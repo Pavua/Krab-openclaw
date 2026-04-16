@@ -311,6 +311,8 @@ class KrabScheduler:
         self._sender: Callable[[str, str], Awaitable[None]] | None = None
         self._max_retries = 5
         self._retry_delay_sec = 60.0
+        # chat_id владельца для перенаправления напоминаний из групп
+        self._owner_chat_id: str = ""
 
     @property
     def is_started(self) -> bool:
@@ -319,6 +321,10 @@ class KrabScheduler:
     def bind_sender(self, sender: Callable[[str, str], Awaitable[None]]) -> None:
         """Привязывает async callback для отправки scheduled сообщений в канал."""
         self._sender = sender
+
+    def bind_owner_chat_id(self, owner_chat_id: str) -> None:
+        """Привязывает chat_id владельца для перенаправления напоминаний из групп."""
+        self._owner_chat_id = str(owner_chat_id)
 
     def start(self) -> None:
         """Старт scheduler в текущем event loop."""
@@ -470,13 +476,28 @@ class KrabScheduler:
         rec = self._reminders.get(reminder_id)
         if not rec or rec.status != "scheduled":
             return
-        payload = f"⏰ Напоминание\n\n{rec.text}"
+
+        # Если напоминание создано в группе (отрицательный chat_id) — перенаправляем в DM владельца
+        target_chat_id = rec.chat_id
+        group_note = ""
+        if rec.chat_id.lstrip("-").isdigit() and rec.chat_id.startswith("-"):
+            if self._owner_chat_id:
+                group_note = f"\n_(создано в чате {rec.chat_id})_"
+                target_chat_id = self._owner_chat_id
+                logger.info(
+                    "reminder_redirected_to_owner_dm",
+                    reminder_id=reminder_id,
+                    original_chat=rec.chat_id,
+                    owner_chat=self._owner_chat_id,
+                )
+
+        payload = f"⏰ Напоминание\n\n{rec.text}{group_note}"
         sender = self._sender
         if sender is None:
             await self._retry_or_fail(rec, "sender_not_bound")
             return
         try:
-            await sender(rec.chat_id, payload)
+            await sender(target_chat_id, payload)
             rec.status = "done"
             rec.fired_at_iso = _now_local().isoformat()
             rec.last_error = ""

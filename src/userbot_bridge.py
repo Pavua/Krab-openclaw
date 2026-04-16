@@ -1493,6 +1493,9 @@ class KraabUserbot(
 
         if scheduler_enabled and client_connected:
             krab_scheduler.bind_sender(self._send_scheduled_message)
+            # Перенаправлять напоминания из групп в DM владельца
+            if self.me:
+                krab_scheduler.bind_owner_chat_id(str(self.me.id))
             if not krab_scheduler.is_started:
                 krab_scheduler.start()
                 logger.info("scheduler_runtime_started")
