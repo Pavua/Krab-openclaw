@@ -113,8 +113,8 @@ _COMMANDS: list[CommandInfo] = [
     CommandInfo(
         name="stats",
         category="basic",
-        description="Статистика текущей сессии (токены, запросы)",
-        usage="!stats",
+        description="Статистика сессии или ecosystem health",
+        usage="!stats [ecosystem|eco|health|basic]",
     ),
     CommandInfo(
         name="health",
@@ -153,7 +153,13 @@ _COMMANDS: list[CommandInfo] = [
         description="Очистить историю диалога",
         usage="!clear",
     ),
-
+    CommandInfo(
+        name="reset",
+        category="system",
+        description="Агрессивный reset истории: Krab cache + OpenClaw + Gemini + Archive",
+        usage="!reset [--all] [--layer=krab|openclaw|gemini|archive] [--dry-run] [--force]",
+        owner_only=True,
+    ),
     # ── ai ───────────────────────────────────────────────────────────────────
     CommandInfo(
         name="ask",
@@ -238,13 +244,12 @@ _COMMANDS: list[CommandInfo] = [
         usage="!media [save|info]",
         owner_only=True,
     ),
-
     # ── models ───────────────────────────────────────────────────────────────
     CommandInfo(
         name="model",
         category="models",
         description="Управление маршрутизацией модели",
-        usage="!model [local|cloud|auto|set <id>|load <name>|unload|scan]",
+        usage="!model [info|local|cloud|auto|set <id>|load <name>|unload|scan]",
         owner_only=True,
     ),
     CommandInfo(
@@ -261,7 +266,6 @@ _COMMANDS: list[CommandInfo] = [
         usage="!reasoning [show|clear]",
         owner_only=True,
     ),
-
     # ── translator ───────────────────────────────────────────────────────────
     CommandInfo(
         name="translator",
@@ -270,16 +274,17 @@ _COMMANDS: list[CommandInfo] = [
         usage="!translator on|off|status|history|lang <from>-<to>|mode <mode>|session start|stop|pause",
         owner_only=True,
     ),
-
     # ── swarm ────────────────────────────────────────────────────────────────
     CommandInfo(
         name="swarm",
         category="swarm",
-        description="Мультиагентный рой: research, summary, schedule, teams, memory",
+        description=(
+            "Мультиагентный рой: research (+ self-reflection → follow-up tasks),"
+            " summary, schedule, teams, memory"
+        ),
         usage="!swarm <team> <задача>|research <тема>|summary|teams|schedule|memory|jobs|task|artifacts|listen|channels|setup",
         owner_only=True,
     ),
-
     # ── costs ────────────────────────────────────────────────────────────────
     CommandInfo(
         name="costs",
@@ -302,7 +307,6 @@ _COMMANDS: list[CommandInfo] = [
         usage="!digest",
         owner_only=True,
     ),
-
     # ── notes ────────────────────────────────────────────────────────────────
     CommandInfo(
         name="memo",
@@ -342,6 +346,13 @@ _COMMANDS: list[CommandInfo] = [
         usage="!remember <текст>",
     ),
     CommandInfo(
+        name="confirm",
+        category="notes",
+        description="Подтвердить persistent-запись памяти (owner-only)",
+        usage="!confirm <hash>",
+        owner_only=True,
+    ),
+    CommandInfo(
         name="recall",
         category="notes",
         description="Вспомнить факт из памяти",
@@ -350,10 +361,9 @@ _COMMANDS: list[CommandInfo] = [
     CommandInfo(
         name="memory",
         category="notes",
-        description="Последние записи памяти",
-        usage="!memory recent",
+        description="Память: recent записи workspace / stats по Memory Layer",
+        usage="!memory recent [source_filter] | !memory stats",
     ),
-
     # ── management ───────────────────────────────────────────────────────────
     CommandInfo(
         name="pin",
@@ -430,7 +440,6 @@ _COMMANDS: list[CommandInfo] = [
         usage="!schedule [list|cancel|add]",
         owner_only=True,
     ),
-
     # ── modes ────────────────────────────────────────────────────────────────
     CommandInfo(
         name="voice",
@@ -468,7 +477,6 @@ _COMMANDS: list[CommandInfo] = [
         usage="!cap [name on|off|reset]",
         owner_only=True,
     ),
-
     # ── users ────────────────────────────────────────────────────────────────
     CommandInfo(
         name="blocked",
@@ -505,13 +513,12 @@ _COMMANDS: list[CommandInfo] = [
         usage="!inbox [list|ack|done|approve|reject|task]",
         owner_only=True,
     ),
-
     # ── scheduler ────────────────────────────────────────────────────────────
     CommandInfo(
         name="remind",
         category="scheduler",
-        description="Поставить напоминание",
-        usage="!remind <время> | <текст>",
+        description="Поставить напоминание (time/event) или list/cancel",
+        usage="!remind <2h|17:30|tomorrow 9:00|when X then Y> <текст> / list / cancel <id>",
     ),
     CommandInfo(
         name="reminders",
@@ -536,8 +543,8 @@ _COMMANDS: list[CommandInfo] = [
     CommandInfo(
         name="cron",
         category="scheduler",
-        description="Управление OpenClaw cron jobs (list/enable/disable/run/status)",
-        usage="!cron [list|enable|disable|run|status] [<name>]",
+        description="Управление OpenClaw cron jobs (list/enable/disable/run/status/quick)",
+        usage='!cron [list|enable|disable|run|status] [<name>] | !cron quick "<время>" "<промпт>"',
         owner_only=True,
     ),
     CommandInfo(
@@ -554,7 +561,6 @@ _COMMANDS: list[CommandInfo] = [
         usage="!watch status|now",
         owner_only=True,
     ),
-
     # ── system ───────────────────────────────────────────────────────────────
     CommandInfo(
         name="sysinfo",
@@ -633,7 +639,6 @@ _COMMANDS: list[CommandInfo] = [
         usage="!history",
         owner_only=False,
     ),
-
     # ── dev ──────────────────────────────────────────────────────────────────
     CommandInfo(
         name="agent",
@@ -727,7 +732,6 @@ _COMMANDS: list[CommandInfo] = [
         ),
         owner_only=True,
     ),
-
     # ── users (дополнительные) ───────────────────────────────────────────────
     CommandInfo(
         name="scope",
@@ -768,7 +772,6 @@ _COMMANDS: list[CommandInfo] = [
         description="WHOIS-поиск домена или IP-адреса через AI",
         usage="!whois <domain|IP>",
     ),
-
     # ── management (дополнительные) ──────────────────────────────────────────
     CommandInfo(
         name="mark",
@@ -791,7 +794,6 @@ _COMMANDS: list[CommandInfo] = [
         usage="!slowmode <сек>  (0 = выключить)",
         owner_only=True,
     ),
-
     # ── modes (дополнительные) ───────────────────────────────────────────────
     CommandInfo(
         name="afk",
@@ -807,7 +809,6 @@ _COMMANDS: list[CommandInfo] = [
         usage="!typing [сек]",
         owner_only=True,
     ),
-
     # ── notes (дополнительные) ───────────────────────────────────────────────
     CommandInfo(
         name="todo",
@@ -828,7 +829,6 @@ _COMMANDS: list[CommandInfo] = [
         usage="!snippet save <name> <lang> <code> | !snippet <name> | !snippet list",
         owner_only=True,
     ),
-
     # ── ai (дополнительные) ──────────────────────────────────────────────────
     CommandInfo(
         name="urban",
@@ -862,7 +862,6 @@ _COMMANDS: list[CommandInfo] = [
         usage="!tts <текст>  или reply на сообщение",
         owner_only=True,
     ),
-
     # ── system (дополнительные) ──────────────────────────────────────────────
     CommandInfo(
         name="version",
@@ -889,7 +888,6 @@ _COMMANDS: list[CommandInfo] = [
         description="Информация о стикере (reply): pack, emoji, file_id",
         usage="!sticker  (reply на стикер)",
     ),
-
     # ── dev (дополнительные) ─────────────────────────────────────────────────
     CommandInfo(
         name="debug",
@@ -938,7 +936,6 @@ _COMMANDS: list[CommandInfo] = [
         description="Информация о YouTube-видео или плейлисте",
         usage="!yt <url|id>",
     ),
-
     # ── basic (дополнительные) ───────────────────────────────────────────────
     CommandInfo(
         name="calc",
@@ -1006,7 +1003,6 @@ _COMMANDS: list[CommandInfo] = [
         description="Конвертация валют через AI",
         usage="!currency <сумма> <из> <в>  (напр. !currency 100 USD EUR)",
     ),
-
     # ── management (утилиты текста) ──────────────────────────────────────────
     CommandInfo(
         name="sed",
@@ -1053,7 +1049,6 @@ _COMMANDS: list[CommandInfo] = [
         usage="!welcome <текст> | !welcome off | !welcome status",
         owner_only=True,
     ),
-
     # ── system (утилиты шифрования) ──────────────────────────────────────────
     CommandInfo(
         name="encrypt",
@@ -1081,7 +1076,6 @@ _COMMANDS: list[CommandInfo] = [
         description="Информация об эмодзи: код, название, категория",
         usage="!emoji <эмодзи>  или !emoji search <название>",
     ),
-
     # ── scheduler (дополнительные) ───────────────────────────────────────────
     CommandInfo(
         name="timer",
@@ -1095,7 +1089,6 @@ _COMMANDS: list[CommandInfo] = [
         description="Секундомер: start, stop, lap, reset",
         usage="!stopwatch start|stop|lap|reset",
     ),
-
     # ── ai (media/vision) ────────────────────────────────────────────────────
     CommandInfo(
         name="spam",
@@ -1110,6 +1103,7 @@ _COMMANDS: list[CommandInfo] = [
 # ---------------------------------------------------------------------------
 # Публичное API реестра
 # ---------------------------------------------------------------------------
+
 
 class CommandRegistry:
     """Единый реестр команд. Используется API и !help."""

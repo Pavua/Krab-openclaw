@@ -32,7 +32,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
-
 DEFAULT_CONFIG_PATH = Path("~/.openclaw/krab_memory/whitelist.json").expanduser()
 
 

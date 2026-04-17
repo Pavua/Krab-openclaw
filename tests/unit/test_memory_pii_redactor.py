@@ -20,7 +20,6 @@ from src.core.memory_pii_redactor import (
     _luhn_valid,
 )
 
-
 # ---------------------------------------------------------------------------
 # Базовый fixture.
 # ---------------------------------------------------------------------------
@@ -313,3 +312,56 @@ class TestRegressionsAndStats:
         assert result.stats.counts.get("phone") == 1
         assert result.stats.counts.get("crypto_btc_legacy") == 1
         assert result.stats.counts.get("crypto_eth") == 1
+
+
+# ---------------------------------------------------------------------------
+# Session 11: rare-branch coverage (_luhn_valid non-digit char, _selfcheck).
+# ---------------------------------------------------------------------------
+
+
+class TestLuhnEdgeCases:
+    def test_non_digit_char_returns_false(self) -> None:
+        """
+        Если строка длиннее 13 символов, но содержит не-цифру —
+        Luhn должен сразу вернуть False на первом non-isdigit символе.
+        """
+        from src.core.memory_pii_redactor import _luhn_valid
+
+        # Достаточная длина, но буква 'X' в середине → ранний False.
+        assert _luhn_valid("42424242424242X2") is False
+        assert _luhn_valid("4242-4242-4242-4242") is False  # дефис не isdigit
+
+    def test_none_like_empty(self) -> None:
+        from src.core.memory_pii_redactor import _luhn_valid
+
+        # empty → False (раннее return).
+        assert _luhn_valid("") is False
+
+    def test_short_input_rejected(self) -> None:
+        """Цифры короче 13 — не должно пытаться вычислять Luhn."""
+        from src.core.memory_pii_redactor import _luhn_valid
+
+        assert _luhn_valid("1234567890") is False  # 10 цифр
+        assert _luhn_valid("123456789012") is False  # 12 цифр
+
+
+class TestSelfCheck:
+    """
+    _selfcheck() — CLI-утилита для ручной проверки. Покрывает ~70 строк
+    редко исполняемого кода (print-statements + вариации samples).
+    """
+
+    def test_selfcheck_exits_zero(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """
+        Прогон всех эталонных samples должен возвращать 0 (все категории
+        матчатся). capsys глушит print-выход в консоль теста.
+        """
+        from src.core.memory_pii_redactor import _selfcheck
+
+        rc = _selfcheck()
+        assert rc == 0
+        captured = capsys.readouterr()
+        # Выход должен содержать финальную сводку.
+        assert "passed" in captured.out
+        # Owner whitelist проверка тоже прогналась.
+        assert "owner whitelist" in captured.out

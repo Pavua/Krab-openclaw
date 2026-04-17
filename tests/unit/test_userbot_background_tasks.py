@@ -320,6 +320,45 @@ async def test_keep_typing_alive_stops_on_event() -> None:
     await setter
 
 
+@pytest.mark.asyncio
+async def test_keep_typing_alive_sends_cancel_on_exit() -> None:
+    """Session 11 fix #6: при выходе из loop шлём явный ChatAction.CANCEL."""
+    client = AsyncMock()
+    stop_event = asyncio.Event()
+    stop_event.set()  # сразу выставлен → loop выйдет после первой итерации
+    await asyncio.wait_for(
+        KraabUserbot._keep_typing_alive(client, 123, "typing", stop_event),
+        timeout=2.0,
+    )
+    # Последний вызов send_chat_action должен быть с CANCEL action.
+    assert client.send_chat_action.called
+    last_call = client.send_chat_action.call_args_list[-1]
+    action = last_call.args[1] if len(last_call.args) > 1 else last_call.kwargs.get("action")
+    assert "CANCEL" in str(action).upper()
+
+
+@pytest.mark.asyncio
+async def test_keep_typing_alive_sends_cancel_on_task_cancel() -> None:
+    """При task.cancel() (exception path) finally всё равно шлёт CANCEL."""
+    client = AsyncMock()
+    stop_event = asyncio.Event()
+
+    task = asyncio.create_task(
+        KraabUserbot._keep_typing_alive(client, 456, "typing", stop_event)
+    )
+    # Даём loop стартовать и послать хотя бы один TYPING.
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    # Последний call — CANCEL, даже при cancellation.
+    last_call = client.send_chat_action.call_args_list[-1]
+    action = last_call.args[1] if len(last_call.args) > 1 else last_call.kwargs.get("action")
+    assert "CANCEL" in str(action).upper()
+
+
 # ---------------------------------------------------------------------------
 # _background_task_reaper (базовый smoke test)
 # ---------------------------------------------------------------------------

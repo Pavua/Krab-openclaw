@@ -176,6 +176,19 @@ MCP серверы — SSE транспорт. Claude Desktop подключае
 MCP Hammerspoon (8013) зарегистрирован в Claude Desktop (session 6).
 Plists: `scripts/launchagents/`
 
+### MCP tools (Telegram MCP server)
+
+- `telegram_*` — get_dialogs/get_chat_history/send_message/download_media/
+  transcribe_voice/search/edit_message (Pyrogram MTProto через TelegramBridge).
+- `krab_status` / `krab_tail_logs` / `krab_restart_gateway` / `krab_run_tests` —
+  dev-операции с панели :8080 и openclaw CLI.
+- `krab_memory_search` — hybrid (FTS5 + semantic + RRF) поиск по
+  `~/.openclaw/krab_memory/archive.db` (~43k messages / ~9k chunks).
+  PII-redacted. Args: `q` (str), `mode` (fts|semantic|hybrid), `limit` (1–20),
+  `chat_id` (опц.). Прямой вызов `HybridRetriever.search()`, fallback — HTTP.
+- `krab_memory_stats` — counts по messages/chats/chunks/embedded, schema_version,
+  size_mb. Read-only чтение archive.db без блокировок.
+
 ## Модели и routing
 
 Runtime truth: `~/.openclaw/agents/main/agent/models.json`
@@ -242,6 +255,16 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - **Phase 7: ~98%** (session 7 завершила 40%→88%, session 8 target: 100%)
 - Готово: ErrorDigest, WeeklyDigest, Research Pipeline, AlertSystem, Cost Budget Alerts, TaskBoard, CommandRegistry, 175+ команд, 180+ API endpoints
 - В работе (session 8): !members, !cron, !log финализация; Dashboard frontend (Gemini spec готов); Swarm listeners e2e; KrabEar диаризация
+
+## Session 10 статус (17.04.2026)
+
+- **Security hardening**: Memory Injection Validator (`src/core/memory_validator.py`) + `!confirm <hash>` команда; блокирует persistent injection-паттерны ("всегда", "в каждом ответе", "always", "never") до owner-подтверждения; NFKC-нормализация против ZWSP/homoglyph bypass
+- **Aggressive `!reset`** (4 layers: Krab `history_cache.db` / OpenClaw session / Gemini prompt cache via UUID-nonce / archive.db opt-in)
+- **Memory Layer Phase 1 bootstrap**: yung_nagato Telegram export → 42 708 messages / 9 099 chunks / 42 МБ в `archive.db`; 92 PII redactions (67 emails + 16 cards + 4 phones + 3 HF keys + 2 SOL)
+- **Observability**: correlation ID (`request_id`) через structlog `merge_contextvars`; tool call indicator в buffered mode (`🔧 Активно: tool_name(...)` + queue)
+- **Resilience**: auto-restart policy для Gateway/MCP (opt-in `AUTO_RESTART_ENABLED`); codex-cli stagnation cancel при >120s без progress
+- **UX**: dedicated Chrome launcher с isolated profile — устраняет "Allow remote debugging?" prompts
+- **Новые модули**: `memory_validator.py`, `auto_restart_policy.py`, `reset_helpers.py`, `gemini_cache_nonce.py`, `dedicated_chrome.py`
 
 ## Ссылки
 
@@ -392,6 +415,8 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 !acl [allow|deny] <user>     — управление ACL
 !notify [on|off|status]      — управление уведомлениями
 !restart                     — перезапуск Краба
+!reset [--all|--layer=…]     — aggressive reset (krab/openclaw/gemini/archive), --dry-run --force
+!confirm <hash>              — подтвердить persistent memory write (owner-only, session 10)
 !debug [on|off|trace]        — режим отладки
 !diagnose                    — диагностика всей экосистемы
 !agent <prompt>              — прямой вызов AI агента
@@ -497,6 +522,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/system/info` | GET | Системная информация хоста |
 | `/api/endpoints` | GET | Self-documenting список endpoints |
 | `/api/v1/health` | GET | Версионированный health (внешние мониторы) |
+| `/metrics` | GET | Prometheus text format metrics для scraping |
 | `/api/voice/toggle` | POST | Переключить голосовой режим |
 | `/api/voice/profile` | GET | Голосовой профиль |
 | `/api/voice/runtime` | GET/POST | Runtime голосовых настроек |
@@ -553,6 +579,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/ecosystem/health` | GET | Здоровье экосистемы |
 | `/api/ecosystem/health/export` | GET | Экспорт health |
 | `/api/ecosystem/capabilities` | GET | Возможности экосистемы |
+| `/api/session10/summary` | GET | Aggregated Session 10 stats для V4 Hub |
 | `/api/system/diagnostics` | GET | Диагностика системы |
 | `/api/ops/diagnostics` | GET | Ops диагностика |
 | `/api/ops/metrics` | GET | Метрики |
@@ -636,3 +663,6 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | Session 5 | 2071 |
 | Session 6 | 3633 |
 | Session 7 | ~6826+ |
+| Session 8 | ~7310+ |
+| Session 9 | ~7365+ |
+| Session 10 | ~7465+ |

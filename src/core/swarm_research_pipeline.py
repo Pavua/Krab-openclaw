@@ -12,6 +12,7 @@ Research Pipeline для Swarm — выделенный модуль (Phase 7).
 from __future__ import annotations
 
 import dataclasses
+import time
 from typing import TYPE_CHECKING, Callable
 
 from .logger import get_logger
@@ -78,14 +79,11 @@ class SwarmResearchPipeline:
                 f"(не менее {self.config.max_sources} источников)."
             )
         else:
-            structure_hint = (
-                f"Найди не менее {self.config.max_sources} источников по теме."
-            )
+            structure_hint = f"Найди не менее {self.config.max_sources} источников по теме."
 
         return (
             f"Проведи исследование по теме: {raw_topic}. "
-            "Обязательно используй web_search для поиска актуальной информации. "
-            + structure_hint
+            "Обязательно используй web_search для поиска актуальной информации. " + structure_hint
         )
 
     # ------------------------------------------------------------------
@@ -98,6 +96,9 @@ class SwarmResearchPipeline:
         *,
         router_factory: Callable[[str], object],
         swarm_bus: object,
+        openclaw_client: object | None = None,
+        task_board: object | None = None,
+        reflect: bool = True,
     ) -> str:
         """
         Запускает research pipeline.
@@ -106,6 +107,9 @@ class SwarmResearchPipeline:
             raw_topic: Тема исследования (без префикса 'research').
             router_factory: Фабрика роутеров `(team_name) -> RouterAdapter`.
             swarm_bus: SwarmBus для межкомандного broadcast.
+            openclaw_client: Опциональный клиент для self-reflection LLM-вызова.
+            task_board: Опциональный SwarmTaskBoard для follow-up задач.
+            reflect: Включает self-reflection hook (Proactivity Level 3).
 
         Returns:
             Финальный текст исследования.
@@ -145,6 +149,32 @@ class SwarmResearchPipeline:
             topic=raw_topic,
             result_len=len(result_text),
         )
+
+        # Self-Reflection hook (Proactivity Level 3, Session 11)
+        if reflect and openclaw_client is not None:
+            try:
+                from .swarm_self_reflection import enqueue_followups, reflect_on_task
+
+                reflection = await reflect_on_task(
+                    task_id=f"research:{team_key}:{int(time.time())}",
+                    task_title=f"Research: {raw_topic}",
+                    task_description=research_prompt,
+                    task_result=result_text,
+                    task_status="completed",
+                    openclaw_client=openclaw_client,
+                )
+                if reflection.followups:
+                    enqueue_followups(reflection, task_board=task_board)
+                    logger.info(
+                        "research_self_reflection_followups_enqueued",
+                        count=len(reflection.followups),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "research_self_reflection_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
 
         return result_text
 

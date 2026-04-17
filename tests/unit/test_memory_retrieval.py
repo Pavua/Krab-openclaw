@@ -17,7 +17,7 @@ Unit-тесты HybridRetriever (Phase 2 skeleton).
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -40,7 +40,6 @@ from src.core.memory_retrieval import (
     normalize_scores_0_1,
     reciprocal_rank_fusion,
 )
-
 
 # ---------------------------------------------------------------------------
 # Хелперы.
@@ -459,3 +458,186 @@ class TestSearchResultContract:
         )
         assert sr.context_before == []
         assert sr.context_after == []
+
+
+# ---------------------------------------------------------------------------
+# Session 11: error-path and rare-branch coverage boosters.
+# ---------------------------------------------------------------------------
+
+
+class TestErrorPaths:
+    """
+    Покрывают редкие ветки retriever'а:
+      - corrupt DB file (open_archive падает),
+      - _ensure_model путь (model_name задан, импорт падает),
+      - FTS5 OperationalError,
+      - пустой query → пустой результат _escape_fts5 path.
+    """
+
+    def test_open_archive_failure_returns_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        _ensure_connection логирует warning и возвращает None, если open_archive
+        выкидывает sqlite3.Error. search() → [].
+        """
+        paths = ArchivePaths.under(tmp_path / "broken")
+        paths.dir.mkdir(parents=True, exist_ok=True)
+        # Создаём плейсхолдер-файл (паттерн .exists() истина).
+        paths.db.write_bytes(b"placeholder")
+
+        import src.core.memory_retrieval as mr
+
+        def failing_open(*args, **kwargs):
+            raise sqlite3.Error("cannot open")
+
+        monkeypatch.setattr(mr, "open_archive", failing_open)
+
+        r = HybridRetriever(archive_paths=paths, model_name=None)
+        assert r.search("anything") == []
+        # Повторный вызов — БД снова не открывается (conn остаётся None).
+        assert r.search("anything") == []
+        r.close()
+
+    def test_close_is_idempotent(self, tmp_path: Path) -> None:
+        # close() на retriever'е, у которого БД вообще никогда не открывалась.
+        paths = ArchivePaths.under(tmp_path / "never")
+        r = HybridRetriever(archive_paths=paths, model_name=None)
+        r.close()
+        r.close()  # второй close — no-op
+
+    def test_ensure_model_swallows_import_error(
+        self, archive_with_data: ArchivePaths, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        _ensure_model должен залогировать warning и занулить model_name,
+        если import model2vec упал. После этого повторные search() не должны
+        пытаться импортить заново.
+        """
+        import builtins
+
+        real_import = builtins.__import__
+
+        def failing_import(name: str, *args, **kwargs):
+            if name == "model2vec":
+                raise ImportError("model2vec not installed")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", failing_import)
+
+        r = HybridRetriever(
+            archive_paths=archive_with_data,
+            model_name="minishlab/M2V_multilingual_output",
+        )
+        # _vector_search вызовет _ensure_model, но нужно попасть в ту ветку.
+        # Проще — дёрнуть _ensure_model() напрямую.
+        assert r._ensure_model() is None
+        # После первой попытки model_name должен быть обнулён — защита от повторов.
+        assert r._model_name is None
+        # Повторный вызов — return None сразу, без import-попытки.
+        assert r._ensure_model() is None
+
+    def test_fts_operational_error_returns_empty(
+        self, archive_with_data: ArchivePaths, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        Если FTS5-запрос падает на OperationalError (мусорный MATCH),
+        _fts_search возвращает [] и search() деградирует в пустой список.
+        """
+        r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
+
+        # Форсим OperationalError через patching метода класса HybridRetriever.
+        def raising_fts(self, conn, query, chat_id, limit):
+            raise sqlite3.OperationalError("simulated fts error")
+
+        # Подменим напрямую — функция вызовется, но обычно _fts_search уже
+        # перехватывает OperationalError внутри. Проверим конкретную ветку
+        # `except OperationalError: return []` на уровне _fts_search.
+        real_ensure = r._ensure_connection
+        conn = real_ensure()
+        assert conn is not None
+
+        # Для проверки ветки 385-387 подменяем execute через adapter-класс.
+        class BrokenConn:
+            def __init__(self, real) -> None:
+                self._real = real
+
+            def execute(self, sql: str, *args, **kwargs):
+                if "messages_fts" in sql:
+                    raise sqlite3.OperationalError("fts broken")
+                return self._real.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name: str):
+                return getattr(self._real, name)
+
+        # Вызываем _fts_search с broken conn напрямую.
+        broken = BrokenConn(conn)
+        fts_ids = r._fts_search(broken, "dashboard", None, limit=10)  # type: ignore[arg-type]
+        assert fts_ids == []
+        r.close()
+
+    def test_search_whitespace_only_query_returns_empty(
+        self, archive_with_data: ArchivePaths
+    ) -> None:
+        """Только спецсимволы (`!!!***`) после _escape_fts5 → ''."""
+        r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
+        assert r.search("!!!***") == []
+        assert r.search("***") == []
+        r.close()
+
+    def test_close_swallows_sqlite_error(
+        self, archive_with_data: ArchivePaths
+    ) -> None:
+        """
+        close() должен проглотить sqlite3.Error при conn.close() и всё равно
+        занулить self._conn — защита от "сломанной" connection.
+        Тестируем через adapter-подмену _conn.
+        """
+        r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
+
+        class RaisingConn:
+            def close(self) -> None:
+                raise sqlite3.Error("close failed")
+
+        # Подменяем внутреннее поле напрямую (атрибут Python-объекта — писуем).
+        r._conn = RaisingConn()  # type: ignore[assignment]
+        r.close()
+        assert r._conn is None
+
+    def test_vector_search_no_model_returns_empty(
+        self, archive_with_data: ArchivePaths
+    ) -> None:
+        """
+        _vector_search возвращает [] если _ensure_model вернул None
+        (model_name=None или импорт упал). Покрывает строки 405-407.
+        """
+        r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
+        conn = r._ensure_connection()
+        assert conn is not None
+        # Напрямую — model_name=None → _ensure_model return None → [].
+        assert r._vector_search(conn, "dashboard", None, limit=10) == []
+        r.close()
+
+    def test_target_none_in_fetch_context(
+        self, archive_with_data: ArchivePaths
+    ) -> None:
+        """
+        _fetch_context на несуществующем chunk_id возвращает (None, [], []).
+        Покрывает ветку target is None (line 523).
+        """
+        r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
+        conn = r._ensure_connection()
+        assert conn is not None
+        result = r._fetch_context(conn, "nonexistent_chunk_id", with_context=2)
+        assert result == (None, [], [])
+        r.close()
+
+    def test_fetch_chunks_empty_iter(
+        self, archive_with_data: ArchivePaths
+    ) -> None:
+        """_fetch_chunks на пустом iterable → {}. Покрывает line 494."""
+        r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
+        conn = r._ensure_connection()
+        assert conn is not None
+        assert r._fetch_chunks(conn, []) == {}
+        r.close()

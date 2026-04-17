@@ -185,6 +185,18 @@ class _TailLogsInput(BaseModel):
     n: int = Field(default=50, ge=1, le=500, description="Количество последних строк лога (1–500)")
 
 
+class _MemorySearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    q: str = Field(..., max_length=500, description="Поисковый запрос")
+    mode: str = Field(
+        default="hybrid",
+        pattern="^(fts|semantic|hybrid)$",
+        description="Режим: fts | semantic | hybrid (default hybrid)",
+    )
+    limit: int = Field(default=5, ge=1, le=20, description="Количество результатов (1–20)")
+    chat_id: str = Field(default="", description="Опциональный chat_id для ограничения поиска")
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ── TELEGRAM TOOLS ────────────────────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
@@ -698,6 +710,158 @@ async def krab_run_tests(params: _RunTestsInput) -> str:
         )
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── MEMORY TOOLS ─────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool(
+    name="krab_memory_search",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def krab_memory_search(params: _MemorySearchInput) -> str:
+    """Полнотекстовый + semantic hybrid поиск по Krab Memory Layer (archive.db).
+
+    Результаты уже PII-redacted (email/телефоны/карты маскированы в `text_redacted`).
+    База: `~/.openclaw/krab_memory/archive.db` (~43k messages / ~9k chunks).
+
+    Используется:
+      1. Прямой вызов `HybridRetriever.search()` (in-process, без HTTP).
+      2. Fallback на Krab panel `GET /api/memory/search` если модуль недоступен.
+
+    Args:
+        params:
+            - q (str): поисковый запрос (обязателен)
+            - mode (str): "fts" | "semantic" | "hybrid" (default "hybrid")
+            - limit (int): 1–20 (default 5)
+            - chat_id (str, опц.): ограничение поиска по chat_id
+
+    Returns:
+        str: JSON {"ok": bool, "query": str, "mode": str, "count": int,
+                   "results": [{"chunk_id", "text", "score", "chat_id", "timestamp"}]}
+    """
+    q = (params.q or "").strip()
+    if not q:
+        return json.dumps({"ok": False, "error": "empty_query"}, ensure_ascii=False)
+
+    limit = min(max(int(params.limit), 1), 20)
+    mode = params.mode or "hybrid"
+    chat_id = params.chat_id.strip() or None
+
+    # Путь 1: прямой вызов HybridRetriever (in-process)
+    try:
+        from src.core.memory_retrieval import HybridRetriever
+
+        def _run_search():
+            retriever = HybridRetriever()
+            try:
+                return retriever.search(
+                    q,
+                    chat_id=chat_id,
+                    top_k=limit,
+                    with_context=0,
+                    decay_mode="auto",
+                )
+            finally:
+                retriever.close()
+
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(None, _run_search)
+
+        payload = {
+            "ok": True,
+            "query": q,
+            "mode": mode,
+            "count": len(results),
+            "results": [
+                {
+                    "chunk_id": r.message_id,
+                    "chat_id": r.chat_id,
+                    "text": (r.text_redacted[:500] + "...")
+                    if len(r.text_redacted) > 500
+                    else r.text_redacted,
+                    "score": round(float(r.score), 4),
+                    "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+                }
+                for r in results
+            ],
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+    except ImportError:
+        # Fallback на HTTP endpoint панели
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(
+                    f"{_KRAB_WEB_BASE}/api/memory/search",
+                    params={"q": q, "mode": mode, "limit": limit},
+                )
+                data = r.json() if r.content else {}
+                return json.dumps(data, ensure_ascii=False, indent=2)
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps(
+                {"ok": False, "error": f"search_failed: {exc}"},
+                ensure_ascii=False,
+            )
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps(
+            {"ok": False, "error": f"search_failed: {exc}"},
+            ensure_ascii=False,
+        )
+
+
+@mcp.tool(
+    name="krab_memory_stats",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def krab_memory_stats() -> str:
+    """Статистика Krab Memory Layer: counts по messages/chats/chunks/embedded.
+
+    Читает archive.db в read-only режиме. Если файла нет — возвращает
+    `{"archive": {"exists": false}}` без ошибки.
+
+    Returns:
+        str: JSON {"archive": {"exists": bool, "messages": int, "chats": int,
+                               "chunks": int, "embedded": int, "size_mb": float,
+                               "schema_version": int, "path": str}}
+    """
+    import sqlite3
+
+    db_path = Path("~/.openclaw/krab_memory/archive.db").expanduser()
+    archive: dict[str, Any] = {"exists": db_path.exists(), "path": str(db_path)}
+
+    if archive["exists"]:
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            try:
+                archive["messages"] = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+                archive["chats"] = conn.execute("SELECT COUNT(*) FROM chats").fetchone()[0]
+                archive["chunks"] = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+                archive["size_mb"] = round(db_path.stat().st_size / 1024 / 1024, 2)
+
+                # Schema version из meta
+                try:
+                    row = conn.execute(
+                        "SELECT value FROM meta WHERE key = 'schema_version';"
+                    ).fetchone()
+                    archive["schema_version"] = int(row[0]) if row else None
+                except (sqlite3.OperationalError, ValueError, TypeError):
+                    archive["schema_version"] = None
+
+                # Embedded chunks (vec_chunks может отсутствовать, если нет sqlite-vec)
+                try:
+                    archive["embedded"] = conn.execute(
+                        "SELECT COUNT(*) FROM vec_chunks"
+                    ).fetchone()[0]
+                except sqlite3.OperationalError:
+                    archive["embedded"] = 0
+            finally:
+                conn.close()
+        except Exception as exc:  # noqa: BLE001
+            archive["error"] = str(exc)
+
+    return json.dumps({"archive": archive}, ensure_ascii=False, indent=2, default=str)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
