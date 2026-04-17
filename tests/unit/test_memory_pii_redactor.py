@@ -313,3 +313,86 @@ class TestRegressionsAndStats:
         assert result.stats.counts.get("phone") == 1
         assert result.stats.counts.get("crypto_btc_legacy") == 1
         assert result.stats.counts.get("crypto_eth") == 1
+
+
+# ---------------------------------------------------------------------------
+# False positives: URL status IDs и ASCII art.
+# ---------------------------------------------------------------------------
+
+class TestFalsePositives:
+    """Регрессии для известных false positives (smoke test retrieval)."""
+
+    def test_card_skipped_in_twitter_url(self, redactor: PIIRedactor) -> None:
+        """18-значный Twitter status ID внутри URL — не должен стать CARD."""
+        text = "Check https://x.com/balajis/status/1234567890123456789 for details"
+        result = redactor.redact(text)
+        assert "[REDACTED:CARD]" not in result.text
+        assert "https://x.com/balajis/status/1234567890123456789" in result.text
+        assert "card" not in result.stats.counts
+
+    def test_card_skipped_in_http_url(self, redactor: PIIRedactor) -> None:
+        """http:// (не https) тоже покрыт."""
+        text = "Link http://example.com/item/1234567890123456789 raw"
+        result = redactor.redact(text)
+        assert "[REDACTED:CARD]" not in result.text
+        assert "1234567890123456789" in result.text
+
+    def test_card_still_redacted_outside_url(self, redactor: PIIRedactor) -> None:
+        """Luhn-valid карта вне URL по-прежнему редактится."""
+        text = "Моя карта: 4532015112830366"  # Luhn-valid
+        result = redactor.redact(text)
+        assert "[REDACTED:CARD]" in result.text
+        assert result.stats.counts.get("card") == 1
+
+    def test_card_inside_markdown_link(self, redactor: PIIRedactor) -> None:
+        """Markdown ссылка: [text](https://...) — URL внутри скобок тоже skip."""
+        text = "[tweet](https://x.com/user/status/1234567890123456789)"
+        result = redactor.redact(text)
+        assert "[REDACTED:CARD]" not in result.text
+        assert "1234567890123456789" in result.text
+
+    def test_phone_skipped_for_ascii_art(self, redactor: PIIRedactor) -> None:
+        """11 повторов цифры '8' — ASCII art, не телефон."""
+        text = "ASCII art: 88888888888 end"
+        result = redactor.redact(text)
+        assert "[REDACTED:PHONE]" not in result.text
+        assert "88888888888" in result.text
+        assert "phone" not in result.stats.counts
+
+    def test_phone_skipped_for_repeated_zeros(self, redactor: PIIRedactor) -> None:
+        """Последовательность нулей вида '+70000000000' — тоже ASCII art."""
+        text = "Spam: +70000000000"
+        result = redactor.redact(text)
+        # 10 подряд идущих нулей — баннер/дефолт, не реальный телефон.
+        assert "[REDACTED:PHONE]" not in result.text
+
+    def test_phone_still_redacted_real(self, redactor: PIIRedactor) -> None:
+        """Реальный телефон с разделителями — по-прежнему редактится."""
+        text = "+7 999 123 45 67 звони"
+        result = redactor.redact(text)
+        assert "[REDACTED:PHONE]" in result.text
+        assert result.stats.counts.get("phone") == 1
+
+    def test_phone_still_redacted_e164(self, redactor: PIIRedactor) -> None:
+        """E.164 формат без разделителей, но с разнообразными цифрами — phone."""
+        text = "+79991234567 звони"
+        result = redactor.redact(text)
+        assert "[REDACTED:PHONE]" in result.text
+
+    def test_phone_skipped_inside_url(self, redactor: PIIRedactor) -> None:
+        """Номера внутри URL — query/path, не телефон."""
+        text = "https://api.example.com/call/+79991234567?x=1 extra"
+        result = redactor.redact(text)
+        assert "[REDACTED:PHONE]" not in result.text
+        assert "+79991234567" in result.text
+
+    def test_mixed_url_and_real_phone(self, redactor: PIIRedactor) -> None:
+        """В одной строке: URL с ID (skip) + реальный телефон (redact)."""
+        text = (
+            "Tweet https://x.com/status/1234567890123456789 "
+            "звони +7 999 123 45 67"
+        )
+        result = redactor.redact(text)
+        assert "[REDACTED:CARD]" not in result.text
+        assert "1234567890123456789" in result.text
+        assert "[REDACTED:PHONE]" in result.text
