@@ -6003,43 +6003,57 @@ async def handle_budget(bot: "KraabUserbot", message: Message) -> None:
 
 
 async def handle_digest(bot: "KraabUserbot", message: Message) -> None:
-    """!digest — немедленно сгенерировать и отправить weekly digest (owner-only)."""
+    """
+    !digest — немедленно сгенерировать и отправить daily + weekly digest (owner-only).
+
+    Отправляет:
+    1. Nightly Summary (daily) — данные за сегодня.
+    2. Weekly Digest — данные за 7 дней (swarm/cost/inbox сводка).
+    """
     # Проверка: только владелец
     access_profile = bot._get_access_profile(message.from_user)
     if access_profile.level != AccessLevel.OWNER:
         raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
 
-    await message.reply("⏳ Генерирую digest, подожди...")
+    await message.reply("⏳ Генерирую digest...")
 
+    # --- Nightly (daily) summary ---
+    try:
+        from ..core.nightly_summary import generate_summary  # noqa: PLC0415
+
+        daily_text = await generate_summary()
+        await message.reply(daily_text, parse_mode="markdown")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("handle_digest_nightly_failed", error=str(exc))
+        await message.reply(f"⚠️ Daily summary не удался: {exc}")
+
+    # --- Weekly digest ---
     try:
         result = await weekly_digest.generate_digest()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("handle_digest_failed", error=str(exc))
-        await message.reply(f"❌ Ошибка генерации digest: {exc}")
+        logger.warning("handle_digest_weekly_failed", error=str(exc))
+        await message.reply(f"❌ Weekly digest не удался: {exc}")
         return
 
     if not result.get("ok"):
         err = result.get("error", "неизвестная ошибка")
-        await message.reply(f"❌ Digest не удался: {err}")
+        await message.reply(f"❌ Weekly digest не удался: {err}")
         return
 
     rounds = result.get("total_rounds", 0)
     cost = result.get("cost_week_usd", 0.0)
     attention = result.get("attention_count", 0)
 
-    # Digest уже доставлен через telegram_callback если он настроен;
-    # иначе выводим итоговую сводку
     if not weekly_digest._telegram_callback:
         await message.reply(
-            f"✅ **Weekly Digest сгенерирован**\n"
-            f"Swarm rounds: {rounds}\n"
+            f"✅ **Weekly Digest**\n"
+            f"Swarm rounds (7д): {rounds}\n"
             f"Cost (7д): ${cost:.4f}\n"
-            f"Attention items: {attention}\n\n"
-            "_Для автодоставки в чат настрой telegram_callback._"
+            f"Attention items: {attention}"
         )
     else:
         await message.reply(
-            f"✅ Digest отправлен.\n"
+            f"✅ Weekly digest отправлен.\n"
             f"Rounds: {rounds} | Cost 7д: ${cost:.4f} | Attention: {attention}"
         )
 
