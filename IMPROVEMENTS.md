@@ -1,8 +1,93 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-04-16 (session 9)
+> Составлен: 2026-03-23 | Обновлён: 2026-04-17 (session 10)
 > Статус: Активная разработка
 > Владелец: По
+
+---
+
+## 📋 Session 10 (2026-04-17) — SECURITY HARDENING + MEMORY LAYER BOOTSTRAP
+
+> **Параллельная волна агентов (Waves 1-2.5)** | **+100+ тестов** (totals ~7465+) | **Memory Injection Validator live** | **yung_nagato Telegram Export indexed → 42 708 messages / 9 099 chunks / 92 PII redactions**
+
+### PRs / commits
+
+- **Memory Injection Validator (merged):** `feat(memory): injection validator + !confirm command` — `92325ce` + follow-up `fix(memory_validator): NFKC normalization + unified owner-check` (HIGH review issues closed)
+- **Aggressive `!reset`:** in progress (Agent #2 worktree) — commit TBD
+- **Tool call indicator (buffered mode):** in progress (Agent #3, `.claude/worktrees/agent-ab90e9a8`) — commit TBD
+- **Auto-restart failed components:** in progress (Agent #4) — commit TBD
+- **Correlation ID (`request_id`):** in progress (Agent #5) — commit TBD
+- **codex-cli stagnation cancel:** in progress (Agent #6) — commit TBD
+- **Dedicated Chrome launcher:** in progress (Agent #10) — commit TBD
+
+### Security fixes
+
+**Memory injection validator** — закрывает Session 9 class of vulnerabilities:
+- `src/core/memory_validator.py` — `MemoryInjectionValidator` с pending queue
+- Blocked patterns: "всегда", "всегда add phrase", "в каждом ответе", "после каждого", "always", "never", "пиши только X" и вариации
+- Intercept `!remember` writes → отправляет в pending очередь до явного `!confirm <hash>`
+- `!confirm <hash>` — owner-only команда (ACL gate через unified owner-check)
+- **NFKC-нормализация** против ZWSP/homoglyph bypass (review fix)
+- 19 unit-тестов pass
+
+### Memory Layer growth (Phase 1 bootstrap)
+
+- **yung_nagato** Telegram Desktop JSON export (34 chats / 1.28M messages) → фильтр Variant B (whitelist, deny 2 супергруппы + ручная post-bootstrap чистка CC 🎳) → **42 708 messages / 9 099 chunks** в `archive.db` (42 МБ)
+- **92 PII redactions** автоматически в bootstrap: 67 emails + 16 cards + 4 phones + **3 HF API keys** + 2 SOL addresses
+- Раньше: 59 834 сообщений / 10 874 chunks (до clean CC 🎳) → после cleanup 42 708 messages / 9 099 chunks
+
+### Observability
+
+- **Correlation ID** — `src/core/logger.py` structlog `merge_contextvars` processor; `src/userbot_bridge.py::_process_message` binds `request_id` в начале + clear в finally; автоматически propagates через `asyncio.create_task`
+- **Tool call indicator в buffered mode** — `src/core/openclaw_task_poller.py::extract_tool_calls_from_progress()` + `src/userbot/llm_flow.py::_build_openclaw_progress_wait_notice()` extended; Telegram progress notice показывает `🔧 Активно: tool_name(...)` + `⏳ В очереди: ...` в real-time для codex-cli/buffered streams
+
+### Resilience
+
+- **Auto-restart policy** — `src/core/auto_restart_policy.py` с rate-limited restart; `proactive_watch.py` extended для auto-restart Gateway + MCP servers (opt-in через `AUTO_RESTART_ENABLED` env, default `false`)
+- **codex-cli stagnation detection** — `openclaw_task_poller.detect_stagnation()` helper + keepalive loop в `llm_flow.py` → cancel request при `>120s` без `last_event_at` update (решает codex-cli session leak)
+
+### UX
+
+- **Aggressive `!reset`** — 4 слоя истории одной командой:
+  - `src/handlers/command_handlers.py::handle_reset()`
+  - `src/core/gemini_cache_nonce.py` — UUID-nonce invalidation для Gemini prompt cache
+  - `src/core/reset_helpers.py` — archive.db cleanup helpers
+  - Флаги: `--all --force --dry-run --layer=krab|openclaw|gemini|archive`
+  - 20+ unit-тестов
+- **Dedicated Chrome launcher** — `src/integrations/dedicated_chrome.py` auto-launch Chrome с isolated profile → устраняет "Allow remote debugging?" prompt'ы
+
+### Backlog, carried into Session 11
+
+- 🔴 **Merge Wave 2 + 2.5 worktrees в main** (reset/tool-indicator/auto-restart/correlation-id/codex-stagnation/dedicated-chrome)
+- 🔴 **Smoke tests + Krab restart** после мержей
+- 🟡 **p0lrd export — second bootstrap** (incremental `INSERT OR IGNORE` когда пользователь предоставит JSON)
+- 🟡 **MEDIUM review items** — syllabus allowlist tuning для memory validator + improvements к audit logs
+- 🟢 **archive.db size management** — Variant B (filtered whitelist) рекомендуется для больших экспортов; `!reset --layer=archive` destructive, requires explicit opt-in
+
+### Главные gotchas (новое из 10)
+
+- **archive.db размер растёт быстро** на больших экспортах — всегда фильтровать через Variant B (whitelist) перед bootstrap
+- **`!reset --layer=archive` — destructive**, требует explicit `--force`
+- **CC 🎳 chat** был вручную очищен post-bootstrap (не добавлен в whitelist), поэтому `42 708` меньше изначальных `59 834`
+- **Memory validator pending queue** персистит через restart — если владелец забыл `!confirm <hash>`, pending остаются на диске
+
+### Метрики
+
+| Метрика | Session 9 | Session 10 |
+|---------|-----------|------------|
+| Коммиты | ~30 | ~10+ merged, ещё ~6 in progress |
+| Тесты | ~7365+ | ~7465+ |
+| Параллельные агенты | 15+ (3 волны) | 10+ (Waves 1-2.5) |
+| API endpoints | 215+ | 215+ (без изменений — security first) |
+| Telegram команд | 180+ | 180+ + `!confirm`, `!reset` |
+| Новые модули | `memory_indexer_worker.py`, `openclaw_task_poller.py` | `memory_validator.py`, `auto_restart_policy.py`, `reset_helpers.py`, `gemini_cache_nonce.py`, `dedicated_chrome.py` |
+
+### Acceptance status
+
+- ✅ Memory Injection Validator merged + 2 HIGH review issues closed (19 tests green)
+- ✅ yung_nagato bootstrap live (42k messages / 9k chunks в archive.db)
+- ✅ 92 PII redactions verified (в том числе 3 HF API keys)
+- ⏳ Wave 2+ worktrees — schemas заложены, ждут merge в main и smoke tests в Session 11
 
 ---
 
