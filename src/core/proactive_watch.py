@@ -27,6 +27,11 @@ from ..config import config
 from ..integrations.macos_automation import macos_automation
 from ..memory_engine import memory_manager
 from ..openclaw_client import openclaw_client
+from .auto_restart_policy import (
+    RESTART_COMMANDS,
+    auto_restart_manager,
+    is_auto_restart_enabled,
+)
 from .inbox_service import inbox_service
 from .logger import get_logger
 from .openclaw_runtime_models import get_runtime_primary_model
@@ -523,6 +528,95 @@ class ProactiveWatchService:
             "manual": manual,
             "baseline_created": previous is None,
         }
+
+    # -----------------------------------------------------------------
+    # Auto-restart of external services (session 10)
+    # -----------------------------------------------------------------
+    # Карта: имя сервиса → (URL health check). Krab core / LM Studio
+    # намеренно не включены — self-restart и пользовательский UI.
+    AUTO_RESTART_HEALTH_URLS: dict[str, str] = {
+        "openclaw_gateway": "http://127.0.0.1:18789/health",
+        "mcp_yung_nagato": "http://127.0.0.1:8011/",
+        "mcp_p0lrd": "http://127.0.0.1:8012/",
+        "mcp_hammerspoon": "http://127.0.0.1:8013/",
+    }
+    AUTO_RESTART_HEALTH_TIMEOUT_SEC: float = 3.0
+    AUTO_RESTART_CHECKS_INTERVAL_SEC: int = 300  # 5 минут
+
+    async def _probe_service_health(self, url: str) -> bool:
+        """
+        Быстрый HTTP-probe. Возвращает True если GET вернул 2xx в срок.
+        Любая ошибка считается fail (сервис мёртв).
+        """
+        try:
+            import httpx  # локальный импорт: в тестах можно замокать
+        except ImportError:
+            logger.warning("auto_restart_httpx_missing")
+            return True  # не мы решаем: пусть остальные слои детектят
+
+        try:
+            async with httpx.AsyncClient(timeout=self.AUTO_RESTART_HEALTH_TIMEOUT_SEC) as c:
+                resp = await c.get(url)
+                return 200 <= resp.status_code < 300
+        except Exception as exc:  # noqa: BLE001
+            logger.info("auto_restart_probe_failed", url=url, error=str(exc))
+            return False
+
+    async def run_auto_restart_checks(self) -> dict[str, Any]:
+        """
+        Прогоняет health-probe по всем auto-restart-eligible сервисам и
+        пытается поднять упавшие через auto_restart_manager.
+
+        Безопасно по умолчанию: если AUTO_RESTART_ENABLED=false (дефолт),
+        всё равно возвращаем health-report, но без вызова restart.
+        """
+        results: dict[str, Any] = {}
+        for service, url in self.AUTO_RESTART_HEALTH_URLS.items():
+            ok = await self._probe_service_health(url)
+            entry: dict[str, Any] = {"healthy": ok, "url": url}
+            if not ok:
+                cmd = RESTART_COMMANDS.get(service)
+                if cmd is None:
+                    entry["restart"] = {"attempted": False, "reason": "no_cmd"}
+                else:
+                    success, reason = await auto_restart_manager.attempt_restart(
+                        service, cmd
+                    )
+                    entry["restart"] = {
+                        "attempted": True,
+                        "success": success,
+                        "reason": reason,
+                    }
+            results[service] = entry
+
+        logger.info(
+            "auto_restart_checks_done",
+            enabled=is_auto_restart_enabled(),
+            results=results,
+        )
+        return results
+
+    async def _auto_restart_checks_loop(self) -> None:
+        """Бесконечный цикл auto-restart-health: каждые N секунд."""
+        while True:
+            await asyncio.sleep(self.AUTO_RESTART_CHECKS_INTERVAL_SEC)
+            try:
+                await self.run_auto_restart_checks()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("auto_restart_loop_error", error=str(exc))
+
+    def start_auto_restart_loop(self) -> "asyncio.Task[None]":
+        """Запускает фоновую задачу auto-restart и возвращает Task."""
+        loop = asyncio.get_event_loop()
+        task = loop.create_task(
+            self._auto_restart_checks_loop(), name="krab_auto_restart_checks"
+        )
+        logger.info(
+            "auto_restart_loop_started",
+            interval_sec=self.AUTO_RESTART_CHECKS_INTERVAL_SEC,
+            enabled=is_auto_restart_enabled(),
+        )
+        return task
 
     def get_status(self) -> dict[str, Any]:
         """Возвращает persisted статус watch-контура для команд/UI."""

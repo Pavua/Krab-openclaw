@@ -488,6 +488,7 @@ class KraabUserbot(
         self._telegram_watchdog_task: Optional[asyncio.Task] = None
         self._background_task_reaper_task: Optional[asyncio.Task] = None
         self._proactive_watch_task: Optional[asyncio.Task] = None
+        self._auto_restart_task: Optional[asyncio.Task] = None
         self._memory_indexer_task: Optional[asyncio.Task] = None
         self._error_digest_task: Optional[asyncio.Task] = None
         self._silence_schedule_task: Optional[asyncio.Task] = None
@@ -1489,6 +1490,18 @@ class KraabUserbot(
         # Запускаем периодическую сводку ошибок (каждые 6 часов)
         if self._error_digest_task is None or self._error_digest_task.done():
             self._error_digest_task = proactive_watch.start_error_digest_loop()
+        # Auto-restart upstream services (session 10): регистрируем notify callback
+        # и запускаем health-probe loop. AUTO_RESTART_ENABLED env-flag решает,
+        # реально пытаться ли restart или только отдать telemetry.
+        try:
+            from .core.auto_restart_policy import auto_restart_manager  # noqa: PLC0415
+
+            auto_restart_manager.set_notification_callback(self._send_proactive_watch_alert)
+            art_task = getattr(self, "_auto_restart_task", None)
+            if art_task is None or art_task.done():
+                self._auto_restart_task = proactive_watch.start_auto_restart_loop()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("auto_restart_setup_failed", error=str(exc))
         # WeeklyDigest: подключаем Telegram delivery callback + запускаем loop
         try:
             from .core.weekly_digest import weekly_digest  # noqa: PLC0415
@@ -2213,6 +2226,7 @@ class KraabUserbot(
         await self._cancel_background_task("_telegram_watchdog_task")
         await self._cancel_background_task("_background_task_reaper_task")
         await self._cancel_background_task("_proactive_watch_task")
+        await self._cancel_background_task("_auto_restart_task")
         await self._cancel_background_task("_silence_schedule_task")
         await self._cancel_background_task("_memory_indexer_task")
         try:
