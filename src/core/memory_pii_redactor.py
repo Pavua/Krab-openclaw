@@ -96,6 +96,14 @@ _PHONE_PATTERN = re.compile(
 # чтобы не стёрло message_id и номера заказов.
 _CARD_CANDIDATE = re.compile(r"\b(?:\d[\s\-]?){13,19}\b")
 
+# URL boundaries — нужны чтобы не редактить CARD/PHONE внутри URL
+# (Twitter/X status IDs — 18-значные числа, Luhn-valid рандомно попадают).
+_URL_RANGES_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
+# ASCII art / spam numbers: повторение одной цифры >=6 раз подряд без разделителей.
+# Пример: "88888888888" (11 восьмёрок) — не телефон, а баннер/ASCII art.
+_REPEATED_DIGIT_RE = re.compile(r"(\d)\1{5,}")
+
 # Crypto. Порядок: ETH (самый узкий) → TRX → BTC bech32 → BTC legacy → SOL.
 # SOL самый широкий (base58 32-44) — он последний.
 _ETH_PATTERN = re.compile(r"\b0x[a-fA-F0-9]{40}\b")
@@ -146,6 +154,24 @@ class RedactionResult:
     stats: RedactionStats
 
 
+def _collect_url_ranges(text: str) -> list[tuple[int, int]]:
+    """Собирает все (start, end) URL-диапазоны в тексте — один проход."""
+    return [(m.start(), m.end()) for m in _URL_RANGES_RE.finditer(text)]
+
+
+def _is_in_url(url_ranges: list[tuple[int, int]], match_start: int, match_end: int) -> bool:
+    """True если [match_start, match_end) целиком попадает в один из URL-диапазонов."""
+    for start, end in url_ranges:
+        if start <= match_start and match_end <= end:
+            return True
+    return False
+
+
+def _is_ascii_art_number(matched_text: str) -> bool:
+    """True если строка содержит 6+ одинаковых цифр подряд (ASCII art / баннер)."""
+    return bool(_REPEATED_DIGIT_RE.search(matched_text))
+
+
 def _luhn_valid(digits: str) -> bool:
     """
     Классический Luhn — валидация номера банковской карты.
@@ -169,10 +195,19 @@ def _luhn_valid(digits: str) -> bool:
 
 
 def _redact_cards(text: str, counter: dict[str, int]) -> str:
-    """Замена банковских карт через Luhn-валидацию (защита от ложных срабатываний)."""
+    """Замена банковских карт через Luhn-валидацию (защита от ложных срабатываний).
+
+    Пропускает совпадения внутри URL — Twitter/X status ID (18 цифр)
+    случайно проходят Luhn, но это не карты.
+    """
+
+    url_ranges = _collect_url_ranges(text)
 
     def _sub(match: re.Match[str]) -> str:
         raw = match.group(0)
+        # Skip если match целиком внутри URL (Twitter status ID и т.п.).
+        if _is_in_url(url_ranges, match.start(), match.end()):
+            return raw
         digits = re.sub(r"[\s\-]", "", raw)
         if 13 <= len(digits) <= 19 and _luhn_valid(digits):
             counter["card"] = counter.get("card", 0) + 1
@@ -280,11 +315,21 @@ class PIIRedactor:
         return _EMAIL_PATTERN.sub(_sub, text)
 
     def _redact_phones(self, text: str, counter: dict[str, int]) -> str:
-        """Телефоны с owner-whitelist."""
+        """Телефоны с owner-whitelist.
+
+        Skip-ит ASCII art (6+ одинаковых цифр подряд) и совпадения внутри URL.
+        """
         whitelisted = self._owner_whitelist
+        url_ranges = _collect_url_ranges(text)
 
         def _sub(match: re.Match[str]) -> str:
             raw = match.group(0)
+            # Skip номера внутри URL (query string, ID и т.п.).
+            if _is_in_url(url_ranges, match.start(), match.end()):
+                return raw
+            # Skip ASCII art / баннеры из повторяющихся цифр.
+            if _is_ascii_art_number(raw):
+                return raw
             normalized = re.sub(r"[\s\-\(\)]", "", raw)
             if any(w in normalized for w in whitelisted):
                 return raw
