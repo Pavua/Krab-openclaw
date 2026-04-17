@@ -3002,14 +3002,27 @@ class KraabUserbot(
         except Exception as exc:
             logger.warning("monitor_alert_error", error=str(exc))
 
-    async def _safe_edit(self, msg: Message, text: str) -> Message:
+    async def _safe_edit(
+        self,
+        msg: Message,
+        text: str,
+        *,
+        parse_mode: Any = enums.ParseMode.MARKDOWN,
+    ) -> Message:
         """
         Безопасно редактирует сообщение через _telegram_send_queue (с retry).
+
+        По умолчанию parse_mode=MARKDOWN — чтобы `**bold**`, `_italic_`, "`code`"
+        рендерились корректно. При parse-ошибке (unclosed entity, bad markdown)
+        делает fallback к plain text (parse_mode=None).
+
         Возвращает актуальный Message:
         - исходный, если edit не потребовался;
         - результат edit;
         - новый message при fallback на send_message.
         """
+        from .core.markdown_escape import looks_like_parse_error  # noqa: PLC0415
+
         current_text = (getattr(msg, "text", None) or getattr(msg, "caption", None) or "").strip()
         target_text = (text or "").strip()
         # Telegram EditMessage не принимает пустой/невидимый текст.
@@ -3019,8 +3032,11 @@ class KraabUserbot(
             return msg
         chat_id: int = msg.chat.id
         _text = target_text  # захват для lambda
+        _pm = parse_mode
         try:
-            edited = await _telegram_send_queue.run(chat_id, lambda: msg.edit(_text))
+            edited = await _telegram_send_queue.run(
+                chat_id, lambda: msg.edit(_text, parse_mode=_pm)
+            )
             return edited or msg
         except Exception as exc:  # noqa: BLE001 - фильтруем MESSAGE_NOT_MODIFIED
             if self._is_message_not_modified_error(exc):
@@ -3028,41 +3044,115 @@ class KraabUserbot(
             if self._is_message_id_invalid_error(exc) or self._is_message_empty_error(exc):
                 logger.warning("telegram_edit_fallback_send_new", error=str(exc))
                 return await _telegram_send_queue.run(
-                    chat_id, lambda: self.client.send_message(chat_id, _text)
+                    chat_id,
+                    lambda: self.client.send_message(chat_id, _text, parse_mode=_pm),
                 )
             if self._is_message_too_long_error(exc):
                 # Текст превысил лимит Telegram (4096). Отрезаем и отправляем новым сообщением.
                 logger.warning("telegram_edit_too_long_fallback_send_new", error=str(exc))
                 _truncated = _text[:4000]
                 return await _telegram_send_queue.run(
-                    chat_id, lambda: self.client.send_message(chat_id, _truncated)
+                    chat_id,
+                    lambda: self.client.send_message(chat_id, _truncated, parse_mode=_pm),
                 )
+            # Fallback при parse-ошибке — перешлём plain text, чтобы не потерять ответ.
+            if _pm is not None and looks_like_parse_error(exc):
+                logger.warning(
+                    "telegram_edit_parse_fallback_plain",
+                    error=str(exc),
+                    text_preview=_text[:200],
+                )
+                try:
+                    edited = await _telegram_send_queue.run(
+                        chat_id, lambda: msg.edit(_text, parse_mode=None)
+                    )
+                    return edited or msg
+                except Exception as exc2:  # noqa: BLE001
+                    if self._is_message_not_modified_error(exc2):
+                        return msg
+                    logger.warning("telegram_edit_plain_fallback_send_new", error=str(exc2))
+                    return await _telegram_send_queue.run(
+                        chat_id,
+                        lambda: self.client.send_message(chat_id, _text, parse_mode=None),
+                    )
             raise
 
-    async def _safe_reply_or_send_new(self, msg: Message, text: str) -> Message:
+    async def _safe_reply_or_send_new(
+        self,
+        msg: Message,
+        text: str,
+        *,
+        parse_mode: Any = enums.ParseMode.MARKDOWN,
+    ) -> Message:
         """
         Безопасно отвечает на сообщение через reply с fallback на send_message.
+
+        По умолчанию parse_mode=MARKDOWN. При parse-ошибке (unclosed entity и т.д.)
+        делает fallback к plain text — критично, иначе Краб silent.
 
         Это защищает private owner-path от silent-drop, когда Telegram принимает
         обычную отправку в чат, но валит именно reply на конкретный message id.
         Оба вызова идут через _telegram_send_queue (с retry при FLOOD_WAIT/timeout).
         """
+        from .core.markdown_escape import looks_like_parse_error  # noqa: PLC0415
+
         target_text = (text or "").strip() or "…"
         chat_id: int = msg.chat.id
         _text = target_text  # захват для lambda
+        _pm = parse_mode
         try:
-            sent = await _telegram_send_queue.run(chat_id, lambda: msg.reply(_text))
+            sent = await _telegram_send_queue.run(
+                chat_id, lambda: msg.reply(_text, parse_mode=_pm)
+            )
             return sent or msg
         except Exception as exc:  # noqa: BLE001
+            # Parse-error — fallback к plain text через reply.
+            if _pm is not None and looks_like_parse_error(exc):
+                logger.warning(
+                    "telegram_reply_parse_fallback_plain",
+                    chat_id=str(chat_id),
+                    message_id=str(getattr(msg, "id", "") or ""),
+                    error=str(exc),
+                    text_preview=_text[:200],
+                )
+                try:
+                    sent = await _telegram_send_queue.run(
+                        chat_id, lambda: msg.reply(_text, parse_mode=None)
+                    )
+                    return sent or msg
+                except Exception as exc2:  # noqa: BLE001
+                    logger.warning(
+                        "telegram_reply_plain_fallback_send_new",
+                        chat_id=str(chat_id),
+                        error=str(exc2),
+                    )
+                    return await _telegram_send_queue.run(
+                        chat_id,
+                        lambda: self.client.send_message(chat_id, _text, parse_mode=None),
+                    )
             logger.warning(
                 "telegram_reply_fallback_send_new",
                 chat_id=str(chat_id),
                 message_id=str(getattr(msg, "id", "") or ""),
                 error=str(exc),
             )
-            return await _telegram_send_queue.run(
-                chat_id, lambda: self.client.send_message(chat_id, _text)
-            )
+            try:
+                return await _telegram_send_queue.run(
+                    chat_id,
+                    lambda: self.client.send_message(chat_id, _text, parse_mode=_pm),
+                )
+            except Exception as exc3:  # noqa: BLE001
+                if _pm is not None and looks_like_parse_error(exc3):
+                    logger.warning(
+                        "telegram_send_new_parse_fallback_plain",
+                        chat_id=str(chat_id),
+                        error=str(exc3),
+                    )
+                    return await _telegram_send_queue.run(
+                        chat_id,
+                        lambda: self.client.send_message(chat_id, _text, parse_mode=None),
+                    )
+                raise
 
     # _get_chat_processing_lock -> BackgroundTasksMixin (src/userbot/background_tasks.py)
 

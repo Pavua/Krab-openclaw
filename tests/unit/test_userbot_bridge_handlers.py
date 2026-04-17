@@ -254,7 +254,7 @@ class TestSafeReplyOrSendNew:
 
         msg.reply = AsyncMock(side_effect=Exception("reply err"))
 
-        async def capture_send(chat_id, text):
+        async def capture_send(chat_id, text, **kwargs):
             captured_text.append(text)
             return sent
 
