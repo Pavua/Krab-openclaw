@@ -9,6 +9,7 @@
   !reset --layer=krab         — только Krab history_cache
   !reset --layer=archive      — archive.db per-chat
   !reset --dry-run            — превью, ничего не удаляет
+  !reset dry-run              — безопасный alias для телефона
 """
 
 from __future__ import annotations
@@ -272,6 +273,30 @@ class TestHandleResetDryRun:
         text: str = msg.reply.call_args[0][0]
         assert "Dry-run" in text or "dry" in text.lower()
         # Nonce НЕ создан в dry-run
+        assert get_gemini_nonce("42") == ""
+
+    @pytest.mark.asyncio
+    async def test_dry_run_alias_without_dashes_is_safe(self) -> None:
+        """Alias `dry-run` без `--` не должен выполнять реальную очистку.
+
+        Этот вариант легко набрать с телефона, поэтому он обязан быть безопасным.
+        """
+        bot = _make_bot(owner_id=999)
+        msg = _make_message("!reset dry-run", chat_id=42, from_user_id=100)
+        oc = _make_openclaw(sessions={"42": [{"role": "user", "content": "x"}]})
+        h_cache = _make_cache(has_keys={"chat_history:42"})
+
+        with (
+            patch("src.handlers.command_handlers.openclaw_client", oc),
+            patch("src.handlers.command_handlers.history_cache", h_cache),
+        ):
+            await handle_reset(bot, msg)
+
+        oc.clear_session.assert_not_called()
+        h_cache.delete.assert_not_called()
+        msg.reply.assert_called_once()
+        text: str = msg.reply.call_args[0][0]
+        assert "Dry-run" in text
         assert get_gemini_nonce("42") == ""
 
 

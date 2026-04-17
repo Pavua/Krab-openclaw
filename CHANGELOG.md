@@ -7,7 +7,83 @@ Versioning: Semantic (MAJOR.MINOR.PATCH).
 
 ## [Unreleased]
 
-Nothing queued yet — see `.remember/next_session.md` for Session 11 scope.
+Nothing queued yet — see `.remember/next_session.md` for Session 12 scope.
+
+## [10.2.0] — 2026-04-17 — Session 11: Proactivity + Memory Layer Phase 2 + Feature polish
+
+### Added
+- **Memory Layer Phase 2** end-to-end:
+  - Model2Vec embeddings pipeline — 9131 chunks encoded в 1.9s
+  - sqlite-vec virtual table for vector search
+  - Hybrid FTS5+semantic Reciprocal Rank Fusion re-ranker (`src/core/memory_hybrid_reranker.py`)
+  - `/api/memory/search` endpoint (fts/semantic/hybrid modes)
+  - `!recall <query>` command в Telegram
+  - `krab_memory_search` + `krab_memory_stats` MCP tools
+- **Proactivity Level 2** — Reminders Queue (`src/core/reminders_queue.py`):
+  - Time-based reminders ("через 2 часа ...")
+  - Event-based reminders ("когда в чате X появится тема Y")
+  - Wired в `userbot_bridge` startup + event hook в `_process_message`
+  - `!remind <spec>` command + parser (RU+EN natural language)
+- **Proactivity Level 3** — Self-reflection pipeline (`src/core/swarm_self_reflection.py`):
+  - Post-task LLM reflection parses insights/unresolved/followups
+  - Followups auto-enqueued в task_board или reminders_queue
+- **Proactivity Level 1** — Per-chat cron UX:
+  - Human-friendly cron spec parser (`src/core/cron_spec_parser.py`) RU+EN
+  - `!cron quick "каждый день в 10:00" "prompt"` subcommand
+  - Fixed: `!cron` handler never registered в dispatcher (dead code restored)
+- **New Telegram commands:** `!recall`, `!remind`, `!cron quick`, `!model info`, `!stats ecosystem`
+- **Dashboard V4 backend:** `/api/session10/summary` endpoint + Gemini 3.1 Pro frontend spec
+- **Dedicated Chrome launcher** активирован в Krab startup (opt-in через env)
+- **Provider auto-failover** (`src/core/provider_failover.py`) — N consecutive failures → switch to fallback
+- **Prometheus `/metrics` endpoint** без deps на prometheus_client
+- **Typing keepalive** context manager (`src/userbot/typing_keepalive.py`) с explicit cancel
+- **Auto-restart policy** расширен с launchctl "not loaded" detection
+- **Markdown escape helper** (`src/core/markdown_escape.py`) + default `parse_mode=markdown` в `_safe_reply`/`_safe_edit`
+- **Weekly maintenance script** (`scripts/maintenance_weekly.py`) — VACUUM + log rotation
+- **CI health report** aggregator (`scripts/ci_health_report.py`)
+- **Stale worktrees cleanup** utility (`scripts/cleanup_stale_worktrees.py`)
+- **CHANGELOG auto-appender** (`scripts/changelog_append.py`)
+
+### Fixed
+- **codex-cli stagnation cancel** verified live во время 17.04 outage (Wave 2 code работает)
+- **Gateway "not loaded"** recovery через launchctl bootstrap (incident 17.04)
+- **Chrome prompts** — disable `chrome-devtools` + `playwright` MCP в `~/.claude.json`, kill workspace Chrome, user manually disabled `chrome://inspect` toggle
+- **`handle_cron` dispatcher** — never registered, теперь connects `!cron` к filter
+- **`auto_restart_manager`/`is_auto_restart_enabled`** backward compat aliases для `proactive_watch` import
+
+### Changed
+- **PIIRedactor** — URL skip для CARD matches (Twitter status IDs), ASCII art skip for PHONE
+- **Memory validator patterns** — WEAK/STRONG split against decoration bypass + 9 new synonyms
+- **`!stats`** — добавлен `ecosystem` subcommand (alias `eco`, `health`)
+- **`!memory`** — добавлен `stats` subcommand
+
+### Tests
+- **+200+ new unit tests** (estimated)
+- Memory Layer coverage: **89% → 94%** (3 modules >85%)
+- `src/core/logger.py`: 48% → **100%**
+- `src/core/openclaw_task_poller.py`: 50% → **100%**
+- Integration tests для Session 10 endpoints + E2E memory chain
+- Smoke tests: retrieval (0.5-0.9ms FTS), semantic search (1.2s cold / ~50ms warm)
+
+### Security
+- **Memory Injection Validator** medium fixes merged (allowlist tuning, NFKC normalization, 9 synonyms, audit logging)
+- Owner check unified через ACL (removed env-based OWNER_USER_IDS risk)
+
+### Docs
+- `.remember/session_11_rollup.md` — interim rollup
+- `.remember/session_11_feature_requests.md` — user feedback (parse_mode md, proactivity 2-level, `!model info`)
+- `docs/DASHBOARD_V4_SESSION10_FRONTEND_SPEC.md` — 329 lines spec для Gemini
+- `CLAUDE.md` — новые endpoints (`/metrics`, `/api/memory/search`, `/api/chrome/dedicated/*`)
+
+### Commits (58+)
+Spans `95d1754..HEAD`. Full list via `git log --oneline 95d1754..HEAD`.
+
+### Known issues carried to Session 12
+- p0lrd Telegram Export >24h (still exporting, старый аккаунт)
+- 27 locked worktrees (parent Claude Code PID holds — prune после session end)
+- Main Chrome CDP `:9222` disabled (user action), dedicated Chrome активирован
+
+---
 
 ## [10.1.0] — 2026-04-17 — Session 10: Security Hardening + Memory Layer Bootstrap
 

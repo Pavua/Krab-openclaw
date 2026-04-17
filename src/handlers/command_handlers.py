@@ -1944,7 +1944,10 @@ async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
     tokens = raw_args.split() if raw_args else []
     is_all = "--all" in tokens
     is_force = "--force" in tokens
-    dry_run = "--dry-run" in tokens
+    # Безопасный alias: пользователь может написать `!reset dry-run` с телефона.
+    # Раньше такой вариант не считался dry-run и мог уйти в реальное выполнение reset.
+    dry_run_aliases = {"--dry-run", "dry-run", "dryrun", "dry"}
+    dry_run = any(token.lower() in dry_run_aliases for token in tokens)
     layer: str | None = None
     for token in tokens:
         if token.startswith("--layer="):
