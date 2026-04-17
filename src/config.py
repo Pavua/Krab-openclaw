@@ -478,6 +478,10 @@ class Config:
         "yes",
     )
 
+    # Voice Channel FastAPI port (VA Phase 1.4).
+    # Voice Gateway POSTает сюда транскрипты → ответ LLM стримится как SSE.
+    KRAB_VOICE_PORT: int = int(os.getenv("KRAB_VOICE_PORT", "8081"))
+
     @classmethod
     def validate(cls) -> list[str]:
         """Проверяет обязательные настройки и возвращает список ошибок"""

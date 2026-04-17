@@ -269,6 +269,24 @@ class MCPClientManager:
                     },
                 }
             )
+        # voice_assistant_tools: voice channel MCP tools (VA Phase 1.4)
+        try:
+            from .mcp_tools.voice_assistant_tools import VOICE_TOOL_SCHEMAS
+
+            for schema in VOICE_TOOL_SCHEMAS:
+                manifest.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": schema["name"],
+                            "description": schema["description"],
+                            "parameters": schema["inputSchema"],
+                        },
+                    }
+                )
+        except ImportError:
+            pass  # voice_assistant_tools не установлены — не критично
+
         return manifest
 
     async def call_tool_unified(self, full_tool_name: str, arguments: Dict[str, Any]) -> str:
@@ -283,6 +301,9 @@ class MCPClientManager:
 
         if full_tool_name == "tor_fetch":
             return await self._tor_fetch_impl(arguments)
+
+        if full_tool_name.startswith("voice:"):
+            return await self._voice_tool_impl(full_tool_name, arguments)
 
         if "__" not in full_tool_name:
             return f"❌ Неизвестный формат инструмента: {full_tool_name}"
@@ -339,6 +360,21 @@ class MCPClientManager:
         except Exception as e:
             logger.error("tor_fetch_tool_failed", url=url, error=repr(e))
             return f"❌ Ошибка tor_fetch: {e}"
+
+    async def _voice_tool_impl(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Делегирует вызовы voice:* инструментов в voice_assistant_tools."""
+        try:
+            from .mcp_tools.voice_assistant_tools import dispatch_voice_tool
+
+            result = await dispatch_voice_tool(tool_name, arguments)
+            if isinstance(result, dict):
+                import json as _json
+
+                return _json.dumps(result, ensure_ascii=False)
+            return str(result)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("voice_tool_impl_error", tool=tool_name, error=str(exc))
+            return f"voice_tool_error: {exc}"
 
     async def health_check(self) -> dict:
         """Возвращает статус MCP relay для capability_registry._probe_status().
