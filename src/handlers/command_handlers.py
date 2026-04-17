@@ -6798,13 +6798,204 @@ async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
     await message.reply(f"🤫 Тишина в этом чате на **{minutes}** мин.\n`!тишина стоп` чтобы снять.")
 
 
+def _costs_filter_calls(calls: list, *, days: int | None = None) -> list:
+    """Вернуть вызовы за последние `days` дней (None = все)."""
+    if days is None:
+        return calls
+    import time as _time
+
+    cutoff = _time.time() - days * 86400
+    return [r for r in calls if r.timestamp >= cutoff]
+
+
+def _costs_aggregate(calls: list) -> dict:
+    """Агрегировать список CallRecord в сводку."""
+    from collections import defaultdict as _dd
+
+    by_model: dict = _dd(lambda: {"cost_usd": 0.0, "calls": 0, "tokens": 0})
+    by_provider: dict = _dd(lambda: {"cost_usd": 0.0, "calls": 0})
+    total_cost = 0.0
+    total_tokens = 0
+    for r in calls:
+        total_cost += r.cost_usd
+        total_tokens += r.input_tokens + r.output_tokens
+        by_model[r.model_id]["cost_usd"] += r.cost_usd
+        by_model[r.model_id]["calls"] += 1
+        by_model[r.model_id]["tokens"] += r.input_tokens + r.output_tokens
+        # Провайдер — часть до «/»
+        provider = r.model_id.split("/")[0] if "/" in r.model_id else r.model_id
+        by_provider[provider]["cost_usd"] += r.cost_usd
+        by_provider[provider]["calls"] += 1
+    return {
+        "total_cost": total_cost,
+        "total_tokens": total_tokens,
+        "calls_count": len(calls),
+        "by_model": dict(by_model),
+        "by_provider": dict(by_provider),
+    }
+
+
+def _costs_ascii_trend(calls: list, days: int = 30) -> str:
+    """Построить ASCII-график расходов за последние `days` дней."""
+    import datetime
+
+    now = datetime.date.today()
+    # Сгруппировать вызовы по дате
+    daily: dict[datetime.date, float] = {}
+    for d in range(days):
+        day = now - datetime.timedelta(days=days - 1 - d)
+        daily[day] = 0.0
+    for r in calls:
+        day = datetime.date.fromtimestamp(r.timestamp)
+        if day in daily:
+            daily[day] += r.cost_usd
+
+    values = [daily[d] for d in sorted(daily)]
+    max_v = max(values) if values else 0.0
+    total = sum(values)
+    avg = total / len(values) if values else 0.0
+
+    bars = " ▁▂▃▄▅▆▇█"
+
+    def _bar(v: float) -> str:
+        if max_v == 0:
+            return " "
+        idx = round((v / max_v) * (len(bars) - 1))
+        return bars[idx]
+
+    bar_line = "".join(_bar(v) for v in values)
+
+    lines = [
+        f"📈 **Тренд за {days} дней ($):**",
+        f"`{bar_line}`",
+        f"↑ {days}d ago {'·' * max(0, len(values) - 10)} ↑ today",
+        f"avg=${avg:.2f}/d · total=${total:.4f}",
+    ]
+    return "\n".join(lines)
+
+
+async def _handle_costs_today(bot: "KraabUserbot", message: Message) -> None:
+    """!costs today — расходы за сегодня."""
+    calls = _costs_filter_calls(getattr(cost_analytics, "_calls", []), days=1)
+    agg = _costs_aggregate(calls)
+    lines = [
+        "💰 **Costs: сегодня**",
+        "─────────────────",
+        f"Вызовов: {agg['calls_count']} | Токенов: {agg['total_tokens']}",
+        f"Стоимость: ${agg['total_cost']:.4f}",
+    ]
+    if agg["by_model"]:
+        lines.append("")
+        lines.append("**По моделям:**")
+        for mid, data in sorted(agg["by_model"].items(), key=lambda x: -x[1]["cost_usd"]):
+            lines.append(f"• {mid}: ${data['cost_usd']:.4f} ({data['calls']} calls)")
+    await message.reply("\n".join(lines))
+
+
+async def _handle_costs_week(bot: "KraabUserbot", message: Message) -> None:
+    """!costs week — расходы за 7 дней."""
+    calls = _costs_filter_calls(getattr(cost_analytics, "_calls", []), days=7)
+    agg = _costs_aggregate(calls)
+    lines = [
+        "💰 **Costs: 7 дней**",
+        "─────────────────",
+        f"Вызовов: {agg['calls_count']} | Токенов: {agg['total_tokens']}",
+        f"Стоимость: ${agg['total_cost']:.4f}",
+        f"Средняя в день: ${agg['total_cost'] / 7:.4f}",
+    ]
+    if agg["by_model"]:
+        lines.append("")
+        lines.append("**По моделям:**")
+        for mid, data in sorted(agg["by_model"].items(), key=lambda x: -x[1]["cost_usd"]):
+            lines.append(f"• {mid}: ${data['cost_usd']:.4f} ({data['calls']} calls)")
+    await message.reply("\n".join(lines))
+
+
+async def _handle_costs_breakdown(bot: "KraabUserbot", message: Message) -> None:
+    """!costs breakdown — разбивка по провайдерам."""
+    calls = getattr(cost_analytics, "_calls", [])
+    agg = _costs_aggregate(calls)
+    lines = [
+        "💰 **Costs: по провайдерам**",
+        "─────────────────",
+        f"Всего: ${agg['total_cost']:.4f} | Вызовов: {agg['calls_count']}",
+        "",
+        "**По провайдерам:**",
+    ]
+    total = agg["total_cost"] or 1.0  # защита от деления на 0
+    for provider, data in sorted(agg["by_provider"].items(), key=lambda x: -x[1]["cost_usd"]):
+        pct = round(data["cost_usd"] / total * 100, 1)
+        lines.append(f"• {provider}: ${data['cost_usd']:.4f} ({pct}%, {data['calls']} calls)")
+    if agg["by_model"]:
+        lines.append("")
+        lines.append("**По моделям:**")
+        for mid, data in sorted(agg["by_model"].items(), key=lambda x: -x[1]["cost_usd"])[:8]:
+            lines.append(f"• {mid}: ${data['cost_usd']:.4f} ({data['calls']} calls)")
+    await message.reply("\n".join(lines))
+
+
+async def _handle_costs_budget(bot: "KraabUserbot", message: Message) -> None:
+    """!costs budget — бюджет vs фактические расходы."""
+    budget = cost_analytics.get_monthly_budget_usd()
+    cost_month = cost_analytics.get_monthly_cost_usd()
+    cost_session = cost_analytics.get_cost_so_far_usd()
+    forecast = cost_analytics.monthly_calls_forecast()
+    lines = [
+        "💰 **Costs: бюджет**",
+        "─────────────────",
+        f"Сессия: ${cost_session:.4f}",
+        f"Месяц: ${cost_month:.4f}",
+    ]
+    if budget > 0:
+        pct = min(100, round(cost_month / budget * 100, 1))
+        remaining = max(0.0, budget - cost_month)
+        bar_filled = round(pct / 10)
+        bar = "█" * bar_filled + "░" * (10 - bar_filled)
+        lines += [
+            f"Бюджет: ${budget:.2f}",
+            f"[{bar}] {pct}%",
+            f"Остаток: ${remaining:.4f}",
+        ]
+        if pct >= 90:
+            lines.append("⚠️ Бюджет почти исчерпан!")
+        elif pct >= 75:
+            lines.append("⚡ Более 75% бюджета израсходовано.")
+    else:
+        lines.append("Бюджет: не задан (`!budget 10.00` чтобы задать)")
+    if forecast is not None:
+        lines.append(f"Прогноз вызовов (конец месяца): ~{int(forecast)}")
+    await message.reply("\n".join(lines))
+
+
+async def _handle_costs_trend(bot: "KraabUserbot", message: Message) -> None:
+    """!costs trend — ASCII-тренд за 30 дней."""
+    calls = getattr(cost_analytics, "_calls", [])
+    trend_text = _costs_ascii_trend(calls, days=30)
+    await message.reply(trend_text)
+
+
 async def handle_costs(bot: "KraabUserbot", message: Message) -> None:
-    """!costs — текущий cost report прямо в Telegram (owner-only)."""
+    """!costs [today|week|breakdown|budget|trend] — cost report (owner-only)."""
     # Проверка: только владелец
     access_profile = bot._get_access_profile(message.from_user)
     if access_profile.level != AccessLevel.OWNER:
         raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
 
+    args = (bot._get_command_args(message) or "").strip().lower()
+    sub = args.split()[0] if args else ""
+
+    if sub == "today":
+        return await _handle_costs_today(bot, message)
+    if sub == "week":
+        return await _handle_costs_week(bot, message)
+    if sub == "breakdown":
+        return await _handle_costs_breakdown(bot, message)
+    if sub == "budget":
+        return await _handle_costs_budget(bot, message)
+    if sub == "trend":
+        return await _handle_costs_trend(bot, message)
+
+    # Default — текущий month summary
     report = cost_analytics.build_usage_report_dict()
 
     cost_session = report.get("cost_session_usd", 0.0)
