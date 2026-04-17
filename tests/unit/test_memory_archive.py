@@ -15,7 +15,6 @@ Unit-тесты схемы SQLite для Memory Layer (DDL-only слой).
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from pathlib import Path
 
@@ -30,7 +29,6 @@ from src.core.memory_archive import (
     list_tables,
     open_archive,
 )
-
 
 # ---------------------------------------------------------------------------
 # :memory: для unit-логики.
@@ -305,3 +303,149 @@ class TestMeta:
         assert row is not None
         # ISO-8601 UTC с суффиксом Z.
         assert row[0].endswith("Z")
+
+
+# ---------------------------------------------------------------------------
+# Session 11: error paths + read-only mode + malformed meta version.
+# ---------------------------------------------------------------------------
+
+
+class TestCreateSchemaRollback:
+    """
+    При sqlite3.Error в середине create_schema должен прийти rollback+raise.
+    """
+
+    def test_rollback_on_ddl_error(self) -> None:
+        """
+        Оборачиваем sqlite3.Connection в класс, чей cursor().execute падает
+        на известном DDL-шаге. После rollback исключение пробрасывается наружу.
+        """
+
+        class FailingCursor:
+            def __init__(self, real_cur: sqlite3.Cursor) -> None:
+                self._real = real_cur
+
+            def execute(self, sql: str, *args, **kwargs):
+                # Ломаемся на DDL таблицы chunks — после meta уже создана,
+                # но BEGIN транзакции требует rollback.
+                if "CREATE TABLE IF NOT EXISTS chunks" in sql:
+                    raise sqlite3.Error("simulated DDL error")
+                return self._real.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name: str):
+                return getattr(self._real, name)
+
+        class WrappedConn:
+            def __init__(self, real: sqlite3.Connection) -> None:
+                self._real = real
+                self.rollback_called = False
+
+            def cursor(self) -> FailingCursor:
+                return FailingCursor(self._real.cursor())
+
+            def rollback(self) -> None:
+                self.rollback_called = True
+                return self._real.rollback()
+
+            def commit(self) -> None:
+                return self._real.commit()
+
+            def __getattr__(self, name: str):
+                return getattr(self._real, name)
+
+        real_conn = sqlite3.connect(":memory:")
+        try:
+            wrapped = WrappedConn(real_conn)
+            with pytest.raises(sqlite3.Error, match="simulated DDL error"):
+                create_schema(wrapped)  # type: ignore[arg-type]
+            assert wrapped.rollback_called, "rollback должен быть вызван"
+        finally:
+            real_conn.close()
+
+
+class TestReadOnlyOpen:
+    def test_read_only_on_existing_db(self, tmp_path: Path) -> None:
+        """
+        open_archive(read_only=True) должен использовать `file:...?mode=ro` URI
+        и успешно открыться на уже существующей БД.
+        """
+        paths = ArchivePaths.under(tmp_path / "ro")
+        # Сначала создадим БД.
+        conn = open_archive(paths)
+        try:
+            create_schema(conn)
+        finally:
+            conn.close()
+
+        # Теперь открываем в read-only — запись должна провалиться.
+        ro_conn = open_archive(paths, read_only=True, create_if_missing=False)
+        try:
+            with pytest.raises(sqlite3.OperationalError):
+                ro_conn.execute(
+                    "INSERT INTO meta(key, value) VALUES ('test', 'x');"
+                )
+        finally:
+            ro_conn.close()
+
+
+class TestSchemaVersionParsing:
+    """
+    get_schema_version устойчив к мусору в meta.value и отсутствующей строке.
+    """
+
+    def test_none_when_row_missing(self, mem_conn: sqlite3.Connection) -> None:
+        # Удалим строку schema_version — get_schema_version должен вернуть None.
+        mem_conn.execute("DELETE FROM meta WHERE key='schema_version';")
+        mem_conn.commit()
+        assert get_schema_version(mem_conn) is None
+
+    def test_none_when_value_not_int(self, mem_conn: sqlite3.Connection) -> None:
+        # Перезапишем value на мусор — parse int должен упасть в ValueError.
+        mem_conn.execute(
+            "UPDATE meta SET value='not-a-number' WHERE key='schema_version';"
+        )
+        mem_conn.commit()
+        assert get_schema_version(mem_conn) is None
+
+    def test_none_when_value_typeerror(self, mem_conn: sqlite3.Connection) -> None:
+        """
+        Путь TypeError — подсовываем значение, которое int() отказывается
+        парсить не по ValueError, а по TypeError (float с '.5' → ValueError,
+        а вот bytes-like не валидный текст → часть того же ветвления).
+
+        Надёжный способ: подменим fetchone так, чтобы вернуть объект, у которого
+        row[0] — это не-строка, не-bytes, не-число (например, список).
+        """
+
+        class WrappedConn:
+            def __init__(self, real: sqlite3.Connection) -> None:
+                self._real = real
+
+            def execute(self, sql: str, *args, **kwargs):
+                real_res = self._real.execute(sql, *args, **kwargs)
+                if "schema_version" in sql:
+                    class FakeResult:
+                        def fetchone(self):  # noqa: PLR6301
+                            return ([],)  # список → TypeError в int()
+                    return FakeResult()
+                return real_res
+
+            def __getattr__(self, name: str):
+                return getattr(self._real, name)
+
+        wrapped = WrappedConn(mem_conn)
+        assert get_schema_version(wrapped) is None  # type: ignore[arg-type]
+
+
+class TestEnforcePermissionsEdges:
+    def test_enforce_on_missing_paths_noop(self, tmp_path: Path) -> None:
+        """
+        Если dir/db ещё не созданы, enforce не должен падать на OSError —
+        просто пропустить chmod без исключения.
+        """
+        paths = ArchivePaths.under(tmp_path / "never_created")
+        # ни директория, ни файл не существуют — функция должна тихо пройти.
+        enforce_archive_permissions(paths)
+        # И dir, и db по-прежнему отсутствуют.
+        assert not paths.dir.exists()
+        assert not paths.db.exists()
