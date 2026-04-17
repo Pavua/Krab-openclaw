@@ -13388,6 +13388,43 @@ class WebApp:
             self._assert_write_access(x_krab_web_key, token)
             return self._launch_owner_chrome_remote_debugging()
 
+        @self.app.get("/api/chrome/dedicated/status")
+        async def chrome_dedicated_status():
+            """Статус dedicated Chrome (isolated profile на /tmp/krab-chrome)."""
+            from ..integrations.dedicated_chrome import (
+                DEFAULT_CDP_PORT,
+                find_chrome_binary,
+                is_dedicated_chrome_running,
+            )
+
+            port = int(os.environ.get("DEDICATED_CHROME_PORT") or DEFAULT_CDP_PORT)
+            enabled = os.environ.get("DEDICATED_CHROME_ENABLED", "false").lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+            return {
+                "ok": True,
+                "enabled": enabled,
+                "running": is_dedicated_chrome_running(port),
+                "port": port,
+                "binary": find_chrome_binary(),
+                "profile_dir": os.environ.get("DEDICATED_CHROME_PROFILE_DIR")
+                or "/tmp/krab-chrome",
+            }
+
+        @self.app.post("/api/chrome/dedicated/launch")
+        async def chrome_dedicated_launch(
+            token: str = Query(default=""),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        ):
+            """Ручной запуск dedicated Chrome (идемпотентно)."""
+            self._assert_write_access(x_krab_web_key, token)
+            from ..integrations.dedicated_chrome import launch_dedicated_chrome
+
+            ok, status = await asyncio.to_thread(launch_dedicated_chrome)
+            return {"ok": ok, "status": status}
+
         @self.app.get("/api/openclaw/browser-mcp-readiness")
         async def openclaw_browser_mcp_readiness(url: str = "https://example.com"):
             """Агрегированный staged readiness для browser-контура владельца и managed MCP."""
