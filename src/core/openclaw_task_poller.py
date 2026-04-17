@@ -11,9 +11,10 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +30,77 @@ GATEWAY_HEALTH_URL = "http://127.0.0.1:18789/healthz"
 GATEWAY_HEALTH_TIMEOUT_SEC = 5.0
 
 
+# ---------------------------------------------------------------------------
+# Tool call extraction (buffered mode tool indicator)
+# ---------------------------------------------------------------------------
+# Паттерны для extraction активного tool из progress_summary строк.
+# Gateway пишет разнообразные форматы (emoji, RU/EN narration, JSON, markdown),
+# поэтому перебираем несколько regex'ов в порядке специфичности.
+_TOOL_CALL_PATTERNS = [
+    # Pattern 1: "🔧 Tool: name(args)" or "🔧 name"
+    re.compile(
+        r"🔧\s*(?:Tool:|Активно:|Running:|Calling:)?\s*([\w_]+)(?:\((.*?)\))?", re.IGNORECASE
+    ),
+    # Pattern 2: "Executing tool_name" or "Running tool_name"
+    re.compile(
+        r"\b(?:Executing|Running|Calling|Invoking|Запускаю|Вызов)\s+([\w_]+)", re.IGNORECASE
+    ),
+    # Pattern 3: JSON-like {"tool": "name", ...}
+    re.compile(r'"tool"\s*:\s*"([\w_]+)"', re.IGNORECASE),
+    # Pattern 4: markdown-code `tool_name(`
+    re.compile(r"`([\w_]+)\s*\(", re.IGNORECASE),
+]
+
+# Паттерн для очереди запланированных tools.
+_QUEUE_PATTERN = re.compile(r"(?:queued|в\s*очереди|pending)\s*[:=]?\s*([^.\n]+)", re.IGNORECASE)
+
+
+def extract_tool_calls_from_progress(progress_text: str) -> tuple[str, list[str]]:
+    """
+    Извлечь (active_tool, queued_tools) из progress_summary строки.
+
+    Returns ("", []) если ничего не найдено.
+
+    Примеры:
+        "🔧 web_search(query='hello')" → ("web_search(query='hello')", [])
+        "Executing read_file now" → ("read_file", [])
+        "Running tool_a. Queued: b, c" → ("tool_a", ["b", "c"])
+    """
+    if not progress_text:
+        return "", []
+
+    active = ""
+    for pat in _TOOL_CALL_PATTERNS:
+        m = pat.search(progress_text)
+        if m:
+            tool_name = m.group(1)
+            args_str = ""
+            # group(2) доступен только у первого паттерна (tool(args))
+            if len(m.groups()) >= 2:
+                try:
+                    args_str = m.group(2) or ""
+                except IndexError:
+                    args_str = ""
+            if args_str and len(args_str) > 40:
+                args_str = args_str[:37] + "..."
+            active = f"{tool_name}({args_str})" if args_str else tool_name
+            break
+
+    # Queued tools: разбираем через запятую/точку с запятой, чистим от кавычек и скобок.
+    queued: list[str] = []
+    qm = _QUEUE_PATTERN.search(progress_text)
+    if qm:
+        raw = qm.group(1).strip()
+        for part in re.split(r"[,;]\s*", raw):
+            part = part.strip().strip("`\"'[]")
+            if part and re.match(r"^[\w_]+$", part):
+                queued.append(part)
+            if len(queued) >= 5:
+                break
+
+    return active, queued
+
+
 @dataclass(frozen=True)
 class TaskState:
     """Снимок состояния активной задачи OpenClaw."""
@@ -39,6 +111,9 @@ class TaskState:
     progress_summary: str
     last_event_at_ms: int
     is_stale: bool  # last_event_at > STALE_THRESHOLD_SEC назад
+    # Извлечённый активный tool (buffered mode indicator, session 9)
+    active_tool: str = ""
+    queued_tools: list[str] = field(default_factory=list)
 
 
 def poll_active_tasks() -> list[TaskState]:
@@ -69,14 +144,19 @@ def poll_active_tasks() -> list[TaskState]:
     for row in rows:
         task_id, status, label, progress, last_event_ms = row
         age_sec = (now_ms - (last_event_ms or 0)) / 1000.0
+        progress_text = str(progress or "")
+        # Извлекаем активный tool + очередь из progress_summary (buffered mode indicator).
+        active_tool, queued_tools = extract_tool_calls_from_progress(progress_text)
         result.append(
             TaskState(
                 task_id=str(task_id or ""),
                 status=str(status or ""),
                 label=str(label or ""),
-                progress_summary=str(progress or ""),
+                progress_summary=progress_text,
                 last_event_at_ms=int(last_event_ms or 0),
                 is_stale=age_sec > STALE_THRESHOLD_SEC,
+                active_tool=active_tool,
+                queued_tools=queued_tools,
             )
         )
     return result
@@ -95,9 +175,7 @@ def poll_gateway_liveness() -> tuple[bool, str]:
     try:
         conn = sqlite3.connect(f"file:{RUNS_DB_PATH}?mode=ro", uri=True)
         try:
-            row = conn.execute(
-                "SELECT MAX(last_event_at) FROM task_runs;"
-            ).fetchone()
+            row = conn.execute("SELECT MAX(last_event_at) FROM task_runs;").fetchone()
         finally:
             conn.close()
         if row and row[0]:
