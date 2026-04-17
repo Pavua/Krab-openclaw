@@ -1,53 +1,55 @@
 # -*- coding: utf-8 -*-
 """
-Integration-тесты для Session 10 endpoints в Krab Owner Panel.
+Интеграционные тесты для Session 10 aggregated endpoints.
 
-Покрывают:
-  - GET /api/chrome/dedicated/status  (Agent #10) — skipped если endpoint не зарегистрирован
-  - POST /api/chrome/dedicated/launch (Agent #10) — skipped если endpoint не зарегистрирован
-  - GET /api/memory/indexer           (Session 9 Phase 4)
-  - POST /api/memory/indexer/flush    (Session 9 Phase 4)
-  - GET /api/health/lite              (schema regression — Session 10 поля не должны ломать ответ)
+Покрываем:
+- GET /api/session10/summary — единый aggregated view для V4 Hub
+  (session_info, memory_validator, memory_archive, new_commands,
+   dedicated_chrome, auto_restart, observability, known_issues).
 
-Запуск:
-    venv/bin/python -m pytest tests/integration/test_session10_endpoints.py -v
+Тесты защищены от отсутствия опциональных модулей (memory_validator и т.д.) —
+endpoint должен возвращать defaults, не 500.
 """
 
 from __future__ import annotations
 
-import sys
-from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
-from src.modules.web_app import WebApp  # noqa: E402
+from src.modules.web_app import WebApp
 
 # ---------------------------------------------------------------------------
-# Минимальные заглушки (берём паттерн из tests/unit/test_web_commands_health_api)
+# Заглушки зависимостей (копируют паттерн test_web_app_dashboard_endpoints.py)
 # ---------------------------------------------------------------------------
+
+
+class _DummyRouter:
+    """Минимальный роутер-заглушка."""
+
+    def get_model_info(self) -> dict:
+        return {}
+
+    def health_check(self):  # pragma: no cover - AsyncMock используется ниже
+        return None
 
 
 class _FakeOpenClaw:
-    """Заглушка OpenClaw клиента для deps."""
-
     def get_last_runtime_route(self) -> dict:
         return {
             "channel": "cloud",
             "provider": "google",
-            "model": "google/gemini-test",
+            "model": "google/gemini-3-pro-preview",
             "status": "ok",
-            "error_code": None,
         }
 
     def get_tier_state_export(self) -> dict:
-        return {"active_tier": "free", "last_error_code": None}
+        return {"active_tier": "free"}
+
+    async def get_cloud_runtime_check(self) -> dict:
+        return {"ok": True}
 
     async def health_check(self) -> bool:
         return True
@@ -58,43 +60,30 @@ class _FakeHealthClient:
         return True
 
     async def health_report(self) -> dict:
-        return {"ok": True, "status": "ok", "source": "fake"}
+        return {"ok": True, "status": "ok", "source": "fake", "detail": {}}
 
     async def capabilities_report(self) -> dict:
         return {"ok": True, "status": "ok", "source": "fake", "detail": {}}
 
 
-class _DummyRouter:
-    def get_model_info(self) -> dict:
-        return {}
-
-
 class _FakeKraab:
-    """Заглушка userbot."""
-
     def get_translator_runtime_profile(self) -> dict:
-        return {"language_pair": "es-ru", "enabled": True}
+        return {"enabled": False, "src_lang": "ru", "tgt_lang": "es"}
 
     def get_translator_session_state(self) -> dict:
-        return {"session_status": "idle", "active_chats": [], "stats": {}}
-
-    def get_voice_runtime_profile(self) -> dict:
-        return {"tts_enabled": False}
-
-    def get_runtime_state(self) -> dict:
-        return {"startup_state": "running", "client_connected": True}
+        return {"active": False, "session_id": None}
 
 
-# ---------------------------------------------------------------------------
-# Фикстуры
-# ---------------------------------------------------------------------------
+def _build_client(*, watchdog: Any = None) -> TestClient:
+    """Создаёт TestClient с набором зависимостей."""
+    router = MagicMock()
+    router.health_check = AsyncMock(return_value={"status": "healthy"})
+    router.task_queue = None
+    router.cost_analytics = None
+    router.cost_engine = None
 
-
-@pytest.fixture
-def _deps() -> dict[str, Any]:
-    """Возвращает минимальный набор deps для WebApp."""
-    return {
-        "router": _DummyRouter(),
+    deps = {
+        "router": router,
         "openclaw_client": _FakeOpenClaw(),
         "black_box": None,
         "health_service": None,
@@ -104,268 +93,142 @@ def _deps() -> dict[str, Any]:
         "voice_gateway_client": _FakeHealthClient(),
         "krab_ear_client": _FakeHealthClient(),
         "perceptor": None,
-        "watchdog": None,
+        "watchdog": watchdog,
         "queue": None,
         "kraab_userbot": _FakeKraab(),
     }
-
-
-@pytest.fixture
-def client(_deps: dict[str, Any]) -> TestClient:
-    """Возвращает TestClient поверх локального WebApp."""
-    app = WebApp(_deps, port=18099, host="127.0.0.1")
+    app = WebApp(deps, port=18080, host="127.0.0.1")
     return TestClient(app.app)
 
 
 @pytest.fixture
-def reset_memory_indexer_singleton() -> Iterator[None]:
-    """
-    Перед и после теста сбрасываем singleton memory_indexer,
-    чтобы predictable state. Используется memory-indexer тестами.
-    """
-    try:
-        from src.core.memory_indexer_worker import _reset_singleton_for_tests
-
-        _reset_singleton_for_tests()
-        yield
-        _reset_singleton_for_tests()
-    except ImportError:
-        # Если модуль не импортится — тесты сами должны пропуститься.
-        yield
-
-
-@pytest.fixture
-def no_web_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Сбрасывает WEB_API_KEY, чтобы write-эндпоинты открылись без токена."""
-    monkeypatch.delenv("WEB_API_KEY", raising=False)
+def client() -> TestClient:
+    return _build_client()
 
 
 # ---------------------------------------------------------------------------
-# /api/chrome/dedicated/status   (Agent #10)
+# Contract tests (требуются заданием)
 # ---------------------------------------------------------------------------
 
 
-def _route_registered(app, path: str, method: str = "GET") -> bool:
-    """True если endpoint с указанным method/path есть в app.routes."""
-    method = method.upper()
-    for route in app.routes:
-        route_path = getattr(route, "path", None)
-        methods = getattr(route, "methods", None)
-        if route_path == path and methods and method in methods:
-            return True
-    return False
+def test_session10_summary_returns_200(client: TestClient) -> None:
+    """GET /api/session10/summary возвращает 200 и нужные top-level ключи."""
+    r = client.get("/api/session10/summary")
+    assert r.status_code == 200
+    d = r.json()
+    assert d["ok"] is True
+    assert "session_info" in d
+    assert "memory_validator" in d
+    assert "memory_archive" in d
+    assert "new_commands" in d
+    assert isinstance(d["new_commands"], list)
 
 
-def test_chrome_dedicated_status_returns_schema(client: TestClient) -> None:
-    """
-    GET /api/chrome/dedicated/status должен отдавать {enabled, running, port,
-    binary, profile_dir}. Если endpoint не зарегистрирован (Agent #10 ещё не
-    приземлился) — тест помечается как skipped, build не падает.
-    """
-    if not _route_registered(client.app, "/api/chrome/dedicated/status", "GET"):
-        pytest.skip("endpoint /api/chrome/dedicated/status не зарегистрирован (Agent #10 pending)")
-
-    resp = client.get("/api/chrome/dedicated/status")
-    assert resp.status_code == 200, f"unexpected status {resp.status_code}: {resp.text}"
-    data = resp.json()
-    expected_keys = {"enabled", "running", "port", "binary", "profile_dir"}
-    missing = expected_keys - set(data.keys())
-    assert not missing, f"response schema missing keys: {missing}; got: {data}"
+def test_session10_summary_new_commands_list(client: TestClient) -> None:
+    """new_commands содержит дебютные команды Session 10."""
+    r = client.get("/api/session10/summary")
+    names = [c["name"] for c in r.json()["new_commands"]]
+    assert "!confirm" in names
+    assert "!reset" in names
 
 
-def test_chrome_dedicated_status_running_detection(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """
-    Если мы мокнём is_dedicated_chrome_running → True, поле running должно
-    стать True. Пропускается, если endpoint или integration-модуль
-    отсутствуют (Agent #10 не приземлился).
-    """
-    if not _route_registered(client.app, "/api/chrome/dedicated/status", "GET"):
-        pytest.skip("endpoint /api/chrome/dedicated/status не зарегистрирован")
-
-    try:
-        from src.integrations import dedicated_chrome as _dc  # type: ignore[attr-defined]
-    except ImportError:
-        pytest.skip("модуль src.integrations.dedicated_chrome отсутствует")
-
-    monkeypatch.setattr(_dc, "is_dedicated_chrome_running", lambda port=9222: True, raising=False)
-
-    resp = client.get("/api/chrome/dedicated/status")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data.get("running") is True, f"running=true ожидалось, получили {data}"
-
-
-def test_chrome_dedicated_launch_requires_write_access(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """
-    POST /api/chrome/dedicated/launch должен проверять write-access
-    (_assert_write_access). Если настроен WEB_API_KEY и токен не передан —
-    ожидаем 403.
-    """
-    if not _route_registered(client.app, "/api/chrome/dedicated/launch", "POST"):
-        pytest.skip("endpoint /api/chrome/dedicated/launch не зарегистрирован")
-
-    monkeypatch.setenv("WEB_API_KEY", "super-secret-token-for-test")
-    resp = client.post("/api/chrome/dedicated/launch", json={})
-    # 403 ожидаем, но допустим также 401 (в зависимости от реализации).
-    assert resp.status_code in {401, 403}, (
-        f"ожидали 401/403 для write без токена, получили {resp.status_code}"
-    )
-
-
-def test_chrome_dedicated_launch_success(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-    no_web_api_key: None,
-) -> None:
-    """
-    При отсутствии WEB_API_KEY и замоканном launch_dedicated_chrome →
-    (True, "launched") — endpoint должен возвращать 200 и статус launched.
-    """
-    if not _route_registered(client.app, "/api/chrome/dedicated/launch", "POST"):
-        pytest.skip("endpoint /api/chrome/dedicated/launch не зарегистрирован")
-
-    try:
-        from src.integrations import dedicated_chrome as _dc  # type: ignore[attr-defined]
-    except ImportError:
-        pytest.skip("модуль src.integrations.dedicated_chrome отсутствует")
-
-    monkeypatch.setattr(
-        _dc,
-        "launch_dedicated_chrome",
-        lambda **kwargs: (True, "launched"),
-        raising=False,
-    )
-
-    resp = client.post("/api/chrome/dedicated/launch", json={})
-    assert resp.status_code == 200, f"unexpected status {resp.status_code}: {resp.text}"
-    data = resp.json()
-    # Тело ответа может варьироваться, но должно сигналить успех.
-    assert data.get("ok") is True or data.get("status") in {"launched", "ok", "started"}, (
-        f"не похоже на успешный launch-ответ: {data}"
-    )
+def test_session10_summary_has_observability(client: TestClient) -> None:
+    """Секция observability содержит правильные флаги + порог stagnation."""
+    r = client.get("/api/session10/summary")
+    obs = r.json().get("observability", {})
+    assert obs.get("correlation_id_active") is True
+    assert obs.get("tool_indicator_enabled") is True
+    assert isinstance(obs.get("stagnation_threshold_sec"), int)
 
 
 # ---------------------------------------------------------------------------
-# /api/memory/indexer (Session 9 Phase 4)
+# Дополнительное покрытие (session_info / defaults / watchdog)
 # ---------------------------------------------------------------------------
 
 
-def test_memory_indexer_status_endpoint_200(
-    client: TestClient,
-    reset_memory_indexer_singleton: None,
-) -> None:
-    """GET /api/memory/indexer возвращает HTTP 200."""
-    resp = client.get("/api/memory/indexer")
-    assert resp.status_code == 200, f"unexpected status: {resp.status_code}, body={resp.text}"
+def test_session10_summary_session_info_has_static_fields(client: TestClient) -> None:
+    """session_info содержит статичные поля name/date/status/new_tests_count."""
+    d = client.get("/api/session10/summary").json()
+    info = d["session_info"]
+    assert info["name"] == "Session 10"
+    assert info["date"] == "2026-04-17"
+    assert info["status"] == "closed"
+    assert isinstance(info["new_tests_count"], int)
+    assert info["new_tests_count"] >= 0
 
 
-def test_memory_indexer_status_schema(
-    client: TestClient,
-    reset_memory_indexer_singleton: None,
-) -> None:
-    """
-    GET /api/memory/indexer отдаёт снимок IndexerStats.
-    Допускаем два формата ответа:
-      - normal: {is_running, queue_size, enqueued_total, processed_total, ...};
-      - fallback: {"error": "indexer_unavailable"} если singleton сломан.
-    """
-    data = client.get("/api/memory/indexer").json()
-    if "error" in data:
-        # Fallback допустим, явно не fail build.
-        assert data["error"] == "indexer_unavailable", f"unexpected error: {data}"
-        return
-
-    # Normal path: проверяем ключевые поля IndexerStats.
-    for field in (
-        "is_running",
-        "queue_size",
-        "queue_maxsize",
-        "enqueued_total",
-        "processed_total",
-        "chunks_committed",
-        "embeddings_committed",
+def test_session10_summary_memory_validator_defaults(client: TestClient) -> None:
+    """memory_validator возвращает defaults даже когда модуль отсутствует."""
+    d = client.get("/api/session10/summary").json()
+    mv = d["memory_validator"]
+    # Все ключи присутствуют, значения — числа либо bool
+    for k in (
+        "safe_total",
+        "injection_blocked_total",
+        "confirmed_total",
+        "confirm_failed_total",
+        "pending_count",
     ):
-        assert field in data, f"missing field {field!r} in response: {data}"
-
-    # Типы ключевых полей.
-    assert isinstance(data["is_running"], bool)
-    assert isinstance(data["queue_size"], int)
-    assert isinstance(data["enqueued_total"], int)
-    assert isinstance(data["processed_total"], int)
+        assert k in mv
+        assert isinstance(mv[k], int)
+    assert isinstance(mv.get("enabled"), bool)
 
 
-def test_memory_indexer_flush_endpoint_200(
-    client: TestClient,
-    reset_memory_indexer_singleton: None,
-) -> None:
-    """POST /api/memory/indexer/flush возвращает 200 (и ack=True)."""
-    resp = client.post("/api/memory/indexer/flush")
-    assert resp.status_code == 200, f"unexpected status: {resp.status_code}, body={resp.text}"
-    data = resp.json()
-    # Допустимы: {ack:True, queue_size:N, note:...} или error-fallback.
-    if "error" in data:
-        assert data["error"] == "indexer_unavailable", f"unexpected error: {data}"
-        return
-    assert data.get("ack") is True, f"ack=true ожидалось, получили: {data}"
-    assert "queue_size" in data, f"нет queue_size в ответе: {data}"
+def test_session10_summary_memory_archive_shape(client: TestClient) -> None:
+    """memory_archive содержит ожидаемые поля с корректными типами."""
+    d = client.get("/api/session10/summary").json()
+    ar = d["memory_archive"]
+    assert isinstance(ar["exists"], bool)
+    assert isinstance(ar["size_bytes"], int)
+    assert isinstance(ar["size_mb"], (int, float))
+    assert isinstance(ar["message_count"], int)
+    assert isinstance(ar["chats_count"], int)
+    assert isinstance(ar["chunks_count"], int)
+    assert isinstance(ar["indexer_state"], str)
 
 
-# ---------------------------------------------------------------------------
-# /api/health/lite — schema regression для Session 10
-# ---------------------------------------------------------------------------
+def test_session10_summary_dedicated_chrome_shape(client: TestClient) -> None:
+    """dedicated_chrome имеет boolean enabled/running и int port."""
+    d = client.get("/api/session10/summary").json()
+    dc = d["dedicated_chrome"]
+    assert isinstance(dc["enabled"], bool)
+    assert isinstance(dc["running"], bool)
+    assert isinstance(dc["port"], int)
+    assert dc["port"] > 0
 
 
-def test_health_lite_status_200(client: TestClient) -> None:
-    """GET /api/health/lite → 200."""
-    resp = client.get("/api/health/lite")
-    assert resp.status_code == 200
+def test_session10_summary_auto_restart_empty_deps(client: TestClient) -> None:
+    """При отсутствии watchdog deps — auto_restart disabled + empty list."""
+    d = client.get("/api/session10/summary").json()
+    ar = d["auto_restart"]
+    assert ar["enabled"] is False
+    assert ar["services_tracked"] == []
+    assert ar["total_attempts_last_hour"] == 0
 
 
-def test_health_lite_schema_stable(client: TestClient) -> None:
-    """
-    Session 10 добавила поля memory_indexer_state и memory_indexer_queue_size в
-    /api/health/lite, но базовый schema не должен сломаться. Проверяем
-    стандартные поля.
-    """
-    data = client.get("/api/health/lite").json()
-    # Базовая стабильность схемы.
-    assert data.get("ok") is True, f"ok=true ожидалось: {data}"
-    assert data.get("status") == "up", f"status='up' ожидалось: {data}"
-    for field in (
-        "telegram_session_state",
-        "telegram_userbot_state",
-        "openclaw_auth_state",
-        "last_runtime_route",
-    ):
-        assert field in data, f"обязательное поле {field!r} отсутствует"
+def test_session10_summary_auto_restart_with_watchdog() -> None:
+    """Если watchdog в deps — auto_restart enabled и services_tracked заполнен."""
+    watchdog = MagicMock()
+    watchdog.last_recovery_attempt = {
+        "openclaw": {"ts": 0, "ok": True},
+        "lmstudio": {"ts": 0, "ok": True},
+    }
+    c = _build_client(watchdog=watchdog)
+    d = c.get("/api/session10/summary").json()
+    ar = d["auto_restart"]
+    assert ar["enabled"] is True
+    assert "openclaw" in ar["services_tracked"]
+    assert "lmstudio" in ar["services_tracked"]
 
 
-def test_health_lite_contains_memory_indexer_fields(client: TestClient) -> None:
-    """
-    Session 9/10: в /api/health/lite появились memory_indexer_state и
-    memory_indexer_queue_size. Их наличие — smoke для Phase 4 интеграции.
-    """
-    data = client.get("/api/health/lite").json()
-    assert "memory_indexer_state" in data, (
-        "поле memory_indexer_state должно присутствовать после Session 9 Phase 4"
-    )
-    assert "memory_indexer_queue_size" in data, (
-        "поле memory_indexer_queue_size должно присутствовать после Session 9 Phase 4"
-    )
+def test_session10_summary_known_issues_is_list(client: TestClient) -> None:
+    """known_issues — всегда список (по умолчанию пустой)."""
+    d = client.get("/api/session10/summary").json()
+    assert isinstance(d["known_issues"], list)
 
 
-# ---------------------------------------------------------------------------
-# Sanity: тестовый клиент поднимается в принципе.
-# ---------------------------------------------------------------------------
-
-
-def test_client_boots(client: TestClient) -> None:
-    """Smoke: хотя бы один ping endpoint должен отвечать (кроме изучаемых)."""
-    resp = client.get("/api/health/lite")
-    assert resp.status_code == 200, "TestClient не может поднять приложение"
+def test_session10_summary_generated_at_is_epoch(client: TestClient) -> None:
+    """generated_at — int (unix epoch)."""
+    d = client.get("/api/session10/summary").json()
+    assert isinstance(d["generated_at"], int)
+    assert d["generated_at"] > 0

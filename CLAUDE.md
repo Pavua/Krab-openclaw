@@ -565,6 +565,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/ecosystem/health` | GET | Здоровье экосистемы |
 | `/api/ecosystem/health/export` | GET | Экспорт health |
 | `/api/ecosystem/capabilities` | GET | Возможности экосистемы |
+| `/api/session10/summary` | GET | Aggregated Session 10 stats для V4 Hub |
 | `/api/system/diagnostics` | GET | Диагностика системы |
 | `/api/ops/diagnostics` | GET | Ops диагностика |
 | `/api/ops/metrics` | GET | Метрики |
