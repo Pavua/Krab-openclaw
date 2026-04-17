@@ -1,8 +1,97 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-04-17 (session 10)
+> Составлен: 2026-03-23 | Обновлён: 2026-04-17 (session 11)
 > Статус: Активная разработка
 > Владелец: По
+
+---
+
+## 📋 Session 11 (2026-04-17) — PROACTIVITY + MEMORY LAYER PHASE 2 + UX POLISH
+
+**Commits (~90+):** `95d1754..19f78c0+` — 4 waves (7-14) через parallel agent orchestration
+
+### Security & Reliability
+- **Memory Injection Validator** (merged + MEDIUM fixes): NFKC normalization, WEAK/STRONG pattern split, 9 synonyms (ru+en), audit logging, unified ACL owner-check
+- **Typing keepalive** context manager с explicit cancel — фикс stuck "typing..." при error/cancel
+- **Auto-restart launchctl detection** — detect "not loaded" state + bootstrap recovery
+- **Provider auto-failover** — N consecutive errors → switch to fallback (opt-in env)
+- **codex-cli stagnation cancel** verified live во время 17.04 outage
+
+### Memory Layer Phase 2 (end-to-end)
+- Model2Vec embeddings pipeline — 9131 chunks encoded в 1.9s (~13k chunks/sec)
+- sqlite-vec virtual table integration
+- Hybrid FTS5 + semantic RRF re-ranker
+- `/api/memory/search` endpoint (fts/semantic/hybrid modes)
+- `!recall <query>` command (Telegram)
+- `krab_memory_search` + `krab_memory_stats` MCP tools
+- Auto-context RAG для `!ask` (opt-in env flag)
+
+### Proactivity (Chado-inspired 3 levels)
+- **Level 1**: Per-chat cron UX + `!cron quick "каждый день в 10:00" "prompt"` natural-language spec parser
+- **Level 2**: Reminders queue с time + event triggers, wired в userbot_bridge
+- **Level 3**: Self-reflection hook в swarm_research_pipeline (auto follow-ups в task_board)
+
+### New Telegram commands
+- `!confirm <hash>` — подтверждать persistent memory writes (owner)
+- `!reset [--all] [--layer=...] [--dry-run] [--force]` — aggressive 4-layer history purge
+- `!recall <query>` — hybrid memory search
+- `!remind <time-spec> <action>` — time/event-based reminders с natural parsing
+- `!cron quick "время" "prompt"` — human-friendly cron
+- `!model info` — active route + fallback chain + providers health
+- `!memory stats` — archive + indexer + validator counters
+- `!stats ecosystem` — full ecosystem health snapshot
+- `!digest` — immediate daily digest (if scheduler integration done)
+
+### Owner Panel API (new endpoints)
+- `/api/memory/search?q=X&mode=fts|semantic|hybrid`
+- `/api/session10/summary` (V4 Dashboard aggregated)
+- `/api/ecosystem/health` extended с session_10 block
+- `/api/chrome/dedicated/status` + `/launch`
+- `/api/swarm/task-board/export?format=csv|json`
+- `/api/krab_ear/status`
+- `/metrics` (Prometheus text format, 14 metrics)
+
+### Observability
+- Correlation ID (`request_id`) через structlog contextvars — auto-prop через asyncio.create_task
+- Tool call indicator в buffered mode (`🔧 Активно: tool_name(...)`)
+- Prometheus `/metrics` endpoint без prometheus_client dep
+- Alert rules sample (docs/krab_alerts.yml) — 3 groups: critical/capacity/engagement
+
+### Ops
+- `scripts/maintenance_weekly.py` — archive.db VACUUM + log rotation + Chrome cache purge
+- `scripts/ci_health_report.py` — aggregated pytest + ruff + coverage
+- `scripts/cleanup_stale_worktrees.py` — merge-aware worktree prune
+- `scripts/changelog_append.py` — auto-append CHANGELOG с conventional commits parsing
+- Archive.db size threshold alert (warn@500MB, crit@1GB, 12h cooldown)
+- Dedicated Chrome auto-launch при startup (`/tmp/krab-chrome` isolated profile)
+- Chrome MCP prompts root cause — disable `chrome-devtools` + `playwright` в `~/.claude.json`
+
+### Tests & Quality
+- ~**250+ new tests** (estimated)
+- Memory Layer coverage: **89% → 94%** (3 modules >85%)
+- `logger.py` + `openclaw_task_poller.py`: **48-50% → 100%**
+- Ruff cleanup: src/ **6 → 0 errors**
+- Integration tests для Session 10 endpoints + Memory Layer full chain
+- Live E2E verified via MCP: **9/10 PASS** (145 commands available live)
+
+### Docs
+- `CHANGELOG.md` entry `[10.2.0]`
+- `docs/COMMANDS_CHEATSHEET.md` auto-generated (145 commands, 14 categories)
+- `docs/DASHBOARD_V4_SESSION10_FRONTEND_SPEC.md` для Gemini 3.1 Pro
+- `docs/PROMETHEUS_MONITORING.md`
+- `docs/README.md` auto-index (31 docs)
+- `.remember/chado_architecture_learnings.md` (interview pending)
+
+### Known issues carried to Session 12
+- p0lrd Telegram export >24h still pending
+- Some locked worktrees (parent Claude Code PID) — cleanup після session end
+- `!reset` без explicit handler для fast path (routed через LLM agent) — fix registration
+- Some subtle duplicate: multiple ParseMode PR variants landed
+
+### Metrics
+- Archive.db live: **43086+ messages / 9134 chunks / 50+ MB**
+- Memory validator: injection_blocked_total=1 (first real live block)
+- LLM route: codex-cli/gpt-5.4 primary stable після incident 16:00-18:30
 
 ---
 
