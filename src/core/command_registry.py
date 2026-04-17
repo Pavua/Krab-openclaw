@@ -514,8 +514,8 @@ _COMMANDS: list[CommandInfo] = [
     CommandInfo(
         name="remind",
         category="scheduler",
-        description="Поставить напоминание",
-        usage="!remind <время> | <текст>",
+        description="Поставить напоминание (time/event) или list/cancel",
+        usage="!remind <2h|17:30|tomorrow 9:00|when X then Y> <текст> / list / cancel <id>",
     ),
     CommandInfo(
         name="reminders",
