@@ -176,6 +176,19 @@ MCP серверы — SSE транспорт. Claude Desktop подключае
 MCP Hammerspoon (8013) зарегистрирован в Claude Desktop (session 6).
 Plists: `scripts/launchagents/`
 
+### MCP tools (Telegram MCP server)
+
+- `telegram_*` — get_dialogs/get_chat_history/send_message/download_media/
+  transcribe_voice/search/edit_message (Pyrogram MTProto через TelegramBridge).
+- `krab_status` / `krab_tail_logs` / `krab_restart_gateway` / `krab_run_tests` —
+  dev-операции с панели :8080 и openclaw CLI.
+- `krab_memory_search` — hybrid (FTS5 + semantic + RRF) поиск по
+  `~/.openclaw/krab_memory/archive.db` (~43k messages / ~9k chunks).
+  PII-redacted. Args: `q` (str), `mode` (fts|semantic|hybrid), `limit` (1–20),
+  `chat_id` (опц.). Прямой вызов `HybridRetriever.search()`, fallback — HTTP.
+- `krab_memory_stats` — counts по messages/chats/chunks/embedded, schema_version,
+  size_mb. Read-only чтение archive.db без блокировок.
+
 ## Модели и routing
 
 Runtime truth: `~/.openclaw/agents/main/agent/models.json`
