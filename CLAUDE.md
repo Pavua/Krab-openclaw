@@ -497,6 +497,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/system/info` | GET | Системная информация хоста |
 | `/api/endpoints` | GET | Self-documenting список endpoints |
 | `/api/v1/health` | GET | Версионированный health (внешние мониторы) |
+| `/metrics` | GET | Prometheus text format metrics для scraping |
 | `/api/voice/toggle` | POST | Переключить голосовой режим |
 | `/api/voice/profile` | GET | Голосовой профиль |
 | `/api/voice/runtime` | GET/POST | Runtime голосовых настроек |
