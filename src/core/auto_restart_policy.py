@@ -281,13 +281,19 @@ class AutoRestartPolicy:
 # Default instance — для удобства импорта.
 auto_restart_policy = AutoRestartPolicy()
 
+# Backward compat aliases для proactive_watch и остальных legacy импортов.
+auto_restart_manager = auto_restart_policy
+is_auto_restart_enabled = _auto_restart_enabled
+
 
 __all__ = [
     "AUTO_RESTART_ENABLED",
     "AutoRestartPolicy",
     "RESTART_COMMANDS",
     "SERVICES",
+    "auto_restart_manager",
     "auto_restart_policy",
     "bootstrap_service_if_unloaded",
+    "is_auto_restart_enabled",
     "is_service_loaded_in_launchd",
 ]
