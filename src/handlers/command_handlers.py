@@ -8889,16 +8889,41 @@ async def handle_alias(bot: "KraabUserbot", message: Message) -> None:
         )
 
 
+def _parse_ask_memory_flags(question: str) -> tuple[str, "bool | None"]:
+    """
+    Извлекает `--with-memory` / `--no-memory` флаги из вопроса.
+
+    Returns:
+        (cleaned_question, force_enable) — force_enable: True / False / None.
+    """
+    tokens = (question or "").split()
+    force_enable: "bool | None" = None
+    remaining: list[str] = []
+    for tok in tokens:
+        low = tok.lower()
+        if low in ("--with-memory", "--memory", "--with-mem"):
+            force_enable = True
+            continue
+        if low in ("--no-memory", "--no-mem"):
+            force_enable = False
+            continue
+        remaining.append(tok)
+    return " ".join(remaining).strip(), force_enable
+
+
 async def handle_ask(bot: "KraabUserbot", message: Message) -> None:
     """
     !ask [вопрос] — задаёт вопрос AI о конкретном сообщении (reply).
 
     Использование:
-      !ask кратко         — суммаризировать сообщение
-      !ask переведи       — перевести
-      !ask                — объяснить сообщение (вопрос по умолчанию)
+      !ask кратко                     — суммаризировать сообщение
+      !ask переведи                   — перевести
+      !ask                            — объяснить сообщение (вопрос по умолчанию)
+      !ask --with-memory <вопрос>     — augment context из memory recall
+      !ask --no-memory <вопрос>       — чистый LLM без recall (override env)
     """
-    question = bot._get_command_args(message).strip()
+    raw_question = bot._get_command_args(message).strip()
+    question, force_memory = _parse_ask_memory_flags(raw_question)
 
     # Получаем исходное сообщение — только из reply
     replied = message.reply_to_message
@@ -8932,6 +8957,20 @@ async def handle_ask(bot: "KraabUserbot", message: Message) -> None:
 
     # Формируем промпт: текст + вопрос
     prompt = f'Текст:\n"""\n{source_text}\n"""\n\nВопрос: {question}'
+
+    # Semantic recall auto-context: prepend top-k memory chunks если включено
+    from ..core.memory_context_augmenter import augment_query_with_memory
+
+    augmented = await augment_query_with_memory(
+        question,
+        force_enable=force_memory,
+    )
+    if augmented.enabled and augmented.chunks_used:
+        # Добавляем recall-префикс перед исходным prompt
+        prompt = (
+            f"{augmented.augmented_prompt}\n\n"
+            f"Текст:\n\"\"\"\n{source_text}\n\"\"\""
+        )
 
     # Отправляем статус и запускаем стриминг
     msg = await message.reply("🤔 Думаю...")
