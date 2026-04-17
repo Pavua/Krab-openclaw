@@ -8294,6 +8294,33 @@ class WebApp:
                 "voice": profile,
             }
 
+        @self.app.get("/api/krab_ear/status")
+        async def krab_ear_status():
+            """KrabEar STT diarization status and readiness."""
+            krab_ear = self.deps.get("krab_ear_client")
+            if not krab_ear:
+                return {
+                    "ok": False,
+                    "status": "unavailable",
+                    "error": "krab_ear_client_not_available",
+                }
+            try:
+                report = await krab_ear.health_report()
+                return {
+                    "ok": report.get("ok", False),
+                    "status": report.get("status", "unknown"),
+                    "latency_ms": report.get("latency_ms"),
+                    "source": report.get("source"),
+                    "detail": report.get("detail"),
+                }
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("krab_ear_status_failed", error=str(exc))
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "error": str(exc),
+                }
+
         @self.app.get("/api/openclaw/cron/status")
         async def openclaw_cron_status():
             """Возвращает truthful snapshot scheduler и recurring jobs из OpenClaw CLI."""
