@@ -688,9 +688,22 @@ class TestSession10Block:
 class TestSession10MemoryValidator:
     """[Session 10] Прямые вызовы _session_10_memory_validator() с моками."""
 
-    def test_returns_default_when_module_missing(self):
-        """Если memory_validator.py отсутствует — возвращаем 'available'=False."""
-        # В текущей кодовой базе модуля memory_validator нет — это проверка defaults
+    def test_returns_default_when_module_missing(self, monkeypatch):
+        """Если memory_validator.py отсутствует — возвращаем 'available'=False.
+
+        Симулируем отсутствие модуля: sys.modules[...] = None заставит
+        Python бросить ImportError при `from src.core import memory_validator`.
+        Также удаляем атрибут с parent-пакета, т.к. submodule уже мог быть
+        импортирован в других тестах и закэширован как `src.core.memory_validator`.
+        """
+        import sys
+
+        import src.core as _pkg
+
+        # Эмулируем отсутствие модуля для lazy import внутри функции
+        monkeypatch.setitem(sys.modules, "src.core.memory_validator", None)
+        monkeypatch.delattr(_pkg, "memory_validator", raising=False)
+
         result = EcosystemHealthService._session_10_memory_validator()
         assert "safe_total" in result
         assert "injection_blocked_total" in result
@@ -699,10 +712,18 @@ class TestSession10MemoryValidator:
         # Модуль отсутствует → available=False
         assert result.get("available") is False
 
-    def test_reads_stats_from_mocked_module(self):
-        """При наличии memory_validator читает stats + list_pending."""
+    def test_reads_stats_from_mocked_module(self, monkeypatch):
+        """При наличии memory_validator читает stats + list_pending.
+
+        Python cache nuance: `from src.core import memory_validator` резолвит
+        атрибут на parent-пакете `src.core`. Если модуль уже был импортирован
+        (напр. в другом тесте), замена только sys.modules недостаточна —
+        нужно обновить и `src.core.memory_validator` attribute.
+        """
         import sys
         import types
+
+        import src.core as _pkg
 
         fake_module = types.ModuleType("src.core.memory_validator")
         fake_module.stats = {
@@ -712,17 +733,17 @@ class TestSession10MemoryValidator:
             "confirm_failed_total": 1,
         }
         fake_module.list_pending = lambda: ["req1", "req2"]
-        sys.modules["src.core.memory_validator"] = fake_module
-        try:
-            result = EcosystemHealthService._session_10_memory_validator()
-            assert result["available"] is True
-            assert result["safe_total"] == 42
-            assert result["injection_blocked_total"] == 7
-            assert result["confirmed_total"] == 3
-            assert result["confirm_failed_total"] == 1
-            assert result["pending_count"] == 2
-        finally:
-            sys.modules.pop("src.core.memory_validator", None)
+
+        monkeypatch.setitem(sys.modules, "src.core.memory_validator", fake_module)
+        monkeypatch.setattr(_pkg, "memory_validator", fake_module, raising=False)
+
+        result = EcosystemHealthService._session_10_memory_validator()
+        assert result["available"] is True
+        assert result["safe_total"] == 42
+        assert result["injection_blocked_total"] == 7
+        assert result["confirmed_total"] == 3
+        assert result["confirm_failed_total"] == 1
+        assert result["pending_count"] == 2
 
 
 class TestSession10MemoryArchive:
@@ -833,21 +854,38 @@ class TestSession10AutoRestart:
 class TestSession10GeminiNonce:
     """[Session 10] Проверка _session_10_gemini_nonce."""
 
-    def test_default_zero_when_module_missing(self):
-        """Модуль gemini_cache_nonce отсутствует → tracked_chats=0."""
+    def test_default_zero_when_module_missing(self, monkeypatch):
+        """Модуль gemini_cache_nonce отсутствует → tracked_chats=0.
+
+        См. TestSession10MemoryValidator: чтобы lazy import реально провалился,
+        помечаем модуль как None в sys.modules + удаляем атрибут parent-пакета.
+        """
+        import sys
+
+        import src.core as _pkg
+
+        monkeypatch.setitem(sys.modules, "src.core.gemini_cache_nonce", None)
+        monkeypatch.delattr(_pkg, "gemini_cache_nonce", raising=False)
+
         result = EcosystemHealthService._session_10_gemini_nonce()
         assert result == {"tracked_chats": 0}
 
-    def test_reads_map_from_mocked_module(self):
-        """Подменяем модуль — читаем _GEMINI_NONCE_MAP."""
+    def test_reads_map_from_mocked_module(self, monkeypatch):
+        """Подменяем модуль — читаем _GEMINI_NONCE_MAP.
+
+        См. TestSession10MemoryValidator: нужно патчить оба — sys.modules и
+        атрибут parent-пакета `src.core.gemini_cache_nonce`.
+        """
         import sys
         import types
 
+        import src.core as _pkg
+
         fake_module = types.ModuleType("src.core.gemini_cache_nonce")
         fake_module._GEMINI_NONCE_MAP = {1: "nonceA", 2: "nonceB", 3: "nonceC"}
-        sys.modules["src.core.gemini_cache_nonce"] = fake_module
-        try:
-            result = EcosystemHealthService._session_10_gemini_nonce()
-            assert result["tracked_chats"] == 3
-        finally:
-            sys.modules.pop("src.core.gemini_cache_nonce", None)
+
+        monkeypatch.setitem(sys.modules, "src.core.gemini_cache_nonce", fake_module)
+        monkeypatch.setattr(_pkg, "gemini_cache_nonce", fake_module, raising=False)
+
+        result = EcosystemHealthService._session_10_gemini_nonce()
+        assert result["tracked_chats"] == 3
