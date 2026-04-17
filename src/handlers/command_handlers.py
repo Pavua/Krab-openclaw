@@ -41,6 +41,7 @@ from ..core.exceptions import UserInputError
 from ..core.inbox_service import inbox_service
 from ..core.lm_studio_health import is_lm_studio_available
 from ..core.logger import get_logger
+from ..core.memory_validator import memory_validator
 from ..core.model_aliases import normalize_model_alias
 from ..core.openclaw_runtime_models import get_runtime_primary_model
 from ..core.openclaw_workspace import (
@@ -1226,11 +1227,17 @@ async def handle_remember(bot: "KraabUserbot", message: Message) -> None:
     text = bot._get_command_args(message)
     if not text:
         raise UserInputError(user_message="🧠 Что запомнить? Напиши: `!remember <текст>`")
+    # Memory Injection Validator: persistent-инструкции требуют !confirm от owner.
+    author = str(getattr(getattr(message, "from_user", None), "username", "") or "")
+    safe, warn_msg, _ = memory_validator.stage(text, source="userbot", author=author)
+    if not safe:
+        await message.reply(warn_msg)
+        return
     try:
         workspace_saved = append_workspace_memory_entry(
             text,
             source="userbot",
-            author=str(getattr(getattr(message, "from_user", None), "username", "") or ""),
+            author=author,
         )
         vector_saved = memory_manager.save_fact(text)
         success = workspace_saved or vector_saved
@@ -1238,6 +1245,52 @@ async def handle_remember(bot: "KraabUserbot", message: Message) -> None:
             await message.reply(f"🧠 **Запомнил:** `{text}`")
         else:
             await message.reply("❌ Ошибка памяти.")
+    except (ValueError, RuntimeError, OSError) as e:
+        await message.reply(f"❌ Critical Memory Error: {e}")
+
+
+async def handle_confirm(bot: "KraabUserbot", message: Message) -> None:
+    """!confirm <hash> — подтверждает staged memory write (owner-only).
+
+    Без аргументов — показывает список ожидающих подтверждения.
+    """
+    # Owner-check (использует config.OWNER_USER_IDS, как в swarm_team_listener).
+    sender_id = getattr(getattr(message, "from_user", None), "id", 0)
+    if not sender_id or str(sender_id) not in config.OWNER_USER_IDS:
+        await message.reply("⛔ Только для владельца.")
+        return
+
+    hash_code = (bot._get_command_args(message) or "").strip().upper()
+    if not hash_code:
+        pending = memory_validator.list_pending()
+        if not pending:
+            await message.reply("📭 Нет ожидающих подтверждений.")
+            return
+        lines = [
+            f"• `{p.hash}` — {p.text[:60]}{'…' if len(p.text) > 60 else ''}"
+            for p in pending
+        ]
+        await message.reply("⏳ Ожидают подтверждения:\n" + "\n".join(lines))
+        return
+
+    ok, reply_msg, pending = memory_validator.confirm(hash_code)
+    if not ok or pending is None:
+        await message.reply(reply_msg)
+        return
+
+    # Выполняем отложенную запись — дублирует логику handle_remember.
+    try:
+        workspace_saved = append_workspace_memory_entry(
+            pending.text,
+            source=pending.source or "userbot",
+            author=pending.author,
+        )
+        vector_saved = memory_manager.save_fact(pending.text)
+        success = workspace_saved or vector_saved
+        if success:
+            await message.reply(f"{reply_msg}. Запись сохранена.")
+        else:
+            await message.reply("❌ Подтверждено, но запись не удалась.")
     except (ValueError, RuntimeError, OSError) as e:
         await message.reply(f"❌ Critical Memory Error: {e}")
 
