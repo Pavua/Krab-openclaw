@@ -1722,22 +1722,26 @@ async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
     """Очищает все слои истории одной операцией.
 
     Syntax:
-        !reset                   — текущий чат, все слои (safe default)
-        !reset --all             — все чаты (требует --force)
-        !reset --layer=krab      — только Krab history_cache.db
-        !reset --layer=openclaw  — только OpenClaw session
-        !reset --layer=gemini    — только Gemini cache invalidate (nonce)
-        !reset --layer=archive   — archive.db indexer state per chat
-        !reset --dry-run         — показать что удалится, не удалять
-        !reset --force           — пропустить confirmation для --all
+        !reset                    — Krab + OpenClaw + Gemini (archive НЕ включён)
+        !reset --all              — все чаты (Krab + OpenClaw + Gemini, требует --force)
+        !reset --layer=krab       — только Krab history_cache.db
+        !reset --layer=openclaw   — только OpenClaw session
+        !reset --layer=gemini     — только Gemini cache invalidate (nonce)
+        !reset --layer=archive    — удалить из archive.db (opt-in destructive)
+        !reset --dry-run          — показать что удалится, не удалять
+        !reset --force            — пропустить confirmation для --all
 
     Возвращает отчёт по каждому слою. Owner-only для --all (destructive).
+    Archive destructive → не включён в default scope: требует явного --layer=archive.
     """
     from ..core.gemini_cache_nonce import invalidate_gemini_cache_for_chat
     from ..core.reset_helpers import (
         clear_archive_db_for_chat,
         count_archive_messages_for_chat,
     )
+
+    # Разрешённые значения для --layer=<...>. Неизвестные — ошибка (предсказуемое API).
+    valid_layers = {"krab", "openclaw", "gemini", "archive"}
 
     chat_id = str(message.chat.id)
     raw_args = ""
@@ -1755,6 +1759,11 @@ async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
     for token in tokens:
         if token.startswith("--layer="):
             layer = token.split("=", 1)[1].strip().lower() or None
+
+    # Валидация --layer=<value>: неизвестные слои возвращают ошибку, а не silent pass.
+    if layer is not None and layer not in valid_layers:
+        await message.reply(f"❌ Unknown layer: `{layer}`. Valid: {sorted(valid_layers)}")
+        return
 
     # Owner-check для --all. Userbot — message.from_user.id должен совпадать с bot.me.id.
     if is_all:
@@ -1784,6 +1793,16 @@ async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
     else:
         target_chat_ids = [chat_id]
 
+    # Audit log: destructive --all --force execution — фиксируем факт для post-mortem.
+    if is_all and is_force and not dry_run:
+        sender_id = getattr(getattr(message, "from_user", None), "id", None)
+        logger.warning(
+            "reset_all_force_executed",
+            chat_count=len(target_chat_ids),
+            user_id=sender_id,
+            layer=layer or "all",
+        )
+
     # ── dry-run: только превью ────────────────────────────────────────────
     impact = {"krab": 0, "openclaw": 0, "gemini": 0, "archive": 0}
 
@@ -1810,6 +1829,13 @@ async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
 
     if dry_run:
         scope = "все чаты" if is_all else "текущий чат"
+        # Archive не в default scope — честно предупреждаем в превью.
+        archive_hint = ""
+        if layer is None:
+            archive_hint = (
+                "\n⚠️ Archive НЕ включён в default scope. "
+                "Используй `--layer=archive` для очистки archive.db."
+            )
         preview = (
             f"🔍 **Dry-run** (nothing deleted)\n"
             f"Scope: {scope}\n"
@@ -1818,7 +1844,7 @@ async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
             f"• Krab cache: {impact['krab']}\n"
             f"• OpenClaw: {impact['openclaw']}\n"
             f"• Gemini cache invalidate: {impact['gemini']}\n"
-            f"• Archive: {impact['archive']}"
+            f"• Archive: {impact['archive']}{archive_hint}"
         )
         if message.from_user and message.from_user.id == bot.me.id:
             await message.edit(preview)
@@ -1831,9 +1857,13 @@ async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
 
     for cid in target_chat_ids:
         if layer in (None, "krab"):
+            # Избегаем double-count: clear_session() ниже тоже удаляет chat_history:*,
+            # поэтому инкрементим stats только если ключ реально был.
+            key = f"chat_history:{cid}"
             try:
-                history_cache.delete(f"chat_history:{cid}")
-                stats["krab"] += 1
+                if history_cache.get(key):
+                    history_cache.delete(key)
+                    stats["krab"] += 1
             except Exception as exc:  # noqa: BLE001
                 logger.warning("reset_krab_failed", chat_id=cid, error=str(exc))
 

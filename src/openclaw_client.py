@@ -2452,7 +2452,7 @@ class OpenClawClient:
 
             # Добавляем Gemini prompt-cache nonce (если установлен через !reset),
             # чтобы инвалидировать cache без перезапуска рантайма.
-            from .core.gemini_cache_nonce import get_gemini_nonce
+            from .core.gemini_cache_nonce import clear_gemini_nonce, get_gemini_nonce
 
             effective_system_prompt = system_prompt
             _nonce = get_gemini_nonce(chat_id)
@@ -2472,6 +2472,37 @@ class OpenClawClient:
                 self._sessions[chat_id].insert(
                     0, {"role": "system", "content": effective_system_prompt}
                 )
+
+            # Nonce consumed при первом применении к новой/пустой сессии.
+            if _nonce:
+                clear_gemini_nonce(chat_id)
+        else:
+            # Сессия уже загружена в памяти (например, !reset --layer=gemini не чистил её).
+            # Проверяем, есть ли pending nonce: если да — обновляем content первого
+            # system-message, чтобы на следующем request Gemini получил отличающийся
+            # system_prompt и cache инвалидировался.
+            from .core.gemini_cache_nonce import clear_gemini_nonce, get_gemini_nonce
+
+            _nonce = get_gemini_nonce(chat_id)
+            if _nonce and system_prompt and self._sessions[chat_id]:
+                first_msg = self._sessions[chat_id][0]
+                if isinstance(first_msg, dict) and first_msg.get("role") == "system":
+                    first_msg["content"] = (
+                        f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
+                    )
+                else:
+                    # Нет system-сообщения — вставим его с nonce.
+                    self._sessions[chat_id].insert(
+                        0,
+                        {
+                            "role": "system",
+                            "content": (
+                                f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
+                            ),
+                        },
+                    )
+                # Consume nonce после применения: чтобы не обновлять system при каждом запросе.
+                clear_gemini_nonce(chat_id)
 
         self._sanitize_session_and_cache(chat_id)
 

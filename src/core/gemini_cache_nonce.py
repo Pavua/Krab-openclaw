@@ -24,7 +24,7 @@ _GEMINI_NONCE_MAP: dict[str, str] = {}
 def invalidate_gemini_cache_for_chat(chat_id: str) -> str:
     """Генерирует новый UUID-nonce для чата.
 
-    При следующем LLM-вызове system_prompt изменится → Gemini promtp cache miss.
+    При следующем LLM-вызове system_prompt изменится → Gemini prompt cache miss.
     Возвращает сгенерированный nonce (для логирования).
     """
     nonce = uuid.uuid4().hex
