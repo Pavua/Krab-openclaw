@@ -1294,19 +1294,73 @@ async def handle_confirm(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(f"❌ Critical Memory Error: {e}")
 
 
+MEMORY_SEARCH_URL = os.environ.get(
+    "KRAB_PANEL_URL", "http://127.0.0.1:8080"
+).rstrip("/") + "/api/memory/search"
+
+
+async def _recall_memory_layer(query: str, limit: int = 5) -> list[dict]:
+    """Зовёт /api/memory/search (hybrid) и возвращает список результатов.
+
+    Для надёжности использует httpx с коротким timeout. Все ошибки
+    (недоступность endpoint'а, отсутствующая БД) проглатываются — вызов
+    из handle_recall не должен ронять UX из-за опционального слоя.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                MEMORY_SEARCH_URL,
+                params={"q": query, "mode": "hybrid", "limit": limit},
+            )
+            data = resp.json()
+    except Exception as exc:  # noqa: BLE001 — endpoint может быть не запущен
+        logger.debug("recall_memory_layer_failed", error=str(exc))
+        return []
+
+    if not isinstance(data, dict) or not data.get("ok"):
+        return []
+    results = data.get("results") or []
+    if not isinstance(results, list):
+        return []
+    return results[:limit]
+
+
+def _format_memory_layer_section(results: list[dict]) -> str:
+    """Форматирует результаты Memory Layer для вставки в !recall ответ."""
+    lines: list[str] = []
+    for i, r in enumerate(results, start=1):
+        text = str(r.get("text") or "")
+        preview = text[:150].replace("\n", " ").strip()
+        mode = r.get("mode", "hybrid")
+        score = r.get("score")
+        try:
+            score_str = f"{float(score):.2f}" if score is not None else "—"
+        except (TypeError, ValueError):
+            score_str = "—"
+        lines.append(f"{i}. [{mode} score={score_str}]\n   `{preview}`")
+    return "\n".join(lines)
+
+
 async def handle_recall(bot: "KraabUserbot", message: Message) -> None:
-    """Вспомнить факт."""
+    """Вспомнить факт — workspace + vector + Memory Layer archive (hybrid)."""
     text = bot._get_command_args(message)
     if not text:
         raise UserInputError(user_message="🧠 Что вспомнить? Напиши: `!recall <запрос>`")
     try:
         workspace_facts = recall_workspace_memory(text)
         vector_facts = memory_manager.recall(text)
+        memory_layer_results = await _recall_memory_layer(text, limit=5)
+
         sections: list[str] = []
         if workspace_facts:
             sections.append(f"**OpenClaw workspace:**\n{workspace_facts}")
         if vector_facts and vector_facts not in workspace_facts:
             sections.append(f"**Local vector memory:**\n{vector_facts}")
+        if memory_layer_results:
+            sections.append(
+                "**Memory Layer archive (hybrid):**\n"
+                + _format_memory_layer_section(memory_layer_results)
+            )
         facts = "\n\n".join(section for section in sections if section).strip()
         if facts:
             await message.reply(f"🧠 **Вспомнил:**\n\n{facts}")

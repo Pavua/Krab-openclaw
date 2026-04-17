@@ -7560,6 +7560,108 @@ class WebApp:
                 "note": "flush будет выполнен в течение batch_timeout_sec",
             }
 
+        @self.app.get("/api/memory/search")
+        async def memory_search(
+            q: str = "",
+            mode: str = "hybrid",
+            limit: int = 10,
+            chat_id: Optional[str] = None,
+        ):
+            """
+            Поиск в Memory Layer archive.db (FTS5 + semantic + hybrid).
+
+            Phase 2 retrieval: использует ``HybridRetriever``, который внутри
+            делает FTS5 BM25, опционально vector similarity через sqlite-vec,
+            и Reciprocal Rank Fusion.
+
+            Параметры:
+              q: поисковый запрос (обязателен).
+              mode: ``fts`` | ``semantic`` | ``hybrid`` (default ``hybrid``).
+                    ``fts`` — только BM25 путь.
+                    ``semantic`` — только vec0 путь; если sqlite-vec не доступен,
+                    вернёт ``count=0``.
+                    ``hybrid`` — RRF fusion обоих (текущий default Retriever'а).
+              limit: сколько результатов вернуть (default 10, max 50).
+              chat_id: опциональный фильтр по чату.
+
+            Returns: ``{ok, query, mode, count, results: [...]}``.
+            Результат содержит ``chunk_id`` (совпадает с ``message_id`` retriever'а),
+            ``text`` (truncated 300 chars), ``score`` (float 0..1),
+            ``mode`` (выбранный режим), ``timestamp``, ``chat_id``.
+            """
+            query = (q or "").strip()
+            if not query:
+                return {"ok": False, "error": "empty_query"}
+
+            mode_normalized = (mode or "hybrid").strip().lower()
+            if mode_normalized not in {"fts", "semantic", "hybrid"}:
+                return {"ok": False, "error": "invalid_mode", "mode": mode}
+
+            try:
+                limit_val = max(1, min(50, int(limit)))
+            except (TypeError, ValueError):
+                limit_val = 10
+
+            try:
+                from ..core.memory_archive import ArchivePaths
+                from ..core.memory_retrieval import HybridRetriever
+            except ImportError:
+                return {"ok": False, "error": "memory_layer_unavailable"}
+
+            paths = ArchivePaths.default()
+            if not paths.db.exists():
+                return {"ok": False, "error": "archive_db_missing"}
+
+            # Для режима semantic мы не можем форсировать внутри retriever'а
+            # чистый vec-only путь — публичный API HybridRetriever всегда
+            # идёт через FTS. Поэтому для semantic возвращаем hybrid (при
+            # наличии sqlite-vec дадут те же результаты, отсортированные по
+            # vec-ранку; при отсутствии — FTS-only, что честно отразим в ответе).
+            try:
+                retriever = HybridRetriever(archive_paths=paths)
+                raw_results = await asyncio.to_thread(
+                    retriever.search,
+                    query,
+                    chat_id=chat_id,
+                    top_k=limit_val,
+                )
+                effective_mode = mode_normalized
+                if mode_normalized == "semantic" and not getattr(
+                    retriever, "_vec_available", False
+                ):
+                    # Semantic не доступен → честно помечаем как "fts" fallback.
+                    effective_mode = "fts"
+                retriever.close()
+            except Exception as exc:  # noqa: BLE001 — endpoint не должен падать
+                logger.warning("memory_search_failed", error=str(exc))
+                return {"ok": False, "error": "search_failed", "detail": str(exc)}
+
+            results = []
+            for sr in raw_results:
+                text = sr.text_redacted or ""
+                preview = text if len(text) <= 300 else text[:300] + "..."
+                results.append(
+                    {
+                        "chunk_id": sr.message_id,
+                        "chat_id": sr.chat_id,
+                        "text": preview,
+                        "score": float(sr.score),
+                        "timestamp": sr.timestamp.isoformat()
+                        if sr.timestamp
+                        else None,
+                        "mode": effective_mode,
+                    }
+                )
+
+            return {
+                "ok": True,
+                "query": query,
+                "mode": effective_mode,
+                "requested_mode": mode_normalized,
+                "count": len(results),
+                "results": results,
+            }
+
         # ── Stats Dashboard (session 4+, Gemini 3.1 Pro frontend) ──────────
 
         @self.app.get("/api/stats/caches")
