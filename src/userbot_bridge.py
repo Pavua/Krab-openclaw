@@ -121,6 +121,7 @@ from .handlers import (
     handle_remind,
     handle_reminders,
     handle_report,
+    handle_reset,
     handle_restart,
     handle_rewrite,
     handle_rm_remind,
@@ -596,6 +597,12 @@ class KraabUserbot(
         )
         async def wrap_clear(c, m):
             await run_cmd(handle_clear, m)
+
+        @self.client.on_message(
+            filters.command("reset", prefixes=prefixes) & _make_command_filter("reset"), group=-1
+        )
+        async def wrap_reset(c, m):
+            await run_cmd(handle_reset, m)
 
         @self.client.on_message(
             filters.command("config", prefixes=prefixes) & _make_command_filter("config"), group=-1

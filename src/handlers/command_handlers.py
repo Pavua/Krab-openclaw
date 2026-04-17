@@ -1714,6 +1714,224 @@ async def handle_clear(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(res)
 
 
+# ---------------------------------------------------------------------------
+# !reset — агрессивная многослойная очистка истории
+# ---------------------------------------------------------------------------
+
+async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
+    """Очищает все слои истории одной операцией.
+
+    Syntax:
+        !reset                    — Krab + OpenClaw + Gemini (archive НЕ включён)
+        !reset --all              — все чаты (Krab + OpenClaw + Gemini, требует --force)
+        !reset --layer=krab       — только Krab history_cache.db
+        !reset --layer=openclaw   — только OpenClaw session
+        !reset --layer=gemini     — только Gemini cache invalidate (nonce)
+        !reset --layer=archive    — удалить из archive.db (opt-in destructive)
+        !reset --dry-run          — показать что удалится, не удалять
+        !reset --force            — пропустить confirmation для --all
+
+    Возвращает отчёт по каждому слою. Owner-only для --all (destructive).
+    Archive destructive → не включён в default scope: требует явного --layer=archive.
+    """
+    from ..core.gemini_cache_nonce import invalidate_gemini_cache_for_chat
+    from ..core.reset_helpers import (
+        clear_archive_db_for_chat,
+        count_archive_messages_for_chat,
+    )
+
+    # Разрешённые значения для --layer=<...>. Неизвестные — ошибка (предсказуемое API).
+    valid_layers = {"krab", "openclaw", "gemini", "archive"}
+
+    chat_id = str(message.chat.id)
+    raw_args = ""
+    if hasattr(bot, "_get_command_args"):
+        try:
+            raw_args = (bot._get_command_args(message) or "").strip()
+        except Exception:  # noqa: BLE001
+            raw_args = ""
+
+    tokens = raw_args.split() if raw_args else []
+    is_all = "--all" in tokens
+    is_force = "--force" in tokens
+    dry_run = "--dry-run" in tokens
+    layer: str | None = None
+    for token in tokens:
+        if token.startswith("--layer="):
+            layer = token.split("=", 1)[1].strip().lower() or None
+
+    # Валидация --layer=<value>: неизвестные слои возвращают ошибку, а не silent pass.
+    if layer is not None and layer not in valid_layers:
+        await message.reply(f"❌ Unknown layer: `{layer}`. Valid: {sorted(valid_layers)}")
+        return
+
+    # Owner-check для --all. Userbot — message.from_user.id должен совпадать с bot.me.id.
+    if is_all:
+        me_id = getattr(getattr(bot, "me", None), "id", None)
+        sender_id = getattr(getattr(message, "from_user", None), "id", None)
+        if me_id is None or sender_id != me_id:
+            await message.reply(
+                "🚫 `!reset --all` доступен только владельцу."
+            )
+            return
+
+    # Confirmation flow для --all без --force (и не dry-run)
+    if is_all and not is_force and not dry_run:
+        await message.reply(
+            "⚠️ `!reset --all` удалит историю из **ВСЕХ** чатов (все слои).\n"
+            "Это необратимо.\n\nПовтори с флагом `--force`:\n`!reset --all --force`"
+        )
+        return
+
+    # Список целевых чатов
+    if is_all:
+        target_chat_ids = [str(cid) for cid in openclaw_client._sessions.keys()]
+        # Если _sessions пустой, но просили --all — всё равно пытаемся обработать
+        # текущий чат как минимум, чтобы не вернуть no-op-отчёт без смысла.
+        if not target_chat_ids:
+            target_chat_ids = [chat_id]
+    else:
+        target_chat_ids = [chat_id]
+
+    # Audit log: destructive --all --force execution — фиксируем факт для post-mortem.
+    if is_all and is_force and not dry_run:
+        sender_id = getattr(getattr(message, "from_user", None), "id", None)
+        logger.warning(
+            "reset_all_force_executed",
+            chat_count=len(target_chat_ids),
+            user_id=sender_id,
+            layer=layer or "all",
+        )
+
+    # ── dry-run: только превью ────────────────────────────────────────────
+    impact = {"krab": 0, "openclaw": 0, "gemini": 0, "archive": 0}
+
+    if layer in (None, "krab"):
+        for cid in target_chat_ids:
+            try:
+                if history_cache.get(f"chat_history:{cid}"):
+                    impact["krab"] += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("reset_krab_probe_failed", chat_id=cid, error=str(exc))
+
+    if layer in (None, "openclaw"):
+        impact["openclaw"] = sum(
+            1 for cid in target_chat_ids if cid in openclaw_client._sessions
+        )
+
+    if layer in (None, "gemini"):
+        # Nonce-инвалидация — per chat, независимо от текущего состояния
+        impact["gemini"] = len(target_chat_ids)
+
+    if layer == "archive":
+        for cid in target_chat_ids:
+            impact["archive"] += count_archive_messages_for_chat(cid)
+
+    if dry_run:
+        scope = "все чаты" if is_all else "текущий чат"
+        # Archive не в default scope — честно предупреждаем в превью.
+        archive_hint = ""
+        if layer is None:
+            archive_hint = (
+                "\n⚠️ Archive НЕ включён в default scope. "
+                "Используй `--layer=archive` для очистки archive.db."
+            )
+        preview = (
+            f"🔍 **Dry-run** (nothing deleted)\n"
+            f"Scope: {scope}\n"
+            f"Layer filter: `{layer or 'all'}`\n\n"
+            f"Удалилось бы:\n"
+            f"• Krab cache: {impact['krab']}\n"
+            f"• OpenClaw: {impact['openclaw']}\n"
+            f"• Gemini cache invalidate: {impact['gemini']}\n"
+            f"• Archive: {impact['archive']}{archive_hint}"
+        )
+        if message.from_user and message.from_user.id == bot.me.id:
+            await message.edit(preview)
+        else:
+            await message.reply(preview)
+        return
+
+    # ── EXECUTE ───────────────────────────────────────────────────────────
+    stats = {"krab": 0, "openclaw": 0, "gemini": 0, "archive": 0}
+
+    # Progress message для длинного --all (>10 чатов).
+    # Обновляем каждые 10 итераций, чтобы не спамить Telegram API.
+    total = len(target_chat_ids)
+    progress_msg = None
+    if total > 10:
+        try:
+            progress_msg = await message.reply(f"🔄 Reset: 0 / {total}...")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("reset_progress_init_failed", error=str(exc))
+            progress_msg = None
+
+    for idx, cid in enumerate(target_chat_ids):
+        if layer in (None, "krab"):
+            # Избегаем double-count: clear_session() ниже тоже удаляет chat_history:*,
+            # поэтому инкрементим stats только если ключ реально был.
+            key = f"chat_history:{cid}"
+            try:
+                if history_cache.get(key):
+                    history_cache.delete(key)
+                    stats["krab"] += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("reset_krab_failed", chat_id=cid, error=str(exc))
+
+        if layer in (None, "openclaw"):
+            try:
+                openclaw_client.clear_session(cid)
+                stats["openclaw"] += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "reset_openclaw_failed", chat_id=cid, error=str(exc)
+                )
+
+        if layer in (None, "gemini"):
+            try:
+                invalidate_gemini_cache_for_chat(cid)
+                stats["gemini"] += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "reset_gemini_failed", chat_id=cid, error=str(exc)
+                )
+
+        if layer == "archive":
+            try:
+                stats["archive"] += clear_archive_db_for_chat(cid)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "reset_archive_failed", chat_id=cid, error=str(exc)
+                )
+
+        # Прогресс каждые 10 чатов — не спамим и не валим на edit-ошибке.
+        if progress_msg is not None and (idx + 1) % 10 == 0 and (idx + 1) < total:
+            try:
+                await progress_msg.edit(f"🔄 Reset: {idx + 1} / {total}...")
+            except Exception:  # noqa: BLE001
+                pass
+
+    # Удаляем progress-message перед финальным отчётом (best-effort).
+    if progress_msg is not None:
+        try:
+            await progress_msg.delete()
+        except Exception:  # noqa: BLE001
+            pass
+
+    scope = "всех чатов" if is_all else "текущего чата"
+    res = (
+        f"🗑️ **Reset выполнен** ({scope})\n"
+        f"• Krab cache: {stats['krab']}\n"
+        f"• OpenClaw: {stats['openclaw']}\n"
+        f"• Gemini: {stats['gemini']}\n"
+        f"• Archive: {stats['archive']}"
+    )
+    if message.from_user and message.from_user.id == bot.me.id:
+        await message.edit(res)
+    else:
+        await message.reply(res)
+
+
 ##############################################################################
 # Группы ключей для !config — технические/системные настройки
 ##############################################################################

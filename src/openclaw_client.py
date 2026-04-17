@@ -146,6 +146,10 @@ class OpenClawClient:
         self._last_runtime_route: dict[str, Any] = {}
         # Трекинг активных tool calls для отображения в Telegram progress notices.
         self._active_tool_calls: list[dict[str, Any]] = []
+        # Текущая in-flight LLM-задача (stream completion). Watchdog из llm_flow
+        # (detect_stagnation) использует её для hard-cancel при зависании codex-cli.
+        # None = нет активного запроса.
+        self._current_request_task: Optional[asyncio.Task] = None
 
     def _sync_token_from_runtime_on_init(self) -> None:
         """При старте синхронизируем токен из ~/.openclaw/openclaw.json.
@@ -363,6 +367,36 @@ class OpenClawClient:
     def get_last_runtime_route(self) -> dict[str, Any]:
         """Возвращает snapshot последнего фактического маршрута."""
         return dict(self._last_runtime_route)
+
+    def register_current_request_task(self, task: Optional[asyncio.Task]) -> None:
+        """
+        Регистрирует текущий in-flight LLM task (обёртка над send_message_stream).
+
+        Вызывается llm_flow при старте stream'а. При детекте стагнации watchdog
+        вызывает cancel_current_request() — тогда .cancel() на этом task
+        штатно прерывает await-цепочку async generator'а.
+
+        Передай None чтобы снять регистрацию (после завершения).
+        """
+        self._current_request_task = task
+
+    def cancel_current_request(self) -> bool:
+        """
+        Отменяет текущий in-flight LLM-call. Returns True если был активный task.
+
+        Используется watchdog'ом (llm_flow.detect_stagnation): когда gateway
+        task-poller видит, что OpenClaw runs.sqlite не обновлялся > threshold
+        секунд — мы гарантированно hung и ждать дальше бессмысленно.
+
+        Важно: task.cancel() прерывает await в send_message_stream и заставляет
+        все async for/yield получить CancelledError — это штатный asyncio way.
+        """
+        task = self._current_request_task
+        if task and not task.done():
+            task.cancel()
+            logger.warning("llm_request_cancelled_by_watchdog")
+            return True
+        return False
 
     def _sync_last_runtime_route_active_tier(self) -> None:
         """
@@ -2416,10 +2450,59 @@ class OpenClawClient:
             else:
                 self._sessions[chat_id] = []
 
-            if system_prompt and not self._sessions[chat_id]:
-                self._sessions[chat_id].append({"role": "system", "content": system_prompt})
-            elif system_prompt and self._sessions[chat_id][0].get("role") != "system":
-                self._sessions[chat_id].insert(0, {"role": "system", "content": system_prompt})
+            # Добавляем Gemini prompt-cache nonce (если установлен через !reset),
+            # чтобы инвалидировать cache без перезапуска рантайма.
+            from .core.gemini_cache_nonce import clear_gemini_nonce, get_gemini_nonce
+
+            effective_system_prompt = system_prompt
+            _nonce = get_gemini_nonce(chat_id)
+            if effective_system_prompt and _nonce:
+                effective_system_prompt = (
+                    f"{effective_system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
+                )
+
+            if effective_system_prompt and not self._sessions[chat_id]:
+                self._sessions[chat_id].append(
+                    {"role": "system", "content": effective_system_prompt}
+                )
+            elif (
+                effective_system_prompt
+                and self._sessions[chat_id][0].get("role") != "system"
+            ):
+                self._sessions[chat_id].insert(
+                    0, {"role": "system", "content": effective_system_prompt}
+                )
+
+            # Nonce consumed при первом применении к новой/пустой сессии.
+            if _nonce:
+                clear_gemini_nonce(chat_id)
+        else:
+            # Сессия уже загружена в памяти (например, !reset --layer=gemini не чистил её).
+            # Проверяем, есть ли pending nonce: если да — обновляем content первого
+            # system-message, чтобы на следующем request Gemini получил отличающийся
+            # system_prompt и cache инвалидировался.
+            from .core.gemini_cache_nonce import clear_gemini_nonce, get_gemini_nonce
+
+            _nonce = get_gemini_nonce(chat_id)
+            if _nonce and system_prompt and self._sessions[chat_id]:
+                first_msg = self._sessions[chat_id][0]
+                if isinstance(first_msg, dict) and first_msg.get("role") == "system":
+                    first_msg["content"] = (
+                        f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
+                    )
+                else:
+                    # Нет system-сообщения — вставим его с nonce.
+                    self._sessions[chat_id].insert(
+                        0,
+                        {
+                            "role": "system",
+                            "content": (
+                                f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
+                            ),
+                        },
+                    )
+                # Consume nonce после применения: чтобы не обновлять system при каждом запросе.
+                clear_gemini_nonce(chat_id)
 
         self._sanitize_session_and_cache(chat_id)
 
@@ -3056,12 +3139,81 @@ class OpenClawClient:
                     logger.warning("model_manager_mark_request_finished_failed", error=str(exc))
 
     def clear_session(self, chat_id: str):
-        """Очищает историю чата (память и кэш)."""
+        """Очищает историю чата (in-memory + кэш + persistent session-файлы).
+
+        Persistent cleanup: лучшее усилие по удалению
+        ``~/.openclaw/agents/main/sessions/*.jsonl`` через content-lookup по
+        маркеру ``"chat_id": <id>``. Т.к. явного mapping chat_id→session_id в
+        Krab нет, ищем по содержимому файла: если встречается — удаляем.
+        Ошибки IO не пропагируются — только WARN-лог.
+        """
         if chat_id in self._sessions:
             del self._sessions[chat_id]
         self._lm_native_chat_state.pop(chat_id, None)
         history_cache.delete(f"chat_history:{chat_id}")
+
+        # Persistent session-файлы OpenClaw: best-effort cleanup.
+        # TODO(krab-session-mapping): если появится chat_id→session_id в Krab,
+        # заменить pattern-lookup на прямой lookup из маппинга.
+        try:
+            removed = self._cleanup_openclaw_session_files(chat_id)
+            if removed:
+                logger.info(
+                    "openclaw_session_files_removed",
+                    chat_id=chat_id,
+                    count=removed,
+                )
+        except OSError as exc:
+            logger.warning(
+                "openclaw_session_files_cleanup_failed",
+                chat_id=chat_id,
+                error=str(exc),
+            )
+
         logger.info("session_cleared", chat_id=chat_id)
+
+    @staticmethod
+    def _cleanup_openclaw_session_files(chat_id: str) -> int:
+        """Удаляет session.jsonl файлы, в которых встречается chat_id.
+
+        Возвращает число удалённых файлов. Безопасно: игнорирует отсутствие
+        директории и любые IO-ошибки на отдельных файлах.
+        """
+        sessions_dir = Path.home() / ".openclaw" / "agents" / "main" / "sessions"
+        if not sessions_dir.exists() or not sessions_dir.is_dir():
+            return 0
+
+        # Маркер ищем в разных формах (JSON может сериализовать по-разному).
+        needle_quoted = f'"chat_id": "{chat_id}"'
+        needle_unquoted = f'"chat_id":"{chat_id}"'
+        needle_int = f'"chat_id": {chat_id}'
+        needle_int_unquoted = f'"chat_id":{chat_id}'
+
+        removed = 0
+        try:
+            candidates = list(sessions_dir.glob("*.jsonl"))
+        except OSError:
+            return 0
+
+        for path in candidates:
+            try:
+                # Читаем как текст; big-files не ожидаются (session jsonl небольшие).
+                content = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if (
+                needle_quoted in content
+                or needle_unquoted in content
+                or needle_int in content
+                or needle_int_unquoted in content
+            ):
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    # Не валим весь reset из-за одного проблемного файла.
+                    continue
+        return removed
 
     def get_usage_stats(self) -> Dict[str, int]:
         """Возвращает статистику использования токенов."""
