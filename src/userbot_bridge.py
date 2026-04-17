@@ -1541,6 +1541,16 @@ class KraabUserbot(
                 self._weekly_digest_task = weekly_digest.start_weekly_digest_loop()
         except Exception as exc:  # noqa: BLE001
             logger.warning("weekly_digest_setup_failed", error=str(exc))
+        # NightlySummary: ежедневный digest в DM owner
+        try:
+            from .core.nightly_summary import nightly_summary_service  # noqa: PLC0415
+
+            nightly_summary_service.bind_bot(self.client)
+            nst = getattr(self, "_nightly_summary_task", None)
+            if nst is None or nst.done():
+                self._nightly_summary_task = nightly_summary_service.start()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("nightly_summary_setup_failed", error=str(exc))
 
     async def _run_proactive_watch_loop(self) -> None:
         """
