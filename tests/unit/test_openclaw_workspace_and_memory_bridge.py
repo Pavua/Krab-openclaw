@@ -169,6 +169,13 @@ async def test_handle_recall_reads_shared_workspace_memory(monkeypatch):
     )
     monkeypatch.setattr(command_handlers_module.memory_manager, "recall", lambda query: "")
 
+    # Memory Layer endpoint может быть недоступен в unit-test'е — подменяем
+    # на пустой результат, чтобы не ждать 5s httpx timeout.
+    async def _empty_recall(query, limit=5):  # noqa: ARG001
+        return []
+
+    monkeypatch.setattr(command_handlers_module, "_recall_memory_layer", _empty_recall)
+
     await handle_recall(bot, message)
 
     message.reply.assert_awaited_once()
