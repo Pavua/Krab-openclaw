@@ -4720,6 +4720,11 @@ async def handle_cron(bot: "KraabUserbot", message: Message) -> None:
             await msg.edit(text)
         return
 
+    # ---------- !cron quick — human-friendly создание per-chat job ----------
+    if sub in {"quick", "быстро", "add"}:
+        await _handle_cron_quick(bot, message, arg)
+        return
+
     # ---------- Неизвестная субкоманда ----------
     await message.reply(
         "🗓 **!cron** — управление OpenClaw cron jobs\n\n"
@@ -4727,7 +4732,115 @@ async def handle_cron(bot: "KraabUserbot", message: Message) -> None:
         "`!cron enable <name>` — включить job\n"
         "`!cron disable <name>` — выключить job\n"
         "`!cron run <name>` — запустить job немедленно\n"
-        "`!cron status` — общая статистика"
+        "`!cron status` — общая статистика\n"
+        "`!cron quick \"<время>\" \"<промпт>\"` — создать job в текущем чате\n"
+        "   Пример: `!cron quick \"каждый день в 10:00\" \"AI-ресёрч и саммари\"`"
+    )
+
+
+async def _handle_cron_quick(
+    bot: "KraabUserbot", message: Message, args: str
+) -> None:
+    """
+    !cron quick "<время>" "<промпт>" — создаёт per-chat recurring cron job.
+
+    Время понимается human-friendly (см. cron_spec_parser):
+      - "каждый день в HH:MM" / "every day at HH:MM"
+      - "каждые N часов" / "every N hours"
+      - "каждый понедельник в HH:MM" / "every monday at HH:MM"
+      - прямой cron `M H D Mo Dow`
+    """
+    import shlex
+
+    from ..core.cron_spec_parser import parse_cron_expression  # noqa: PLC0415
+
+    raw = (args or "").strip()
+    if not raw:
+        await bot._safe_reply(
+            message,
+            "❌ Формат: `!cron quick \"<время>\" \"<промпт>\"`\n"
+            "Пример: `!cron quick \"каждый день в 10:00\" \"AI+crypto ресёрч, саммари\"`",
+        )
+        return
+
+    try:
+        parts = shlex.split(raw)
+    except ValueError:
+        await bot._safe_reply(
+            message,
+            "❌ Не распарсил аргументы. Используй кавычки: "
+            "`!cron quick \"время\" \"промпт\"`",
+        )
+        return
+
+    if len(parts) < 2:
+        await bot._safe_reply(
+            message,
+            "❌ Нужно 2 аргумента: время + промпт. "
+            "Пример: `!cron quick \"каждые 2 часа\" \"проверь BTC/ETH\"`",
+        )
+        return
+
+    time_expr = parts[0]
+    prompt = " ".join(parts[1:]).strip()
+    if not prompt:
+        await bot._safe_reply(message, "❌ Промпт не может быть пустым.")
+        return
+
+    cron_spec = parse_cron_expression(time_expr)
+    if not cron_spec:
+        await bot._safe_reply(
+            message,
+            f"❌ Не распарсил время: `{time_expr}`.\nПримеры:\n"
+            "• `каждый день в 10:00`\n"
+            "• `каждые 2 часа`\n"
+            "• `каждый понедельник в 09:00`\n"
+            "• `0 10 * * *` (прямой cron)",
+        )
+        return
+
+    chat_id = message.chat.id if getattr(message, "chat", None) else 0
+    # Имя job должно быть уникальным и читаемым: tg-quick-<chat_id>-<timestamp>
+    job_name = f"tg-quick-{chat_id}-{int(time.time())}"
+    description = f"quick per-chat job (chat_id={chat_id})"
+
+    # Нативный `openclaw cron add` — уже существующий контракт (см. web_app.py openclaw_cron_job_create).
+    # create_subprocess_exec гарантирует, что аргументы не интерпретируются shell.
+    ok, raw_out = await _cron_run_openclaw(
+        "cron",
+        "add",
+        "--json",
+        "--name",
+        job_name,
+        "--every",
+        cron_spec,
+        "--session",
+        "main",
+        "--wake",
+        "now",
+        "--description",
+        description,
+        "--system-event",
+        prompt,
+        timeout=45.0,
+    )
+    if not ok:
+        short = raw_out[:200] if raw_out else "no output"
+        logger.warning(
+            "cron_quick_create_failed", name=job_name, spec=cron_spec, raw=short
+        )
+        await bot._safe_reply(message, f"❌ Ошибка создания job:\n`{short}`")
+        return
+
+    prompt_preview = prompt[:80] + ("…" if len(prompt) > 80 else "")
+    await bot._safe_reply(
+        message,
+        "✅ **Cron создан**\n"
+        f"• Имя: `{job_name}`\n"
+        f"• Расписание: `{cron_spec}` (из `{time_expr}`)\n"
+        f"• Промпт: `{prompt_preview}`\n"
+        f"• Chat: `{chat_id}`\n"
+        f"Выключить: `!cron disable {job_name}`",
     )
 
 

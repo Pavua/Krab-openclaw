@@ -540,8 +540,8 @@ _COMMANDS: list[CommandInfo] = [
     CommandInfo(
         name="cron",
         category="scheduler",
-        description="Управление OpenClaw cron jobs (list/enable/disable/run/status)",
-        usage="!cron [list|enable|disable|run|status] [<name>]",
+        description="Управление OpenClaw cron jobs (list/enable/disable/run/status/quick)",
+        usage='!cron [list|enable|disable|run|status] [<name>] | !cron quick "<время>" "<промпт>"',
         owner_only=True,
     ),
     CommandInfo(
