@@ -539,6 +539,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/translator/mobile/onboarding` | GET | Онбординг мобильный |
 | `/api/translator/bootstrap` | GET | Bootstrap данные |
 | `/api/swarm/task-board` | GET | Kanban-доска задач |
+| `/api/swarm/task-board/export?format=csv\|json` | GET | Export task board |
 | `/api/swarm/tasks` | GET | Список задач свёрма |
 | `/api/swarm/task/{id}` | GET | Детальная задача |
 | `/api/swarm/tasks/create` | POST | Создать задачу |
