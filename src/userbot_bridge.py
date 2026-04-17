@@ -78,6 +78,7 @@ from .handlers import (
     handle_config,
     handle_context,
     handle_costs,
+    handle_cron,
     handle_cronstatus,
     handle_debug,
     handle_del,
@@ -1028,6 +1029,13 @@ class KraabUserbot(
         )
         async def wrap_cronstatus(c, m):
             await run_cmd(handle_cronstatus, m)
+
+        @self.client.on_message(
+            filters.command("cron", prefixes=prefixes) & _make_command_filter("cron"),
+            group=-1,
+        )
+        async def wrap_cron(c, m):
+            await run_cmd(handle_cron, m)
 
         @self.client.on_message(
             filters.command("schedule", prefixes=prefixes) & _make_command_filter("schedule"),
