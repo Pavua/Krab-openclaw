@@ -7517,6 +7517,24 @@ class WebApp:
                 result["telegram_rate_limiter"] = _rate_limiter_stats
             return result
 
+        # ── Prometheus metrics ───────────────────────────────────────────────
+
+        @self.app.get("/metrics")
+        async def prometheus_metrics():
+            """Prometheus scraping endpoint (text format, version=0.0.4)."""
+            from fastapi.responses import PlainTextResponse
+
+            from ..core.prometheus_metrics import collect_metrics
+
+            try:
+                return PlainTextResponse(
+                    collect_metrics(),
+                    media_type="text/plain; version=0.0.4",
+                )
+            except Exception as e:
+                logger.error("metrics_collect_failed", error=str(e))
+                return PlainTextResponse(f"# ERROR: {e}\n", status_code=500)
+
         # ── Memory Indexer API (phase 4) ─────────────────────────────────────
 
         @self.app.get("/api/memory/indexer")
