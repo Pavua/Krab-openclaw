@@ -89,15 +89,34 @@ class BackgroundTasksMixin:
     async def _keep_typing_alive(
         client: Any, chat_id: int, action: Any, stop_event: asyncio.Event
     ) -> None:
-        """Фоновая корутина: повторяет send_chat_action каждые 4 секунды, пока не установлен stop_event."""
-        while not stop_event.is_set():
+        """Фоновая корутина: повторяет send_chat_action каждые 4 секунды, пока не установлен stop_event.
+
+        Session 11 fix (feature req #6): при выходе шлём явный ChatAction.CANCEL,
+        чтобы Telegram мгновенно убрал indicator на клиентах. Без этого при
+        exception/cancel во время LLM-flow пользователи в группах видели
+        «печатает...» часами (observed: outage 17.04, «eNULL и Yung Nagato
+        печатают» — stop_event так и не был выставлен до падения).
+        """
+        try:
+            while not stop_event.is_set():
+                try:
+                    await client.send_chat_action(chat_id, action)
+                except Exception:
+                    pass
+                try:
+                    await asyncio.wait_for(asyncio.shield(stop_event.wait()), timeout=4.0)
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            # Explicit CANCEL — critical: без него indicator висит до auto-expire
+            # (~5 сек) или навсегда (если сервер пропустил тик). Выполняется
+            # даже при CancelledError благодаря finally.
             try:
-                await client.send_chat_action(chat_id, action)
+                from pyrogram import enums as _pg_enums  # noqa: PLC0415
+
+                await client.send_chat_action(chat_id, _pg_enums.ChatAction.CANCEL)
             except Exception:
-                pass
-            try:
-                await asyncio.wait_for(asyncio.shield(stop_event.wait()), timeout=4.0)
-            except asyncio.TimeoutError:
+                # best-effort — если сеть легла, indicator всё равно auto-expire-нет.
                 pass
 
     @staticmethod
