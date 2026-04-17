@@ -9335,7 +9335,7 @@ async def handle_dice(bot: "KraabUserbot", message: Message) -> None:
       !dice slot       → 🎰 слот-машина
     """
     # Карта alias → эмодзи
-    _DICE_ALIASES: dict[str, str] = {
+    _DICE_ALIASES: dict[str, str] = {  # noqa: N806 — легаси emoji map
         "": "🎲",
         "dice": "🎲",
         "dart": "🎯",
