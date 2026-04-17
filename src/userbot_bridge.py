@@ -1835,6 +1835,77 @@ class KraabUserbot(
         )
         return True
 
+    def _activate_provider_failover(self) -> None:
+        """
+        Регистрирует apply-callback и owner-notification-callback для
+        `provider_failover.failover_policy`.
+
+        Почему как отдельный метод:
+        - держит `start()` читаемым;
+        - позволяет unit-тестить activation изолированно от Telegram lifecycle.
+
+        Безопасный для legacy: graceful-fallback если модуль `provider_failover`
+        отсутствует (например при rollback).
+        """
+        try:
+            from .core.provider_failover import failover_policy  # noqa: PLC0415
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("provider_failover_import_failed", error=str(exc))
+            return
+
+        async def _failover_apply(from_provider: str, to_provider: str) -> None:
+            """Применяет model switch через existing openclaw_client API."""
+            try:
+                if hasattr(openclaw_client, "set_primary_model"):
+                    result = openclaw_client.set_primary_model(to_provider)
+                    if asyncio.iscoroutine(result):
+                        await result
+                elif hasattr(openclaw_client, "switch_model"):
+                    result = openclaw_client.switch_model(to_provider)
+                    if asyncio.iscoroutine(result):
+                        await result
+                else:
+                    # Fallback на runtime-config — пишем в config.MODEL как
+                    # !model set делает в handlers/command_handlers.py.
+                    try:
+                        config.update_setting("MODEL", to_provider)
+                        config.MODEL = to_provider
+                        logger.info(
+                            "provider_failover_applied_via_config",
+                            from_provider=from_provider,
+                            to_provider=to_provider,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "failover_no_switch_method",
+                            to_provider=to_provider,
+                            error=str(exc),
+                        )
+            except Exception as exc:  # noqa: BLE001
+                logger.error("failover_switch_failed", error=str(exc))
+
+        async def _failover_notify(msg: str) -> None:
+            """Отправляет owner DM с предупреждением о switch."""
+            try:
+                if self.client is None:
+                    logger.warning("failover_notify_no_client")
+                    return
+                owner_ids = getattr(config, "OWNER_USER_IDS", []) or []
+                target: Any = "me"
+                if owner_ids:
+                    raw = owner_ids[0]
+                    target = int(raw) if str(raw).isdigit() else raw
+                await self.client.send_message(target, msg)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("failover_notify_send_failed", error=str(exc))
+
+        try:
+            failover_policy.set_failover_callback(_failover_apply)
+            failover_policy.set_notification_callback(_failover_notify)
+            logger.info("provider_failover_callbacks_registered")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("provider_failover_activation_failed", error=str(exc))
+
     async def start(self):
         """Запуск юзербота"""
         self._set_startup_state(state="starting")
@@ -2048,6 +2119,13 @@ class KraabUserbot(
             _load_usage()
         except Exception as _exc:
             logger.warning("command_usage_load_failed", error=str(_exc))
+
+        # Provider auto-failover — регистрируем callbacks после инициализации Krab,
+        # до handlers и фоновых задач. Policy feed'ит health-таблицу из
+        # `_set_last_runtime_route`, но без зарегистрированных callbacks реальный
+        # switch не выполнится даже если threshold breached.
+        # Активируется через PROVIDER_FAILOVER_ENABLED=true (safety default off).
+        self._activate_provider_failover()
 
         # Запуск фоновых задач (Safe Start)
         self._ensure_maintenance_started()

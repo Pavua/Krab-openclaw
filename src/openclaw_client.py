@@ -367,7 +367,7 @@ class OpenClawClient:
 
         # Feed policy — success/failure каждого route попадает в health-таблицу
         # provider_failover. Сам auto-switch триггерится отдельным хуком
-        # `_maybe_trigger_failover` на транспорт-ошибках (см. stream-handler).
+        # при достижении threshold (см. callbacks в userbot_bridge.start()).
         try:
             provider = self._last_runtime_route.get("provider", "") or ""
             if status == "ok" and provider:
