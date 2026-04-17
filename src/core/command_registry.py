@@ -153,6 +153,13 @@ _COMMANDS: list[CommandInfo] = [
         description="Очистить историю диалога",
         usage="!clear",
     ),
+    CommandInfo(
+        name="reset",
+        category="system",
+        description="Агрессивный reset истории: Krab cache + OpenClaw + Gemini + Archive",
+        usage="!reset [--all] [--layer=krab|openclaw|gemini|archive] [--dry-run] [--force]",
+        owner_only=True,
+    ),
 
     # ── ai ───────────────────────────────────────────────────────────────────
     CommandInfo(

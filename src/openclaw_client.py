@@ -2450,10 +2450,28 @@ class OpenClawClient:
             else:
                 self._sessions[chat_id] = []
 
-            if system_prompt and not self._sessions[chat_id]:
-                self._sessions[chat_id].append({"role": "system", "content": system_prompt})
-            elif system_prompt and self._sessions[chat_id][0].get("role") != "system":
-                self._sessions[chat_id].insert(0, {"role": "system", "content": system_prompt})
+            # Добавляем Gemini prompt-cache nonce (если установлен через !reset),
+            # чтобы инвалидировать cache без перезапуска рантайма.
+            from .core.gemini_cache_nonce import get_gemini_nonce
+
+            effective_system_prompt = system_prompt
+            _nonce = get_gemini_nonce(chat_id)
+            if effective_system_prompt and _nonce:
+                effective_system_prompt = (
+                    f"{effective_system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
+                )
+
+            if effective_system_prompt and not self._sessions[chat_id]:
+                self._sessions[chat_id].append(
+                    {"role": "system", "content": effective_system_prompt}
+                )
+            elif (
+                effective_system_prompt
+                and self._sessions[chat_id][0].get("role") != "system"
+            ):
+                self._sessions[chat_id].insert(
+                    0, {"role": "system", "content": effective_system_prompt}
+                )
 
         self._sanitize_session_and_cache(chat_id)
 
