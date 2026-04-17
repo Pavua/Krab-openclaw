@@ -496,6 +496,8 @@ class KraabUserbot(
         self._error_digest_task: Optional[asyncio.Task] = None
         self._silence_schedule_task: Optional[asyncio.Task] = None
         self._command_usage_save_task: Optional[asyncio.Task] = None
+        # Wave 7-D: фоновый loop очереди напоминаний (time/event).
+        self._reminders_task: Optional[asyncio.Task] = None
         self._swarm_team_clients: dict[str, Any] = {}  # team → Pyrogram Client
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
@@ -553,6 +555,7 @@ class KraabUserbot(
             try:
                 _cmd_name = handler.__name__.removeprefix("handle_")
                 from .core.command_registry import bump_command
+
                 bump_command(_cmd_name)
             except Exception:  # noqa: BLE001
                 pass
@@ -820,7 +823,8 @@ class KraabUserbot(
             await run_cmd(handle_fix, m)
 
         @self.client.on_message(
-            filters.command("rewrite", prefixes=prefixes) & _make_command_filter("rewrite"), group=-1
+            filters.command("rewrite", prefixes=prefixes) & _make_command_filter("rewrite"),
+            group=-1,
         )
         async def wrap_rewrite(c, m):
             await run_cmd(handle_rewrite, m)
@@ -1343,9 +1347,9 @@ class KraabUserbot(
           costs_detail       — подробная разбивка по моделям
           health_recheck     — повторный health check
         """
-        action = data[len("action:"):]
+        action = data[len("action:") :]
         if action.startswith("swarm_team:"):
-            team = action[len("swarm_team:"):]
+            team = action[len("swarm_team:") :]
             await cq.answer(f"🐝 {team}")
             await cq.message.reply(
                 f"🐝 Используй команду:\n`!swarm {team} <тема>`\n\n"
@@ -1354,6 +1358,7 @@ class KraabUserbot(
         elif action == "costs_detail":
             await cq.answer("📊 Загружаю детали…")
             from .core.cost_analytics import cost_analytics
+
             report = cost_analytics.build_usage_report_dict()
             by_model: dict = report.get("by_model", {})
             if not by_model:
@@ -1369,8 +1374,7 @@ class KraabUserbot(
         elif action == "health_recheck":
             await cq.answer("🔄 Перепроверяю…")
             await cq.message.reply(
-                "🔄 Запускаю повторный health check…\n"
-                "Используй `!health` для полного отчёта."
+                "🔄 Запускаю повторный health check…\nИспользуй `!health` для полного отчёта."
             )
         else:
             await cq.answer(f"⚠️ Неизвестный action: {action}")
@@ -1492,6 +1496,7 @@ class KraabUserbot(
             await asyncio.sleep(300)  # 5 минут
             try:
                 from .core.command_registry import save_usage as _save_usage
+
                 _save_usage()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("command_usage_periodic_save_failed", error=str(exc))
@@ -2031,6 +2036,7 @@ class KraabUserbot(
         # Загружаем счётчики вызовов команд с диска
         try:
             from .core.command_registry import load_usage as _load_usage
+
             _load_usage()
         except Exception as _exc:
             logger.warning("command_usage_load_failed", error=str(_exc))
@@ -2043,6 +2049,40 @@ class KraabUserbot(
         self._ensure_silence_schedule_started()
         self._ensure_memory_indexer_started()
         self._command_usage_save_task = asyncio.create_task(self._command_usage_save_loop())
+
+        # Wave 7-D: запускаем reminders_queue loop + регистрируем fire callback.
+        # Callback отправляет DM owner'у при срабатывании напоминания. Ошибка при
+        # старте loop — не fatal, юзербот продолжает работать без reminders.
+        try:
+            from .core.reminders_queue import reminders_queue  # noqa: PLC0415
+
+            async def _fire_reminder_callback(reminder):
+                """Срабатывает когда reminder истекает/матчится — DM owner'у."""
+                owner_id = reminder.owner_user_id
+                try:
+                    chat_id: Any = (
+                        int(owner_id) if str(owner_id).lstrip("-").isdigit() else owner_id
+                    )
+                except (TypeError, ValueError):
+                    chat_id = owner_id
+                text = f"🔔 **Напоминание:** {reminder.action_payload}"
+                try:
+                    assert self.client is not None
+                    await self.client.send_message(
+                        chat_id, text, parse_mode=enums.ParseMode.MARKDOWN
+                    )
+                except Exception as _send_exc:  # noqa: BLE001
+                    logger.warning(
+                        "reminder_fire_send_failed",
+                        id=reminder.id,
+                        error=str(_send_exc),
+                    )
+
+            reminders_queue.set_fire_callback(_fire_reminder_callback)
+            self._reminders_task = asyncio.create_task(reminders_queue.start_loop())
+            logger.info("reminders_queue_started")
+        except Exception as _rem_exc:  # noqa: BLE001
+            logger.warning("reminders_queue_start_failed", error=str(_rem_exc))
 
         # Reserve bot (Phase 2.1) — запускаем после userbot, не блокируем старт при ошибке
         try:
@@ -2078,7 +2118,8 @@ class KraabUserbot(
                                 _lockf.unlink()
                                 logger.info(
                                     "swarm_stale_lock_cleaned",
-                                    team=team, file=str(_lockf),
+                                    team=team,
+                                    file=str(_lockf),
                                 )
                             except OSError:
                                 pass
@@ -2261,8 +2302,11 @@ class KraabUserbot(
         await self._cancel_background_task("_auto_restart_task")
         await self._cancel_background_task("_silence_schedule_task")
         await self._cancel_background_task("_memory_indexer_task")
+        # Wave 7-D: reminders queue loop
+        await self._cancel_background_task("_reminders_task")
         try:
             from .core.memory_indexer_worker import get_indexer as _get_idx
+
             await _get_idx().stop(drain=True, timeout=10.0)
         except Exception as _stop_exc:  # noqa: BLE001
             logger.debug("memory_indexer_stop_failed", error=str(_stop_exc))
@@ -2995,6 +3039,7 @@ class KraabUserbot(
             # Передаём в ReactionEngine для накопления feedback
             try:
                 from .core.reaction_engine import reaction_engine  # noqa: PLC0415
+
                 reaction_engine.record_reaction(
                     chat_id=chat_id,
                     message_id=message_id,
@@ -3016,10 +3061,14 @@ class KraabUserbot(
             # Информация об отправителе
             sender = message.from_user
             sender_name = (
-                getattr(sender, "username", None)
-                or getattr(sender, "first_name", None)
-                or str(getattr(sender, "id", "?"))
-            ) if sender else "Unknown"
+                (
+                    getattr(sender, "username", None)
+                    or getattr(sender, "first_name", None)
+                    or str(getattr(sender, "id", "?"))
+                )
+                if sender
+                else "Unknown"
+            )
             # Название чата
             chat_title = (
                 getattr(message.chat, "title", None)
@@ -3334,17 +3383,18 @@ class KraabUserbot(
         _ack_model = ""
         try:
             from .userbot.llm_flow import _current_runtime_primary_model  # noqa: PLC0415
+
             _ack_model = _current_runtime_primary_model() or ""
         except Exception:
             pass
         _ack_model_hint = f"\nТекущий маршрут: `{_ack_model}`" if _ack_model else ""
         _ack_text = (
-            f"🦀 Принял запрос.\n\n"
-            f"🛠️ Собираю контекст и запускаю маршрут...{_ack_model_hint}"
+            f"🦀 Принял запрос.\n\n🛠️ Собираю контекст и запускаю маршрут...{_ack_model_hint}"
         )
         # Progress-уведомления только в личных чатах (PRIVATE). В группах — молчим
         # и отправляем только финальный ответ.
         from pyrogram import enums as _pg_enums  # noqa: PLC0415
+
         _chat_type = getattr(getattr(message, "chat", None), "type", None)
         _is_private_chat = _chat_type == _pg_enums.ChatType.PRIVATE
         _show_progress_notices = _is_private_chat or is_self
@@ -3360,7 +3410,8 @@ class KraabUserbot(
                     logger.warning("initial_request_ack_failed", chat_id=chat_id, error=str(exc))
                     try:
                         temp_msg = await self.client.send_message(
-                            message.chat.id, _ack_text,
+                            message.chat.id,
+                            _ack_text,
                         )
                     except Exception as send_exc:  # noqa: BLE001
                         logger.warning(
@@ -3373,9 +3424,8 @@ class KraabUserbot(
                 # Групповой чат — только typing indicator, без текстового ack
                 try:
                     from pyrogram import enums as _e  # noqa: PLC0415
-                    await self.client.send_chat_action(
-                        message.chat.id, _e.ChatAction.TYPING
-                    )
+
+                    await self.client.send_chat_action(message.chat.id, _e.ChatAction.TYPING)
                 except Exception:
                     pass
                 temp_msg = message
@@ -3774,6 +3824,22 @@ class KraabUserbot(
                         self._send_monitor_alert(message=message, matched_keyword=_matched_kw)
                     )
 
+            # Wave 7-D: event-based reminders. Проверяем pending event-reminders
+            # на совпадение по (chat_id, regex). Матчи запускаем fire-and-forget,
+            # чтобы не блокировать основной обработчик. Ошибка check_event_match —
+            # не fatal, просто логгируем на DEBUG.
+            if chat_id:
+                try:
+                    from .core.reminders_queue import reminders_queue as _rq  # noqa: PLC0415
+
+                    _text_for_rq = message.text or message.caption or ""
+                    if _text_for_rq:
+                        _matched_rems = _rq.check_event_match(chat_id, _text_for_rq)
+                        for _rem in _matched_rems:
+                            asyncio.create_task(_rq.fire_event_reminder(_rem))
+                except Exception as _rem_exc:  # noqa: BLE001
+                    logger.debug("reminders_event_check_failed", error=str(_rem_exc))
+
             # SPAM GUARD: проверяем входящее сообщение (если spam_guard включён
             # для чата). Только чужие сообщения, не команды — fire-and-forget.
             if not _is_self_for_guard and not _is_command_for_guard and chat_id:
@@ -3790,9 +3856,7 @@ class KraabUserbot(
                         if _spam_reason:
                             from .handlers.command_handlers import apply_spam_action
 
-                            asyncio.create_task(
-                                apply_spam_action(self, message, _spam_reason)
-                            )
+                            asyncio.create_task(apply_spam_action(self, message, _spam_reason))
                 except Exception as _spam_exc:  # noqa: BLE001
                     logger.debug("spam_guard_check_failed", error=str(_spam_exc))
 
@@ -3802,7 +3866,9 @@ class KraabUserbot(
                     indexer = get_indexer()
                     await indexer.enqueue(message)
                 except Exception as _idx_exc:  # noqa: BLE001
-                    logger.debug("memory_indexer_enqueue_failed", error=str(_idx_exc), chat_id=chat_id)
+                    logger.debug(
+                        "memory_indexer_enqueue_failed", error=str(_idx_exc), chat_id=chat_id
+                    )
 
             # AUTO-TRANSLATE: если для чата включён автоперевод (!translate auto),
             # переводим входящее текстовое сообщение (не от self, не команду).
