@@ -24,11 +24,17 @@ if TYPE_CHECKING:
 from ..config import config
 from ..core.logger import get_logger
 from ..core.openclaw_task_poller import (
+    STAGNATION_THRESHOLD_SEC,
     check_gateway_http_alive,
     check_tasks_hung,
+    detect_stagnation,
     format_task_progress_for_telegram,
     poll_active_tasks,
 )
+
+# Маркер reason для asyncio.CancelledError при стагнации LLM-call.
+# Ловим только эту reason-строку — generic CancelledError всё ещё пробрасываем выше.
+LLM_STAGNATION_CANCEL_REASON = "llm_stagnation_detected"
 
 logger = get_logger(__name__)
 
@@ -423,6 +429,17 @@ class LLMFlowMixin:
             disable_tools=_guest_disable_tools,
         )
         stream_iter = stream.__aiter__()
+        # Регистрируем текущий task в клиенте для hard-cancel из watchdog'а.
+        # detect_stagnation видит зависшую runs.sqlite-задачу и зовёт cancel_current_request() →
+        # .cancel() вернётся сюда как CancelledError с reason=stagnation.
+        _llm_current_task = asyncio.current_task()
+        if _llm_current_task is not None and hasattr(
+            openclaw_client, "register_current_request_task"
+        ):
+            try:
+                openclaw_client.register_current_request_task(_llm_current_task)
+            except Exception:  # noqa: BLE001
+                pass
         received_any_chunk = False
         started_wait_at = time.monotonic()
         slow_first_chunk_notice_sent = False
@@ -634,6 +651,81 @@ class LLMFlowMixin:
                                 stale_sec=int(hung_sec),
                                 chat_id=chat_id,
                             )
+                        # Hard stagnation cancel: если gateway watchdog видит, что
+                        # last_event_at у running/queued задачи не обновлялся > threshold —
+                        # codex-cli subprocess hung после gateway restart. Отменяем.
+                        _stagnation_threshold = float(
+                            getattr(
+                                config,
+                                "LLM_STAGNATION_THRESHOLD_SEC",
+                                STAGNATION_THRESHOLD_SEC,
+                            )
+                        )
+                        _stagnant_tasks = detect_stagnation(
+                            gateway_tasks, threshold_sec=_stagnation_threshold
+                        )
+                        if _stagnant_tasks:
+                            for _st in _stagnant_tasks:
+                                _st_age_sec = int(
+                                    time.time() - (_st.last_event_at_ms // 1000)
+                                )
+                                logger.warning(
+                                    "llm_stagnation_detected",
+                                    task_id=_st.task_id,
+                                    label=_st.label,
+                                    status=_st.status,
+                                    last_event_age_sec=_st_age_sec,
+                                    threshold_sec=int(_stagnation_threshold),
+                                    chat_id=chat_id,
+                                )
+                            # Показываем owner'у что детектирована стагнация
+                            stagnation_msg = (
+                                f"⚠️ LLM-провайдер не отвечает "
+                                f"{int(_stagnation_threshold)}+ сек. "
+                                f"Запрос отменён. Попробуй снова или переключи "
+                                f"модель через `!model switch <name>`."
+                            )
+                            if _show_progress:
+                                try:
+                                    if is_self:
+                                        message = await self._safe_edit(
+                                            message,
+                                            f"🦀 {query}\n\n{stagnation_msg}",
+                                        )
+                                    else:
+                                        temp_msg = await self._safe_edit(
+                                            temp_msg, stagnation_msg
+                                        )
+                                except Exception as exc:  # noqa: BLE001
+                                    logger.warning(
+                                        "llm_stagnation_notice_delivery_failed",
+                                        chat_id=chat_id,
+                                        error=str(exc),
+                                    )
+                            # Закрываем stream + cancel pending chunk task
+                            if next_chunk_task and not next_chunk_task.done():
+                                next_chunk_task.cancel()
+                                try:
+                                    await next_chunk_task
+                                except (asyncio.CancelledError, StopAsyncIteration):
+                                    pass
+                                except Exception:  # noqa: BLE001
+                                    pass
+                            try:
+                                await stream.aclose()
+                            except Exception:  # noqa: BLE001
+                                pass
+                            # Сигнализируем клиенту что нужно cancel его side
+                            # (on-the-fly cleanup tool calls, active HTTP request).
+                            if hasattr(openclaw_client, "cancel_current_request"):
+                                try:
+                                    openclaw_client.cancel_current_request()
+                                except Exception:  # noqa: BLE001
+                                    pass
+                            # Bubble CancelledError с маркером reason — обёртка
+                            # _finish_ai_request_background проверяет str(e) и не
+                            # перевыбрасывает как generic error.
+                            raise asyncio.CancelledError(LLM_STAGNATION_CANCEL_REASON)
                         if tool_summary or gateway_progress_text or gateway_http_dead:
                             route_meta = {}
                             if hasattr(openclaw_client, "get_last_runtime_route"):
@@ -1244,6 +1336,12 @@ class LLMFlowMixin:
             action_stop_event.set()
             action_task.cancel()
             await asyncio.gather(action_task, return_exceptions=True)
+            # Снимаем регистрацию task у клиента: следующий flow запишет свой.
+            if hasattr(openclaw_client, "register_current_request_task"):
+                try:
+                    openclaw_client.register_current_request_task(None)
+                except Exception:  # noqa: BLE001
+                    pass
 
     async def _finish_ai_request_background(self, **kwargs: Any) -> None:
         """Доводит long LLM/tool path до конца уже после release per-chat lock."""
@@ -1271,6 +1369,18 @@ class LLMFlowMixin:
                         **kwargs, prefer_send_message_for_background=True
                     )
                     return  # успешно — выходим
+                except asyncio.CancelledError as cancel_err:
+                    # Стагнационный cancel через watchdog: сообщение пользователю уже
+                    # показано внутри _run_llm_request_flow. Тихо выходим, не ретраим.
+                    # Любой другой CancelledError пробрасываем наверх (как и раньше).
+                    if LLM_STAGNATION_CANCEL_REASON in str(cancel_err):
+                        logger.warning(
+                            "llm_stagnation_cancel_handled",
+                            chat_id=chat_id,
+                            reason=LLM_STAGNATION_CANCEL_REASON,
+                        )
+                        return
+                    raise
                 except LLMRetryableError as retry_err:
                     last_retryable_error_text = retry_err.error_text
                     if retry_attempt >= max_retries:

@@ -382,6 +382,14 @@ class Config:
     OPENCLAW_TOOL_PROGRESS_POLL_SEC: float = float(
         os.getenv("OPENCLAW_TOOL_PROGRESS_POLL_SEC", "3.0")
     )
+    # Порог стагнации для hard-cancel LLM-call через gateway watchdog.
+    # Если ни одна из активных задач OpenClaw (runs.sqlite) не апдейтила last_event_at
+    # дольше этого порога — Краб отменяет текущий запрос (codex-cli hung
+    # после gateway restart). Default 120 сек: меньше 90 — ложные срабатывания
+    # на больших моделях, больше 180 — пользователь заметно "виснет".
+    LLM_STAGNATION_THRESHOLD_SEC: float = float(
+        os.getenv("LLM_STAGNATION_THRESHOLD_SEC", "120")
+    )
     # Streaming UI: показывать reasoning (chain-of-thought) в сообщении.
     TELEGRAM_STREAM_SHOW_REASONING: bool = os.getenv(
         "TELEGRAM_STREAM_SHOW_REASONING", "0"

@@ -146,6 +146,10 @@ class OpenClawClient:
         self._last_runtime_route: dict[str, Any] = {}
         # Трекинг активных tool calls для отображения в Telegram progress notices.
         self._active_tool_calls: list[dict[str, Any]] = []
+        # Текущая in-flight LLM-задача (stream completion). Watchdog из llm_flow
+        # (detect_stagnation) использует её для hard-cancel при зависании codex-cli.
+        # None = нет активного запроса.
+        self._current_request_task: Optional[asyncio.Task] = None
 
     def _sync_token_from_runtime_on_init(self) -> None:
         """При старте синхронизируем токен из ~/.openclaw/openclaw.json.
@@ -363,6 +367,36 @@ class OpenClawClient:
     def get_last_runtime_route(self) -> dict[str, Any]:
         """Возвращает snapshot последнего фактического маршрута."""
         return dict(self._last_runtime_route)
+
+    def register_current_request_task(self, task: Optional[asyncio.Task]) -> None:
+        """
+        Регистрирует текущий in-flight LLM task (обёртка над send_message_stream).
+
+        Вызывается llm_flow при старте stream'а. При детекте стагнации watchdog
+        вызывает cancel_current_request() — тогда .cancel() на этом task
+        штатно прерывает await-цепочку async generator'а.
+
+        Передай None чтобы снять регистрацию (после завершения).
+        """
+        self._current_request_task = task
+
+    def cancel_current_request(self) -> bool:
+        """
+        Отменяет текущий in-flight LLM-call. Returns True если был активный task.
+
+        Используется watchdog'ом (llm_flow.detect_stagnation): когда gateway
+        task-poller видит, что OpenClaw runs.sqlite не обновлялся > threshold
+        секунд — мы гарантированно hung и ждать дальше бессмысленно.
+
+        Важно: task.cancel() прерывает await в send_message_stream и заставляет
+        все async for/yield получить CancelledError — это штатный asyncio way.
+        """
+        task = self._current_request_task
+        if task and not task.done():
+            task.cancel()
+            logger.warning("llm_request_cancelled_by_watchdog")
+            return True
+        return False
 
     def _sync_last_runtime_route_active_tier(self) -> None:
         """

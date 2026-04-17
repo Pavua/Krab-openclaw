@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -22,8 +23,11 @@ from structlog import get_logger
 logger = get_logger(__name__)
 
 RUNS_DB_PATH = Path("~/.openclaw/tasks/runs.sqlite").expanduser()
-# Если last_event_at старше этого — считаем задачу зависшей.
+# Если last_event_at старше этого — считаем задачу зависшей (для UI-иконки).
 STALE_THRESHOLD_SEC = 90.0
+# Порог стагнации для hard-cancel текущего LLM-call (default 120s, override env).
+# Отличается от STALE_THRESHOLD_SEC: stale — индикация, stagnation — триггер отмены.
+STAGNATION_THRESHOLD_SEC = float(os.getenv("LLM_STAGNATION_THRESHOLD_SEC", "120"))
 # Gateway HTTP endpoint для liveness probe
 GATEWAY_HEALTH_URL = "http://127.0.0.1:18789/healthz"
 GATEWAY_HEALTH_TIMEOUT_SEC = 5.0
@@ -175,3 +179,33 @@ def check_tasks_hung(
     if all(s > hung_threshold_sec for s in stale_secs):
         return max(stale_secs)
     return None
+
+
+def detect_stagnation(
+    tasks: list[TaskState],
+    threshold_sec: float = STAGNATION_THRESHOLD_SEC,
+) -> list[TaskState]:
+    """
+    Возвращает running/queued задачи, которые зависли (last_event_at > threshold ago).
+
+    Используется LLM flow как hard-trigger для cancel текущего in-flight call:
+    если gateway watchdog видит N секунд без новых событий — значит codex-cli
+    subprocess hung после gateway restart, и ждать бесконечно уже бессмысленно.
+
+    Игнорирует:
+      - задачи в статусе не running/queued (завершённые/failed)
+      - задачи без last_event_at_ms (<=0 → фиктивное значение)
+    """
+    if not tasks:
+        return []
+    now_ms = int(time.time() * 1000)
+    stagnant: list[TaskState] = []
+    for task in tasks:
+        if task.status not in ("running", "queued"):
+            continue
+        if not task.last_event_at_ms or task.last_event_at_ms <= 0:
+            continue
+        age_sec = (now_ms - task.last_event_at_ms) / 1000.0
+        if age_sec > threshold_sec:
+            stagnant.append(task)
+    return stagnant
