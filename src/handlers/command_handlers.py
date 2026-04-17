@@ -1068,7 +1068,9 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(f"📡 Группа привязана к команде **{team}**\nChat ID: `{chat_id}`")
         return
 
-    # !swarm research <тема> — research pipeline с обязательным web_search
+    # !swarm research <тема> — research pipeline с обязательным web_search.
+    # После завершения research hook self-reflection создаёт follow-up задачи
+    # в swarm_task_board (или reminders_queue для time-based триггеров).
     if args.lower().startswith("research") or args.lower().startswith("исследование"):
         from ..core.swarm_research_pipeline import SwarmResearchPipeline
 
@@ -1099,11 +1101,25 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
                     system_prompt=system_prompt,
                 )
 
+            # Self-reflection singletons (optional — graceful degradation).
+            # openclaw_client импортирован на уровне модуля; task_board подтягиваем локально.
+            _reflect_board = None
+            try:
+                from ..core.swarm_task_board import swarm_task_board as _reflect_board
+            except Exception as _reflect_exc:  # noqa: BLE001
+                logger.warning(
+                    "swarm_research_reflect_wiring_failed",
+                    error=str(_reflect_exc),
+                )
+
             pipeline = SwarmResearchPipeline()
             result_text = await pipeline.run(
                 raw_topic,
                 router_factory=_router_factory,
                 swarm_bus=swarm_bus,
+                openclaw_client=openclaw_client,
+                task_board=_reflect_board,
+                reflect=True,
             )
             chunks = _split_text_for_telegram(result_text)
             await msg.edit(chunks[0])

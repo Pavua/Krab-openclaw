@@ -275,7 +275,10 @@ _COMMANDS: list[CommandInfo] = [
     CommandInfo(
         name="swarm",
         category="swarm",
-        description="Мультиагентный рой: research, summary, schedule, teams, memory",
+        description=(
+            "Мультиагентный рой: research (+ self-reflection → follow-up tasks),"
+            " summary, schedule, teams, memory"
+        ),
         usage="!swarm <team> <задача>|research <тема>|summary|teams|schedule|memory|jobs|task|artifacts|listen|channels|setup",
         owner_only=True,
     ),
