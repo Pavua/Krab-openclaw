@@ -209,7 +209,10 @@ async def test_stats_renders_panel(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rl_mod.telegram_rate_limiter, "stats", lambda: fake_rl_stats)
 
     message = _msg("!stats")
-    bot = SimpleNamespace(get_voice_runtime_profile=lambda: None)
+    bot = SimpleNamespace(
+        get_voice_runtime_profile=lambda: None,
+        _get_command_args=lambda _msg: "",
+    )
     await handle_stats(bot, message)
     message.reply.assert_awaited_once()
     text = message.reply.await_args.args[0]
@@ -236,7 +239,10 @@ async def test_stats_panel_contains_key_sections(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(cmd_module.chat_ban_cache, "list_entries", lambda: [])
 
     message = _msg("!stats")
-    bot = SimpleNamespace(get_voice_runtime_profile=lambda: None)
+    bot = SimpleNamespace(
+        get_voice_runtime_profile=lambda: None,
+        _get_command_args=lambda _msg: "",
+    )
     await handle_stats(bot, message)
     text = message.reply.await_args.args[0]
     # Проверяем ключевые секции панели

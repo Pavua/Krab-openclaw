@@ -6107,8 +6107,162 @@ def _render_stats_panel(bot: "KraabUserbot") -> str:
     return "\n".join(lines).rstrip()
 
 
+def _format_ecosystem_report(report: dict[str, Any]) -> str:
+    """
+    Формирует Telegram-представление ecosystem health отчёта.
+
+    Поддерживает как основные секции `/api/ecosystem/health` (status, checks,
+    chain, resources, queue, budget, recommendations), так и опциональный блок
+    `session_10` (memory_validator / memory_archive / dedicated_chrome /
+    auto_restart) — если он появится в будущих расширениях сервиса.
+    """
+    lines: list[str] = ["🌍 **Ecosystem Health**"]
+
+    # Top-level ────────────────────────────────────────────────────────
+    status = str(report.get("status") or "unknown").lower()
+    risk = str(report.get("risk_level") or "unknown").lower()
+    degradation = str(report.get("degradation") or "unknown")
+    status_icon = "✅" if status == "ok" else ("⚠️" if status == "degraded" else "❌")
+    lines.append(f"**Overall:** {status_icon} {status} · risk=`{risk}` · {degradation}")
+
+    # Chain ────────────────────────────────────────────────────────────
+    chain = report.get("chain") or {}
+    if chain:
+        ai_channel = chain.get("active_ai_channel", "?")
+        fb_ready = chain.get("fallback_ready")
+        voice_ready = chain.get("voice_assist_ready")
+        lines.append(
+            f"**Chain:** channel=`{ai_channel}` · fallback={'✅' if fb_ready else '❌'}"
+            f" · voice={'✅' if voice_ready else '❌'}"
+        )
+
+    # Checks (opencla / local_lm / voice_gateway / krab_ear) ───────────
+    checks = report.get("checks") or {}
+    if isinstance(checks, dict) and checks:
+        lines.append("\n**Checks:**")
+        for name, info in checks.items():
+            if not isinstance(info, dict):
+                continue
+            ok = bool(info.get("ok"))
+            status_txt = str(info.get("status") or "?")
+            latency = info.get("latency_ms")
+            extra = f" · {latency}ms" if isinstance(latency, int) else ""
+            lines.append(f"• {'✅' if ok else '❌'} `{name}` · {status_txt}{extra}")
+
+    # Resources ────────────────────────────────────────────────────────
+    resources = report.get("resources") or {}
+    if isinstance(resources, dict) and resources and "error" not in resources:
+        cpu = resources.get("cpu_percent")
+        ram = resources.get("ram_percent")
+        ram_avail = resources.get("ram_available_gb")
+        parts: list[str] = []
+        if cpu is not None:
+            parts.append(f"CPU={cpu}%")
+        if ram is not None:
+            parts.append(f"RAM={ram}%")
+        if ram_avail is not None:
+            parts.append(f"free={ram_avail}GB")
+        if parts:
+            lines.append(f"\n**Resources:** {' · '.join(parts)}")
+
+    # Budget ───────────────────────────────────────────────────────────
+    budget = report.get("budget") or {}
+    if isinstance(budget, dict) and budget:
+        usage_pct = budget.get("usage_percent")
+        runway = budget.get("runway_days")
+        economy = budget.get("is_economy_mode")
+        bparts: list[str] = []
+        if usage_pct is not None:
+            bparts.append(f"usage={usage_pct}%")
+        if runway is not None:
+            bparts.append(f"runway={runway}d")
+        if economy:
+            bparts.append("🏷 ECONOMY")
+        if bparts:
+            lines.append(f"**Budget:** {' · '.join(bparts)}")
+
+    # Session 10 (опциональный расширенный блок) ───────────────────────
+    s10 = report.get("session_10") or {}
+    if isinstance(s10, dict) and s10:
+        lines.append("\n**Session 10:**")
+        mv = s10.get("memory_validator") or {}
+        if isinstance(mv, dict) and mv.get("available"):
+            lines.append(
+                f"• 🛡 Memory Validator: safe={mv.get('safe_total', 0)}"
+                f" blocked={mv.get('injection_blocked_total', 0)}"
+                f" pending={mv.get('pending_count', 0)}"
+            )
+        ma = s10.get("memory_archive") or {}
+        if isinstance(ma, dict) and ma.get("exists"):
+            size_bytes = ma.get("size_bytes", 0) or 0
+            size_mb = int(size_bytes // 1024 // 1024)
+            msgs = ma.get("message_count", 0)
+            msgs_str = f"{msgs:,}".replace(",", " ")
+            lines.append(f"• 🧠 Archive: {msgs_str} msgs, {size_mb} MB")
+        dc = s10.get("dedicated_chrome") or {}
+        if isinstance(dc, dict) and dc.get("enabled"):
+            lines.append(
+                f"• 🌐 Chrome: running={dc.get('running')} port={dc.get('port')}"
+            )
+        ar = s10.get("auto_restart") or {}
+        if isinstance(ar, dict) and ar:
+            lines.append(
+                f"• 🔄 Auto-restart: enabled={ar.get('enabled')}"
+                f" attempts/hr={ar.get('total_attempts_last_hour', 0)}"
+            )
+
+    # Recommendations ──────────────────────────────────────────────────
+    recs = report.get("recommendations") or []
+    if isinstance(recs, list) and recs:
+        lines.append("\n**Recommendations:**")
+        for r in recs[:5]:
+            lines.append(f"• {r}")
+
+    # Truncate for Telegram limit ─────────────────────────────────────
+    text = "\n".join(lines)
+    if len(text) > 3800:
+        text = text[:3800] + "\n…(truncated)"
+    return text
+
+
+async def _handle_stats_ecosystem(bot: "KraabUserbot", message: Message) -> None:
+    """Вывод ecosystem health в Telegram через `/api/ecosystem/health`."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get("http://127.0.0.1:8080/api/ecosystem/health")
+            data = r.json()
+    except Exception as exc:  # noqa: BLE001
+        await message.reply(f"❌ Ecosystem health недоступен: {exc}")
+        return
+
+    # API возвращает {"ok": True, "report": {...}}. Если обёртки нет — принимаем
+    # data как report (backward-compat с потенциальными вариантами ответа).
+    if isinstance(data, dict) and "report" in data:
+        report = data.get("report") or {}
+    else:
+        report = data if isinstance(data, dict) else {}
+    if not isinstance(report, dict) or not report:
+        await message.reply("❌ Ecosystem health: пустой ответ от API.")
+        return
+
+    text = _format_ecosystem_report(report)
+    await message.reply(text)
+
+
 async def handle_stats(bot: "KraabUserbot", message: Message) -> None:
-    """Агрегированный runtime-статус Краба (B.9 session 4 tail)."""
+    """Агрегированный runtime-статус Краба.
+
+    Поддерживаемые подкоманды:
+    - `!stats` / `!stats basic` — per-session panel (rate limiter, caches, silence, voice).
+    - `!stats ecosystem` (`eco`, `health`) — ecosystem health из `/api/ecosystem/health`.
+    """
+    args = bot._get_command_args(message) or ""
+    sub = args.strip().lower()
+
+    if sub in ("ecosystem", "eco", "health"):
+        await _handle_stats_ecosystem(bot, message)
+        return
+
     panel = _render_stats_panel(bot)
     await message.reply(panel)
 
