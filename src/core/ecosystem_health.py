@@ -252,6 +252,9 @@ class EcosystemHealthService:
             "timeout_budget_sec": self.timeout_sec,
         }
 
+        # [Session 10] Собираем статистику по новым подсистемам
+        session_10 = self._collect_session_10_stats()
+
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "status": "ok"
@@ -275,7 +278,209 @@ class EcosystemHealthService:
             "budget": budget,
             "recommendations": recommendations[:8],  # Лимит рекомендаций
             "_diagnostics": diagnostics,  # [R20] Latency-диагностика
+            "session_10": session_10,  # [Session 10] Новые подсистемы
         }
+
+    def _collect_session_10_stats(self) -> dict[str, Any]:
+        """
+        [Session 10] Агрегирует статистику по новым подсистемам.
+
+        Собирает:
+        - memory_validator — валидация инъекций в MEMORY.md/USER.md
+        - memory_archive   — SQLite-архив сообщений (read-only query)
+        - dedicated_chrome — выделенный Chrome instance для браузер-MCP
+        - auto_restart     — авто-рестарт упавших сервисов
+        - gemini_nonce     — cache-invalidation nonce для Gemini
+
+        Все подмодули импортируются лениво в try/except — если модуль
+        отсутствует, возвращаем пустой/дефолтный словарь, endpoint не падает.
+        """
+        return {
+            "memory_validator": self._session_10_memory_validator(),
+            "memory_archive": self._session_10_memory_archive(),
+            "dedicated_chrome": self._session_10_dedicated_chrome(),
+            "auto_restart": self._session_10_auto_restart(),
+            "gemini_nonce": self._session_10_gemini_nonce(),
+        }
+
+    @staticmethod
+    def _session_10_memory_validator() -> dict[str, Any]:
+        """Стат по memory_validator (если модуль подключён)."""
+        try:
+            # Ленивый импорт — модуль может отсутствовать в ранних сессиях
+            from src.core import memory_validator  # type: ignore
+        except Exception:
+            return {
+                "available": False,
+                "safe_total": 0,
+                "injection_blocked_total": 0,
+                "confirmed_total": 0,
+                "confirm_failed_total": 0,
+                "pending_count": 0,
+            }
+
+        try:
+            stats = getattr(memory_validator, "stats", {}) or {}
+            list_pending = getattr(memory_validator, "list_pending", None)
+            pending = list_pending() if callable(list_pending) else []
+            return {
+                "available": True,
+                "safe_total": int(stats.get("safe_total", 0)),
+                "injection_blocked_total": int(stats.get("injection_blocked_total", 0)),
+                "confirmed_total": int(stats.get("confirmed_total", 0)),
+                "confirm_failed_total": int(stats.get("confirm_failed_total", 0)),
+                "pending_count": len(pending) if pending is not None else 0,
+            }
+        except Exception as exc:
+            return {
+                "available": False,
+                "error": str(exc),
+                "safe_total": 0,
+                "injection_blocked_total": 0,
+                "confirmed_total": 0,
+                "confirm_failed_total": 0,
+                "pending_count": 0,
+            }
+
+    @staticmethod
+    def _session_10_memory_archive() -> dict[str, Any]:
+        """Стат по archive.db — размер, счётчики сообщений/чатов/чанков."""
+        # Импорты внутри функции — не роняем endpoint, если путь недоступен
+        import sqlite3 as _sqlite3
+        from pathlib import Path as _Path
+
+        db_path = _Path.home() / ".openclaw" / "krab_memory" / "archive.db"
+
+        if not db_path.exists():
+            return {
+                "exists": False,
+                "size_bytes": 0,
+                "message_count": 0,
+                "chats_count": 0,
+                "chunks_count": 0,
+            }
+
+        try:
+            size_bytes = db_path.stat().st_size
+            # Read-only открытие чтобы не конфликтовать с live indexer'ом
+            uri = f"file:{db_path}?mode=ro"
+            conn = _sqlite3.connect(uri, uri=True, timeout=1.5)
+            try:
+                # Каждый COUNT обёрнут отдельно — если таблицы нет, 0 вместо краха
+                def _count(table: str) -> int:
+                    try:
+                        row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                        return int(row[0]) if row else 0
+                    except Exception:
+                        return 0
+
+                return {
+                    "exists": True,
+                    "size_bytes": size_bytes,
+                    "message_count": _count("messages"),
+                    "chats_count": _count("chats"),
+                    "chunks_count": _count("chunks"),
+                }
+            finally:
+                conn.close()
+        except Exception as exc:
+            return {
+                "exists": True,
+                "size_bytes": db_path.stat().st_size if db_path.exists() else 0,
+                "message_count": 0,
+                "chats_count": 0,
+                "chunks_count": 0,
+                "error": str(exc),
+            }
+
+    @staticmethod
+    def _session_10_dedicated_chrome() -> dict[str, Any]:
+        """Стат по dedicated Chrome (ENV-флаг + процесс + порт)."""
+        enabled = os.getenv("DEDICATED_CHROME_ENABLED", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        port_raw = os.getenv("DEDICATED_CHROME_PORT", "9222").strip()
+        try:
+            port = int(port_raw) if port_raw else 9222
+        except ValueError:
+            port = 9222
+
+        running = False
+        try:
+            # Ленивый импорт — модуль не обязателен
+            from src.integrations import dedicated_chrome  # type: ignore
+
+            checker = getattr(dedicated_chrome, "is_dedicated_chrome_running", None)
+            if callable(checker):
+                try:
+                    running = bool(checker())
+                except Exception:
+                    running = False
+        except Exception:
+            running = False
+
+        return {
+            "enabled": enabled,
+            "running": running,
+            "port": port,
+        }
+
+    @staticmethod
+    def _session_10_auto_restart() -> dict[str, Any]:
+        """Стат по auto_restart_manager (ENV-флаг + tracked services)."""
+        enabled = os.getenv("AUTO_RESTART_ENABLED", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+
+        services: list[str] = []
+        total_attempts = 0
+        try:
+            # Ленивый импорт — модуль не обязателен
+            from src.core import auto_restart_manager  # type: ignore
+
+            states = getattr(auto_restart_manager, "_states", None)
+            if isinstance(states, dict):
+                services = list(states.keys())
+                for state in states.values():
+                    attempts = getattr(state, "attempts", None)
+                    if attempts is not None:
+                        try:
+                            total_attempts += len(attempts)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+        return {
+            "enabled": enabled,
+            "services_tracked": services,
+            "total_attempts_last_hour": total_attempts,
+        }
+
+    @staticmethod
+    def _session_10_gemini_nonce() -> dict[str, Any]:
+        """Стат по gemini_cache_nonce — количество отслеживаемых чатов."""
+        tracked = 0
+        try:
+            # Ленивый импорт — модуль не обязателен
+            from src.core import gemini_cache_nonce  # type: ignore
+
+            nonce_map = getattr(gemini_cache_nonce, "_GEMINI_NONCE_MAP", None)
+            if nonce_map is not None:
+                try:
+                    tracked = len(nonce_map)
+                except Exception:
+                    tracked = 0
+        except Exception:
+            tracked = 0
+
+        return {"tracked_chats": tracked}
 
     def _collect_resource_metrics(self) -> dict[str, Any]:
         """[R11] Метрики потребления ресурсов macOS."""

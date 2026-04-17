@@ -551,3 +551,303 @@ class TestCollectResourceMetrics:
         with patch("psutil.cpu_percent", side_effect=RuntimeError("no psutil")):
             metrics = svc._collect_resource_metrics()
         assert "error" in metrics
+
+
+# ---------------------------------------------------------------------------
+# [Session 10] Статистика новых подсистем в `collect()`
+# ---------------------------------------------------------------------------
+
+
+class TestSession10Block:
+    """[Session 10] Проверка нового блока session_10 в ответе collect()."""
+
+    @pytest.mark.asyncio
+    async def test_collect_includes_session_10_block(self, healthy_service):
+        """collect() возвращает ключ session_10 на верхнем уровне."""
+        with patch("httpx.AsyncClient") as mock_httpx:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_httpx.return_value.__aenter__ = AsyncMock(return_value=mock_httpx.return_value)
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_httpx.return_value.get = AsyncMock(return_value=mock_response)
+
+            result = await healthy_service.collect()
+
+        assert "session_10" in result
+        s10 = result["session_10"]
+        for key in (
+            "memory_validator",
+            "memory_archive",
+            "dedicated_chrome",
+            "auto_restart",
+            "gemini_nonce",
+        ):
+            assert key in s10, f"session_10 missing key: {key}"
+
+    @pytest.mark.asyncio
+    async def test_memory_validator_stats_fields(self, healthy_service):
+        """memory_validator stats имеет все нужные int-поля."""
+        with patch("httpx.AsyncClient") as mock_httpx:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_httpx.return_value.__aenter__ = AsyncMock(return_value=mock_httpx.return_value)
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_httpx.return_value.get = AsyncMock(return_value=mock_response)
+
+            result = await healthy_service.collect()
+
+        mv = result["session_10"]["memory_validator"]
+        for key in (
+            "safe_total",
+            "injection_blocked_total",
+            "confirmed_total",
+            "confirm_failed_total",
+            "pending_count",
+        ):
+            assert key in mv, f"memory_validator missing: {key}"
+            assert isinstance(mv[key], int), f"memory_validator.{key} not int"
+
+    @pytest.mark.asyncio
+    async def test_memory_archive_stats_fields(self, healthy_service):
+        """memory_archive содержит exists + счётчики."""
+        with patch("httpx.AsyncClient") as mock_httpx:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_httpx.return_value.__aenter__ = AsyncMock(return_value=mock_httpx.return_value)
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_httpx.return_value.get = AsyncMock(return_value=mock_response)
+
+            result = await healthy_service.collect()
+
+        ma = result["session_10"]["memory_archive"]
+        assert "exists" in ma
+        # Если archive.db присутствует — счётчики должны быть int
+        if ma["exists"]:
+            assert ma["message_count"] >= 0
+            assert ma["chats_count"] >= 0
+            assert ma["chunks_count"] >= 0
+            assert ma["size_bytes"] >= 0
+
+    @pytest.mark.asyncio
+    async def test_dedicated_chrome_fields(self, healthy_service):
+        """dedicated_chrome содержит enabled/running/port."""
+        with patch("httpx.AsyncClient") as mock_httpx:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_httpx.return_value.__aenter__ = AsyncMock(return_value=mock_httpx.return_value)
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_httpx.return_value.get = AsyncMock(return_value=mock_response)
+
+            result = await healthy_service.collect()
+
+        dc = result["session_10"]["dedicated_chrome"]
+        assert "enabled" in dc
+        assert "running" in dc
+        assert "port" in dc
+        assert isinstance(dc["enabled"], bool)
+        assert isinstance(dc["running"], bool)
+        assert isinstance(dc["port"], int)
+
+    @pytest.mark.asyncio
+    async def test_auto_restart_fields(self, healthy_service):
+        """auto_restart содержит enabled/services_tracked/total_attempts."""
+        with patch("httpx.AsyncClient") as mock_httpx:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_httpx.return_value.__aenter__ = AsyncMock(return_value=mock_httpx.return_value)
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_httpx.return_value.get = AsyncMock(return_value=mock_response)
+
+            result = await healthy_service.collect()
+
+        ar = result["session_10"]["auto_restart"]
+        assert "enabled" in ar
+        assert "services_tracked" in ar
+        assert "total_attempts_last_hour" in ar
+        assert isinstance(ar["enabled"], bool)
+        assert isinstance(ar["services_tracked"], list)
+        assert isinstance(ar["total_attempts_last_hour"], int)
+
+    @pytest.mark.asyncio
+    async def test_gemini_nonce_fields(self, healthy_service):
+        """gemini_nonce содержит tracked_chats (int)."""
+        with patch("httpx.AsyncClient") as mock_httpx:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_httpx.return_value.__aenter__ = AsyncMock(return_value=mock_httpx.return_value)
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_httpx.return_value.get = AsyncMock(return_value=mock_response)
+
+            result = await healthy_service.collect()
+
+        gn = result["session_10"]["gemini_nonce"]
+        assert "tracked_chats" in gn
+        assert isinstance(gn["tracked_chats"], int)
+
+
+class TestSession10MemoryValidator:
+    """[Session 10] Прямые вызовы _session_10_memory_validator() с моками."""
+
+    def test_returns_default_when_module_missing(self):
+        """Если memory_validator.py отсутствует — возвращаем 'available'=False."""
+        # В текущей кодовой базе модуля memory_validator нет — это проверка defaults
+        result = EcosystemHealthService._session_10_memory_validator()
+        assert "safe_total" in result
+        assert "injection_blocked_total" in result
+        assert result["safe_total"] == 0
+        assert result["injection_blocked_total"] == 0
+        # Модуль отсутствует → available=False
+        assert result.get("available") is False
+
+    def test_reads_stats_from_mocked_module(self):
+        """При наличии memory_validator читает stats + list_pending."""
+        import sys
+        import types
+
+        fake_module = types.ModuleType("src.core.memory_validator")
+        fake_module.stats = {
+            "safe_total": 42,
+            "injection_blocked_total": 7,
+            "confirmed_total": 3,
+            "confirm_failed_total": 1,
+        }
+        fake_module.list_pending = lambda: ["req1", "req2"]
+        sys.modules["src.core.memory_validator"] = fake_module
+        try:
+            result = EcosystemHealthService._session_10_memory_validator()
+            assert result["available"] is True
+            assert result["safe_total"] == 42
+            assert result["injection_blocked_total"] == 7
+            assert result["confirmed_total"] == 3
+            assert result["confirm_failed_total"] == 1
+            assert result["pending_count"] == 2
+        finally:
+            sys.modules.pop("src.core.memory_validator", None)
+
+
+class TestSession10MemoryArchive:
+    """[Session 10] Проверка чтения archive.db."""
+
+    def test_returns_not_exists_when_db_missing(self, tmp_path, monkeypatch):
+        """Если DB не существует — exists=False + нулевые счётчики."""
+        # Подменяем HOME на временную директорию — DB гарантированно нет
+        monkeypatch.setenv("HOME", str(tmp_path))
+        result = EcosystemHealthService._session_10_memory_archive()
+        assert result["exists"] is False
+        assert result["size_bytes"] == 0
+        assert result["message_count"] == 0
+
+    def test_reads_counters_from_real_db(self, tmp_path, monkeypatch):
+        """Если DB есть и схема валидна — читает счётчики через read-only."""
+        import sqlite3
+
+        # Создаём тестовую DB со схемой (минимальные таблицы)
+        fake_home = tmp_path
+        db_dir = fake_home / ".openclaw" / "krab_memory"
+        db_dir.mkdir(parents=True, exist_ok=True)
+        db_path = db_dir / "archive.db"
+
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY)")
+        conn.execute("CREATE TABLE chats (id INTEGER PRIMARY KEY)")
+        conn.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY)")
+        conn.executemany("INSERT INTO messages VALUES (?)", [(i,) for i in range(5)])
+        conn.executemany("INSERT INTO chats VALUES (?)", [(i,) for i in range(2)])
+        conn.executemany("INSERT INTO chunks VALUES (?)", [(i,) for i in range(3)])
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setenv("HOME", str(fake_home))
+        result = EcosystemHealthService._session_10_memory_archive()
+        assert result["exists"] is True
+        assert result["size_bytes"] > 0
+        assert result["message_count"] == 5
+        assert result["chats_count"] == 2
+        assert result["chunks_count"] == 3
+
+
+class TestSession10DedicatedChrome:
+    """[Session 10] Проверка _session_10_dedicated_chrome."""
+
+    def test_default_disabled(self, monkeypatch):
+        """Без ENV — enabled=False, port=9222."""
+        monkeypatch.delenv("DEDICATED_CHROME_ENABLED", raising=False)
+        monkeypatch.delenv("DEDICATED_CHROME_PORT", raising=False)
+        result = EcosystemHealthService._session_10_dedicated_chrome()
+        assert result["enabled"] is False
+        assert result["port"] == 9222
+        assert result["running"] is False
+
+    def test_enabled_via_env(self, monkeypatch):
+        """DEDICATED_CHROME_ENABLED=true → enabled=True."""
+        monkeypatch.setenv("DEDICATED_CHROME_ENABLED", "true")
+        monkeypatch.setenv("DEDICATED_CHROME_PORT", "9333")
+        result = EcosystemHealthService._session_10_dedicated_chrome()
+        assert result["enabled"] is True
+        assert result["port"] == 9333
+
+    def test_invalid_port_falls_back_to_default(self, monkeypatch):
+        """Невалидный port → fallback 9222."""
+        monkeypatch.setenv("DEDICATED_CHROME_PORT", "not-a-number")
+        result = EcosystemHealthService._session_10_dedicated_chrome()
+        assert result["port"] == 9222
+
+
+class TestSession10AutoRestart:
+    """[Session 10] Проверка _session_10_auto_restart."""
+
+    def test_default_disabled(self, monkeypatch):
+        """Без ENV — enabled=False, пустой список."""
+        monkeypatch.delenv("AUTO_RESTART_ENABLED", raising=False)
+        result = EcosystemHealthService._session_10_auto_restart()
+        assert result["enabled"] is False
+        assert result["services_tracked"] == []
+        assert result["total_attempts_last_hour"] == 0
+
+    def test_reads_states_from_mocked_module(self, monkeypatch):
+        """Подменяем auto_restart_manager — читаем services + attempts."""
+        import sys
+        import types
+
+        fake_module = types.ModuleType("src.core.auto_restart_manager")
+
+        class _FakeState:
+            def __init__(self, attempts_count: int):
+                self.attempts = list(range(attempts_count))
+
+        fake_module._states = {
+            "openclaw": _FakeState(3),
+            "krab_ear": _FakeState(1),
+        }
+        sys.modules["src.core.auto_restart_manager"] = fake_module
+        try:
+            monkeypatch.setenv("AUTO_RESTART_ENABLED", "1")
+            result = EcosystemHealthService._session_10_auto_restart()
+            assert result["enabled"] is True
+            assert set(result["services_tracked"]) == {"openclaw", "krab_ear"}
+            assert result["total_attempts_last_hour"] == 4
+        finally:
+            sys.modules.pop("src.core.auto_restart_manager", None)
+
+
+class TestSession10GeminiNonce:
+    """[Session 10] Проверка _session_10_gemini_nonce."""
+
+    def test_default_zero_when_module_missing(self):
+        """Модуль gemini_cache_nonce отсутствует → tracked_chats=0."""
+        result = EcosystemHealthService._session_10_gemini_nonce()
+        assert result == {"tracked_chats": 0}
+
+    def test_reads_map_from_mocked_module(self):
+        """Подменяем модуль — читаем _GEMINI_NONCE_MAP."""
+        import sys
+        import types
+
+        fake_module = types.ModuleType("src.core.gemini_cache_nonce")
+        fake_module._GEMINI_NONCE_MAP = {1: "nonceA", 2: "nonceB", 3: "nonceC"}
+        sys.modules["src.core.gemini_cache_nonce"] = fake_module
+        try:
+            result = EcosystemHealthService._session_10_gemini_nonce()
+            assert result["tracked_chats"] == 3
+        finally:
+            sys.modules.pop("src.core.gemini_cache_nonce", None)
