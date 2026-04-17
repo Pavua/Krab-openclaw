@@ -1964,6 +1964,22 @@ class KraabUserbot(
         except Exception as exc:  # noqa: BLE001
             logger.warning("scheduler_runtime_sync_failed", error=str(exc))
 
+        # Dedicated Chrome auto-launch (opt-in через DEDICATED_CHROME_ENABLED=true).
+        # Избегаем Remote Debugging Trust Prompt в обычном Chrome владельца,
+        # запуская изолированный Chrome с /tmp/krab-chrome profile на порту 9222.
+        if os.environ.get("DEDICATED_CHROME_ENABLED", "false").lower() in (
+            "true",
+            "1",
+            "yes",
+        ):
+            try:
+                from .integrations.dedicated_chrome import launch_dedicated_chrome
+
+                ok, status = await asyncio.to_thread(launch_dedicated_chrome)
+                logger.info("dedicated_chrome_startup", ok=ok, status=status)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("dedicated_chrome_startup_failed", error=str(exc))
+
         # WAKE UP CHECK
         try:
             # Wait for OpenClaw to spin up (up to 180s)
