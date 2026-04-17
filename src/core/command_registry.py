@@ -349,6 +349,13 @@ _COMMANDS: list[CommandInfo] = [
         usage="!remember <текст>",
     ),
     CommandInfo(
+        name="confirm",
+        category="notes",
+        description="Подтвердить persistent-запись памяти (owner-only)",
+        usage="!confirm <hash>",
+        owner_only=True,
+    ),
+    CommandInfo(
         name="recall",
         category="notes",
         description="Вспомнить факт из памяти",

@@ -76,6 +76,7 @@ from .handlers import (
     handle_codex,
     handle_collect,
     handle_config,
+    handle_confirm,
     handle_context,
     handle_costs,
     handle_cronstatus,
@@ -854,6 +855,13 @@ class KraabUserbot(
         )
         async def wrap_remember(c, m):
             await run_cmd(handle_remember, m)
+
+        @self.client.on_message(
+            filters.command("confirm", prefixes=prefixes) & _make_command_filter("confirm"),
+            group=-1,
+        )
+        async def wrap_confirm(c, m):
+            await run_cmd(handle_confirm, m)
 
         @self.client.on_message(
             filters.command("recall", prefixes=prefixes) & _make_command_filter("recall"), group=-1
