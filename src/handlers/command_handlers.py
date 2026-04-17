@@ -3953,8 +3953,8 @@ async def handle_debug(bot: "KraabUserbot", message: Message) -> None:
 
 
 _REMIND_HELP = (
-    "⏰ **Напоминания — форматы:**\n\n"
-    "**Создать:**\n"
+    "⏰ **Напоминания — Формат:**\n\n"
+    "**Создать (по времени):**\n"
     "- `!remind me in 30m купить молоко`\n"
     "- `!remind in 2 hours позвонить`\n"
     "- `!remind at 15:00 встреча`\n"
@@ -3962,6 +3962,9 @@ _REMIND_HELP = (
     "- `!remind через 20 минут проверить почту`\n"
     "- `!remind в 18:30 созвон`\n"
     "- `!remind 10m | выпить воды`\n\n"
+    "**Создать (по событию):**\n"
+    "- `!remind when upload photos then notify me`\n"
+    "- `!remind когда upload photos сделай напомнить`\n\n"
     "**Управление:**\n"
     "- `!remind list` — список активных\n"
     "- `!remind cancel <id>` — отменить\n"
@@ -3998,7 +4001,15 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
     # --- Субкоманда: list ---
     if raw_args.lower() in ("list", "список", "ls"):
         rows = krab_scheduler.list_reminders(chat_id=str(message.chat.id))
-        if not rows:
+        # Добавляем event-based reminders из reminders_queue (Wave 7-D)
+        try:
+            from ..core.reminders_queue import reminders_queue as _rq
+            owner_id = str(getattr(message.from_user, "id", "") or "")
+            event_rows = _rq.list_pending(owner_id=owner_id) if owner_id else []
+        except Exception:  # noqa: BLE001
+            event_rows = []
+
+        if not rows and not event_rows:
             await message.reply("⏰ Активных напоминаний нет.")
             return
         lines = ["⏰ **Активные напоминания:**"]
@@ -4012,6 +4023,15 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
             text = str(item.get("text") or "")
             rid = str(item.get("reminder_id") or "")
             lines.append(f"- `{rid}` · `{due_label}` · {text}")
+        # Event-based rows
+        for r in event_rows:
+            if r.trigger_type.value == "time" and r.fire_at:
+                when = datetime.datetime.fromtimestamp(r.fire_at).strftime("%d.%m %H:%M")
+                lines.append(f"- `{r.id}` · `{when}` · {r.action_payload[:120]}")
+            elif r.trigger_type.value == "event":
+                lines.append(
+                    f"- `{r.id}` · when `{r.match_pattern}` · {r.action_payload[:120]}"
+                )
         payload = "\n".join(lines)
         chunks = _split_text_for_telegram(payload, limit=3600)
         await message.reply(chunks[0])
@@ -4024,6 +4044,13 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
     if cancel_match:
         rid = cancel_match.group(1)
         ok = krab_scheduler.remove_reminder(rid)
+        if not ok:
+            # Пробуем cancel через reminders_queue (event-based / Wave 7-D)
+            try:
+                from ..core.reminders_queue import reminders_queue as _rq
+                ok = _rq.cancel(rid)
+            except Exception:  # noqa: BLE001
+                ok = False
         if ok:
             await message.reply(f"🗑️ Напоминание `{rid}` отменено.")
         else:
@@ -4033,6 +4060,30 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
     # --- Без аргументов: справка ---
     if not raw_args:
         raise UserInputError(user_message=_REMIND_HELP)
+
+    # --- Event-based: "when X then Y" / "когда X сделай Y" ---
+    # Используем reminders_queue (Wave 7-D) для persistence
+    from ..core.remind_parser import parse_remind_args
+    from ..core.reminders_queue import reminders_queue
+
+    _spec = parse_remind_args(raw_args)
+    if _spec is not None and _spec.get("type") == "event":
+        owner_id = str(getattr(message.from_user, "id", "") or "")
+        chat_id = str(message.chat.id)
+        rid = reminders_queue.add_event_reminder(
+            owner_id=owner_id,
+            chat_id=chat_id,
+            pattern=str(_spec["pattern"]),
+            action=str(_spec["action"]),
+        )
+        await message.reply(
+            "👁️ Event-напоминание создано в этом чате.\n"
+            f"- ID: `{rid}`\n"
+            f"- Pattern: `{_spec['pattern']}`\n"
+            f"- Action: {_spec['action']}\n\n"
+            f"Отменить: `!remind cancel {rid}`"
+        )
+        return
 
     # --- Создание напоминания ---
     time_spec, reminder_text = split_reminder_input(raw_args)
