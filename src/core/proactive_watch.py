@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -766,6 +768,13 @@ class ProactiveWatchService:
             logger.warning("alert_check_cost_budget_failed", error=str(exc))
             results["cost_budget"] = False
 
+        # -- archive_db_size ------------------------------------------------------
+        try:
+            results["archive_db_size"] = self._check_archive_db_size()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("alert_check_archive_db_size_failed", error=str(exc))
+            results["archive_db_size"] = False
+
         logger.info("alert_checks_done", results=results)
         return results
 
@@ -959,6 +968,96 @@ class ProactiveWatchService:
             spent=round(spent, 4),
             budget=budget,
             pct=round(pct, 1),
+        )
+        return True
+
+    # Cooldown между archive.db alert'ами (12 часов)
+    ARCHIVE_DB_ALERT_COOLDOWN_SEC: int = 43200
+
+    def _check_archive_db_size(self) -> bool:
+        """
+        Проверяет размер archive.db и создаёт inbox item при превышении порогов.
+
+        Пороги (переопределяемые env-переменными):
+        - ARCHIVE_DB_WARN_MB  (default 500) → severity=warning
+        - ARCHIVE_DB_CRIT_MB  (default 1024) → severity=error
+
+        Cooldown 12 часов между повторными alert'ами (дедупе по state_key).
+        Возвращает True если алерт сработал.
+        """
+        db_path = Path(os.environ.get("ARCHIVE_DB_PATH", "~/.openclaw/krab_memory/archive.db")).expanduser()
+        if not db_path.exists():
+            return False
+
+        size_mb = db_path.stat().st_size / 1024 / 1024
+        warn_threshold = float(os.environ.get("ARCHIVE_DB_WARN_MB", "500"))
+        crit_threshold = float(os.environ.get("ARCHIVE_DB_CRIT_MB", "1024"))
+
+        if size_mb < warn_threshold:
+            return False
+
+        # Cooldown: читаем persisted state чтобы не спамить
+        state = self._load_state()
+        last_alert_ts = float(state.get("archive_db_size_last_alert", 0))
+        now = time.time()
+        if now - last_alert_ts < self.ARCHIVE_DB_ALERT_COOLDOWN_SEC:
+            return False
+
+        # Определяем уровень
+        is_critical = size_mb >= crit_threshold
+        severity = "error" if is_critical else "warning"
+        threshold_label = crit_threshold if is_critical else warn_threshold
+        ts_now = _now_utc_iso()
+
+        if is_critical:
+            msg = (
+                f"**Archive.db Critical** — {ts_now}\n"
+                f"Размер archive.db: **{size_mb:.1f} MB** (критический порог: {crit_threshold:.0f} MB).\n"
+                f"Рекомендуется: `scripts/maintenance_weekly.py --execute` "
+                f"и очистка старых чатов."
+            )
+            title = f"Archive.db Critical: {size_mb:.1f} MB (>{crit_threshold:.0f} MB)"
+        else:
+            msg = (
+                f"**Archive.db Warning** — {ts_now}\n"
+                f"Размер archive.db: **{size_mb:.1f} MB** (порог предупреждения: {warn_threshold:.0f} MB).\n"
+                f"Рекомендуется: `scripts/maintenance_weekly.py --execute`."
+            )
+            title = f"Archive.db Warning: {size_mb:.1f} MB (>{warn_threshold:.0f} MB)"
+
+        inbox_service.upsert_item(
+            dedupe_key=f"proactive:alert:archive_db_size:{ts_now[:13]}",
+            kind="proactive_action",
+            source="krab-internal",
+            title=title,
+            body=msg,
+            severity=severity,
+            status="open",
+            identity=inbox_service.build_identity(
+                channel_id="system",
+                team_id="owner",
+                trace_id="alert:archive_db_size",
+                approval_scope="owner",
+            ),
+            metadata={
+                "action_type": "archive_db_size_alert",
+                "size_mb": round(size_mb, 2),
+                "warn_threshold_mb": warn_threshold,
+                "crit_threshold_mb": crit_threshold,
+                "is_critical": is_critical,
+                "alert_ts": ts_now,
+            },
+        )
+
+        # Сохраняем timestamp последнего алерта в persisted state
+        state["archive_db_size_last_alert"] = now
+        self._save_state(state)
+
+        logger.warning(
+            "alert_archive_db_size_triggered",
+            size_mb=round(size_mb, 1),
+            threshold_mb=threshold_label,
+            is_critical=is_critical,
         )
         return True
 
