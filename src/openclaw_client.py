@@ -3153,12 +3153,81 @@ class OpenClawClient:
                     logger.warning("model_manager_mark_request_finished_failed", error=str(exc))
 
     def clear_session(self, chat_id: str):
-        """Очищает историю чата (память и кэш)."""
+        """Очищает историю чата (in-memory + кэш + persistent session-файлы).
+
+        Persistent cleanup: лучшее усилие по удалению
+        ``~/.openclaw/agents/main/sessions/*.jsonl`` через content-lookup по
+        маркеру ``"chat_id": <id>``. Т.к. явного mapping chat_id→session_id в
+        Krab нет, ищем по содержимому файла: если встречается — удаляем.
+        Ошибки IO не пропагируются — только WARN-лог.
+        """
         if chat_id in self._sessions:
             del self._sessions[chat_id]
         self._lm_native_chat_state.pop(chat_id, None)
         history_cache.delete(f"chat_history:{chat_id}")
+
+        # Persistent session-файлы OpenClaw: best-effort cleanup.
+        # TODO(krab-session-mapping): если появится chat_id→session_id в Krab,
+        # заменить pattern-lookup на прямой lookup из маппинга.
+        try:
+            removed = self._cleanup_openclaw_session_files(chat_id)
+            if removed:
+                logger.info(
+                    "openclaw_session_files_removed",
+                    chat_id=chat_id,
+                    count=removed,
+                )
+        except OSError as exc:
+            logger.warning(
+                "openclaw_session_files_cleanup_failed",
+                chat_id=chat_id,
+                error=str(exc),
+            )
+
         logger.info("session_cleared", chat_id=chat_id)
+
+    @staticmethod
+    def _cleanup_openclaw_session_files(chat_id: str) -> int:
+        """Удаляет session.jsonl файлы, в которых встречается chat_id.
+
+        Возвращает число удалённых файлов. Безопасно: игнорирует отсутствие
+        директории и любые IO-ошибки на отдельных файлах.
+        """
+        sessions_dir = Path.home() / ".openclaw" / "agents" / "main" / "sessions"
+        if not sessions_dir.exists() or not sessions_dir.is_dir():
+            return 0
+
+        # Маркер ищем в разных формах (JSON может сериализовать по-разному).
+        needle_quoted = f'"chat_id": "{chat_id}"'
+        needle_unquoted = f'"chat_id":"{chat_id}"'
+        needle_int = f'"chat_id": {chat_id}'
+        needle_int_unquoted = f'"chat_id":{chat_id}'
+
+        removed = 0
+        try:
+            candidates = list(sessions_dir.glob("*.jsonl"))
+        except OSError:
+            return 0
+
+        for path in candidates:
+            try:
+                # Читаем как текст; big-files не ожидаются (session jsonl небольшие).
+                content = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if (
+                needle_quoted in content
+                or needle_unquoted in content
+                or needle_int in content
+                or needle_int_unquoted in content
+            ):
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    # Не валим весь reset из-за одного проблемного файла.
+                    continue
+        return removed
 
     def get_usage_stats(self) -> Dict[str, int]:
         """Возвращает статистику использования токенов."""

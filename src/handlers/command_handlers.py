@@ -1908,7 +1908,18 @@ async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
     # ── EXECUTE ───────────────────────────────────────────────────────────
     stats = {"krab": 0, "openclaw": 0, "gemini": 0, "archive": 0}
 
-    for cid in target_chat_ids:
+    # Progress message для длинного --all (>10 чатов).
+    # Обновляем каждые 10 итераций, чтобы не спамить Telegram API.
+    total = len(target_chat_ids)
+    progress_msg = None
+    if total > 10:
+        try:
+            progress_msg = await message.reply(f"🔄 Reset: 0 / {total}...")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("reset_progress_init_failed", error=str(exc))
+            progress_msg = None
+
+    for idx, cid in enumerate(target_chat_ids):
         if layer in (None, "krab"):
             # Избегаем double-count: clear_session() ниже тоже удаляет chat_history:*,
             # поэтому инкрементим stats только если ключ реально был.
@@ -1945,6 +1956,20 @@ async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
                 logger.warning(
                     "reset_archive_failed", chat_id=cid, error=str(exc)
                 )
+
+        # Прогресс каждые 10 чатов — не спамим и не валим на edit-ошибке.
+        if progress_msg is not None and (idx + 1) % 10 == 0 and (idx + 1) < total:
+            try:
+                await progress_msg.edit(f"🔄 Reset: {idx + 1} / {total}...")
+            except Exception:  # noqa: BLE001
+                pass
+
+    # Удаляем progress-message перед финальным отчётом (best-effort).
+    if progress_msg is not None:
+        try:
+            await progress_msg.delete()
+        except Exception:  # noqa: BLE001
+            pass
 
     scope = "всех чатов" if is_all else "текущего чата"
     res = (

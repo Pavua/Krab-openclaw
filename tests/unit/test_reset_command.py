@@ -700,3 +700,237 @@ class TestGeminiNonceAppliesToExistingSession:
         # Idempotent: clear на пустом — no-op, не падает
         clear_gemini_nonce("99")
         assert get_gemini_nonce("99") == ""
+
+
+# ──────────────────────────────────────────────
+# Follow-up patch: session files + audit + archive hint + progress
+# ──────────────────────────────────────────────
+
+
+class TestOpenClawSessionFileCleanup:
+    """MEDIUM: openclaw_client.clear_session чистит также persistent session.jsonl."""
+
+    def test_session_file_removed_when_chat_id_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Создаём fake ~/.openclaw/.../sessions/<id>.jsonl с нужным chat_id → после
+        clear_session файл удалён. Другие файлы (без chat_id) не тронуты."""
+        import src.openclaw_client as oc_mod
+
+        # Редиректим Path.home() на tmp_path, чтобы изолировать тест от реальной FS.
+        monkeypatch.setattr(oc_mod.Path, "home", lambda: tmp_path)
+
+        sessions_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+
+        # Файл с нужным chat_id — должен быть удалён.
+        target = sessions_dir / "aaaa.jsonl"
+        target.write_text(
+            '{"type":"session","id":"aaaa"}\n'
+            '{"type":"user_message","chat_id": "42", "text": "hi"}\n',
+            encoding="utf-8",
+        )
+        # Файл без chat_id — остаётся.
+        other = sessions_dir / "bbbb.jsonl"
+        other.write_text('{"type":"session","id":"bbbb"}\n', encoding="utf-8")
+
+        # Собираем минимальный OpenClawClient-инстанс только для clear_session.
+        from src.openclaw_client import OpenClawClient
+
+        client = OpenClawClient.__new__(OpenClawClient)
+        client._sessions = {"42": []}
+        client._lm_native_chat_state = {}
+
+        # history_cache.delete — мокаем на no-op, чтобы не тронуть реальный кэш.
+        monkeypatch.setattr(oc_mod.history_cache, "delete", lambda _k: None)
+
+        client.clear_session("42")
+
+        assert not target.exists(), "файл с chat_id=42 должен быть удалён"
+        assert other.exists(), "файл без chat_id=42 не должен быть тронут"
+
+    def test_session_file_cleanup_noop_when_dir_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Если sessions-директории нет — clear_session не падает."""
+        import src.openclaw_client as oc_mod
+
+        # Home → tmp_path без sessions-директории.
+        monkeypatch.setattr(oc_mod.Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(oc_mod.history_cache, "delete", lambda _k: None)
+
+        from src.openclaw_client import OpenClawClient
+
+        client = OpenClawClient.__new__(OpenClawClient)
+        client._sessions = {}
+        client._lm_native_chat_state = {}
+
+        # Не падает, не поднимает исключения.
+        client.clear_session("404")
+
+
+class TestAuditLogAllForce:
+    """LOW: audit-лог при `!reset --all --force` (destructive)."""
+
+    @pytest.mark.asyncio
+    async def test_audit_log_emitted_for_all_force(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Проверяем, что logger.warning(reset_all_force_executed, ...) вызывается."""
+        import src.handlers.command_handlers as ch
+
+        bot = _make_bot(owner_id=999)
+        msg = _make_message("!reset --all --force", chat_id=1, from_user_id=999)
+        oc = _make_openclaw(sessions={"1": [], "2": []})
+        h_cache = _make_cache()
+
+        # Перехватываем warning прямо на logger модуля — надёжнее чем caplog
+        # для structlog (проксирует через stdlib, но event сериализуется в message).
+        calls: list[tuple[str, dict]] = []
+
+        def _capture(event: str, **kwargs: object) -> None:
+            calls.append((event, dict(kwargs)))
+
+        monkeypatch.setattr(ch.logger, "warning", _capture)
+
+        with (
+            patch("src.handlers.command_handlers.openclaw_client", oc),
+            patch("src.handlers.command_handlers.history_cache", h_cache),
+        ):
+            await handle_reset(bot, msg)
+
+        # Ищем нужное событие в перехваченных.
+        audit_calls = [c for c in calls if c[0] == "reset_all_force_executed"]
+        assert audit_calls, f"ожидали reset_all_force_executed, получили: {calls}"
+        event, kwargs = audit_calls[0]
+        assert kwargs.get("chat_count") == 2
+        assert kwargs.get("user_id") == 999
+        assert kwargs.get("layer") == "all"
+
+    @pytest.mark.asyncio
+    async def test_audit_log_not_emitted_for_dry_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Для dry-run audit-лог НЕ пишется (ничего не разрушается)."""
+        import src.handlers.command_handlers as ch
+
+        bot = _make_bot(owner_id=999)
+        msg = _make_message("!reset --all --force --dry-run", from_user_id=999)
+        oc = _make_openclaw(sessions={"1": []})
+        h_cache = _make_cache()
+
+        calls: list[tuple[str, dict]] = []
+        monkeypatch.setattr(
+            ch.logger,
+            "warning",
+            lambda event, **kwargs: calls.append((event, dict(kwargs))),
+        )
+
+        with (
+            patch("src.handlers.command_handlers.openclaw_client", oc),
+            patch("src.handlers.command_handlers.history_cache", h_cache),
+        ):
+            await handle_reset(bot, msg)
+
+        assert not any(
+            c[0] == "reset_all_force_executed" for c in calls
+        ), "dry-run не должен триггерить audit-лог"
+
+
+class TestDryRunArchiveHint:
+    """LOW: dry-run для default scope явно сообщает, что archive не включён."""
+
+    @pytest.mark.asyncio
+    async def test_dry_run_includes_archive_hint_for_default(self) -> None:
+        bot = _make_bot(owner_id=999)
+        msg = _make_message("!reset --dry-run", chat_id=42, from_user_id=100)
+        oc = _make_openclaw(sessions={"42": []})
+        h_cache = _make_cache()
+
+        with (
+            patch("src.handlers.command_handlers.openclaw_client", oc),
+            patch("src.handlers.command_handlers.history_cache", h_cache),
+        ):
+            await handle_reset(bot, msg)
+
+        text: str = msg.reply.call_args[0][0]
+        # Hint должен быть в превью.
+        assert "Archive" in text
+        assert "--layer=archive" in text
+
+
+class TestProgressMessageForLargeAll:
+    """NICE: при --all с >10 чатами показываем интерактивный прогресс."""
+
+    @pytest.mark.asyncio
+    async def test_progress_shown_for_many_chats(self) -> None:
+        bot = _make_bot(owner_id=999)
+        msg = _make_message("!reset --all --force", from_user_id=999)
+
+        # 15 чатов — в 1.5 раза больше порога (10).
+        sessions = {str(i): [] for i in range(15)}
+        oc = _make_openclaw(sessions=sessions)
+        h_cache = _make_cache()
+
+        # Подменяем reply чтобы отличить progress-message от финального.
+        progress_mock = AsyncMock()
+        progress_mock.edit = AsyncMock()
+        progress_mock.delete = AsyncMock()
+        reply_calls: list[str] = []
+
+        async def _reply(text: str) -> AsyncMock:
+            reply_calls.append(text)
+            if "🔄" in text:
+                return progress_mock  # progress-message
+            return AsyncMock()  # финальный отчёт
+
+        msg.reply = AsyncMock(side_effect=_reply)
+        # sender == bot.me → edit, а не reply. Но progress всё равно пойдёт
+        # через message.reply (first bootstrap message). Оставляем from_user_id=999
+        # но заменим на иной id чтобы получить reply-путь для финального отчёта тоже.
+        msg.from_user = SimpleNamespace(id=100, username="not-owner")
+        # Но тогда owner-check для --all упадёт → нам нужен обход. Возвращаем owner.
+        msg.from_user = SimpleNamespace(id=999, username="owner")
+
+        with (
+            patch("src.handlers.command_handlers.openclaw_client", oc),
+            patch("src.handlers.command_handlers.history_cache", h_cache),
+        ):
+            await handle_reset(bot, msg)
+
+        # Progress-message создан (first reply с "🔄 Reset: 0 /")
+        assert any("Reset: 0 /" in t for t in reply_calls), (
+            f"ожидали progress-init reply, получили: {reply_calls}"
+        )
+        # Хотя бы один edit вызван (на 10-й итерации из 15).
+        assert progress_mock.edit.call_count >= 1
+        # Progress удалён в конце.
+        progress_mock.delete.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_progress_not_shown_for_small_all(self) -> None:
+        """Если чатов ≤10 — progress не показываем."""
+        bot = _make_bot(owner_id=999)
+        msg = _make_message("!reset --all --force", from_user_id=999)
+
+        sessions = {str(i): [] for i in range(5)}
+        oc = _make_openclaw(sessions=sessions)
+        h_cache = _make_cache()
+
+        reply_calls: list[str] = []
+
+        async def _reply(text: str) -> AsyncMock:
+            reply_calls.append(text)
+            return AsyncMock()
+
+        msg.reply = AsyncMock(side_effect=_reply)
+
+        with (
+            patch("src.handlers.command_handlers.openclaw_client", oc),
+            patch("src.handlers.command_handlers.history_cache", h_cache),
+        ):
+            await handle_reset(bot, msg)
+
+        # В edit-пути (sender == bot.me) financial report уходит в edit,
+        # reply вообще не вызывается. Главное — нет progress-сообщения.
+        assert not any("🔄 Reset: 0 /" in t for t in reply_calls)
