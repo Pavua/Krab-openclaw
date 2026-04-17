@@ -83,6 +83,7 @@ if TYPE_CHECKING:
 # Утилита: тех-ответ только в ЛС владельца
 # ---------------------------------------------------------------------------
 
+
 async def _reply_tech(message: Message, bot: "KraabUserbot", text: str, **kwargs: Any) -> None:
     """Отправляет тех-ответ: в группе — редиректит в ЛС, в ЛС — обычный reply.
 
@@ -119,6 +120,7 @@ _stopwatches: dict[int, dict] = {}
 def _parse_duration(spec: str) -> int | None:
     """Парсит строку вида 5m, 1h30m, 90s в секунды. Возвращает None при ошибке."""
     import re
+
     spec = spec.strip().lower()
     # Попытка распарсить составной формат: 1h30m20s
     pattern = re.compile(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$")
@@ -396,7 +398,7 @@ async def handle_search(bot: "KraabUserbot", message: Message) -> None:
     for flag in ("--raw", "--brave"):
         if raw_args.lower().startswith(flag):
             raw_mode = True
-            query = raw_args[len(flag):].strip()
+            query = raw_args[len(flag) :].strip()
             break
 
     if not query:
@@ -1266,10 +1268,7 @@ async def handle_confirm(bot: "KraabUserbot", message: Message) -> None:
         if not pending:
             await message.reply("📭 Нет ожидающих подтверждений.")
             return
-        lines = [
-            f"• `{p.hash}` — {p.text[:60]}{'…' if len(p.text) > 60 else ''}"
-            for p in pending
-        ]
+        lines = [f"• `{p.hash}` — {p.text[:60]}{'…' if len(p.text) > 60 else ''}" for p in pending]
         await message.reply("⏳ Ожидают подтверждения:\n" + "\n".join(lines))
         return
 
@@ -1524,22 +1523,11 @@ async def handle_status(bot: "KraabUserbot", message: Message) -> None:
         f"{oc_icon} OpenClaw ({model_short}) | "
         f"{sched_icon} Scheduler ({job_count} jobs)"
     )
-    line2 = (
-        f"📬 Inbox: {inbox_open} open | "
-        f"💰 Cost: {cost_str} | "
-        f"🐝 Swarm: {team_count} teams"
-    )
+    line2 = f"📬 Inbox: {inbox_open} open | 💰 Cost: {cost_str} | 🐝 Swarm: {team_count} teams"
     line3 = f"🔄 Translator: {translator_str} | 🔇 Silence: {silence_str}"
     line4 = f"⏱ Uptime: {uptime_str} | 🧠 RAM: {ram_str} | 📊 Messages: {msg_count}"
 
-    text = (
-        "🦀 **Krab Status**\n"
-        "━━━━━━━━━━━━\n"
-        f"{line1}\n"
-        f"{line2}\n"
-        f"{line3}\n"
-        f"{line4}"
-    )
+    text = f"🦀 **Krab Status**\n━━━━━━━━━━━━\n{line1}\n{line2}\n{line3}\n{line4}"
 
     # Доп. строка: Primary runtime если не совпадает с фактической моделью
     if declared_primary and declared_primary != effective_model:
@@ -1586,7 +1574,7 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
             f"**Облачная модель:** `{cloud_model}`\n"
             f"**LM Studio URL:** `{config.LM_STUDIO_URL}`\n"
             f"**FORCE_CLOUD:** `{force_cloud}`\n\n"
-            "_Подкоманды: `local`, `cloud`, `auto`, `set <model_id>`, `load <name>`, `unload`, `scan`_"
+            "_Подкоманды: `info`, `local`, `cloud`, `auto`, `set <model_id>`, `load <name>`, `unload`, `scan`_"
         )
         await message.reply(text)
         return
@@ -1668,6 +1656,12 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
             await msg.edit(f"❌ Ошибка выгрузки: `{str(e)[:200]}`")
         return
 
+    if sub == "info":
+        # Собираем снимок текущего маршрута, providers health и fallback chain.
+        text = await _format_model_info()
+        await message.reply(text)
+        return
+
     if sub in ("scan", "list"):
         msg = await message.reply("🔍 Сканирую доступные модели...")
         try:
@@ -1720,9 +1714,97 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
     raise UserInputError(
         user_message=(
             f"❓ Неизвестная подкоманда `{sub}`.\n"
-            "Доступные: `local`, `cloud`, `auto`, `set`, `load`, `unload`, `scan`"
+            "Доступные: `local`, `cloud`, `auto`, `set`, `load`, `unload`, `scan`, `info`"
         )
     )
+
+
+async def _format_model_info() -> str:
+    """Формирует Markdown-отчёт для `!model info`.
+
+    Источники:
+    - openclaw_client.get_last_runtime_route() — активный маршрут последнего запроса;
+    - http://127.0.0.1:8080/api/openclaw/cloud — providers health через локальный web-app;
+    - get_cloud_fallback_chain() — fallback цепочка из конфига;
+    - is_lm_studio_available() — статус LM Studio.
+    """
+    from ..core.cloud_gateway import get_cloud_fallback_chain  # noqa: PLC0415
+
+    # 1) Активный маршрут — используем публичный accessor, с fallback на атрибут.
+    try:
+        last_route = openclaw_client.get_last_runtime_route() or {}
+    except Exception:
+        last_route = getattr(openclaw_client, "_last_runtime_route", {}) or {}
+
+    # 2) Providers health — коротко, через локальный web-app (1.5s таймаут).
+    cloud_report: dict[str, Any] = {}
+    try:
+        async with httpx.AsyncClient(timeout=1.5) as client:
+            resp = await client.get("http://127.0.0.1:8080/api/openclaw/cloud")
+            if resp.status_code == 200:
+                payload = resp.json() or {}
+                cloud_report = payload.get("report", {}) if isinstance(payload, dict) else {}
+    except Exception:
+        cloud_report = {}
+
+    # 3) Fallback chain.
+    try:
+        fallback_chain = get_cloud_fallback_chain()
+    except Exception:
+        fallback_chain = []
+
+    # 4) LM Studio availability.
+    try:
+        lm_available = bool(await is_lm_studio_available())
+    except Exception:
+        lm_available = False
+
+    lines: list[str] = ["🤖 **Model Info**", "", "**Active route:**"]
+    provider = str(last_route.get("provider") or "n/a")
+    model_id = str(last_route.get("model") or "n/a")
+    tier = str(last_route.get("active_tier") or "n/a")
+    status = str(last_route.get("status") or "n/a")
+    ts_raw = last_route.get("timestamp")
+    if isinstance(ts_raw, int) and ts_raw > 0:
+        ts_str = datetime.datetime.fromtimestamp(ts_raw).strftime("%H:%M:%S")
+        status_line = f"✅ {status} ({ts_str})" if status == "ok" else f"⚠️ {status} ({ts_str})"
+    else:
+        status_line = status
+    lines.append(f"• Provider: `{provider}`")
+    lines.append(f"• Model: `{model_id}`")
+    lines.append(f"• Tier: `{tier}`")
+    lines.append(f"• Last status: {status_line}")
+
+    # Fallback chain.
+    lines.append("")
+    lines.append("**Fallback chain:**")
+    if fallback_chain:
+        for idx, mid in enumerate(fallback_chain[:6], start=1):
+            lines.append(f"{idx}. {mid}")
+    else:
+        lines.append("_(пусто или недоступно)_")
+
+    # Providers health.
+    lines.append("")
+    lines.append("**Providers health:**")
+    providers = cloud_report.get("providers", {}) if isinstance(cloud_report, dict) else {}
+    if providers:
+        for name, info in providers.items():
+            if not isinstance(info, dict):
+                continue
+            ok = info.get("ok")
+            http_status = info.get("http_status")
+            provider_status = info.get("provider_status", "n/a")
+            icon = "✅" if ok else "❌"
+            http_hint = f" (http {http_status})" if http_status else ""
+            lines.append(f"• {name}: {icon} {provider_status}{http_hint}")
+    else:
+        lines.append("• google: ⚠️ недоступно (cloud API off)")
+
+    lm_state = "ready" if lm_available else "idle"
+    lines.append(f"• LM Studio: {lm_state}")
+
+    return "\n".join(lines)
 
 
 async def handle_clear(bot: "KraabUserbot", message: Message) -> None:
@@ -1770,6 +1852,7 @@ async def handle_clear(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 # !reset — агрессивная многослойная очистка истории
 # ---------------------------------------------------------------------------
+
 
 async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
     """Очищает все слои истории одной операцией.
@@ -1823,9 +1906,7 @@ async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
         me_id = getattr(getattr(bot, "me", None), "id", None)
         sender_id = getattr(getattr(message, "from_user", None), "id", None)
         if me_id is None or sender_id != me_id:
-            await message.reply(
-                "🚫 `!reset --all` доступен только владельцу."
-            )
+            await message.reply("🚫 `!reset --all` доступен только владельцу.")
             return
 
     # Confirmation flow для --all без --force (и не dry-run)
@@ -1868,9 +1949,7 @@ async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
                 logger.warning("reset_krab_probe_failed", chat_id=cid, error=str(exc))
 
     if layer in (None, "openclaw"):
-        impact["openclaw"] = sum(
-            1 for cid in target_chat_ids if cid in openclaw_client._sessions
-        )
+        impact["openclaw"] = sum(1 for cid in target_chat_ids if cid in openclaw_client._sessions)
 
     if layer in (None, "gemini"):
         # Nonce-инвалидация — per chat, независимо от текущего состояния
@@ -1936,26 +2015,20 @@ async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
                 openclaw_client.clear_session(cid)
                 stats["openclaw"] += 1
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "reset_openclaw_failed", chat_id=cid, error=str(exc)
-                )
+                logger.warning("reset_openclaw_failed", chat_id=cid, error=str(exc))
 
         if layer in (None, "gemini"):
             try:
                 invalidate_gemini_cache_for_chat(cid)
                 stats["gemini"] += 1
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "reset_gemini_failed", chat_id=cid, error=str(exc)
-                )
+                logger.warning("reset_gemini_failed", chat_id=cid, error=str(exc))
 
         if layer == "archive":
             try:
                 stats["archive"] += clear_archive_db_for_chat(cid)
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "reset_archive_failed", chat_id=cid, error=str(exc)
-                )
+                logger.warning("reset_archive_failed", chat_id=cid, error=str(exc))
 
         # Прогресс каждые 10 чатов — не спамим и не валим на edit-ошибке.
         if progress_msg is not None and (idx + 1) % 10 == 0 and (idx + 1) < total:
@@ -1991,84 +2064,107 @@ async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
 
 # (config_key, описание)
 _CONFIG_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
-    ("Модель и routing", [
-        ("MODEL",                        "Основная модель"),
-        ("FORCE_CLOUD",                  "Принудительный cloud-маршрут"),
-        ("LOCAL_FALLBACK_ENABLED",       "Fallback cloud→local при ошибках"),
-        ("LOCAL_PREFERRED_MODEL",        "Локальная модель (LM Studio)"),
-        ("LOCAL_PREFERRED_VISION_MODEL", "Локальная vision-модель"),
-        ("SINGLE_LOCAL_MODEL_MODE",      "Держать одну локальную модель"),
-        ("GUARDED_IDLE_UNLOAD",          "Guarded idle-unload локальной модели"),
-        ("GUARDED_IDLE_UNLOAD_GRACE_SEC","Пауза перед idle-unload (сек)"),
-        ("RESTORE_PREFERRED_ON_IDLE_UNLOAD", "Восстановить preferred после unload"),
-    ]),
-    ("Таймауты и retry", [
-        ("OPENCLAW_CHUNK_TIMEOUT_SEC",              "Таймаут chunk стриминга (сек)"),
-        ("OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC",         "Таймаут первого chunk (сек)"),
-        ("OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC",   "Таймаут первого chunk фото (сек)"),
-        ("OPENCLAW_AUTO_RETRY_COUNT",                "Кол-во auto-retry при ошибках"),
-        ("OPENCLAW_AUTO_RETRY_DELAY_SEC",            "Задержка auto-retry (сек)"),
-        ("OPENCLAW_PROGRESS_NOTICE_INITIAL_SEC",     "Первый progress-notice (сек)"),
-        ("OPENCLAW_PROGRESS_NOTICE_REPEAT_SEC",      "Повтор progress-notice (сек)"),
-    ]),
-    ("Userbot и Telegram", [
-        ("USERBOT_MAX_OUTPUT_TOKENS",      "Макс. токенов ответа (текст)"),
-        ("USERBOT_PHOTO_MAX_OUTPUT_TOKENS","Макс. токенов ответа (фото)"),
-        ("USERBOT_FORCE_CLOUD_FOR_PHOTO",  "Cloud-маршрут для фото"),
-        ("TELEGRAM_STREAM_UPDATE_INTERVAL_SEC", "Интервал stream UI (сек)"),
-        ("TELEGRAM_STREAM_SHOW_REASONING",      "Показывать reasoning в stream"),
-        ("TELEGRAM_REACTIONS_ENABLED",          "Реакции 👀✅❌"),
-        ("TELEGRAM_MESSAGE_BATCH_WINDOW_SEC",   "Окно склейки сообщений (сек)"),
-        ("TELEGRAM_SESSION_HEARTBEAT_SEC",      "Heartbeat MTProto (сек)"),
-        ("TOOL_NARRATION_ENABLED",              "Tool narration в Telegram"),
-    ]),
-    ("Фоновые задачи", [
-        ("SCHEDULER_ENABLED",              "Планировщик reminders/cron"),
-        ("DEFERRED_ACTION_GUARD_ENABLED",  "Guard deferred-actions"),
-        ("SWARM_AUTONOMOUS_ENABLED",       "Автономные задачи свёрма"),
-        ("SILENCE_DEFAULT_MINUTES",        "Tишина по умолчанию (мин)"),
-        ("OWNER_AUTO_SILENCE_MINUTES",     "Авто-тишина при owner-write (мин)"),
-    ]),
-    ("Доступ и безопасность", [
-        ("OWNER_USERNAME",              "Username владельца (fallback)"),
-        ("NON_OWNER_SAFE_MODE_ENABLED", "Safe-mode для гостей"),
-        ("GUEST_TOOLS_DISABLED",        "Запрет tools для GUEST"),
-        ("FORWARD_UNKNOWN_INCOMING",    "Пересылать неизвестные входящие"),
-        ("AI_DISCLOSURE_ENABLED",       "Дисклеймер ИИ в начале диалога"),
-        ("MANUAL_BLOCKLIST",            "Чёрный список (usernames/IDs)"),
-    ]),
-    ("Голос", [
-        ("VOICE_MODE_DEFAULT",   "Voice-режим по умолчанию"),
-        ("VOICE_REPLY_SPEED",    "Скорость TTS"),
-        ("VOICE_REPLY_VOICE",    "TTS-голос"),
-        ("VOICE_REPLY_DELIVERY", "Режим доставки (text+voice/voice/text)"),
-    ]),
-    ("История диалога", [
-        ("HISTORY_WINDOW_MESSAGES",       "Окно cloud-истории (сообщений)"),
-        ("LOCAL_HISTORY_WINDOW_MESSAGES", "Окно local-истории (сообщений)"),
-        ("RETRY_HISTORY_WINDOW_MESSAGES", "Окно retry-истории (сообщений)"),
-    ]),
-    ("Сеть и прокси", [
-        ("TOR_ENABLED",       "Tor SOCKS5 прокси"),
-        ("TOR_SOCKS_PORT",    "Порт Tor SOCKS5"),
-        ("BROWSER_FOCUS_TAB", "Фокус вкладки браузера"),
-        ("LM_STUDIO_URL",     "URL LM Studio"),
-        ("OPENCLAW_URL",      "URL OpenClaw Gateway"),
-    ]),
-    ("Прочее", [
-        ("DEFAULT_WEATHER_CITY",    "Город погоды по умолчанию"),
-        ("MAX_RAM_GB",              "Лимит RAM (GB)"),
-        ("LOG_LEVEL",               "Уровень логирования"),
-        ("GEMINI_PAID_KEY_ENABLED", "Платный Gemini API ключ"),
-    ]),
+    (
+        "Модель и routing",
+        [
+            ("MODEL", "Основная модель"),
+            ("FORCE_CLOUD", "Принудительный cloud-маршрут"),
+            ("LOCAL_FALLBACK_ENABLED", "Fallback cloud→local при ошибках"),
+            ("LOCAL_PREFERRED_MODEL", "Локальная модель (LM Studio)"),
+            ("LOCAL_PREFERRED_VISION_MODEL", "Локальная vision-модель"),
+            ("SINGLE_LOCAL_MODEL_MODE", "Держать одну локальную модель"),
+            ("GUARDED_IDLE_UNLOAD", "Guarded idle-unload локальной модели"),
+            ("GUARDED_IDLE_UNLOAD_GRACE_SEC", "Пауза перед idle-unload (сек)"),
+            ("RESTORE_PREFERRED_ON_IDLE_UNLOAD", "Восстановить preferred после unload"),
+        ],
+    ),
+    (
+        "Таймауты и retry",
+        [
+            ("OPENCLAW_CHUNK_TIMEOUT_SEC", "Таймаут chunk стриминга (сек)"),
+            ("OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC", "Таймаут первого chunk (сек)"),
+            ("OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", "Таймаут первого chunk фото (сек)"),
+            ("OPENCLAW_AUTO_RETRY_COUNT", "Кол-во auto-retry при ошибках"),
+            ("OPENCLAW_AUTO_RETRY_DELAY_SEC", "Задержка auto-retry (сек)"),
+            ("OPENCLAW_PROGRESS_NOTICE_INITIAL_SEC", "Первый progress-notice (сек)"),
+            ("OPENCLAW_PROGRESS_NOTICE_REPEAT_SEC", "Повтор progress-notice (сек)"),
+        ],
+    ),
+    (
+        "Userbot и Telegram",
+        [
+            ("USERBOT_MAX_OUTPUT_TOKENS", "Макс. токенов ответа (текст)"),
+            ("USERBOT_PHOTO_MAX_OUTPUT_TOKENS", "Макс. токенов ответа (фото)"),
+            ("USERBOT_FORCE_CLOUD_FOR_PHOTO", "Cloud-маршрут для фото"),
+            ("TELEGRAM_STREAM_UPDATE_INTERVAL_SEC", "Интервал stream UI (сек)"),
+            ("TELEGRAM_STREAM_SHOW_REASONING", "Показывать reasoning в stream"),
+            ("TELEGRAM_REACTIONS_ENABLED", "Реакции 👀✅❌"),
+            ("TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", "Окно склейки сообщений (сек)"),
+            ("TELEGRAM_SESSION_HEARTBEAT_SEC", "Heartbeat MTProto (сек)"),
+            ("TOOL_NARRATION_ENABLED", "Tool narration в Telegram"),
+        ],
+    ),
+    (
+        "Фоновые задачи",
+        [
+            ("SCHEDULER_ENABLED", "Планировщик reminders/cron"),
+            ("DEFERRED_ACTION_GUARD_ENABLED", "Guard deferred-actions"),
+            ("SWARM_AUTONOMOUS_ENABLED", "Автономные задачи свёрма"),
+            ("SILENCE_DEFAULT_MINUTES", "Tишина по умолчанию (мин)"),
+            ("OWNER_AUTO_SILENCE_MINUTES", "Авто-тишина при owner-write (мин)"),
+        ],
+    ),
+    (
+        "Доступ и безопасность",
+        [
+            ("OWNER_USERNAME", "Username владельца (fallback)"),
+            ("NON_OWNER_SAFE_MODE_ENABLED", "Safe-mode для гостей"),
+            ("GUEST_TOOLS_DISABLED", "Запрет tools для GUEST"),
+            ("FORWARD_UNKNOWN_INCOMING", "Пересылать неизвестные входящие"),
+            ("AI_DISCLOSURE_ENABLED", "Дисклеймер ИИ в начале диалога"),
+            ("MANUAL_BLOCKLIST", "Чёрный список (usernames/IDs)"),
+        ],
+    ),
+    (
+        "Голос",
+        [
+            ("VOICE_MODE_DEFAULT", "Voice-режим по умолчанию"),
+            ("VOICE_REPLY_SPEED", "Скорость TTS"),
+            ("VOICE_REPLY_VOICE", "TTS-голос"),
+            ("VOICE_REPLY_DELIVERY", "Режим доставки (text+voice/voice/text)"),
+        ],
+    ),
+    (
+        "История диалога",
+        [
+            ("HISTORY_WINDOW_MESSAGES", "Окно cloud-истории (сообщений)"),
+            ("LOCAL_HISTORY_WINDOW_MESSAGES", "Окно local-истории (сообщений)"),
+            ("RETRY_HISTORY_WINDOW_MESSAGES", "Окно retry-истории (сообщений)"),
+        ],
+    ),
+    (
+        "Сеть и прокси",
+        [
+            ("TOR_ENABLED", "Tor SOCKS5 прокси"),
+            ("TOR_SOCKS_PORT", "Порт Tor SOCKS5"),
+            ("BROWSER_FOCUS_TAB", "Фокус вкладки браузера"),
+            ("LM_STUDIO_URL", "URL LM Studio"),
+            ("OPENCLAW_URL", "URL OpenClaw Gateway"),
+        ],
+    ),
+    (
+        "Прочее",
+        [
+            ("DEFAULT_WEATHER_CITY", "Город погоды по умолчанию"),
+            ("MAX_RAM_GB", "Лимит RAM (GB)"),
+            ("LOG_LEVEL", "Уровень логирования"),
+            ("GEMINI_PAID_KEY_ENABLED", "Платный Gemini API ключ"),
+        ],
+    ),
 ]
 
 # Плоский индекс key→описание для быстрого поиска
-_CONFIG_KEY_DESC: dict[str, str] = {
-    k: desc
-    for _, group in _CONFIG_GROUPS
-    for k, desc in group
-}
+_CONFIG_KEY_DESC: dict[str, str] = {k: desc for _, group in _CONFIG_GROUPS for k, desc in group}
 
 
 def _render_config_value(key: str) -> str:
@@ -2164,17 +2260,17 @@ _SET_ALIASES: dict[str, str] = {
     "stream_interval": "TELEGRAM_STREAM_UPDATE_INTERVAL_SEC",
     "reactions": "TELEGRAM_REACTIONS_ENABLED",
     "weather_city": "DEFAULT_WEATHER_CITY",
-    "language": "_TRANSLATOR_LANGUAGE",   # особый: через translator-профиль
-    "autodel": "_AUTODEL_DEFAULT",         # особый: глобальный default autodel
+    "language": "_TRANSLATOR_LANGUAGE",  # особый: через translator-профиль
+    "autodel": "_AUTODEL_DEFAULT",  # особый: глобальный default autodel
 }
 
 # (алиас → (config_key_или_метка, описание))
 _SET_FRIENDLY: dict[str, tuple[str, str]] = {
     "stream_interval": ("TELEGRAM_STREAM_UPDATE_INTERVAL_SEC", "Интервал стриминга (сек)"),
-    "reactions":       ("TELEGRAM_REACTIONS_ENABLED",          "Реакции 👀✅❌ (on/off)"),
-    "weather_city":    ("DEFAULT_WEATHER_CITY",                "Город погоды по умолчанию"),
-    "autodel":         ("_AUTODEL_DEFAULT",                    "Автоудаление ответов (сек, 0=выкл)"),
-    "language":        ("_TRANSLATOR_LANGUAGE",                "Языковая пара переводчика"),
+    "reactions": ("TELEGRAM_REACTIONS_ENABLED", "Реакции 👀✅❌ (on/off)"),
+    "weather_city": ("DEFAULT_WEATHER_CITY", "Город погоды по умолчанию"),
+    "autodel": ("_AUTODEL_DEFAULT", "Автоудаление ответов (сек, 0=выкл)"),
+    "language": ("_TRANSLATOR_LANGUAGE", "Языковая пара переводчика"),
 }
 
 
@@ -2205,7 +2301,9 @@ def _render_all_settings(bot: "KraabUserbot") -> str:
     lines.append("`!set <key>` — показать одну настройку")
     lines.append("`!set <key> <value>` — установить")
     lines.append("")
-    lines.append("Также поддерживаются RAW ключи config: `!set TELEGRAM_STREAM_UPDATE_INTERVAL_SEC 3`")
+    lines.append(
+        "Также поддерживаются RAW ключи config: `!set TELEGRAM_STREAM_UPDATE_INTERVAL_SEC 3`"
+    )
     return "\n".join(lines)
 
 
@@ -2259,7 +2357,9 @@ async def handle_set(bot: "KraabUserbot", message: Message) -> None:
         try:
             delay = float(value_str)
         except ValueError:
-            raise UserInputError(user_message="❌ `autodel` принимает число секунд (0 = выключить).")
+            raise UserInputError(
+                user_message="❌ `autodel` принимает число секунд (0 = выключить)."
+            )
         if not hasattr(bot, "_runtime_state") or bot._runtime_state is None:
             bot._runtime_state = {}
         autodel_settings: dict = bot._runtime_state.setdefault(_AUTODEL_STATE_KEY, {})
@@ -2465,9 +2565,7 @@ async def handle_scope(bot: "KraabUserbot", message: Message) -> None:
     access_profile = bot._get_access_profile(message.from_user)
     if access_profile.level != AccessLevel.OWNER:
         raise UserInputError(
-            user_message=(
-                "🔒 Управление правами `!scope grant/revoke` доступно только владельцу."
-            )
+            user_message=("🔒 Управление правами `!scope grant/revoke` доступно только владельцу.")
         )
 
     if action == "grant":
@@ -2482,9 +2580,7 @@ async def handle_scope(bot: "KraabUserbot", message: Message) -> None:
         subject = parts[1].strip()
         level_raw = parts[2].strip().lower()
         if level_raw not in {AccessLevel.FULL.value, AccessLevel.PARTIAL.value}:
-            raise UserInputError(
-                user_message="❌ Уровень должен быть `full` или `partial`."
-            )
+            raise UserInputError(user_message="❌ Уровень должен быть `full` или `partial`.")
         result = update_acl_subject(level_raw, subject, add=True)
         state = result["state"]
         changed_note = "обновлено" if result["changed"] else "без изменений"
@@ -2503,8 +2599,7 @@ async def handle_scope(bot: "KraabUserbot", message: Message) -> None:
         if len(parts) < 2:
             raise UserInputError(
                 user_message=(
-                    "❌ Формат: `!scope revoke <user_id>`\n"
-                    "Пример: `!scope revoke 123456789`"
+                    "❌ Формат: `!scope revoke <user_id>`\nПример: `!scope revoke 123456789`"
                 )
             )
         subject = parts[1].strip()
@@ -3309,6 +3404,7 @@ async def handle_sysinfo(bot: "KraabUserbot", message: Message) -> None:
         lines.append(f"Krab: PID {krab_pid} | Uptime: {uptime_str}")
     except Exception:
         import os as _os
+
         lines.append(f"Krab: PID {_os.getpid()}")
 
     await message.reply("\n".join(lines))
@@ -3427,6 +3523,7 @@ async def handle_version(bot: "KraabUserbot", message: Message) -> None:
     # Pyrogram версия
     try:
         import pyrogram
+
         pyro_ver = pyrogram.__version__
     except Exception:
         pyro_ver = "unknown"
@@ -4277,6 +4374,7 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
             due_raw = str(item.get("due_at_iso") or "")
             try:
                 from datetime import datetime as _dt
+
                 due_label = _dt.fromisoformat(due_raw).strftime("%d.%m %H:%M")
             except Exception:  # noqa: BLE001
                 due_label = due_raw
@@ -4309,21 +4407,13 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
     time_spec, reminder_text = split_reminder_input(raw_args)
     if not time_spec or not reminder_text:
         raise UserInputError(
-            user_message=(
-                "⏰ Не удалось разобрать время/текст.\n\n"
-                + _REMIND_HELP
-            )
+            user_message=("⏰ Не удалось разобрать время/текст.\n\n" + _REMIND_HELP)
         )
 
     try:
         due_at = parse_due_time(time_spec)
     except ValueError:
-        raise UserInputError(
-            user_message=(
-                "❌ Не удалось распознать время.\n\n"
-                + _REMIND_HELP
-            )
-        )
+        raise UserInputError(user_message=("❌ Не удалось распознать время.\n\n" + _REMIND_HELP))
 
     if hasattr(bot, "_sync_scheduler_runtime"):
         try:
@@ -4388,19 +4478,21 @@ async def handle_cronstatus(bot: "KraabUserbot", message: Message) -> None:
     status = krab_scheduler.get_status()
     # Тех-вывод: группа → редирект в ЛС
     await _reply_tech(
-        message, bot,
+        message,
+        bot,
         "🧭 **Scheduler status**\n"
         f"- enabled (config): `{status.get('scheduler_enabled')}`\n"
         f"- started: `{status.get('started')}`\n"
         f"- pending: `{status.get('pending_count')}`\n"
         f"- next_due_at: `{status.get('next_due_at') or '-'}`\n"
-        f"- storage: `{status.get('storage_path')}`"
+        f"- storage: `{status.get('storage_path')}`",
     )
 
 
 # ---------------------------------------------------------------------------
 # !cron — управление OpenClaw cron jobs из Telegram
 # ---------------------------------------------------------------------------
+
 
 def _cron_read_jobs() -> list[dict]:
     """Читает jobs.json напрямую (без gateway), возвращает список dict."""
@@ -4511,8 +4603,7 @@ async def handle_cron(bot: "KraabUserbot", message: Message) -> None:
         enabled = sum(1 for j in jobs if j.get("enabled"))
         disabled = total - enabled
         errors = sum(
-            1 for j in jobs
-            if int((j.get("state") or {}).get("consecutiveErrors") or 0) > 0
+            1 for j in jobs if int((j.get("state") or {}).get("consecutiveErrors") or 0) > 0
         )
         lines = [
             "🗓 **OpenClaw Cron — статус**",
@@ -4558,7 +4649,8 @@ async def handle_cron(bot: "KraabUserbot", message: Message) -> None:
         # Ищем job в jobs.json по имени или id
         jobs = _cron_read_jobs()
         matched = [
-            j for j in jobs
+            j
+            for j in jobs
             if str(j.get("name") or "").lower() == arg.lower()
             or str(j.get("id") or "").lower() == arg.lower()
         ]
@@ -4597,7 +4689,8 @@ async def handle_cron(bot: "KraabUserbot", message: Message) -> None:
         # Ищем job в jobs.json по имени или id
         jobs = _cron_read_jobs()
         matched = [
-            j for j in jobs
+            j
+            for j in jobs
             if str(j.get("name") or "").lower() == arg.lower()
             or str(j.get("id") or "").lower() == arg.lower()
         ]
@@ -4612,10 +4705,18 @@ async def handle_cron(bot: "KraabUserbot", message: Message) -> None:
 
         short_raw = raw[:200] if raw else ""
         if ok:
-            text = f"✅ Job **{job_name}** запущен.\n`{short_raw}`" if short_raw else f"✅ Job **{job_name}** запущен."
+            text = (
+                f"✅ Job **{job_name}** запущен.\n`{short_raw}`"
+                if short_raw
+                else f"✅ Job **{job_name}** запущен."
+            )
             await msg.edit(text)
         else:
-            text = f"❌ Ошибка запуска **{job_name}**:\n`{short_raw}`" if short_raw else f"❌ Ошибка запуска **{job_name}**."
+            text = (
+                f"❌ Ошибка запуска **{job_name}**:\n`{short_raw}`"
+                if short_raw
+                else f"❌ Ошибка запуска **{job_name}**."
+            )
             await msg.edit(text)
         return
 
@@ -6043,6 +6144,7 @@ async def handle_chatinfo(bot: "KraabUserbot", message: Message) -> None:
     if dc_date:
         try:
             import datetime as _dt
+
             if isinstance(dc_date, (int, float)):
                 dt = _dt.datetime.fromtimestamp(dc_date, tz=_dt.timezone.utc)
             else:
@@ -6137,7 +6239,7 @@ async def handle_history(bot: "KraabUserbot", message: Message) -> None:
     other_count = 0
 
     weekday_counts: Counter = Counter()  # {0..6: int} — день недели
-    dates_seen: set = set()              # уникальные даты для среднего
+    dates_seen: set = set()  # уникальные даты для среднего
 
     first_dt: _dt.datetime | None = None
     last_dt: _dt.datetime | None = None
@@ -6174,9 +6276,7 @@ async def handle_history(bot: "KraabUserbot", message: Message) -> None:
                     last_dt = msg_dt
 
     except Exception as exc:
-        raise UserInputError(
-            user_message=f"❌ Не удалось получить историю чата: {exc}"
-        ) from exc
+        raise UserInputError(user_message=f"❌ Не удалось получить историю чата: {exc}") from exc
 
     if total == 0:
         await message.reply("📈 В этом чате нет сообщений (в пределах 1000).")
@@ -6188,9 +6288,7 @@ async def handle_history(bot: "KraabUserbot", message: Message) -> None:
         busiest_wd, busiest_count = weekday_counts.most_common(1)[0]
         busiest_name = _weekday_names[busiest_wd]
         # Сколько таких дней встретилось в выборке
-        busiest_days_in_sample = sum(
-            1 for d in dates_seen if d.weekday() == busiest_wd
-        ) or 1
+        busiest_days_in_sample = sum(1 for d in dates_seen if d.weekday() == busiest_wd) or 1
         avg_on_busiest = round(busiest_count / busiest_days_in_sample)
         most_active_str = f"{busiest_name} (avg {avg_on_busiest} msgs)"
     else:
@@ -6814,7 +6912,11 @@ async def handle_archive(bot: "KraabUserbot", message: Message) -> None:
             archived = []
             async for dialog in bot.client.get_dialogs(folder_id=1):
                 chat = dialog.chat
-                title = getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(chat.id)
+                title = (
+                    getattr(chat, "title", None)
+                    or getattr(chat, "first_name", None)
+                    or str(chat.id)
+                )
                 archived.append(f"• `{chat.id}` — {title}")
                 if len(archived) >= 20:
                     break
@@ -8218,7 +8320,7 @@ async def handle_react(bot: "KraabUserbot", message: Message) -> None:
     if not raw_args:
         raise UserInputError(
             user_message="🎭 Формат: `!react <emoji>` (в reply на нужное сообщение)\n"
-                         "Пример: `!react 👍`"
+            "Пример: `!react 👍`"
         )
 
     emoji = raw_args.strip()
@@ -8294,9 +8396,7 @@ async def handle_note(bot: "KraabUserbot", message: Message) -> None:
     # Определяем название чата
     chat = message.chat
     chat_title: str = (
-        getattr(chat, "title", None)
-        or getattr(chat, "first_name", None)
-        or str(chat.id)
+        getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(chat.id)
     )
 
     # Транскрибируем через существующий _transcribe_audio_message
@@ -8379,7 +8479,7 @@ async def handle_alias(bot: "KraabUserbot", message: Message) -> None:
         if len(parts) < 2:
             raise UserInputError(
                 user_message="Формат: `!alias set <имя> <команда>`\n"
-                             "Пример: `!alias set t !translate`"
+                "Пример: `!alias set t !translate`"
             )
         alias_name, alias_cmd = parts[0], parts[1]
         ok, msg = alias_service.add(alias_name, alias_cmd)
@@ -8394,8 +8494,7 @@ async def handle_alias(bot: "KraabUserbot", message: Message) -> None:
 
     else:
         raise UserInputError(
-            user_message=f"Неизвестная подкоманда `{sub}`.\n"
-                         "Доступно: `set`, `list`, `del`"
+            user_message=f"Неизвестная подкоманда `{sub}`.\nДоступно: `set`, `list`, `del`"
         )
 
 
@@ -8423,9 +8522,7 @@ async def handle_ask(bot: "KraabUserbot", message: Message) -> None:
     # Извлекаем текст из reply-сообщения
     source_text = (replied.text or replied.caption or "").strip()
     if not source_text:
-        raise UserInputError(
-            user_message="❌ Исходное сообщение не содержит текста."
-        )
+        raise UserInputError(user_message="❌ Исходное сообщение не содержит текста.")
 
     # Вопрос по умолчанию если не указан
     if not question:
@@ -8443,7 +8540,7 @@ async def handle_ask(bot: "KraabUserbot", message: Message) -> None:
     )
 
     # Формируем промпт: текст + вопрос
-    prompt = f"Текст:\n\"\"\"\n{source_text}\n\"\"\"\n\nВопрос: {question}"
+    prompt = f'Текст:\n"""\n{source_text}\n"""\n\nВопрос: {question}'
 
     # Отправляем статус и запускаем стриминг
     msg = await message.reply("🤔 Думаю...")
@@ -8474,7 +8571,6 @@ async def handle_ask(bot: "KraabUserbot", message: Message) -> None:
         await msg.edit(f"❌ Ошибка: {exc}")
 
 
-
 # ---------------------------------------------------------------------------
 # !fix — исправление грамматики, орфографии и пунктуации через AI
 # ---------------------------------------------------------------------------
@@ -8503,9 +8599,7 @@ async def handle_fix(bot: "KraabUserbot", message: Message) -> None:
             )
         source_text = (replied.text or replied.caption or "").strip()
         if not source_text:
-            raise UserInputError(
-                user_message="❌ Исходное сообщение не содержит текста."
-            )
+            raise UserInputError(user_message="❌ Исходное сообщение не содержит текста.")
     else:
         source_text = args_text
 
@@ -8527,8 +8621,8 @@ async def handle_fix(bot: "KraabUserbot", message: Message) -> None:
         async for chunk in openclaw_client.send_message_stream(
             message=prompt,
             chat_id=session_id,
-            disable_tools=True,       # только текстовый ответ, без tool_calls
-            max_output_tokens=512,    # короткий вывод — только исправленный текст
+            disable_tools=True,  # только текстовый ответ, без tool_calls
+            max_output_tokens=512,  # короткий вывод — только исправленный текст
         ):
             chunks.append(str(chunk))
 
@@ -8566,8 +8660,7 @@ _REWRITE_MODES: dict[str, tuple[str, str]] = {
     ),
     "short": (
         "short",
-        "Сократи текст: убери воду, оставь только суть. "
-        "Итог должен быть заметно короче оригинала.",
+        "Сократи текст: убери воду, оставь только суть. Итог должен быть заметно короче оригинала.",
     ),
     # режим по умолчанию — ключ пустая строка
     "": (
@@ -8600,7 +8693,7 @@ async def handle_rewrite(bot: "KraabUserbot", message: Message) -> None:
         first_word = args.split()[0].lower()
         if first_word in _REWRITE_MODES:
             mode_key = first_word
-            text_to_rewrite = args[len(first_word):].strip()
+            text_to_rewrite = args[len(first_word) :].strip()
         else:
             text_to_rewrite = args
 
@@ -8620,9 +8713,7 @@ async def handle_rewrite(bot: "KraabUserbot", message: Message) -> None:
             )
         text_to_rewrite = (replied.text or replied.caption or "").strip()
         if not text_to_rewrite:
-            raise UserInputError(
-                user_message="❌ Исходное сообщение не содержит текста."
-            )
+            raise UserInputError(user_message="❌ Исходное сообщение не содержит текста.")
 
     _mode_label, mode_instruction = _REWRITE_MODES[mode_key]
 
@@ -8636,7 +8727,7 @@ async def handle_rewrite(bot: "KraabUserbot", message: Message) -> None:
     )
 
     # Промпт = инструкция + текст
-    prompt = f"{mode_instruction}\n\nТекст:\n\"\"\"\n{text_to_rewrite}\n\"\"\""
+    prompt = f'{mode_instruction}\n\nТекст:\n"""\n{text_to_rewrite}\n"""'
 
     # Изолированная сессия, чтобы не загрязнять основной контекст чата
     session_id = f"rewrite_{message.chat.id}"
@@ -8672,6 +8763,7 @@ async def handle_rewrite(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 # !report — структурированный отчёт
 # ---------------------------------------------------------------------------
+
 
 def _collect_daily_report_data() -> dict:
     """Собирает данные для дневного отчёта из доступных источников."""
@@ -8772,7 +8864,7 @@ async def handle_poll(bot: "KraabUserbot", message: Message) -> None:
     is_anonymous = False
     if raw.lower().startswith("anonymous "):
         is_anonymous = True
-        raw = raw[len("anonymous "):].strip()
+        raw = raw[len("anonymous ") :].strip()
 
     # Разбираем вопрос и варианты
     parts = [p.strip() for p in raw.split("|")]
@@ -8802,7 +8894,9 @@ async def handle_poll(bot: "KraabUserbot", message: Message) -> None:
         options=options,
         is_anonymous=is_anonymous,
     )
-    logger.info("handle_poll_sent", question=question, options_count=len(options), anonymous=is_anonymous)
+    logger.info(
+        "handle_poll_sent", question=question, options_count=len(options), anonymous=is_anonymous
+    )
 
 
 async def handle_quiz(bot: "KraabUserbot", message: Message) -> None:
@@ -9201,8 +9295,7 @@ async def handle_grep(bot: "KraabUserbot", message: Message) -> None:
 
     if not matches:
         await status_msg.edit(
-            f"🔍 Ничего не найдено для `{display_query}` "
-            f"в последних {scanned} сообщениях."
+            f"🔍 Ничего не найдено для `{display_query}` в последних {scanned} сообщениях."
         )
         return
 
@@ -9291,8 +9384,7 @@ async def handle_timer(bot: "KraabUserbot", message: Message) -> None:
     seconds = _parse_duration(parts[0])
     if seconds is None:
         await message.reply(
-            f"❌ Не могу распарсить время: `{parts[0]}`\n"
-            "Примеры: `5m`, `1h30m`, `90s`, `3600`"
+            f"❌ Не могу распарсить время: `{parts[0]}`\nПримеры: `5m`, `1h30m`, `90s`, `3600`"
         )
         return
 
@@ -9335,9 +9427,7 @@ async def handle_timer(bot: "KraabUserbot", message: Message) -> None:
     }
 
     label_part = f" — {label}" if label else ""
-    await message.reply(
-        f"⏱ Таймер `#{tid}` запущен на **{_fmt_duration(seconds)}**{label_part}."
-    )
+    await message.reply(f"⏱ Таймер `#{tid}` запущен на **{_fmt_duration(seconds)}**{label_part}.")
 
 
 # ---------------------------------------------------------------------------
@@ -9424,6 +9514,7 @@ async def handle_stopwatch(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 # QR-генерация
 # ---------------------------------------------------------------------------
+
 
 async def handle_qr(bot: "KraabUserbot", message: Message) -> None:
     """Генерирует QR-код из текста/URL и отправляет фото."""
@@ -9558,6 +9649,7 @@ async def handle_todo(bot: "KraabUserbot", message: Message) -> None:
 # !weather — погода через OpenClaw + web_search
 # ---------------------------------------------------------------------------
 
+
 async def handle_weather(bot: "KraabUserbot", message: Message) -> None:
     """
     Показывает текущую погоду для города через LLM + web_search.
@@ -9610,6 +9702,7 @@ async def handle_weather(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 # !hash — хэширование текста (MD5, SHA1, SHA256)
 # ---------------------------------------------------------------------------
+
 
 async def handle_hash(bot: "KraabUserbot", message: Message) -> None:
     """
@@ -9678,6 +9771,7 @@ async def handle_hash(bot: "KraabUserbot", message: Message) -> None:
         )
 
     await message.reply(result)
+
 
 # ---------------------------------------------------------------------------
 # !calc — безопасный калькулятор (compile + ограниченный namespace)
@@ -9864,18 +9958,22 @@ async def handle_b64(bot: "KraabUserbot", message: Message) -> None:
 
     # --- явный режим encode ---
     if args.lower().startswith("encode "):
-        payload = args[len("encode "):].strip()
+        payload = args[len("encode ") :].strip()
         if not payload:
-            raise UserInputError(user_message="❌ Укажи текст для кодирования: `!b64 encode <текст>`")
+            raise UserInputError(
+                user_message="❌ Укажи текст для кодирования: `!b64 encode <текст>`"
+            )
         result = _b64_encode(payload)
         await message.reply(f"🔐 **Base64 (encode):**\n`{result}`")
         return
 
     # --- явный режим decode ---
     if args.lower().startswith("decode "):
-        payload = args[len("decode "):].strip()
+        payload = args[len("decode ") :].strip()
         if not payload:
-            raise UserInputError(user_message="❌ Укажи Base64 для декодирования: `!b64 decode <base64>`")
+            raise UserInputError(
+                user_message="❌ Укажи Base64 для декодирования: `!b64 decode <base64>`"
+            )
         try:
             result = _b64_decode(payload)
         except Exception as exc:  # noqa: BLE001
@@ -10045,11 +10143,7 @@ async def handle_ip(bot: "KraabUserbot", message: Message) -> None:
 
     if args == "local":
         # Только локальный IP
-        text = (
-            "🌐 **IP Info**\n"
-            "─────\n"
-            f"Local: `{local_ip}`"
-        )
+        text = f"🌐 **IP Info**\n─────\nLocal: `{local_ip}`"
         await message.reply(text)
         return
 
@@ -10059,12 +10153,7 @@ async def handle_ip(bot: "KraabUserbot", message: Message) -> None:
     except Exception as exc:  # noqa: BLE001
         raise UserInputError(user_message=f"❌ Не удалось получить публичный IP: {exc}") from exc
 
-    text = (
-        "🌐 **IP Info**\n"
-        "─────\n"
-        f"Public: `{public_ip}`\n"
-        f"Local: `{local_ip}`"
-    )
+    text = f"🌐 **IP Info**\n─────\nPublic: `{public_ip}`\nLocal: `{local_ip}`"
     await message.reply(text)
 
 
@@ -10110,7 +10199,10 @@ async def handle_dns(bot: "KraabUserbot", message: Message) -> None:
     # MX записи через host (доступна на macOS/Linux)
     try:
         proc = await asyncio.create_subprocess_exec(
-            "host", "-t", "MX", domain,
+            "host",
+            "-t",
+            "MX",
+            domain,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -10145,7 +10237,12 @@ async def handle_ping(bot: "KraabUserbot", message: Message) -> None:
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            "ping", "-c", "1", "-W", "3", host,
+            "ping",
+            "-c",
+            "1",
+            "-W",
+            "3",
+            host,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=os.environ.copy(),
@@ -10163,30 +10260,17 @@ async def handle_ping(bot: "KraabUserbot", message: Message) -> None:
         if "time=" in line:
             for part in line.split():
                 if part.startswith("time="):
-                    latency = part[len("time="):]
+                    latency = part[len("time=") :]
                     break
             if latency:
                 break
 
     if proc.returncode == 0 and latency:
-        text = (
-            f"🏓 **Ping: {host}**\n"
-            "─────\n"
-            f"Latency: `{latency} ms`\n"
-            "Status: ✅ доступен"
-        )
+        text = f"🏓 **Ping: {host}**\n─────\nLatency: `{latency} ms`\nStatus: ✅ доступен"
     elif proc.returncode == 0:
-        text = (
-            f"🏓 **Ping: {host}**\n"
-            "─────\n"
-            "Status: ✅ доступен"
-        )
+        text = f"🏓 **Ping: {host}**\n─────\nStatus: ✅ доступен"
     else:
-        text = (
-            f"🏓 **Ping: {host}**\n"
-            "─────\n"
-            "Status: ❌ недоступен"
-        )
+        text = f"🏓 **Ping: {host}**\n─────\nStatus: ❌ недоступен"
 
     await message.reply(text)
 
@@ -10194,6 +10278,7 @@ async def handle_ping(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 # !rand — генератор случайных значений
 # ---------------------------------------------------------------------------
+
 
 async def handle_rand(bot: "KraabUserbot", message: Message) -> None:
     """
@@ -10301,7 +10386,9 @@ async def handle_rand(bot: "KraabUserbot", message: Message) -> None:
     try:
         second = int(rest.split()[0])
     except ValueError:
-        raise UserInputError(user_message="🎲 Формат: `!rand N M` — оба аргумента должны быть целыми числами.")
+        raise UserInputError(
+            user_message="🎲 Формат: `!rand N M` — оба аргумента должны быть целыми числами."
+        )
     lo, hi = min(first, second), max(first, second)
     n = random.randint(lo, hi)
     await message.reply(f"🎲 {n}")
@@ -10343,32 +10430,30 @@ _BUILTIN_QUOTES: list[str] = [
     "In the middle of difficulty lies opportunity. — Albert Einstein",
     "The only way to do great work is to love what you do. — Steve Jobs",
     "Success is not final, failure is not fatal: It is the courage to continue that counts. — Winston Churchill",
-    "Believe you can and you\'re halfway there. — Theodore Roosevelt",
+    "Believe you can and you're halfway there. — Theodore Roosevelt",
     "The future belongs to those who believe in the beauty of their dreams. — Eleanor Roosevelt",
-    "It always seems impossible until it\'s done. — Nelson Mandela",
+    "It always seems impossible until it's done. — Nelson Mandela",
     "You are never too old to set another goal or to dream a new dream. — C.S. Lewis",
     "The only limit to our realization of tomorrow will be our doubts of today. — Franklin D. Roosevelt",
     "Act as if what you do makes a difference. It does. — William James",
     "Hardships often prepare ordinary people for an extraordinary destiny. — C.S. Lewis",
     "Keep your eyes on the stars and your feet on the ground. — Theodore Roosevelt",
-    "Life is what happens when you\'re busy making other plans. — John Lennon",
+    "Life is what happens when you're busy making other plans. — John Lennon",
     "Happiness is when what you think, what you say, and what you do are in harmony. — Mahatma Gandhi",
     "Be the change you wish to see in the world. — Mahatma Gandhi",
     "The best time to plant a tree was 20 years ago. The second best time is now. — Chinese Proverb",
-    "Dream as if you\'ll live forever. Live as if you\'ll die today. — James Dean",
-    "Don\'t watch the clock; do what it does. Keep going. — Sam Levenson",
-    "You miss 100% of the shots you don\'t take. — Wayne Gretzky",
+    "Dream as if you'll live forever. Live as if you'll die today. — James Dean",
+    "Don't watch the clock; do what it does. Keep going. — Sam Levenson",
+    "You miss 100% of the shots you don't take. — Wayne Gretzky",
     "The secret of getting ahead is getting started. — Mark Twain",
-    "Whether you think you can or you think you can\'t, you\'re right. — Henry Ford",
-    "Twenty years from now you will be more disappointed by the things you didn\'t do. — Mark Twain",
+    "Whether you think you can or you think you can't, you're right. — Henry Ford",
+    "Twenty years from now you will be more disappointed by the things you didn't do. — Mark Twain",
     "The way to get started is to quit talking and begin doing. — Walt Disney",
     "Innovation distinguishes between a leader and a follower. — Steve Jobs",
 ]
 
 # Путь к файлу с пользовательскими цитатами
-_SAVED_QUOTES_PATH = (
-    pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "saved_quotes.json"
-)
+_SAVED_QUOTES_PATH = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "saved_quotes.json"
 
 
 def _load_saved_quotes() -> list[dict]:
@@ -10878,8 +10963,7 @@ def _save_welcome_config(data: dict) -> None:
 def _render_welcome_text(template: str, *, name: str, username: str, chat: str, count: int) -> str:
     """Подставляет переменные в шаблон приветствия."""
     return (
-        template
-        .replace("{name}", name)
+        template.replace("{name}", name)
         .replace("{username}", username)
         .replace("{chat}", chat)
         .replace("{count}", str(count))
@@ -11195,8 +11279,7 @@ async def handle_diff(bot: "KraabUserbot", message: Message) -> None:
     if not args:
         raise UserInputError(
             user_message=(
-                "❌ Укажи новый текст: `!diff <текст>`\n"
-                "_Старый текст берётся из reply-сообщения._"
+                "❌ Укажи новый текст: `!diff <текст>`\n_Старый текст берётся из reply-сообщения._"
             )
         )
 
@@ -11258,7 +11341,9 @@ async def handle_sticker(bot: "KraabUserbot", message: Message) -> None:
     if not parts or parts[0].lower() == "list":
         stickers = _load_stickers()
         if not stickers:
-            await message.reply("📭 Нет сохранённых стикеров. Используй `!sticker save <name>` в ответ на стикер.")
+            await message.reply(
+                "📭 Нет сохранённых стикеров. Используй `!sticker save <name>` в ответ на стикер."
+            )
             return
         lines = [f"• `{name}`" for name in sorted(stickers)]
         await message.reply("🗂 **Сохранённые стикеры:**\n" + "\n".join(lines))
@@ -11301,9 +11386,7 @@ async def handle_sticker(bot: "KraabUserbot", message: Message) -> None:
     name = parts[0].lower()
     stickers = _load_stickers()
     if name not in stickers:
-        raise UserInputError(
-            user_message=f"❌ Стикер `{name}` не найден. Список: `!sticker list`"
-        )
+        raise UserInputError(user_message=f"❌ Стикер `{name}` не найден. Список: `!sticker list`")
     file_id = stickers[name]
     await bot.client.send_sticker(message.chat.id, file_id)
     # Удаляем исходную команду, чтобы не засорять чат
@@ -11368,9 +11451,7 @@ async def handle_tts(bot: "KraabUserbot", message: Message) -> None:
     if not text:
         replied = getattr(message, "reply_to_message", None)
         if replied is not None:
-            replied_text = (
-                getattr(replied, "text", None) or getattr(replied, "caption", None) or ""
-            )
+            replied_text = getattr(replied, "text", None) or getattr(replied, "caption", None) or ""
             text = replied_text.strip()
 
     if not text:
@@ -11397,8 +11478,10 @@ async def handle_tts(bot: "KraabUserbot", message: Message) -> None:
             # Шаг 1: macOS say → AIFF
             say_proc = await asyncio.create_subprocess_exec(
                 "/usr/bin/say",
-                "-v", voice_name,
-                "-o", aiff_path,
+                "-v",
+                voice_name,
+                "-o",
+                aiff_path,
                 text,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
@@ -11415,11 +11498,16 @@ async def handle_tts(bot: "KraabUserbot", message: Message) -> None:
             ffmpeg_proc = await asyncio.create_subprocess_exec(
                 "ffmpeg",
                 "-y",
-                "-i", aiff_path,
-                "-c:a", "libopus",
-                "-b:a", "32k",
-                "-vbr", "on",
-                "-compression_level", "10",
+                "-i",
+                aiff_path,
+                "-c:a",
+                "libopus",
+                "-b:a",
+                "32k",
+                "-vbr",
+                "on",
+                "-compression_level",
+                "10",
                 ogg_path,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
@@ -11445,9 +11533,7 @@ async def handle_tts(bot: "KraabUserbot", message: Message) -> None:
             raise
         except Exception as exc:  # noqa: BLE001
             logger.error("tts_error", error=str(exc), error_type=type(exc).__name__)
-            raise UserInputError(
-                user_message=f"❌ TTS ошибка: {str(exc)[:200]}"
-            ) from exc
+            raise UserInputError(user_message=f"❌ TTS ошибка: {str(exc)[:200]}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -11587,8 +11673,7 @@ async def handle_img(bot: "KraabUserbot", message: Message) -> None:
     if not has_photo and not has_doc_image:
         raise UserInputError(
             user_message=(
-                "🖼 Это сообщение не содержит фото. "
-                "Ответь командой на сообщение с фотографией."
+                "🖼 Это сообщение не содержит фото. Ответь командой на сообщение с фотографией."
             )
         )
 
@@ -11695,8 +11780,7 @@ async def handle_ocr(bot: "KraabUserbot", message: Message) -> None:
     if not has_photo and not has_doc_image:
         raise UserInputError(
             user_message=(
-                "📄 Это сообщение не содержит фото. "
-                "Ответь командой на сообщение с изображением."
+                "📄 Это сообщение не содержит фото. Ответь командой на сообщение с изображением."
             )
         )
 
@@ -11938,6 +12022,7 @@ async def handle_media(bot: "KraabUserbot", message: Message) -> None:
 # Антиспам фильтр для групп (!spam)
 # ---------------------------------------------------------------------------
 
+
 async def handle_spam(bot: "KraabUserbot", message: Message) -> None:
     """
     Управление антиспам фильтром в группе.
@@ -12004,8 +12089,7 @@ async def handle_spam(bot: "KraabUserbot", message: Message) -> None:
         if action not in VALID_ACTIONS:
             raise UserInputError(
                 user_message=(
-                    f"❌ Неизвестное действие: `{action}`.\n"
-                    f"Доступны: `ban`, `mute`, `delete`"
+                    f"❌ Неизвестное действие: `{action}`.\nДоступны: `ban`, `mute`, `delete`"
                 )
             )
         set_action(chat_id, action)
@@ -12084,28 +12168,30 @@ _EVAL_ALLOWED_NODES = (
 )
 
 # Запрещённые имена в !eval
-_EVAL_FORBIDDEN_NAMES = frozenset({
-    "import",
-    "exec",
-    "eval",
-    "open",
-    "__builtins__",
-    "__import__",
-    "__loader__",
-    "__spec__",
-    "__build_class__",
-    "compile",
-    "globals",
-    "locals",
-    "vars",
-    "dir",
-    "delattr",
-    "setattr",
-    "getattr",
-    "breakpoint",
-    "input",
-    "print",
-})
+_EVAL_FORBIDDEN_NAMES = frozenset(
+    {
+        "import",
+        "exec",
+        "eval",
+        "open",
+        "__builtins__",
+        "__import__",
+        "__loader__",
+        "__spec__",
+        "__build_class__",
+        "compile",
+        "globals",
+        "locals",
+        "vars",
+        "dir",
+        "delattr",
+        "setattr",
+        "getattr",
+        "breakpoint",
+        "input",
+        "print",
+    }
+)
 
 # Безопасное пространство имён для !eval
 _EVAL_NAMESPACE: dict[str, object] = {
@@ -12469,10 +12555,10 @@ async def handle_json(bot: "KraabUserbot", message: Message) -> None:
     lower = raw_args.lower()
     if lower.startswith("validate ") or lower == "validate":
         sub = "validate"
-        payload = raw_args[len("validate"):].strip()
+        payload = raw_args[len("validate") :].strip()
     elif lower.startswith("minify ") or lower == "minify":
         sub = "minify"
-        payload = raw_args[len("minify"):].strip()
+        payload = raw_args[len("minify") :].strip()
 
     # Если payload пуст — пробуем взять из reply
     if not payload:
@@ -12647,9 +12733,7 @@ async def handle_snippet(bot: "KraabUserbot", message: Message) -> None:
     name = parts[0].lower()
     snippets = _load_snippets()
     if name not in snippets:
-        raise UserInputError(
-            user_message=f"❌ Сниппет `{name}` не найден. Список: `!snippet list`"
-        )
+        raise UserInputError(user_message=f"❌ Сниппет `{name}` не найден. Список: `!snippet list`")
     code = snippets[name].get("code", "")
     created = snippets[name].get("created_at", "")
     header = f"📄 **{name}**" + (f" _(сохранён {created[:10]})_" if created else "")
@@ -12789,6 +12873,7 @@ async def handle_tag(bot: "KraabUserbot", message: Message) -> None:
 # handle_top — лидерборд активности чата
 # ---------------------------------------------------------------------------
 
+
 def _plural_messages(n: int) -> str:
     """Возвращает правильную форму слова 'сообщение' для числа n."""
     if 11 <= n % 100 <= 19:
@@ -12814,7 +12899,7 @@ async def handle_top(bot: "KraabUserbot", message: Message) -> None:
 
     # Парсим аргументы
     limit = 1000  # сколько сообщений из истории тянуть
-    top_n = 10    # сколько участников показать
+    top_n = 10  # сколько участников показать
     period_label = "24ч"
 
     # Временные рамки фильтрации
@@ -12915,9 +13000,21 @@ _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 # Набор коротких доменов (для _is_short_url)
 _SHORT_DOMAINS = frozenset(
     [
-        "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "buff.ly",
-        "short.link", "rb.gy", "cutt.ly", "is.gd", "v.gd", "tiny.cc",
-        "shorturl.at", "clck.ru", "vk.cc",
+        "bit.ly",
+        "tinyurl.com",
+        "t.co",
+        "goo.gl",
+        "ow.ly",
+        "buff.ly",
+        "short.link",
+        "rb.gy",
+        "cutt.ly",
+        "is.gd",
+        "v.gd",
+        "tiny.cc",
+        "shorturl.at",
+        "clck.ru",
+        "vk.cc",
     ]
 )
 
@@ -12926,6 +13023,7 @@ def _is_short_url(url: str) -> bool:
     """Проверяет, является ли URL коротким (шорт-линк)."""
     try:
         from urllib.parse import urlparse  # noqa: PLC0415
+
         host = urlparse(url).netloc.lower().lstrip("www.")
         return host in _SHORT_DOMAINS
     except Exception:  # noqa: BLE001
@@ -12962,16 +13060,15 @@ async def _fetch_link_meta(url: str, *, timeout: float = 10.0) -> dict:
         html = resp.text
 
     # Парсим <title>
-    title_match = re.search(
-        r"<title[^>]*>([^<]{1,300})</title>", html, re.IGNORECASE | re.DOTALL
-    )
+    title_match = re.search(r"<title[^>]*>([^<]{1,300})</title>", html, re.IGNORECASE | re.DOTALL)
     if title_match:
         result["title"] = re.sub(r"\s+", " ", title_match.group(1)).strip()
 
     # og:title перекрывает <title>
     og_title = re.search(
         r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']{1,300})["\']',
-        html, re.IGNORECASE,
+        html,
+        re.IGNORECASE,
     )
     if og_title:
         result["title"] = og_title.group(1).strip()
@@ -12979,12 +13076,14 @@ async def _fetch_link_meta(url: str, *, timeout: float = 10.0) -> dict:
     # og:description или meta description
     og_desc = re.search(
         r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']{1,500})["\']',
-        html, re.IGNORECASE,
+        html,
+        re.IGNORECASE,
     )
     if not og_desc:
         og_desc = re.search(
             r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']{1,500})["\']',
-            html, re.IGNORECASE,
+            html,
+            re.IGNORECASE,
         )
     if og_desc:
         result["description"] = og_desc.group(1).strip()
@@ -12992,7 +13091,8 @@ async def _fetch_link_meta(url: str, *, timeout: float = 10.0) -> dict:
     # og:image
     og_img = re.search(
         r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']{1,500})["\']',
-        html, re.IGNORECASE,
+        html,
+        re.IGNORECASE,
     )
     if og_img:
         result["image"] = og_img.group(1).strip()
@@ -13241,9 +13341,7 @@ async def handle_regex(bot: "KraabUserbot", message: Message) -> None:
     try:
         re.compile(pattern_src)
     except re.error as exc:
-        raise UserInputError(
-            user_message=f"❌ Невалидный regex: `{exc}`"
-        ) from exc
+        raise UserInputError(user_message=f"❌ Невалидный regex: `{exc}`") from exc
 
     # Формируем и отправляем результат
     result = _format_regex_result(pattern_src, text)
@@ -13283,11 +13381,7 @@ async def handle_yt(bot: "KraabUserbot", message: Message) -> None:
     # Пытаемся найти URL: сначала в аргументах, затем в reply
     url: str | None = _extract_yt_url(args)
     if url is None and message.reply_to_message is not None:
-        replied_text = (
-            message.reply_to_message.text
-            or message.reply_to_message.caption
-            or ""
-        )
+        replied_text = message.reply_to_message.text or message.reply_to_message.caption or ""
         url = _extract_yt_url(replied_text)
 
     if url is None:
@@ -13332,7 +13426,9 @@ async def handle_yt(bot: "KraabUserbot", message: Message) -> None:
 # !template — шаблоны сообщений с подстановкой переменных
 # ---------------------------------------------------------------------------
 
-_TEMPLATES_FILE = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "message_templates.json"
+_TEMPLATES_FILE = (
+    pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "message_templates.json"
+)
 
 
 def _load_templates() -> dict[str, str]:
@@ -13423,9 +13519,7 @@ async def handle_template(bot: "KraabUserbot", message: Message) -> None:
         # Показываем найденные переменные в подсказке
         vars_found = list(dict.fromkeys(re.findall(r"\{(\w+)\}", text)))
         var_hint = (
-            f" Переменные: {', '.join(f'`{{{v}}}`' for v in vars_found)}"
-            if vars_found
-            else ""
+            f" Переменные: {', '.join(f'`{{{v}}}`' for v in vars_found)}" if vars_found else ""
         )
         await message.reply(f"✅ Шаблон `{name}` сохранён.{var_hint}")
         return
@@ -13447,9 +13541,7 @@ async def handle_template(bot: "KraabUserbot", message: Message) -> None:
     name = subcommand  # уже lower()
     templates = _load_templates()
     if name not in templates:
-        raise UserInputError(
-            user_message=f"❌ Шаблон `{name}` не найден. Список: `!template list`"
-        )
+        raise UserInputError(user_message=f"❌ Шаблон `{name}` не найден. Список: `!template list`")
     template_text = templates[name]
     # Позиционные аргументы: всё что после имени шаблона, разбитое по пробелам
     positional_args: list[str] = parts[1].split() if len(parts) > 1 else []
@@ -13566,7 +13658,7 @@ async def handle_time(bot: "KraabUserbot", message: Message) -> None:
 
     # --- !time convert HH:MM <из> <в> ---
     if args.lower().startswith("convert "):
-        rest = args[len("convert "):].strip()
+        rest = args[len("convert ") :].strip()
         # Первый токен — время, далее два города
         time_match = re.match(r"^(\d{1,2}:\d{2})\s+(.+)$", rest)
         if not time_match:
@@ -13661,8 +13753,7 @@ async def handle_time(bot: "KraabUserbot", message: Message) -> None:
         offset_fmt = f"UTC{offset[:3]}:{offset[3:]}" if offset else ""
 
         await message.reply(
-            f"🕐 **{display_name}** ({tz_name})\n"
-            f"`{_time_format_dt(dt)}` {offset_fmt}"
+            f"🕐 **{display_name}** ({tz_name})\n`{_time_format_dt(dt)}` {offset_fmt}"
         )
         return
 
@@ -13681,6 +13772,7 @@ async def handle_time(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 # !mark — пометка чатов как прочитанных/непрочитанных
 # ---------------------------------------------------------------------------
+
 
 async def handle_mark(bot: "KraabUserbot", message: Message) -> None:
     """
@@ -13750,6 +13842,7 @@ async def handle_mark(bot: "KraabUserbot", message: Message) -> None:
                 "`!mark readall` — пометить ВСЕ чаты как прочитанные"
             )
         )
+
 
 # ---------------------------------------------------------------------------
 # !typing — симуляция набора текста / записи голосового / загрузки файла
@@ -13935,17 +14028,13 @@ async def handle_slowmode(bot: "KraabUserbot", message: Message) -> None:
             raise UserInputError(
                 user_message="❌ Нет прав администратора для управления slowmode."
             ) from exc
-        raise UserInputError(
-            user_message=f"❌ Ошибка установки slowmode: {exc}"
-        ) from exc
+        raise UserInputError(user_message=f"❌ Ошибка установки slowmode: {exc}") from exc
 
     label = _SLOWMODE_LABELS.get(seconds, f"{seconds} сек")
     if seconds == 0:
         await message.reply(f"✅ Slowmode **выключен** в `{chat.title or chat.id}`.")
     else:
-        await message.reply(
-            f"🐢 Slowmode установлен: **{label}** в `{chat.title or chat.id}`."
-        )
+        await message.reply(f"🐢 Slowmode установлен: **{label}** в `{chat.title or chat.id}`.")
 
 
 # ---------------------------------------------------------------------------
@@ -13994,13 +14083,10 @@ async def handle_chatmute(bot: "KraabUserbot", message: Message) -> None:
                 silent=True,
             )
             await bot.client.invoke(
-                _raw.functions.account.UpdateNotifySettings(
-                    peer=notify_peer, settings=settings
-                )
+                _raw.functions.account.UpdateNotifySettings(peer=notify_peer, settings=settings)
             )
             await message.reply(
-                "🔕 Уведомления в этом чате **отключены**.\n"
-                "`!chatmute on` — включить обратно."
+                "🔕 Уведомления в этом чате **отключены**.\n`!chatmute on` — включить обратно."
             )
         except Exception as exc:
             raise UserInputError(
@@ -14017,15 +14103,11 @@ async def handle_chatmute(bot: "KraabUserbot", message: Message) -> None:
                 silent=False,
             )
             await bot.client.invoke(
-                _raw.functions.account.UpdateNotifySettings(
-                    peer=notify_peer, settings=settings
-                )
+                _raw.functions.account.UpdateNotifySettings(peer=notify_peer, settings=settings)
             )
             await message.reply("🔔 Уведомления в этом чате **включены**.")
         except Exception as exc:
-            raise UserInputError(
-                user_message=f"❌ Не удалось включить уведомления: {exc}"
-            ) from exc
+            raise UserInputError(user_message=f"❌ Не удалось включить уведомления: {exc}") from exc
 
     elif args in {"status", "статус"}:
         import time as _time_mod
@@ -14170,9 +14252,7 @@ async def handle_contacts(bot: "KraabUserbot", message: Message) -> None:
     # ── search ───────────────────────────────────────────────────────────────
     if subcmd == "search":
         if not rest:
-            raise UserInputError(
-                user_message="🔍 Укажи запрос: `!contacts search <имя или номер>`"
-            )
+            raise UserInputError(user_message="🔍 Укажи запрос: `!contacts search <имя или номер>`")
         try:
             results = await bot.client.search_contacts(rest)
         except Exception as exc:
@@ -14285,9 +14365,7 @@ async def handle_invite(bot: "KraabUserbot", message: Message) -> None:
         if len(args_raw) >= 2 and args_raw[1].lower() == "revoke":
             # Отозвать invite link
             if len(args_raw) < 3:
-                raise UserInputError(
-                    user_message="❌ Укажи ссылку: `!invite link revoke <url>`"
-                )
+                raise UserInputError(user_message="❌ Укажи ссылку: `!invite link revoke <url>`")
             link_url = args_raw[2]
             try:
                 revoked = await bot.client.revoke_chat_invite_link(chat_id, link_url)
@@ -14303,9 +14381,7 @@ async def handle_invite(bot: "KraabUserbot", message: Message) -> None:
             link = await bot.client.create_chat_invite_link(chat_id)
             await message.reply(f"🔗 **Пригласительная ссылка:**\n`{link.invite_link}`")
         except Exception as exc:
-            raise UserInputError(
-                user_message=f"❌ Не удалось создать ссылку: `{exc}`"
-            ) from exc
+            raise UserInputError(user_message=f"❌ Не удалось создать ссылку: `{exc}`") from exc
         return
 
     # ── add user ───────────────────────────────────────────────
@@ -14315,9 +14391,7 @@ async def handle_invite(bot: "KraabUserbot", message: Message) -> None:
         await bot.client.add_chat_members(chat_id, target)
         await message.reply(f"✅ Пользователь `{target}` добавлен в чат.")
     except Exception as exc:
-        raise UserInputError(
-            user_message=f"❌ Не удалось добавить `{target}`: `{exc}`"
-        ) from exc
+        raise UserInputError(user_message=f"❌ Не удалось добавить `{target}`: `{exc}`") from exc
 
 
 async def handle_blocked(bot: "KraabUserbot", message: Message) -> None:
@@ -14487,9 +14561,7 @@ async def handle_profile(bot: "KraabUserbot", message: Message) -> None:
     if sub == "bio":
         bio_text = parts[2].strip() if len(parts) > 2 else ""
         if not bio_text:
-            raise UserInputError(
-                user_message="❌ Укажи текст bio: `!profile bio <текст>`"
-            )
+            raise UserInputError(user_message="❌ Укажи текст bio: `!profile bio <текст>`")
         try:
             await bot.client.update_profile(bio=bio_text)
         except Exception as exc:  # noqa: BLE001
@@ -14502,9 +14574,7 @@ async def handle_profile(bot: "KraabUserbot", message: Message) -> None:
     if sub == "name":
         name_args = parts[2].strip() if len(parts) > 2 else ""
         if not name_args:
-            raise UserInputError(
-                user_message="❌ Укажи имя: `!profile name <first> [last]`"
-            )
+            raise UserInputError(user_message="❌ Укажи имя: `!profile name <first> [last]`")
         name_parts = name_args.split(maxsplit=1)
         first_name = name_parts[0]
         last_name = name_parts[1] if len(name_parts) > 1 else ""
@@ -14524,9 +14594,7 @@ async def handle_profile(bot: "KraabUserbot", message: Message) -> None:
     if sub == "username":
         uname = parts[2].strip().lstrip("@") if len(parts) > 2 else ""
         if not uname:
-            raise UserInputError(
-                user_message="❌ Укажи username: `!profile username <username>`"
-            )
+            raise UserInputError(user_message="❌ Укажи username: `!profile username <username>`")
         try:
             await bot.client.update_username(uname)
         except Exception as exc:  # noqa: BLE001
@@ -14551,6 +14619,7 @@ async def handle_profile(bot: "KraabUserbot", message: Message) -> None:
 # !members — управление участниками группы (userbot-admin only)
 # ---------------------------------------------------------------------------
 
+
 async def handle_members(bot: "KraabUserbot", message: Message) -> None:
     """Управление участниками группы.
 
@@ -14564,9 +14633,7 @@ async def handle_members(bot: "KraabUserbot", message: Message) -> None:
     chat = message.chat
     # Только группы поддерживают управление участниками
     if chat.type.name not in ("GROUP", "SUPERGROUP"):
-        raise UserInputError(
-            user_message="❌ Команда `!members` работает только в группах."
-        )
+        raise UserInputError(user_message="❌ Команда `!members` работает только в группах.")
 
     raw_text = (message.text or "").strip()
     parts = raw_text.split(maxsplit=2)
@@ -14581,9 +14648,7 @@ async def handle_members(bot: "KraabUserbot", message: Message) -> None:
             raise UserInputError(
                 user_message=f"❌ Не удалось получить количество участников: {exc}"
             ) from exc
-        await message.reply(
-            f"👥 Участников в `{chat.title or chat.id}`: **{count}**"
-        )
+        await message.reply(f"👥 Участников в `{chat.title or chat.id}`: **{count}**")
         return
 
     # ── !members list [N] — список участников ───────────────────────────────
@@ -14597,9 +14662,7 @@ async def handle_members(bot: "KraabUserbot", message: Message) -> None:
                     raise ValueError
                 limit = min(limit, 200)  # Защита от слишком большого запроса
             except ValueError:
-                raise UserInputError(
-                    user_message="❌ Укажи число участников: `!members list 20`"
-                )
+                raise UserInputError(user_message="❌ Укажи число участников: `!members list 20`")
 
         try:
             members_list = []
@@ -14651,9 +14714,7 @@ async def handle_members(bot: "KraabUserbot", message: Message) -> None:
                 raise UserInputError(
                     user_message="❌ Нет прав администратора для кика участников."
                 ) from exc
-            raise UserInputError(
-                user_message=f"❌ Не удалось кикнуть участника: {exc}"
-            ) from exc
+            raise UserInputError(user_message=f"❌ Не удалось кикнуть участника: {exc}") from exc
         name = target.first_name or str(target.id)
         await message.reply(f"👟 **{name}** кикнут из `{chat.title or chat.id}`.")
         return
@@ -14676,9 +14737,7 @@ async def handle_members(bot: "KraabUserbot", message: Message) -> None:
                 raise UserInputError(
                     user_message="❌ Нет прав администратора для бана участников."
                 ) from exc
-            raise UserInputError(
-                user_message=f"❌ Не удалось забанить участника: {exc}"
-            ) from exc
+            raise UserInputError(user_message=f"❌ Не удалось забанить участника: {exc}") from exc
         name = target.first_name or str(target.id)
         await message.reply(f"🔨 **{name}** забанен в `{chat.title or chat.id}`.")
         return
@@ -14711,9 +14770,7 @@ async def handle_members(bot: "KraabUserbot", message: Message) -> None:
             raise UserInputError(
                 user_message=f"❌ Не удалось разбанить пользователя: {exc}"
             ) from exc
-        await message.reply(
-            f"✅ Пользователь `{target_str}` разбанен в `{chat.title or chat.id}`."
-        )
+        await message.reply(f"✅ Пользователь `{target_str}` разбанен в `{chat.title or chat.id}`.")
         return
 
     # ── Неизвестная подкоманда → справка ─────────────────────────────────────
@@ -14792,8 +14849,7 @@ async def handle_log(bot: "KraabUserbot", message: Message) -> None:
     # Лог-файл должен существовать
     if not log_path.exists():
         await _send_log_text(
-            f"📋 Лог-файл не найден: `{log_path}`\n"
-            "Убедись, что Краб запущен и лог активен."
+            f"📋 Лог-файл не найден: `{log_path}`\nУбедись, что Краб запущен и лог активен."
         )
         return
 
@@ -14810,9 +14866,7 @@ async def handle_log(bot: "KraabUserbot", message: Message) -> None:
             mode = "search"
             query = args[7:].strip()
             if not query:
-                raise UserInputError(
-                    user_message="🔍 Укажи запрос: `!log search <текст>`"
-                )
+                raise UserInputError(user_message="🔍 Укажи запрос: `!log search <текст>`")
         else:
             # Пробуем распарсить как число
             try:
@@ -14842,10 +14896,7 @@ async def handle_log(bot: "KraabUserbot", message: Message) -> None:
     # --- Фильтрация ---
     if mode == "errors":
         _error_keywords = {"error", "critical", "warning"}
-        result_lines = [
-            ln for ln in lines
-            if any(kw in ln.lower() for kw in _error_keywords)
-        ]
+        result_lines = [ln for ln in lines if any(kw in ln.lower() for kw in _error_keywords)]
         header = "⚠️ **Ошибки в логах Краба**"
         if not result_lines:
             await _send_log_text("✅ Ошибок в логах нет.")
@@ -14897,6 +14948,7 @@ def _read_log_tail_subprocess(log_path: pathlib.Path, n: int) -> list[str]:
     """Читает последние N строк большого лог-файла через subprocess tail."""
     try:
         from .core.subprocess_env import clean_subprocess_env  # type: ignore[import]
+
         env = clean_subprocess_env()
     except (ImportError, Exception):
         env = None
@@ -14922,23 +14974,32 @@ def _read_log_tail_subprocess(log_path: pathlib.Path, n: int) -> list[str]:
 # Поля, которые извлекаем из whois-вывода: (ключ_результата, [варианты_regex])
 _WHOIS_FIELD_PATTERNS: list[tuple[str, list[str]]] = [
     ("registrar", [r"Registrar:\s*(.+)", r"registrar:\s*(.+)"]),
-    ("created", [
-        r"Creation Date:\s*(.+)",
-        r"Created Date:\s*(.+)",
-        r"created:\s*(.+)",
-        r"Domain Registration Date:\s*(.+)",
-    ]),
-    ("expires", [
-        r"Registry Expiry Date:\s*(.+)",
-        r"Expir(?:y|ation) Date:\s*(.+)",
-        r"expires:\s*(.+)",
-        r"paid-till:\s*(.+)",
-    ]),
-    ("nameservers", [
-        r"Name Server:\s*(.+)",
-        r"nserver:\s*(.+)",
-        r"Nameservers:\s*(.+)",
-    ]),
+    (
+        "created",
+        [
+            r"Creation Date:\s*(.+)",
+            r"Created Date:\s*(.+)",
+            r"created:\s*(.+)",
+            r"Domain Registration Date:\s*(.+)",
+        ],
+    ),
+    (
+        "expires",
+        [
+            r"Registry Expiry Date:\s*(.+)",
+            r"Expir(?:y|ation) Date:\s*(.+)",
+            r"expires:\s*(.+)",
+            r"paid-till:\s*(.+)",
+        ],
+    ),
+    (
+        "nameservers",
+        [
+            r"Name Server:\s*(.+)",
+            r"nserver:\s*(.+)",
+            r"Nameservers:\s*(.+)",
+        ],
+    ),
 ]
 
 
@@ -15078,57 +15139,85 @@ async def handle_whois(bot: "KraabUserbot", message: Message) -> None:
 # Формат: "единица" → (множитель_к_базе, "базовая_группа")
 _CONVERT_UNITS: dict[str, tuple[float, str]] = {
     # Длина → метры
-    "km":  (1000.0,   "m"),
-    "m":   (1.0,      "m"),
-    "cm":  (0.01,     "m"),
-    "mm":  (0.001,    "m"),
-    "mi":  (1609.344, "m"),
-    "ft":  (0.3048,   "m"),
-    "in":  (0.0254,   "m"),
-    "yd":  (0.9144,   "m"),
+    "km": (1000.0, "m"),
+    "m": (1.0, "m"),
+    "cm": (0.01, "m"),
+    "mm": (0.001, "m"),
+    "mi": (1609.344, "m"),
+    "ft": (0.3048, "m"),
+    "in": (0.0254, "m"),
+    "yd": (0.9144, "m"),
     # Масса → килограммы
-    "kg":  (1.0,      "kg"),
-    "g":   (0.001,    "kg"),
-    "lb":  (0.453592, "kg"),
-    "oz":  (0.028350, "kg"),
+    "kg": (1.0, "kg"),
+    "g": (0.001, "kg"),
+    "lb": (0.453592, "kg"),
+    "oz": (0.028350, "kg"),
     # Объём → литры
-    "l":   (1.0,      "l"),
-    "ml":  (0.001,    "l"),
-    "gal": (3.78541,  "l"),
-    "pt":  (0.473176, "l"),
+    "l": (1.0, "l"),
+    "ml": (0.001, "l"),
+    "gal": (3.78541, "l"),
+    "pt": (0.473176, "l"),
     # Скорость — база м/с (для согласованности)
-    "kmh": (1.0 / 3.6,     "speed"),
-    "mph": (0.44704,        "speed"),
-    "ms":  (1.0,            "speed"),
-    "kn":  (0.514444,       "speed"),
+    "kmh": (1.0 / 3.6, "speed"),
+    "mph": (0.44704, "speed"),
+    "ms": (1.0, "speed"),
+    "kn": (0.514444, "speed"),
 }
 
 # Алиасы: разные варианты написания → канонический ключ
 _CONVERT_ALIASES: dict[str, str] = {
-    "kilometer": "km", "kilometers": "km", "kilometre": "km", "kilometres": "km",
-    "meter": "m", "meters": "m", "metre": "m", "metres": "m",
-    "centimeter": "cm", "centimeters": "cm",
-    "millimeter": "mm", "millimeters": "mm",
-    "mile": "mi", "miles": "mi",
-    "foot": "ft", "feet": "ft",
-    "inch": "in", "inches": "in",
-    "yard": "yd", "yards": "yd",
-    "kilogram": "kg", "kilograms": "kg",
-    "gram": "g", "grams": "g",
-    "pound": "lb", "pounds": "lb", "lbs": "lb",
-    "ounce": "oz", "ounces": "oz",
-    "liter": "l", "liters": "l", "litre": "l", "litres": "l",
-    "milliliter": "ml", "milliliters": "ml",
-    "gallon": "gal", "gallons": "gal",
-    "pint": "pt", "pints": "pt",
+    "kilometer": "km",
+    "kilometers": "km",
+    "kilometre": "km",
+    "kilometres": "km",
+    "meter": "m",
+    "meters": "m",
+    "metre": "m",
+    "metres": "m",
+    "centimeter": "cm",
+    "centimeters": "cm",
+    "millimeter": "mm",
+    "millimeters": "mm",
+    "mile": "mi",
+    "miles": "mi",
+    "foot": "ft",
+    "feet": "ft",
+    "inch": "in",
+    "inches": "in",
+    "yard": "yd",
+    "yards": "yd",
+    "kilogram": "kg",
+    "kilograms": "kg",
+    "gram": "g",
+    "grams": "g",
+    "pound": "lb",
+    "pounds": "lb",
+    "lbs": "lb",
+    "ounce": "oz",
+    "ounces": "oz",
+    "liter": "l",
+    "liters": "l",
+    "litre": "l",
+    "litres": "l",
+    "milliliter": "ml",
+    "milliliters": "ml",
+    "gallon": "gal",
+    "gallons": "gal",
+    "pint": "pt",
+    "pints": "pt",
     "km/h": "kmh",
     "m/s": "ms",
-    "knot": "kn", "knots": "kn",
+    "knot": "kn",
+    "knots": "kn",
     # Температура
-    "c": "c", "celsius": "c",
-    "f": "f", "fahrenheit": "f",
-    "k": "k", "kelvin": "k",
-    "°c": "c", "°f": "f",
+    "c": "c",
+    "celsius": "c",
+    "f": "f",
+    "fahrenheit": "f",
+    "k": "k",
+    "kelvin": "k",
+    "°c": "c",
+    "°f": "f",
 }
 
 # Группа температурных единиц — нелинейное преобразование
@@ -15186,9 +15275,7 @@ def _do_convert(value: float, src: str, dst: str) -> float:
     dst_factor, dst_base = _CONVERT_UNITS[dst_n]
 
     if src_base != dst_base:
-        raise ValueError(
-            f"Несовместимые единицы: `{src}` ({src_base}) и `{dst}` ({dst_base})"
-        )
+        raise ValueError(f"Несовместимые единицы: `{src}` ({src_base}) и `{dst}` ({dst_base})")
 
     # value * src_factor → базовая единица → / dst_factor → dst
     return value * src_factor / dst_factor
@@ -15228,10 +15315,7 @@ async def handle_convert(bot: "KraabUserbot", message: Message) -> None:
     parts = raw_args.split()
     if len(parts) != 3:
         raise UserInputError(
-            user_message=(
-                "❌ Формат: `!convert <число> <из> <в>`\n"
-                "Например: `!convert 100 km mi`"
-            )
+            user_message=("❌ Формат: `!convert <число> <из> <в>`\nНапример: `!convert 100 km mi`")
         )
 
     value_str, src_raw, dst_raw = parts
@@ -15262,9 +15346,7 @@ async def handle_convert(bot: "KraabUserbot", message: Message) -> None:
     src_display = src_raw.upper() if _normalize_unit(src_raw) in _TEMP_UNITS else src_raw
     value_display = _format_convert_result(value)
 
-    await message.reply(
-        f"🔢 **{value_display} {src_display}** = **{result_str} {unit_symbol}**"
-    )
+    await message.reply(f"🔢 **{value_display} {src_display}** = **{result_str} {unit_symbol}**")
 
 
 # ---------------------------------------------------------------------------
@@ -15867,22 +15949,42 @@ _NEWS_LANG_MAP: dict[str, str] = {
 }
 
 # Топик-тематики, которые пользователь может запросить
-_NEWS_KNOWN_TOPICS: frozenset[str] = frozenset({
-    "crypto", "крипто", "криптовалюта",
-    "ai", "ии", "ml",
-    "tech", "технологии", "технология",
-    "finance", "финансы", "финансовые",
-    "science", "наука",
-    "politics", "политика",
-    "business", "бизнес",
-    "sports", "спорт",
-    "gaming", "игры",
-    "space", "космос",
-    "health", "здоровье",
-    "world", "мир",
-    "russia", "россия",
-    "usa", "сша",
-})
+_NEWS_KNOWN_TOPICS: frozenset[str] = frozenset(
+    {
+        "crypto",
+        "крипто",
+        "криптовалюта",
+        "ai",
+        "ии",
+        "ml",
+        "tech",
+        "технологии",
+        "технология",
+        "finance",
+        "финансы",
+        "финансовые",
+        "science",
+        "наука",
+        "politics",
+        "политика",
+        "business",
+        "бизнес",
+        "sports",
+        "спорт",
+        "gaming",
+        "игры",
+        "space",
+        "космос",
+        "health",
+        "здоровье",
+        "world",
+        "мир",
+        "russia",
+        "россия",
+        "usa",
+        "сша",
+    }
+)
 
 
 async def handle_news(bot: "KraabUserbot", message: Message) -> None:
@@ -15906,7 +16008,7 @@ async def handle_news(bot: "KraabUserbot", message: Message) -> None:
         if first_word in _NEWS_LANG_MAP:
             lang_suffix = f" {_NEWS_LANG_MAP[first_word]}"
             # Если после языка есть тема — берём её
-            rest = raw[len(first_word):].strip()
+            rest = raw[len(first_word) :].strip()
             if rest:
                 topic = rest
             # Иначе тема — мировые события на указанном языке
@@ -16216,9 +16318,7 @@ async def handle_backup(bot: "KraabUserbot", message: Message) -> None:
             else:
                 lines.append(f"⬜ `{fname}` _(отсутствует)_")
                 missing_count += 1
-        lines.append(
-            f"\n**Итого:** {found_count} файлов найдено, {missing_count} отсутствуют."
-        )
+        lines.append(f"\n**Итого:** {found_count} файлов найдено, {missing_count} отсутствуют.")
         await message.reply("\n".join(lines))
         return
 
@@ -16279,9 +16379,7 @@ async def handle_backup(bot: "KraabUserbot", message: Message) -> None:
 # !explain — объяснение кода через AI
 # ---------------------------------------------------------------------------
 
-_EXPLAIN_PROMPT = (
-    "Объясни этот код простым языком. Что он делает, зачем, как работает."
-)
+_EXPLAIN_PROMPT = "Объясни этот код простым языком. Что он делает, зачем, как работает."
 
 
 async def handle_explain(bot: "KraabUserbot", message: Message) -> None:
