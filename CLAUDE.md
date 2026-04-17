@@ -500,6 +500,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/voice/toggle` | POST | Переключить голосовой режим |
 | `/api/voice/profile` | GET | Голосовой профиль |
 | `/api/voice/runtime` | GET/POST | Runtime голосовых настроек |
+| `/api/krab_ear/status` | GET | KrabEar STT diarization status и readiness |
 | `/api/translator/auto` | POST | Авто-определение языка |
 | `/api/translator/lang` | POST | Смена пары языков |
 | `/api/translator/test` | GET | Быстрый тест перевода |
