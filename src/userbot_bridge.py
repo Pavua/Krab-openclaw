@@ -3145,6 +3145,8 @@ class KraabUserbot(
         - результат edit;
         - новый message при fallback на send_message.
         """
+        from .core.markdown_escape import looks_like_parse_error  # noqa: PLC0415
+
         current_text = (getattr(msg, "text", None) or getattr(msg, "caption", None) or "").strip()
         target_text = (text or "").strip()
         # Telegram EditMessage не принимает пустой/невидимый текст.
@@ -3189,6 +3191,26 @@ class KraabUserbot(
                     chat_id,
                     lambda: self.client.send_message(chat_id, _truncated, parse_mode=_pm),
                 )
+            # Fallback при parse-ошибке — перешлём plain text, чтобы не потерять ответ.
+            if _pm is not None and looks_like_parse_error(exc):
+                logger.warning(
+                    "telegram_edit_parse_fallback_plain",
+                    error=str(exc),
+                    text_preview=_text[:200],
+                )
+                try:
+                    edited = await _telegram_send_queue.run(
+                        chat_id, lambda: msg.edit(_text, parse_mode=None)
+                    )
+                    return edited or msg
+                except Exception as exc2:  # noqa: BLE001
+                    if self._is_message_not_modified_error(exc2):
+                        return msg
+                    logger.warning("telegram_edit_plain_fallback_send_new", error=str(exc2))
+                    return await _telegram_send_queue.run(
+                        chat_id,
+                        lambda: self.client.send_message(chat_id, _text, parse_mode=None),
+                    )
             raise
 
     async def _safe_reply_or_send_new(
@@ -3209,6 +3231,8 @@ class KraabUserbot(
         обычную отправку в чат, но валит именно reply на конкретный message id.
         Оба вызова идут через _telegram_send_queue (с retry при FLOOD_WAIT/timeout).
         """
+        from .core.markdown_escape import looks_like_parse_error  # noqa: PLC0415
+
         target_text = (text or "").strip() or "…"
         chat_id: int = msg.chat.id
         _text = target_text  # захват для lambda
