@@ -174,7 +174,10 @@ async def test_stats_panel_shows_rate_limiter_waits() -> None:
 class _FakeMessage:
     """Минимальный двойник pyrogram Message с фиксацией текста reply()."""
 
-    def __init__(self) -> None:
+    def __init__(self, text: str = "!stats") -> None:
+        # `!stats` без аргументов → _get_command_args вернёт "" и handle_stats
+        # отрендерит панель (а не уйдёт в subcommand `ecosystem`).
+        self.text = text
         self.replies: list[str] = []
 
     async def reply(self, text: str) -> None:

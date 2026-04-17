@@ -113,8 +113,8 @@ _COMMANDS: list[CommandInfo] = [
     CommandInfo(
         name="stats",
         category="basic",
-        description="Статистика текущей сессии (токены, запросы)",
-        usage="!stats",
+        description="Статистика сессии или ecosystem health",
+        usage="!stats [ecosystem|eco|health|basic]",
     ),
     CommandInfo(
         name="health",
