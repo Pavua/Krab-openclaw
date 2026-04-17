@@ -1,327 +1,286 @@
 # -*- coding: utf-8 -*-
 """
-Тесты auto_restart_policy: rate-limit, cooldown, subprocess mocking,
-Telegram notification callback.
+Тесты auto_restart_policy — launchd-aware self-healing для сервисов.
 
 Покрываем:
-1) AUTO_RESTART_ENABLED=false → restart skipped;
-2) rate-limit: 4-я попытка в час → skip;
-3) экспоненциальный cooldown: 60s → 120s → 300s → 600s;
-4) сброс consecutive_failures при success;
-5) subprocess.run вызывается с clean_subprocess_env;
-6) TimeoutExpired → success=False, reason=timeout;
-7) notification callback вызывается с сообщением.
+1) is_service_loaded_in_launchd — true/false по returncode и state = not loaded
+2) bootstrap_service_if_unloaded — skip если loaded, запуск launchctl если нет
+3) AutoRestartPolicy.attempt_restart — disabled_by_env, unknown_service,
+   cooldown, launchd bootstrap path, restart cmd path, error paths
 """
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
-from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
-import pytest
-
-from src.core.auto_restart_policy import (
-    DEFAULT_COOLDOWNS_SEC,
-    DEFAULT_MAX_ATTEMPTS_PER_HOUR,
-    AutoRestartManager,
-    ServiceRestartState,
-)
-
-# --------------------------------------------------------------------
-# ServiceRestartState unit tests
-# --------------------------------------------------------------------
+# ─── is_service_loaded_in_launchd ────────────────────────────────────────────
 
 
-def test_fresh_state_can_restart() -> None:
-    """Свежее состояние всегда разрешает restart."""
-    state = ServiceRestartState(service_name="svc")
-    can, reason = state.can_restart()
-    assert can is True
-    assert reason == ""
+def test_is_service_loaded_returns_true_when_running(monkeypatch):
+    mock_result = MagicMock(returncode=0, stdout="state = running\npid = 12345\n")
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+    from src.core.auto_restart_policy import is_service_loaded_in_launchd
+
+    assert is_service_loaded_in_launchd("ai.openclaw.gateway") is True
 
 
-def test_rate_limit_blocks_after_max_attempts() -> None:
-    """После N попыток в час — rate_limit_exceeded."""
-    state = ServiceRestartState(service_name="svc")
-    now = datetime.now(timezone.utc)
-    # Добавляем max attempts внутри последнего часа
-    for i in range(DEFAULT_MAX_ATTEMPTS_PER_HOUR):
-        state.attempts.append(now - timedelta(minutes=i * 10))
+def test_is_service_loaded_returns_false_when_not_loaded(monkeypatch):
+    mock_result = MagicMock(returncode=113, stdout="", stderr="Could not find service")
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+    from src.core.auto_restart_policy import is_service_loaded_in_launchd
 
-    can, reason = state.can_restart(now=now)
-    assert can is False
-    assert "rate_limit_exceeded" in reason
+    assert is_service_loaded_in_launchd("nonexistent") is False
 
 
-def test_rate_limit_gc_drops_old_attempts() -> None:
-    """Попытки старше 1 часа не должны блокировать."""
-    state = ServiceRestartState(service_name="svc")
-    now = datetime.now(timezone.utc)
-    # Ставим N попыток, все старше часа
-    for i in range(DEFAULT_MAX_ATTEMPTS_PER_HOUR + 5):
-        state.attempts.append(now - timedelta(hours=2, minutes=i))
+def test_is_service_loaded_returns_false_when_state_not_loaded(monkeypatch):
+    """Иногда launchctl возвращает rc=0, но stdout содержит `state = not loaded`."""
+    mock_result = MagicMock(
+        returncode=0,
+        stdout="service = {\n  state = not loaded\n  label = ai.test\n}\n",
+    )
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+    from src.core.auto_restart_policy import is_service_loaded_in_launchd
 
-    can, reason = state.can_restart(now=now)
-    assert can is True
-    assert reason == ""
-    # GC должен обнулить attempts
-    assert state.attempts == []
+    assert is_service_loaded_in_launchd("ai.test") is False
 
 
-def test_cooldown_exponential_progression() -> None:
-    """Cooldown растёт при consecutive_failures: 60s → 120s → 300s → 600s (cap)."""
-    state = ServiceRestartState(service_name="svc")
-    now = datetime.now(timezone.utc)
+def test_is_service_loaded_returns_false_on_timeout(monkeypatch):
+    def _raise(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd=["launchctl"], timeout=5)
 
-    for failures, expected_cd in enumerate(DEFAULT_COOLDOWNS_SEC):
-        state.consecutive_failures = failures
-        state.last_restart = now - timedelta(seconds=expected_cd - 1)
-        # В пределах cooldown — нельзя
-        can, reason = state.can_restart(now=now)
-        assert can is False, f"failures={failures} should block"
-        assert f"cooldown:{expected_cd}s" in reason
+    monkeypatch.setattr("subprocess.run", _raise)
+    from src.core.auto_restart_policy import is_service_loaded_in_launchd
 
-        # После cooldown — можно
-        state.last_restart = now - timedelta(seconds=expected_cd + 1)
-        can, _ = state.can_restart(now=now)
-        assert can is True, f"failures={failures} should unblock after cooldown"
+    assert is_service_loaded_in_launchd("ai.test") is False
 
 
-def test_cooldown_caps_at_last_entry() -> None:
-    """Consecutive_failures > len(cooldowns) использует последний entry."""
-    state = ServiceRestartState(service_name="svc")
-    now = datetime.now(timezone.utc)
-    max_cd = DEFAULT_COOLDOWNS_SEC[-1]
+def test_is_service_loaded_returns_false_on_oserror(monkeypatch):
+    def _raise(*a, **kw):
+        raise OSError("no launchctl")
 
-    state.consecutive_failures = 99  # намного больше len(cooldowns)
-    state.last_restart = now - timedelta(seconds=max_cd - 10)
-    can, reason = state.can_restart(now=now)
-    assert can is False
-    assert f"cooldown:{max_cd}s" in reason
+    monkeypatch.setattr("subprocess.run", _raise)
+    from src.core.auto_restart_policy import is_service_loaded_in_launchd
+
+    assert is_service_loaded_in_launchd("ai.test") is False
 
 
-def test_record_attempt_resets_failures_on_success() -> None:
-    """Успешный restart обнуляет consecutive_failures."""
-    state = ServiceRestartState(service_name="svc", consecutive_failures=3)
-    state.record_attempt(success=True)
-    assert state.consecutive_failures == 0
-    assert state.last_restart is not None
+# ─── bootstrap_service_if_unloaded ───────────────────────────────────────────
 
 
-def test_record_attempt_increments_on_failure() -> None:
-    """Failed restart инкрементирует consecutive_failures."""
-    state = ServiceRestartState(service_name="svc", consecutive_failures=1)
-    state.record_attempt(success=False)
-    assert state.consecutive_failures == 2
+def test_bootstrap_service_skip_if_loaded(monkeypatch):
+    monkeypatch.setattr(
+        "src.core.auto_restart_policy.is_service_loaded_in_launchd",
+        lambda _label: True,
+    )
+    from src.core.auto_restart_policy import bootstrap_service_if_unloaded
+
+    did, reason = bootstrap_service_if_unloaded("ai.test", "/tmp/test.plist")
+    assert did is False
+    assert reason == "already_loaded"
 
 
-# --------------------------------------------------------------------
-# AutoRestartManager integration tests
-# --------------------------------------------------------------------
+def test_bootstrap_service_runs_launchctl_when_unloaded(monkeypatch):
+    monkeypatch.setattr(
+        "src.core.auto_restart_policy.is_service_loaded_in_launchd",
+        lambda _label: False,
+    )
+    mock_result = MagicMock(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+    from src.core.auto_restart_policy import bootstrap_service_if_unloaded
+
+    did, reason = bootstrap_service_if_unloaded("ai.test", "/tmp/test.plist")
+    assert did is True
+    assert "bootstrap_ok" in reason
 
 
-@pytest.mark.asyncio
-async def test_auto_restart_disabled_by_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AUTO_RESTART_ENABLED=false → сразу skip без subprocess."""
-    monkeypatch.setenv("AUTO_RESTART_ENABLED", "false")
-    mgr = AutoRestartManager()
+def test_bootstrap_service_reports_failure_when_launchctl_fails(monkeypatch):
+    monkeypatch.setattr(
+        "src.core.auto_restart_policy.is_service_loaded_in_launchd",
+        lambda _label: False,
+    )
+    mock_result = MagicMock(returncode=5, stdout="", stderr="Bootstrap failed: E")
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+    from src.core.auto_restart_policy import bootstrap_service_if_unloaded
 
-    subprocess_mock = MagicMock()
-    monkeypatch.setattr(subprocess, "run", subprocess_mock)
+    did, reason = bootstrap_service_if_unloaded("ai.test", "/tmp/test.plist")
+    assert did is True
+    assert reason.startswith("bootstrap_failed")
 
-    success, reason = await mgr.attempt_restart("svc", ["echo", "hi"])
-    assert success is False
+
+def test_bootstrap_service_handles_timeout(monkeypatch):
+    monkeypatch.setattr(
+        "src.core.auto_restart_policy.is_service_loaded_in_launchd",
+        lambda _label: False,
+    )
+
+    def _raise(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd=["launchctl"], timeout=10)
+
+    monkeypatch.setattr("subprocess.run", _raise)
+    from src.core.auto_restart_policy import bootstrap_service_if_unloaded
+
+    did, reason = bootstrap_service_if_unloaded("ai.test", "/tmp/test.plist")
+    assert did is True
+    assert reason.startswith("bootstrap_error")
+
+
+# ─── AutoRestartPolicy.attempt_restart ───────────────────────────────────────
+
+
+def test_attempt_restart_disabled_by_env(monkeypatch):
+    monkeypatch.delenv("AUTO_RESTART_ENABLED", raising=False)
+    from src.core.auto_restart_policy import AutoRestartPolicy
+
+    policy = AutoRestartPolicy()
+    ok, reason = asyncio.run(policy.attempt_restart("openclaw_gateway"))
+    assert ok is False
     assert reason == "disabled_by_env"
-    subprocess_mock.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_auto_restart_rate_limit_skip(monkeypatch: pytest.MonkeyPatch) -> None:
-    """4-я попытка в час возвращает rate_limit_exceeded без subprocess."""
+def test_attempt_restart_unknown_service(monkeypatch):
     monkeypatch.setenv("AUTO_RESTART_ENABLED", "true")
-    mgr = AutoRestartManager()
+    from src.core.auto_restart_policy import AutoRestartPolicy
 
-    # Pre-fill state: N попыток в последний час
-    state = mgr.get_state("svc")
-    now = datetime.now(timezone.utc)
-    for i in range(DEFAULT_MAX_ATTEMPTS_PER_HOUR):
-        state.attempts.append(now - timedelta(minutes=i * 5))
-
-    subprocess_mock = MagicMock()
-    monkeypatch.setattr(subprocess, "run", subprocess_mock)
-
-    success, reason = await mgr.attempt_restart("svc", ["echo", "hi"])
-    assert success is False
-    assert "rate_limit_exceeded" in reason
-    subprocess_mock.assert_not_called()
+    policy = AutoRestartPolicy()
+    ok, reason = asyncio.run(policy.attempt_restart("ghost_service"))
+    assert ok is False
+    assert reason == "unknown_service"
 
 
-@pytest.mark.asyncio
-async def test_auto_restart_cooldown_reset_on_success(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Successful restart сбрасывает consecutive_failures в 0."""
-    monkeypatch.setenv("AUTO_RESTART_ENABLED", "true")
-    mgr = AutoRestartManager()
-    state = mgr.get_state("svc")
-    state.consecutive_failures = 3  # ранее накопленные fails
+def test_attempt_restart_bootstraps_when_unloaded(monkeypatch):
+    monkeypatch.setenv("AUTO_RESTART_ENABLED", "1")
+    monkeypatch.setattr(
+        "src.core.auto_restart_policy.bootstrap_service_if_unloaded",
+        lambda _label, _plist: (True, "bootstrap_ok"),
+    )
+    # Restart cmd не должен вызваться — bootstrap вернул did=True.
+    called = {"subprocess_run": 0}
 
-    completed = MagicMock()
-    completed.returncode = 0
-    completed.stderr = ""
-    monkeypatch.setattr(subprocess, "run", MagicMock(return_value=completed))
+    def _should_not_run(*a, **kw):
+        called["subprocess_run"] += 1
+        return MagicMock(returncode=0, stdout="", stderr="")
 
-    success, reason = await mgr.attempt_restart("svc", ["echo", "ok"])
-    assert success is True
-    assert reason == "ok"
-    assert state.consecutive_failures == 0
+    monkeypatch.setattr("subprocess.run", _should_not_run)
 
+    from src.core.auto_restart_policy import AutoRestartPolicy
 
-@pytest.mark.asyncio
-async def test_restart_command_executed_with_clean_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """subprocess.run должен быть вызван с env=clean_subprocess_env()."""
-    monkeypatch.setenv("AUTO_RESTART_ENABLED", "true")
-    mgr = AutoRestartManager()
-
-    completed = MagicMock()
-    completed.returncode = 0
-    completed.stderr = ""
-    run_mock = MagicMock(return_value=completed)
-    monkeypatch.setattr(subprocess, "run", run_mock)
-
-    success, _ = await mgr.attempt_restart("svc", ["launchctl", "kickstart", "-k", "foo"])
-    assert success is True
-    run_mock.assert_called_once()
-    kwargs = run_mock.call_args.kwargs
-    assert kwargs.get("env") is not None
-    # Malloc-debug ключи должны быть вычищены
-    env = kwargs["env"]
-    assert "MallocStackLogging" not in env
-    assert kwargs.get("check") is False
-    assert kwargs.get("capture_output") is True
+    policy = AutoRestartPolicy()
+    ok, reason = asyncio.run(policy.attempt_restart("openclaw_gateway"))
+    assert ok is True
+    assert reason == "bootstrap_ok"
+    assert called["subprocess_run"] == 0
 
 
-@pytest.mark.asyncio
-async def test_restart_timeout_marks_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """subprocess TimeoutExpired → success=False, reason='timeout'."""
-    monkeypatch.setenv("AUTO_RESTART_ENABLED", "true")
-    mgr = AutoRestartManager()
+def test_attempt_restart_bootstrap_failed(monkeypatch):
+    monkeypatch.setenv("AUTO_RESTART_ENABLED", "1")
+    monkeypatch.setattr(
+        "src.core.auto_restart_policy.bootstrap_service_if_unloaded",
+        lambda _label, _plist: (True, "bootstrap_failed: E"),
+    )
 
-    def raise_timeout(*_args: object, **_kwargs: object) -> object:
-        raise subprocess.TimeoutExpired(cmd=["x"], timeout=30)
+    from src.core.auto_restart_policy import AutoRestartPolicy
 
-    monkeypatch.setattr(subprocess, "run", raise_timeout)
-
-    success, reason = await mgr.attempt_restart("svc", ["sleep", "9999"])
-    assert success is False
-    assert reason == "timeout"
-    # Consecutive failures инкрементируется
-    assert mgr.get_state("svc").consecutive_failures == 1
+    policy = AutoRestartPolicy()
+    ok, reason = asyncio.run(policy.attempt_restart("openclaw_gateway"))
+    assert ok is False
+    assert reason.startswith("bootstrap_failed")
 
 
-@pytest.mark.asyncio
-async def test_restart_nonzero_exit_marks_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """returncode != 0 → success=False, reason='cmd_failed'."""
-    monkeypatch.setenv("AUTO_RESTART_ENABLED", "true")
-    mgr = AutoRestartManager()
+def test_attempt_restart_runs_cmd_when_loaded(monkeypatch):
+    monkeypatch.setenv("AUTO_RESTART_ENABLED", "1")
+    monkeypatch.setattr(
+        "src.core.auto_restart_policy.bootstrap_service_if_unloaded",
+        lambda _label, _plist: (False, "already_loaded"),
+    )
 
-    completed = MagicMock()
-    completed.returncode = 1
-    completed.stderr = "boom"
-    monkeypatch.setattr(subprocess, "run", MagicMock(return_value=completed))
+    mock_result = MagicMock(returncode=0, stdout="ok", stderr="")
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
 
-    success, reason = await mgr.attempt_restart("svc", ["false"])
-    assert success is False
-    assert reason == "cmd_failed"
-    assert mgr.get_state("svc").consecutive_failures == 1
+    from src.core.auto_restart_policy import AutoRestartPolicy
 
-
-@pytest.mark.asyncio
-async def test_restart_os_error_marks_exec_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """OSError (e.g. binary not found) → reason='exec_error'."""
-    monkeypatch.setenv("AUTO_RESTART_ENABLED", "true")
-    mgr = AutoRestartManager()
-
-    def raise_oserror(*_a: object, **_k: object) -> object:
-        raise OSError("no such file")
-
-    monkeypatch.setattr(subprocess, "run", raise_oserror)
-
-    success, reason = await mgr.attempt_restart("svc", ["/nonexistent/bin"])
-    assert success is False
-    assert reason == "exec_error"
+    policy = AutoRestartPolicy()
+    ok, reason = asyncio.run(policy.attempt_restart("openclaw_gateway"))
+    assert ok is True
+    assert reason == "restart_ok"
 
 
-@pytest.mark.asyncio
-async def test_notification_callback_called(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """set_notification_callback: на каждую попытку вызывается callback."""
-    monkeypatch.setenv("AUTO_RESTART_ENABLED", "true")
-    mgr = AutoRestartManager()
+def test_attempt_restart_cmd_failed(monkeypatch):
+    monkeypatch.setenv("AUTO_RESTART_ENABLED", "1")
+    monkeypatch.setattr(
+        "src.core.auto_restart_policy.bootstrap_service_if_unloaded",
+        lambda _label, _plist: (False, "already_loaded"),
+    )
 
-    messages: list[str] = []
+    mock_result = MagicMock(returncode=1, stdout="", stderr="boom")
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
 
-    async def fake_notify(msg: str) -> None:
-        messages.append(msg)
+    from src.core.auto_restart_policy import AutoRestartPolicy
 
-    mgr.set_notification_callback(fake_notify)
-
-    completed = MagicMock()
-    completed.returncode = 0
-    completed.stderr = ""
-    monkeypatch.setattr(subprocess, "run", MagicMock(return_value=completed))
-
-    await mgr.attempt_restart("openclaw_gateway", ["echo", "ok"])
-    assert len(messages) == 1
-    assert "openclaw_gateway" in messages[0]
-    assert "OK" in messages[0]
+    policy = AutoRestartPolicy()
+    ok, reason = asyncio.run(policy.attempt_restart("openclaw_gateway"))
+    assert ok is False
+    assert reason.startswith("restart_failed")
 
 
-@pytest.mark.asyncio
-async def test_notification_callback_failure_does_not_raise(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Ошибка в callback не должна ломать attempt_restart."""
-    monkeypatch.setenv("AUTO_RESTART_ENABLED", "true")
-    mgr = AutoRestartManager()
+def test_attempt_restart_cmd_timeout(monkeypatch):
+    monkeypatch.setenv("AUTO_RESTART_ENABLED", "1")
+    monkeypatch.setattr(
+        "src.core.auto_restart_policy.bootstrap_service_if_unloaded",
+        lambda _label, _plist: (False, "already_loaded"),
+    )
 
-    async def broken_notify(_msg: str) -> None:
-        raise RuntimeError("telegram down")
+    def _raise(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd=["bash"], timeout=30)
 
-    mgr.set_notification_callback(broken_notify)
+    monkeypatch.setattr("subprocess.run", _raise)
 
-    completed = MagicMock()
-    completed.returncode = 0
-    completed.stderr = ""
-    monkeypatch.setattr(subprocess, "run", MagicMock(return_value=completed))
+    from src.core.auto_restart_policy import AutoRestartPolicy
 
-    # Не должно бросать
-    success, _ = await mgr.attempt_restart("svc", ["echo", "ok"])
-    assert success is True
+    policy = AutoRestartPolicy()
+    ok, reason = asyncio.run(policy.attempt_restart("openclaw_gateway"))
+    assert ok is False
+    assert reason.startswith("restart_error")
 
 
-def test_manager_status_reflects_state() -> None:
-    """status() возвращает snapshot всех per-service состояний."""
-    mgr = AutoRestartManager()
-    state = mgr.get_state("openclaw_gateway")
-    state.consecutive_failures = 2
-    state.last_restart = datetime.now(timezone.utc)
-    state.attempts = [datetime.now(timezone.utc)]
+def test_attempt_restart_respects_cooldown(monkeypatch):
+    monkeypatch.setenv("AUTO_RESTART_ENABLED", "1")
+    monkeypatch.setattr(
+        "src.core.auto_restart_policy.bootstrap_service_if_unloaded",
+        lambda _label, _plist: (False, "already_loaded"),
+    )
+    mock_result = MagicMock(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
 
-    snapshot = mgr.status()
-    assert "openclaw_gateway" in snapshot["services"]
-    info = snapshot["services"]["openclaw_gateway"]
-    assert info["consecutive_failures"] == 2
-    assert info["attempts_last_hour"] == 1
-    assert info["last_restart"] is not None
-    assert snapshot["max_attempts_per_hour"] == DEFAULT_MAX_ATTEMPTS_PER_HOUR
+    from src.core.auto_restart_policy import AutoRestartPolicy
+
+    policy = AutoRestartPolicy()
+    # Первый вызов — успешный restart.
+    ok1, r1 = asyncio.run(policy.attempt_restart("openclaw_gateway"))
+    assert ok1 is True and r1 == "restart_ok"
+
+    # Второй подряд — должен попасть в cooldown.
+    ok2, r2 = asyncio.run(policy.attempt_restart("openclaw_gateway"))
+    assert ok2 is False
+    assert r2 == "cooldown"
+
+
+def test_services_has_expected_entries():
+    from src.core.auto_restart_policy import SERVICES
+
+    assert "openclaw_gateway" in SERVICES
+    assert "mcp_yung_nagato" in SERVICES
+    for name, cfg in SERVICES.items():
+        assert "restart_cmd" in cfg, f"{name} missing restart_cmd"
+        assert "launchd_label" in cfg, f"{name} missing launchd_label"
+        assert "plist_path" in cfg, f"{name} missing plist_path"
+
+
+def test_restart_commands_backward_compat():
+    """Legacy call sites читают плоский RESTART_COMMANDS map."""
+    from src.core.auto_restart_policy import RESTART_COMMANDS, SERVICES
+
+    assert set(RESTART_COMMANDS.keys()) == set(SERVICES.keys())
+    for name in SERVICES:
+        assert RESTART_COMMANDS[name] == SERVICES[name]["restart_cmd"]
