@@ -341,6 +341,7 @@ class OpenClawClient:
     ) -> None:
         """Фиксирует последний runtime-маршрут запроса без секретов."""
         from .core.operator_identity import current_account_id, current_operator_id  # noqa: PLC0415
+        from .core.provider_failover import failover_policy  # noqa: PLC0415
 
         self._last_runtime_route = {
             "timestamp": int(time.time()),
@@ -359,6 +360,18 @@ class OpenClawClient:
         }
         if attempt is not None and int(attempt) > 0:
             self._last_runtime_route["attempt"] = int(attempt)
+
+        # Feed policy — success/failure каждого route попадает в health-таблицу
+        # provider_failover. Сам auto-switch триггерится отдельным хуком
+        # `_maybe_trigger_failover` на транспорт-ошибках (см. stream-handler).
+        try:
+            provider = self._last_runtime_route.get("provider", "") or ""
+            if status == "ok" and provider:
+                failover_policy.record_success(provider)
+            elif status == "error" and error_code and provider:
+                failover_policy.record_failure(provider, error_code)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("provider_failover_feed_failed", error=str(exc))
 
     def get_last_runtime_route(self) -> dict[str, Any]:
         """Возвращает snapshot последнего фактического маршрута."""
