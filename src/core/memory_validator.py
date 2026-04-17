@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -97,7 +98,9 @@ class MemoryInjectionValidator:
         if not text or not text.strip():
             return False, ""
 
-        lowered = text.lower()
+        # NFKC-нормализация против bypass через ZWSP / homoglyphs / зеркальные юникод-формы.
+        normalized = unicodedata.normalize("NFKC", text)
+        lowered = normalized.lower()
         for pat in _INJECTION_PATTERNS:
             m = pat.search(lowered)
             if not m:

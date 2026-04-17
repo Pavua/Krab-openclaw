@@ -1254,9 +1254,9 @@ async def handle_confirm(bot: "KraabUserbot", message: Message) -> None:
 
     Без аргументов — показывает список ожидающих подтверждения.
     """
-    # Owner-check (использует config.OWNER_USER_IDS, как в swarm_team_listener).
-    sender_id = getattr(getattr(message, "from_user", None), "id", 0)
-    if not sender_id or str(sender_id) not in config.OWNER_USER_IDS:
+    # Owner-check через ACL (унификация с остальными owner-only командами).
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
         await message.reply("⛔ Только для владельца.")
         return
 
