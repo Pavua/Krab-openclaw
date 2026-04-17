@@ -364,8 +364,8 @@ _COMMANDS: list[CommandInfo] = [
     CommandInfo(
         name="memory",
         category="notes",
-        description="Последние записи памяти",
-        usage="!memory recent",
+        description="Память: recent записи workspace / stats по Memory Layer",
+        usage="!memory recent [source_filter] | !memory stats",
     ),
 
     # ── management ───────────────────────────────────────────────────────────

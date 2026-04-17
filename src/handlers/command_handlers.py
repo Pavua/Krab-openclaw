@@ -4673,19 +4673,25 @@ async def handle_watch(bot: "KraabUserbot", message: Message) -> None:
 
 async def handle_memory(bot: "KraabUserbot", message: Message) -> None:
     """
-    Короткий просмотр общей памяти OpenClaw без поиска по словам.
+    Команды работы с общей памятью и Memory Layer архивом.
 
-    Пока сознательно ограничиваемся read-only режимом:
-    - `!remember` уже отвечает за запись фактов;
-    - эта команда нужна для последних записей и owner-digest слоёв.
+    Поддерживаемые субкоманды:
+    - `!memory recent [source_filter]` — последние записи workspace-памяти;
+    - `!memory stats` — агрегированная статистика по archive.db / indexer / validator.
     """
     del bot
     raw_args = str(message.text or "").split(maxsplit=2)
     action = raw_args[1].strip().lower() if len(raw_args) > 1 else "recent"
     source_filter = raw_args[2].strip() if len(raw_args) > 2 else ""
 
+    if action == "stats":
+        await _handle_memory_stats(message)
+        return
+
     if action != "recent":
-        raise UserInputError(user_message="🧠 Формат: `!memory recent [source_filter]`")
+        raise UserInputError(
+            user_message="🧠 Формат: `!memory recent [source_filter]` | `!memory stats`"
+        )
 
     rows = list_workspace_memory_entries(limit=8, source_filter=source_filter)
     if not rows:
@@ -4698,6 +4704,134 @@ async def handle_memory(bot: "KraabUserbot", message: Message) -> None:
             f"- `{item['date']} {item['time']}` [{item['source']}{author_suffix}] {item['text']}"
         )
     await message.reply("\n".join(lines))
+
+
+async def _handle_memory_stats(message: Message) -> None:
+    """Собирает архив/индексер/валидатор статистику и отправляет reply."""
+    archive_stats = _collect_memory_archive_stats()
+    indexer_stats = _collect_memory_indexer_stats()
+    validator_stats = _collect_memory_validator_stats()
+    reply = format_memory_stats(archive_stats, indexer_stats, validator_stats)
+    await message.reply(reply)
+
+
+def _collect_memory_archive_stats() -> dict[str, Any]:
+    """Read-only снимок archive.db: counts + size. Graceful fallback."""
+    import sqlite3 as _sqlite3
+    from pathlib import Path as _Path
+
+    db_path = _Path("~/.openclaw/krab_memory/archive.db").expanduser()
+    stats: dict[str, Any] = {"exists": db_path.exists()}
+    if not stats["exists"]:
+        return stats
+    try:
+        conn = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            stats["messages"] = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            stats["chats"] = conn.execute("SELECT COUNT(*) FROM chats").fetchone()[0]
+            stats["chunks"] = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        finally:
+            conn.close()
+        stats["size_mb"] = db_path.stat().st_size / 1024 / 1024
+    except Exception as exc:  # noqa: BLE001 — stats команда не должна падать
+        stats["error"] = str(exc)
+    return stats
+
+
+def _collect_memory_indexer_stats() -> dict[str, Any]:
+    """Снимок состояния real-time индексера; при недоступности — заглушка."""
+    try:
+        from ..core.memory_indexer_worker import get_indexer  # noqa: PLC0415
+
+        snap = get_indexer().get_stats()
+        return {
+            "state": "running" if getattr(snap, "is_running", False) else "stopped",
+            "queue_size": getattr(snap, "queue_size", 0),
+            "queue_maxsize": getattr(snap, "queue_maxsize", 0),
+            "processed_total": getattr(snap, "processed_total", 0),
+            "failed": dict(getattr(snap, "failed", {}) or {}),
+        }
+    except Exception:  # noqa: BLE001 — индексер опционален
+        return {"state": "unavailable"}
+
+
+def _collect_memory_validator_stats() -> dict[str, Any]:
+    """Снимок счётчиков memory_validator; при отсутствии модуля — заглушка."""
+    try:
+        from ..core.memory_validator import memory_validator  # noqa: PLC0415
+
+        stats = dict(getattr(memory_validator, "stats", {}) or {})
+        try:
+            stats["pending_count"] = len(memory_validator.list_pending())
+        except Exception:  # noqa: BLE001
+            stats.setdefault("pending_count", 0)
+        return stats
+    except Exception:  # noqa: BLE001 — модуля может не быть
+        return {"error": "not loaded"}
+
+
+def _fmt_int_ru(value: int) -> str:
+    """Целое с пробелом-разделителем тысяч (RU-стиль)."""
+    return f"{int(value):,}".replace(",", " ")
+
+
+def format_memory_stats(
+    archive: dict[str, Any],
+    indexer: dict[str, Any],
+    validator: dict[str, Any],
+) -> str:
+    """Формирует Markdown-сообщение с агрегатом статистики Memory Layer."""
+    lines: list[str] = ["🧠 **Memory Layer Stats**", ""]
+
+    # Archive block
+    lines.append("**Archive.db:**")
+    if archive.get("exists"):
+        if "error" in archive:
+            lines.append(f"• Error: {archive['error']}")
+        else:
+            lines.append(f"• Messages: **{_fmt_int_ru(archive.get('messages', 0))}**")
+            lines.append(f"• Chats: {archive.get('chats', 0)}")
+            lines.append(f"• Chunks: {_fmt_int_ru(archive.get('chunks', 0))}")
+            size_mb = archive.get("size_mb", 0)
+            lines.append(f"• Size: {size_mb:.1f} MB")
+    else:
+        lines.append("• Not initialized")
+
+    # Indexer block
+    lines.append("")
+    lines.append("**Indexer:**")
+    state = indexer.get("state", "unknown")
+    lines.append(f"• State: `{state}`")
+    if state != "unavailable":
+        q_size = indexer.get("queue_size", 0)
+        q_max = indexer.get("queue_maxsize") or 0
+        if q_max:
+            lines.append(f"• Queue: {q_size} / {q_max}")
+        else:
+            lines.append(f"• Queue: {q_size}")
+        lines.append(f"• Processed: {_fmt_int_ru(indexer.get('processed_total', 0))}")
+        failed = indexer.get("failed") or {}
+        if failed:
+            parts = ", ".join(f"{k}={v}" for k, v in failed.items())
+            lines.append(f"• Failed: {parts}")
+
+    # Validator block
+    lines.append("")
+    lines.append("**Validator:**")
+    if "error" in validator:
+        lines.append(f"• {validator['error']}")
+    else:
+        lines.append(f"• Safe: {_fmt_int_ru(validator.get('safe_total', 0))}")
+        lines.append(f"• Blocked: {validator.get('injection_blocked_total', 0)}")
+        lines.append(f"• Confirmed: {validator.get('confirmed_total', 0)}")
+        lines.append(f"• Pending: {validator.get('pending_count', 0)}")
+
+    # Timestamp
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines.append("")
+    lines.append(f"_Последнее обновление: {ts}_")
+
+    return "\n".join(lines)
 
 
 async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
