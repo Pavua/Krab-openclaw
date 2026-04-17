@@ -1900,11 +1900,25 @@ class OpenClawClient:
 
         # Используем обычный POST (не streaming), чтобы получить единый JSON-ответ
         _t0 = time.monotonic()
+        # Correlation ID: пробрасываем request_id из structlog contextvars в
+        # Gateway через X-Request-ID header — упрощает корреляцию логов
+        # bridge↔Gateway. Если request_id нет (например, вызов вне message
+        # handler), header не выставляется.
+        _extra_headers: dict[str, str] | None = None
+        try:
+            from structlog.contextvars import get_contextvars as _get_ctxvars
+
+            _rid = _get_ctxvars().get("request_id")
+            if _rid:
+                _extra_headers = {"X-Request-ID": str(_rid)}
+        except Exception:  # noqa: BLE001
+            pass
         try:
             response = await self._http_client.post(
                 f"{self.base_url}/v1/chat/completions",
                 json=payload,
                 timeout=request_timeout,
+                headers=_extra_headers,
             )
         except httpx.TimeoutException as exc:
             # Пробрасываем как ProviderError(retryable=True), чтобы fallback-loop

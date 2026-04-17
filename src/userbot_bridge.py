@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -33,7 +34,7 @@ from .core.chat_ban_cache import chat_ban_cache
 from .core.chat_capability_cache import chat_capability_cache
 from .core.exceptions import KrabError, UserInputError
 from .core.inbox_service import inbox_service
-from .core.logger import get_logger
+from .core.logger import bind_contextvars, clear_contextvars, get_logger
 from .core.memory_indexer_worker import get_indexer
 from .core.operator_identity import build_trace_id
 from .core.proactive_watch import proactive_watch
@@ -3636,6 +3637,21 @@ class KraabUserbot(
 
     async def _process_message(self, message: Message):
         """Главный обработчик входящих сообщений"""
+        # Correlation ID: короткий UUID (48-bit entropy) для связывания логов
+        # одного запроса через весь pipeline (bridge → openclaw_client → swarm → indexer).
+        # Наследуется автоматически в asyncio.create_task / asyncio.to_thread
+        # (Python 3.7+). clear_contextvars в finally — чтобы не протекало в
+        # следующий message handler.
+        request_id = uuid.uuid4().hex[:12]
+        _chat_id_for_ctx = str(getattr(getattr(message, "chat", None), "id", "") or "unknown")
+        _user_id_for_ctx = str(
+            getattr(getattr(message, "from_user", None), "id", "") or ""
+        )
+        bind_contextvars(
+            request_id=request_id,
+            chat_id=_chat_id_for_ctx,
+            user_id=_user_id_for_ctx,
+        )
         try:
             user = message.from_user
             if not user or user.is_bot:
@@ -3845,6 +3861,11 @@ class KraabUserbot(
                 )
             except Exception:  # noqa: BLE001
                 pass  # reply сам может упасть (ChatWriteForbidden etc.)
+        finally:
+            # ВАЖНО: очищаем contextvars, иначе request_id/chat_id/user_id
+            # "протекут" в следующий message handler (особенно для sequential
+            # messages в одном asyncio-loop контексте).
+            clear_contextvars()
 
     async def _run_self_test(self, message: Message):
         """Вызов внешнего теста здоровья"""
