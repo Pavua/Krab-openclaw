@@ -650,6 +650,21 @@ class KraabUserbot(
             await run_cmd(handle_chatban, m)
 
         @self.client.on_message(
+            filters.command("listen", prefixes=prefixes) & _make_command_filter("listen"),
+            group=-1,
+        )
+        async def wrap_listen(c, m):
+            await run_cmd(handle_listen, m)
+
+        @self.client.on_message(
+            filters.command("mode", prefixes=prefixes) & _make_command_filter("mode"),
+            group=-1,
+        )
+        async def wrap_mode(c, m):
+            # Alias для мобильного UX: `!mode active` делает то же, что `!listen active`.
+            await run_cmd(handle_listen, m)
+
+        @self.client.on_message(
             filters.command("translator", prefixes=prefixes) & _make_command_filter("translator"),
             group=-1,
         )

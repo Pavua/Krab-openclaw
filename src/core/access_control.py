@@ -87,6 +87,9 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "swarm",
         # Capability policy matrix
         "cap",
+        # Per-chat listen mode — owner управляет тем, когда Краб отвечает в группах
+        "listen",
+        "mode",
         # Silence mode
         "тишина",
         # Chat ban cache — owner управляет списком чатов, в которые не слать
@@ -138,6 +141,9 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "hs",
         # Capability policy matrix — runtime toggle, только владелец
         "cap",
+        # Per-chat listen mode — меняет поведение userbot в текущем чате
+        "listen",
+        "mode",
         # Chat ban cache — runtime toggle списка забаненных чатов, только владелец
         "chatban",
         # Пользовательские алиасы — изменяют поведение userbot, только владелец

@@ -132,3 +132,25 @@ async def test_listen_stats_shows_counts(mock_bot: MagicMock, mock_message: Magi
         await handle_listen(mock_bot, mock_message)
 
         mock_bot._safe_reply.assert_called()
+
+
+# ─── регистрация команды в runtime ────────────────────────────────────────────
+
+
+def test_listen_and_mode_registered_for_acl() -> None:
+    """!listen и !mode должны проходить ACL-фильтр userbot, иначе хендлер не вызовется."""
+    from src.core.access_control import OWNER_ONLY_COMMANDS, USERBOT_KNOWN_COMMANDS
+
+    assert "listen" in USERBOT_KNOWN_COMMANDS
+    assert "mode" in USERBOT_KNOWN_COMMANDS
+    assert "listen" in OWNER_ONLY_COMMANDS
+    assert "mode" in OWNER_ONLY_COMMANDS
+
+
+def test_listen_registered_in_command_registry() -> None:
+    """!listen должен быть виден в help/owner panel, а !mode — как alias."""
+    from src.core.command_registry import registry
+
+    info = registry.get("listen")
+    assert info is not None
+    assert "mode" in info.aliases
