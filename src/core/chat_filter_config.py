@@ -74,12 +74,17 @@ class ChatFilterConfig:
             logger.warning("chat_filter_load_failed", error=str(e))
 
     def _maybe_reload(self) -> None:
-        """Проверить mtime файла; перезагрузить если изменён внешне."""
+        """Проверить mtime файла; перезагрузить если изменён внешне.
+
+        Используем строгое неравенство mtime != _last_mtime — _save() всегда
+        обновляет _last_mtime до точного mtime записанного файла, поэтому
+        дополнительный буфер +0.05 не нужен и вызывал timing flakiness.
+        """
         if not self._path.exists():
             return
         try:
             current_mtime = self._path.stat().st_mtime
-            if current_mtime > self._last_mtime + 0.05:
+            if current_mtime != self._last_mtime:
                 logger.info("chat_filter_hot_reload", old_mtime=self._last_mtime, new_mtime=current_mtime)
                 self._rules.clear()
                 self._load()

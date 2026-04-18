@@ -2,7 +2,6 @@
 
 import json
 import tempfile
-import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -11,8 +10,19 @@ import pytest
 
 def _write_config(path: Path, rules: dict) -> None:
     """Helper: write config with proper structure."""
+    import time
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(rules, indent=2))
+    return path.stat().st_mtime
+
+
+def _backdated(cfg) -> None:
+    """Откатить _last_mtime назад, имитируя старый кэш.
+
+    Позволяет тестам не полагаться на time.sleep для гарантии mtime != _last_mtime.
+    """
+    cfg._last_mtime -= 1.0
 
 
 @pytest.fixture
@@ -28,13 +38,14 @@ class TestHotReloadBasic:
 
     def test_new_rule_added_externally_picked_up(self, tmp_path, fresh_config):
         """External file write should be picked up on next get_mode()."""
+        import time
+
         cfg = fresh_config
         # Initially no rules (group defaults to mention-only)
         mode = cfg.get_mode("c1", is_group=True)
         assert mode == "mention-only"
 
         # External write — simulate config change
-        time.sleep(0.1)
         _write_config(
             cfg._path, {"c1": {"mode": "active", "updated_at": time.time(), "note": "external"}}
         )
@@ -49,8 +60,8 @@ class TestHotReloadBasic:
         cfg.set_mode("c1", "muted")
         assert cfg.get_mode("c1", is_group=True) == "muted"
 
-        # External edit removes rule
-        time.sleep(0.1)
+        # Откатить кэш чтобы внешняя запись выглядела новее
+        _backdated(cfg)
         _write_config(cfg._path, {})
 
         # Should revert to default
@@ -59,6 +70,8 @@ class TestHotReloadBasic:
 
     def test_multiple_rules_bulk_replace(self, fresh_config):
         """Bulk external edit should update all rules."""
+        import time
+
         cfg = fresh_config
         cfg.set_mode("a", "active")
         cfg.set_mode("b", "muted")
@@ -67,7 +80,7 @@ class TestHotReloadBasic:
         assert cfg.get_mode("a", is_group=True) == "active"
         assert cfg.get_mode("b", is_group=True) == "muted"
 
-        time.sleep(0.1)
+        _backdated(cfg)
         # External bulk replace
         _write_config(
             cfg._path, {"c": {"mode": "mention-only", "updated_at": time.time(), "note": ""}}
@@ -81,11 +94,13 @@ class TestHotReloadBasic:
 
     def test_rule_mode_changed_externally(self, fresh_config):
         """External mode change in file should be picked up."""
+        import time
+
         cfg = fresh_config
         cfg.set_mode("x", "muted")
         assert cfg.get_mode("x", is_group=True) == "muted"
 
-        time.sleep(0.1)
+        _backdated(cfg)
         # External change: muted → active
         _write_config(
             cfg._path, {"x": {"mode": "active", "updated_at": time.time(), "note": "changed"}}
@@ -99,8 +114,9 @@ class TestReloadMethod:
 
     def test_reload_returns_true_when_changed(self, fresh_config):
         """reload() should return True when file changed."""
+        import time
+
         cfg = fresh_config
-        time.sleep(0.1)
         _write_config(cfg._path, {"x": {"mode": "active", "updated_at": time.time(), "note": ""}})
         assert cfg.reload() is True, "Should detect external change"
 
@@ -121,11 +137,12 @@ class TestReloadMethod:
 
     def test_reload_updates_internal_state(self, fresh_config):
         """reload() should update _rules and _last_mtime."""
+        import time
+
         cfg = fresh_config
         initial_mtime = cfg._last_mtime
         initial_count = len(cfg._rules)
 
-        time.sleep(0.1)
         _write_config(cfg._path, {"y": {"mode": "muted", "updated_at": time.time(), "note": ""}})
 
         changed = cfg.reload()
@@ -139,6 +156,8 @@ class TestRaceConditions:
 
     def test_concurrent_read_during_external_write(self, fresh_config):
         """Multiple concurrent reads during external write."""
+        import time
+
         cfg = fresh_config
         _write_config(cfg._path, {"x": {"mode": "active", "updated_at": time.time(), "note": ""}})
 
@@ -154,7 +173,7 @@ class TestRaceConditions:
         first_mode = cfg.get_mode("a", is_group=True)
         assert first_mode == "active"
 
-        time.sleep(0.1)
+        _backdated(cfg)
         # Simulate corrupted external write
         cfg._path.write_text("{not valid json")
 
@@ -171,7 +190,7 @@ class TestRaceConditions:
         cfg = fresh_config
         cfg.set_mode("b", "muted")
 
-        time.sleep(0.1)
+        _backdated(cfg)
         # Write partial JSON (incomplete)
         cfg._path.write_text('{"b": {"mode": "active"')
 
@@ -189,10 +208,11 @@ class TestMaybeReloadHook:
 
     def test_maybe_reload_triggers_on_get_mode(self, fresh_config):
         """Each get_mode() should check for external changes."""
+        import time
+
         cfg = fresh_config
         assert len(cfg._rules) == 0
 
-        time.sleep(0.1)
         _write_config(
             cfg._path, {"z": {"mode": "mention-only", "updated_at": time.time(), "note": ""}}
         )
@@ -208,7 +228,6 @@ class TestMaybeReloadHook:
         cfg.set_mode("p", "active")
         mtime1 = cfg._last_mtime
 
-        time.sleep(0.05)
         # get_mode without external change
         cfg.get_mode("p", is_group=True)
         mtime2 = cfg._last_mtime
