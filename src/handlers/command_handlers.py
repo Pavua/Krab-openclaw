@@ -5033,7 +5033,8 @@ async def handle_memory(bot: "KraabUserbot", message: Message) -> None:
     - `!memory stats` — агрегированная статистика по archive.db / indexer / validator;
     - `!memory clear` — preview чатов в archive.db;
     - `!memory clear --chat=<id> [--confirm]` — selective delete по чату;
-    - `!memory clear --before=YYYY-MM-DD [--confirm]` — delete old messages.
+    - `!memory clear --before=YYYY-MM-DD [--confirm]` — delete old messages;
+    - `!memory rebuild` — запуск repair_sqlite_vec.py для починки FTS5 + vec_chunks.
     """
     raw_args = str(message.text or "").split(maxsplit=2)
     action = raw_args[1].strip().lower() if len(raw_args) > 1 else "recent"
@@ -5054,13 +5055,25 @@ async def handle_memory(bot: "KraabUserbot", message: Message) -> None:
         await _handle_memory_clear(message, rest)
         return
 
+    if action == "rebuild":
+        # Owner-only: запускает repair_sqlite_vec.py
+        me_id = getattr(getattr(bot, "me", None), "id", None)
+        sender_id = getattr(getattr(message, "from_user", None), "id", None)
+        if me_id is None or sender_id != me_id:
+            await message.reply("🚫 `!memory rebuild` доступен только владельцу.")
+            return
+        del bot
+        await _handle_memory_rebuild(message)
+        return
+
     del bot
     source_filter = rest
 
     if action != "recent":
         raise UserInputError(
             user_message=(
-                "🧠 Формат: `!memory recent [source_filter]` | `!memory stats` | `!memory clear`"
+                "🧠 Формат: `!memory recent [source_filter]` | `!memory stats`"
+                " | `!memory clear` | `!memory rebuild`"
             )
         )
 
@@ -5198,6 +5211,96 @@ async def _handle_memory_clear(message: Message, args_str: str) -> None:
     except Exception as exc:  # noqa: BLE001
         await message.reply(f"❌ Ошибка при очистке archive: {exc}")
 
+
+_REPAIR_SCRIPT_RELPATH = pathlib.Path("scripts") / "repair_sqlite_vec.py"
+_MEMORY_REBUILD_TIMEOUT = 60.0  # секунд
+
+
+async def _handle_memory_rebuild(message: Message) -> None:
+    """Запускает repair_sqlite_vec.py в фоне и возвращает результат в reply.
+
+    Предупреждает: во время repair FTS/vec retrieval может быть нестабилен ~20s.
+    """
+    from ..core.subprocess_env import clean_subprocess_env  # noqa: PLC0415
+
+    krab_root = pathlib.Path.home() / "Antigravity_AGENTS" / "Краб"
+    script_path = krab_root / _REPAIR_SCRIPT_RELPATH
+
+    if not script_path.exists():
+        await message.reply(f"❌ Script not found: {_REPAIR_SCRIPT_RELPATH}")
+        return
+
+    await message.reply(
+        "🔄 Запускаю repair sqlite-vec... (~20s)\n"
+        "⚠️ На время repair retrieval memory может быть нестабилен."
+    )
+
+    t0 = time.monotonic()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(script_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(krab_root),
+            env=clean_subprocess_env(),
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(), timeout=_MEMORY_REBUILD_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            if proc.returncode is None:
+                try:
+                    proc.terminate()
+                except ProcessLookupError:
+                    pass
+            elapsed = time.monotonic() - t0
+            await message.reply(
+                f"⚠️ Repair timeout после {elapsed:.0f}s. Проверь лог вручную."
+            )
+            logger.warning("memory_rebuild_timeout", elapsed=elapsed)
+            return
+    except Exception as exc:  # noqa: BLE001
+        import traceback as _tb
+
+        logger.error(
+            "memory_rebuild_launch_error",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            traceback=_tb.format_exc(),
+        )
+        await message.reply(f"❌ Ошибка запуска repair: {exc}")
+        return
+
+    elapsed = time.monotonic() - t0
+    output = stdout.decode("utf-8", errors="replace").strip()
+    if len(output) > 2000:
+        output = "..." + output[-2000:]
+
+    if proc.returncode == 0:
+        summary_line = ""
+        for line in output.splitlines():
+            if "[DONE]" in line or "[OK]" in line:
+                summary_line = line.strip()
+                break
+        tail = f"\n`{summary_line}`" if summary_line else ""
+        snippet = output[-800:]
+        await message.reply(
+            f"✅ Repair done за {elapsed:.1f}s.{tail}\n\n```\n{snippet}\n```"
+        )
+        logger.info("memory_rebuild_done", elapsed=elapsed, returncode=0)
+    else:
+        snippet = output[-800:]
+        await message.reply(
+            f"❌ Repair завершился с кодом {proc.returncode} за {elapsed:.1f}s.\n"
+            f"```\n{snippet}\n```"
+        )
+        logger.error(
+            "memory_rebuild_failed",
+            returncode=proc.returncode,
+            elapsed=elapsed,
+        )
 
 def _collect_memory_archive_stats() -> dict[str, Any]:
     """Read-only снимок archive.db: counts + size. Graceful fallback."""
