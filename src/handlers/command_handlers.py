@@ -6422,9 +6422,7 @@ def _format_ecosystem_report(report: dict[str, Any]) -> str:
             lines.append(f"• 🧠 Archive: {msgs_str} msgs, {size_mb} MB")
         dc = s10.get("dedicated_chrome") or {}
         if isinstance(dc, dict) and dc.get("enabled"):
-            lines.append(
-                f"• 🌐 Chrome: running={dc.get('running')} port={dc.get('port')}"
-            )
+            lines.append(f"• 🌐 Chrome: running={dc.get('running')} port={dc.get('port')}")
         ar = s10.get("auto_restart") or {}
         if isinstance(ar, dict) and ar:
             lines.append(

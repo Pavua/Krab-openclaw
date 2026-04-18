@@ -1,4 +1,5 @@
 """Tests for !uptime command enhancement."""
+
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
