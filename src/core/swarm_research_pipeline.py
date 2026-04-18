@@ -11,7 +11,9 @@ Research Pipeline для Swarm — выделенный модуль (Phase 7).
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
+import time
 from typing import TYPE_CHECKING, Callable
 
 from .logger import get_logger
@@ -121,9 +123,13 @@ class SwarmResearchPipeline:
             output_format=self.config.output_format,
         )
 
+        # Замер времени по стадиям — setup/round/persist
+        t0 = time.monotonic()
+
         roles = TEAM_REGISTRY.get(team_key)
         room = AgentRoom(roles=roles)
         router = router_factory(team_key)
+        t_setup = time.monotonic() - t0
 
         result_text = await room.run_round(
             research_prompt,
@@ -132,12 +138,26 @@ class SwarmResearchPipeline:
             _router_factory=router_factory,
             _team_name=team_key,
         )
+        t_round = time.monotonic() - t0 - t_setup
 
-        # Сохраняем артефакт с меткой [research]
-        swarm_artifact_store.save_round_artifact(
+        # Сохраняем артефакт с меткой [research] в thread executor,
+        # чтобы sync file I/O не блокировал event loop
+        await asyncio.to_thread(
+            swarm_artifact_store.save_round_artifact,
             team=team_key,
             topic=f"[research] {raw_topic}",
             result=result_text,
+        )
+        t_persist = time.monotonic() - t0 - t_setup - t_round
+        t_total = time.monotonic() - t0
+
+        logger.info(
+            "research_pipeline_stage_timings",
+            topic=raw_topic,
+            setup_ms=round(t_setup * 1000, 1),
+            round_ms=round(t_round * 1000, 1),
+            persist_ms=round(t_persist * 1000, 1),
+            total_ms=round(t_total * 1000, 1),
         )
 
         logger.info(
