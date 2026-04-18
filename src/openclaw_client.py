@@ -2318,11 +2318,14 @@ class OpenClawClient:
             logger.error("openclaw_health_check_failed", error=str(exc))
             return False
 
-    async def wait_for_healthy(self, timeout: int = 15) -> bool:
-        """Ожидает доступности OpenClaw (polling)."""
+    async def wait_for_healthy(self, timeout: int = 90) -> bool:
+        """Ожидает доступности OpenClaw (polling). Timeout configurable via OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC."""
         started = asyncio.get_running_loop().time()
         while (asyncio.get_running_loop().time() - started) < timeout:
             if await self.health_check():
+                elapsed = asyncio.get_running_loop().time() - started
+                if elapsed > 30:
+                    logger.info("openclaw_slow_startup", elapsed_sec=round(elapsed, 1))
                 logger.info("openclaw_healthy_verified")
                 return True
             await asyncio.sleep(1.0)

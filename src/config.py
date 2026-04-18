@@ -181,6 +181,9 @@ class Config:
     # RETRY_DELAY_SEC — пауза перед каждой повторной попыткой.
     OPENCLAW_AUTO_RETRY_COUNT: int = int(os.getenv("OPENCLAW_AUTO_RETRY_COUNT", "1"))
     OPENCLAW_AUTO_RETRY_DELAY_SEC: float = float(os.getenv("OPENCLAW_AUTO_RETRY_DELAY_SEC", "2.0"))
+    # Таймаут ожидания готовности OpenClaw при старте userbot.
+    # При высокой нагрузке на CPU startup может занять до 42 мин — минимум 10s enforced.
+    OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC: int = max(10, int(os.getenv("OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC", "90")))
     # Ограничение длины ответа userbot (ускоряет локальные модели в чатах).
     USERBOT_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_MAX_OUTPUT_TOKENS", "1200"))
     USERBOT_PHOTO_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_PHOTO_MAX_OUTPUT_TOKENS", "420"))
