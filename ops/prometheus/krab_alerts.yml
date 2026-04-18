@@ -1,0 +1,78 @@
+# Prometheus alert rules для Krab.
+# Загружать через rule_files в prometheus.yml.
+# Валидация: promtool check rules ops/prometheus/krab_alerts.yml
+groups:
+  - name: krab_critical
+    interval: 60s
+    rules:
+      - alert: KrabDown
+        expr: up{job="krab"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Krab service down"
+          description: "Krab metrics endpoint not reachable >2min"
+
+      - alert: ArchiveDbSizeWarning
+        expr: krab_archive_db_size_bytes > 500 * 1024 * 1024
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "archive.db > 500 MB"
+          description: "Memory Layer archive approaching recommended limit"
+
+      - alert: ArchiveDbSizeCritical
+        expr: krab_archive_db_size_bytes > 1024 * 1024 * 1024
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "archive.db > 1 GB"
+          description: "Memory Layer archive exceeded critical threshold, prune required"
+
+      - alert: MemoryQueryLatencyHigh
+        expr: histogram_quantile(0.95, rate(krab_memory_query_duration_seconds_bucket[5m])) > 2.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory query p95 latency > 2s"
+          description: "Memory Layer queries slow, check archive size and embeddings"
+
+      - alert: MessageBatcherBackpressure
+        expr: krab_message_batcher_queue_depth > 500
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Message batcher queue depth > 500"
+          description: "Backpressure on message ingest pipeline"
+
+      - alert: LLMErrorRateHigh
+        expr: rate(krab_llm_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM error rate > 0.1/sec"
+          description: "Provider instability, check cloud gateway and LM Studio"
+
+      - alert: CommandHandlerErrors
+        expr: rate(krab_command_errors_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Command handler error rate > 0.05/sec"
+          description: "Userbot command pipeline failing, inspect logs"
+
+      - alert: TelegramRateLimited
+        expr: increase(krab_telegram_flood_wait_total[15m]) > 5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Telegram FLOOD_WAIT > 5 occurrences in 15m"
+          description: "Telegram API rate limiter active, slow down userbot actions"

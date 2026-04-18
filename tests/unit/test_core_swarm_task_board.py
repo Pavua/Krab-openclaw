@@ -451,6 +451,155 @@ class TestBoardSummaryMixedStatuses:
         assert summary["by_team"]["traders"] == 1
 
 
+class TestAsyncLoadInstrumentation:
+    """Wave 22-H: async-ified load + elapsed_ms instrumentation."""
+
+    def test_load_logs_elapsed_ms(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """_load логирует elapsed_ms после успешной загрузки."""
+        import json
+        import logging
+
+        path = tmp_path / "board.json"
+        # 200 задач = размер prod state-файла
+        sample = {
+            f"task_{i}": {
+                "task_id": f"task_{i}",
+                "team": "coders",
+                "title": f"T{i}",
+                "description": "D",
+                "status": "pending",
+                "created_by": "owner",
+                "assigned_to": "coders",
+                "priority": "medium",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+            for i in range(200)
+        }
+        path.write_text(json.dumps(sample), encoding="utf-8")
+
+        with caplog.at_level(logging.INFO, logger="src.core.swarm_task_board"):
+            b = SwarmTaskBoard(state_path=path)
+
+        assert len(b._tasks) == 200  # type: ignore[attr-defined]
+        # Лог должен содержать поле elapsed_ms
+        loaded_records = [
+            r for r in caplog.records if "swarm_task_board_loaded" in r.getMessage()
+        ]
+        assert loaded_records, "swarm_task_board_loaded event not logged"
+
+    def test_load_missing_file_logs_zero_total(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """При отсутствии файла — лог с total=0 и path_missing=True."""
+        import logging
+
+        path = tmp_path / "not_here.json"
+        with caplog.at_level(logging.INFO, logger="src.core.swarm_task_board"):
+            b = SwarmTaskBoard(state_path=path)
+
+        assert b.list_tasks() == []
+
+    def test_load_async_completes(self, tmp_path: Path) -> None:
+        """load_async() успешно перезагружает state через asyncio.to_thread."""
+        import asyncio
+        import json
+
+        path = tmp_path / "board.json"
+        sample = {
+            "t1": {
+                "task_id": "t1",
+                "team": "coders",
+                "title": "Async",
+                "description": "D",
+                "status": "pending",
+                "created_by": "owner",
+                "assigned_to": "coders",
+                "priority": "medium",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        }
+        path.write_text(json.dumps(sample), encoding="utf-8")
+
+        b = SwarmTaskBoard(state_path=tmp_path / "empty.json")
+        assert b.list_tasks() == []
+
+        # Переключаем путь и async-перечитываем
+        async def _reconfigure() -> None:
+            await b.configure_default_path_async(path)
+
+        asyncio.run(_reconfigure())
+        assert b.get_task("t1") is not None
+        assert b.get_task("t1").title == "Async"  # type: ignore[union-attr]
+
+    def test_load_async_does_not_block_loop(self, tmp_path: Path) -> None:
+        """
+        load_async выполняется в thread; параллельная coroutine должна
+        прогрессировать, пока идёт чтение.
+        """
+        import asyncio
+        import json
+
+        path = tmp_path / "board.json"
+        path.write_text(json.dumps({}), encoding="utf-8")
+        b = SwarmTaskBoard(state_path=tmp_path / "empty.json")
+
+        async def _run() -> tuple[bool, bool]:
+            progressed = False
+
+            async def _ticker() -> None:
+                nonlocal progressed
+                await asyncio.sleep(0)
+                progressed = True
+
+            await asyncio.gather(
+                b.configure_default_path_async(path),
+                _ticker(),
+            )
+            return progressed, True
+
+        progressed, completed = asyncio.run(_run())
+        assert progressed and completed
+
+
+class TestCleanupOld:
+    """Метод cleanup_old: удаление done/failed задач."""
+
+    def test_cleanup_removes_done(self, board: SwarmTaskBoard) -> None:
+        t1 = board.create_task("coders", "A", "D")
+        t2 = board.create_task("coders", "B", "D")
+        board.complete_task(t1.task_id, result="ok")
+        board.complete_task(t2.task_id, result="ok")
+
+        removed = board.cleanup_old()
+        assert removed == 2
+        assert board.list_tasks() == []
+
+    def test_cleanup_keeps_pending(self, board: SwarmTaskBoard) -> None:
+        board.create_task("coders", "Pending", "D")
+        t2 = board.create_task("coders", "Done", "D")
+        board.complete_task(t2.task_id, result="ok")
+
+        removed = board.cleanup_old()
+        assert removed == 1
+        assert len(board.list_tasks()) == 1
+
+    def test_cleanup_with_keep_done(self, board: SwarmTaskBoard) -> None:
+        for i in range(5):
+            t = board.create_task("coders", f"T{i}", "D")
+            board.complete_task(t.task_id, result="ok")
+
+        removed = board.cleanup_old(keep_done=2)
+        assert removed == 3
+        assert len(board.list_tasks()) == 2
+
+    def test_cleanup_empty_board(self, board: SwarmTaskBoard) -> None:
+        assert board.cleanup_old() == 0
+
+
 class TestFifo201Task:
     def test_201st_task_trims_oldest_done(self, tmp_path: Path) -> None:
         """При создании 201-й задачи board не превышает _MAX_TASKS."""

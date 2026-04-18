@@ -11,8 +11,8 @@ Research Pipeline для Swarm — выделенный модуль (Phase 7).
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
-import os
 import time
 from typing import TYPE_CHECKING, Callable
 
@@ -23,12 +23,6 @@ from .swarm_bus import TEAM_REGISTRY
 
 if TYPE_CHECKING:
     pass
-
-# Включает structured reflection path (Haiku-style, schema-validated).
-# Можно отключить через env: SWARM_STRUCTURED_REFLECT=false
-SWARM_STRUCTURED_REFLECT: bool = os.environ.get(
-    "SWARM_STRUCTURED_REFLECT", "true"
-).lower() in ("true", "1", "yes")
 
 logger = get_logger(__name__)
 
@@ -86,11 +80,14 @@ class SwarmResearchPipeline:
                 f"(не менее {self.config.max_sources} источников)."
             )
         else:
-            structure_hint = f"Найди не менее {self.config.max_sources} источников по теме."
+            structure_hint = (
+                f"Найди не менее {self.config.max_sources} источников по теме."
+            )
 
         return (
             f"Проведи исследование по теме: {raw_topic}. "
-            "Обязательно используй web_search для поиска актуальной информации. " + structure_hint
+            "Обязательно используй web_search для поиска актуальной информации. "
+            + structure_hint
         )
 
     # ------------------------------------------------------------------
@@ -103,10 +100,6 @@ class SwarmResearchPipeline:
         *,
         router_factory: Callable[[str], object],
         swarm_bus: object,
-        openclaw_client: object | None = None,
-        task_board: object | None = None,
-        reflect: bool = True,
-        structured: bool | None = None,
     ) -> str:
         """
         Запускает research pipeline.
@@ -115,17 +108,10 @@ class SwarmResearchPipeline:
             raw_topic: Тема исследования (без префикса 'research').
             router_factory: Фабрика роутеров `(team_name) -> RouterAdapter`.
             swarm_bus: SwarmBus для межкомандного broadcast.
-            openclaw_client: Опциональный клиент для self-reflection LLM-вызова.
-            task_board: Опциональный SwarmTaskBoard для follow-up задач.
-            reflect: Включает self-reflection hook (Proactivity Level 3).
-            structured: Включает structured reflection path (schema-validated).
-                None = использовать SWARM_STRUCTURED_REFLECT env-флаг.
 
         Returns:
             Финальный текст исследования.
         """
-        # Определяем флаг structured (env → default, явный аргумент — override)
-        use_structured = SWARM_STRUCTURED_REFLECT if structured is None else structured
         team_key = self.config.team_key
         research_prompt = self.build_prompt(raw_topic)
 
@@ -137,9 +123,13 @@ class SwarmResearchPipeline:
             output_format=self.config.output_format,
         )
 
+        # Замер времени по стадиям — setup/round/persist
+        t0 = time.monotonic()
+
         roles = TEAM_REGISTRY.get(team_key)
         room = AgentRoom(roles=roles)
         router = router_factory(team_key)
+        t_setup = time.monotonic() - t0
 
         result_text = await room.run_round(
             research_prompt,
@@ -148,12 +138,26 @@ class SwarmResearchPipeline:
             _router_factory=router_factory,
             _team_name=team_key,
         )
+        t_round = time.monotonic() - t0 - t_setup
 
-        # Сохраняем артефакт с меткой [research]
-        swarm_artifact_store.save_round_artifact(
+        # Сохраняем артефакт с меткой [research] в thread executor,
+        # чтобы sync file I/O не блокировал event loop
+        await asyncio.to_thread(
+            swarm_artifact_store.save_round_artifact,
             team=team_key,
             topic=f"[research] {raw_topic}",
             result=result_text,
+        )
+        t_persist = time.monotonic() - t0 - t_setup - t_round
+        t_total = time.monotonic() - t0
+
+        logger.info(
+            "research_pipeline_stage_timings",
+            topic=raw_topic,
+            setup_ms=round(t_setup * 1000, 1),
+            round_ms=round(t_round * 1000, 1),
+            persist_ms=round(t_persist * 1000, 1),
+            total_ms=round(t_total * 1000, 1),
         )
 
         logger.info(
@@ -161,85 +165,6 @@ class SwarmResearchPipeline:
             topic=raw_topic,
             result_len=len(result_text),
         )
-
-        # Self-Reflection hook (Proactivity Level 3, Session 11)
-        if reflect and openclaw_client is not None:
-            task_id = f"research:{team_key}:{int(time.time())}"
-
-            # Legacy path
-            try:
-                from .swarm_self_reflection import enqueue_followups, reflect_on_task
-
-                reflection = await reflect_on_task(
-                    task_id=task_id,
-                    task_title=f"Research: {raw_topic}",
-                    task_description=research_prompt,
-                    task_result=result_text,
-                    task_status="completed",
-                    openclaw_client=openclaw_client,
-                )
-                if reflection.followups:
-                    enqueue_followups(reflection, task_board=task_board)
-                    logger.info(
-                        "research_self_reflection_followups_enqueued",
-                        count=len(reflection.followups),
-                    )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "research_self_reflection_failed",
-                    error=str(exc),
-                    error_type=type(exc).__name__,
-                )
-
-            # Structured path (schema-validated, light model)
-            if use_structured:
-                try:
-                    from .swarm_self_reflection import (
-                        flush_followups_to_reminders,
-                        structured_reflect,
-                    )
-
-                    async def _llm_caller(prompt: str) -> str:
-                        """Обёртка над openclaw_client для structured reflection."""
-                        chunks: list[str] = []
-                        try:
-                            async for piece in openclaw_client.send_message_stream(
-                                message=prompt,
-                                chat_id="__reflection__",
-                                force_cloud=True,
-                                disable_tools=True,
-                            ):
-                                if isinstance(piece, str):
-                                    chunks.append(piece)
-                        except Exception as _exc:  # noqa: BLE001
-                            logger.warning(
-                                "structured_reflect_stream_failed",
-                                error=str(_exc),
-                            )
-                        return "".join(chunks)
-
-                    structured_result = await structured_reflect(
-                        task_id=task_id,
-                        task_title=f"Research: {raw_topic}",
-                        task_description=research_prompt,
-                        task_result=result_text,
-                        llm_caller=_llm_caller,
-                    )
-
-                    flushed = flush_followups_to_reminders(structured_result)
-                    logger.info(
-                        "structured_reflect_completed",
-                        task_id=task_id,
-                        insights=len(structured_result.insights),
-                        follow_ups_total=len(structured_result.follow_ups),
-                        flushed_to_reminders=flushed,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "structured_reflect_failed",
-                        error=str(exc),
-                        error_type=type(exc).__name__,
-                    )
 
         return result_text
 

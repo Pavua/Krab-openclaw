@@ -6,13 +6,13 @@
     <string>ai.krab.maintenance</string>
 
     <key>Comment</key>
-    <string>Krab Weekly Maintenance — VACUUM archive.db, log rotation, sync docs</string>
+    <string>Krab Weekly Maintenance — VACUUM archive.db + caches, log rotation, archive compaction</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>cd /Users/pablito/Antigravity_AGENTS/Краб && /Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python scripts/maintenance_weekly.py --execute && /Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python scripts/backup_archive_db.py && /Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python scripts/sync_docs.py</string>
+        <string>cd /Users/pablito/Antigravity_AGENTS/Краб &amp;&amp; /Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python scripts/archive_maintenance.py &gt;&gt; logs/archive_maintenance.log 2&gt;&amp;1</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -25,13 +25,13 @@
         <key>Hour</key>
         <integer>3</integer>
         <key>Minute</key>
-        <integer>0</integer>
+        <integer>15</integer>
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/maintenance.log</string>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/archive_maintenance.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/maintenance.err.log</string>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/archive_maintenance.err.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
