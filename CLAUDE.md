@@ -160,7 +160,24 @@ src/
   web/
     index.html          — главный HTML шаблон
     prototypes/         — Gemini-generated dashboard prototypes
+  voice_channel/
+    handler.py          — VoiceChannelHandler: SSE streaming, session state
+    state.py            — VoiceSessionState: buffer, model config
+  mcp_tools/
+    voice_assistant_tools.py — MCP tools для voice assistant
 ```
+
+## Voice Channel (Phase 1.4 voice assistant bridge)
+
+Интеграция Voice Gateway с OpenClaw через HTTP/SSE.
+
+- **Location**: `src/voice_channel/` + `src/mcp_tools/voice_assistant_tools.py`
+- **HTTP Endpoints**:
+  - `POST /v1/voice/message` — SSE streaming (Voice Gateway → tokens → OpenClaw → response)
+  - `GET /v1/voice/status` — session diagnostics
+- **Port**: 8081 (отдельно от OpenClaw :18789)
+- **MCP tools**: `voice:get_recent_dictations`, `voice:send_telegram`, `voice:search_memory`
+- **Model**: preferred_model="qwen3-30b-a3b-instruct-2507"
 
 ## Инфраструктура (LaunchAgents)
 
