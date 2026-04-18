@@ -4903,8 +4903,7 @@ async def _handle_cron_quick(bot: "KraabUserbot", message: Message, args: str) -
 
     raw = (args or "").strip()
     if not raw:
-        await bot._safe_reply(
-            message,
+        await message.reply(
             '❌ Формат: `!cron quick "<время>" "<промпт>"`\n'
             'Пример: `!cron quick "каждый день в 10:00" "AI+crypto ресёрч, саммари"`',
         )
@@ -4913,15 +4912,13 @@ async def _handle_cron_quick(bot: "KraabUserbot", message: Message, args: str) -
     try:
         parts = shlex.split(raw)
     except ValueError:
-        await bot._safe_reply(
-            message,
+        await message.reply(
             '❌ Не распарсил аргументы. Используй кавычки: `!cron quick "время" "промпт"`',
         )
         return
 
     if len(parts) < 2:
-        await bot._safe_reply(
-            message,
+        await message.reply(
             "❌ Нужно 2 аргумента: время + промпт. "
             'Пример: `!cron quick "каждые 2 часа" "проверь BTC/ETH"`',
         )
@@ -4930,13 +4927,12 @@ async def _handle_cron_quick(bot: "KraabUserbot", message: Message, args: str) -
     time_expr = parts[0]
     prompt = " ".join(parts[1:]).strip()
     if not prompt:
-        await bot._safe_reply(message, "❌ Промпт не может быть пустым.")
+        await message.reply("❌ Промпт не может быть пустым.")
         return
 
     cron_spec = parse_cron_expression(time_expr)
     if not cron_spec:
-        await bot._safe_reply(
-            message,
+        await message.reply(
             f"❌ Не распарсил время: `{time_expr}`.\nПримеры:\n"
             "• `каждый день в 10:00`\n"
             "• `каждые 2 часа`\n"
@@ -4973,12 +4969,11 @@ async def _handle_cron_quick(bot: "KraabUserbot", message: Message, args: str) -
     if not ok:
         short = raw_out[:200] if raw_out else "no output"
         logger.warning("cron_quick_create_failed", name=job_name, spec=cron_spec, raw=short)
-        await bot._safe_reply(message, f"❌ Ошибка создания job:\n`{short}`")
+        await message.reply(f"❌ Ошибка создания job:\n`{short}`")
         return
 
     prompt_preview = prompt[:80] + ("…" if len(prompt) > 80 else "")
-    await bot._safe_reply(
-        message,
+    await message.reply(
         "✅ **Cron создан**\n"
         f"• Имя: `{job_name}`\n"
         f"• Расписание: `{cron_spec}` (из `{time_expr}`)\n"
@@ -7312,7 +7307,7 @@ async def handle_bench(bot: "KraabUserbot", message: Message) -> None:
     # Доступ только для владельца
     access = bot._get_access_profile(message.from_user)
     if access.level != AccessLevel.OWNER:
-        await bot._safe_reply(message, "⛔ Только для владельца.")
+        await message.reply("⛔ Только для владельца.")
         return
 
     # Парсим аргументы
@@ -7333,8 +7328,8 @@ async def handle_bench(bot: "KraabUserbot", message: Message) -> None:
     iterations = iterations_map.get(preset, 20)
 
     # Отправляем статус
-    status_msg = await bot._safe_reply(
-        message, f"⏱ Benchmark `{preset}` (iterations={iterations})..."
+    status_msg = await message.reply(
+        f"⏱ Benchmark `{preset}` (iterations={iterations})..."
     )
 
     try:
@@ -7355,18 +7350,17 @@ async def handle_bench(bot: "KraabUserbot", message: Message) -> None:
         if not output:
             output = "(empty output)"
 
-        await bot._safe_reply(
-            message,
+        await message.reply(
             f"📊 **Benchmark results ({preset})**:\n```\n{output}\n```",
         )
         logger.info("handle_bench_done", preset=preset, iterations=iterations)
 
     except subprocess.TimeoutExpired:
-        await bot._safe_reply(message, "⚠️ Benchmark timed out после 120 сек")
+        await message.reply("⚠️ Benchmark timed out после 120 сек")
         logger.warning("handle_bench_timeout", preset=preset)
     except Exception as exc:  # noqa: BLE001
         logger.error("handle_bench_error", preset=preset, error=str(exc))
-        await bot._safe_reply(message, f"❌ Benchmark failed: {exc}")
+        await message.reply(f"❌ Benchmark failed: {exc}")
 
 
 async def handle_health(bot: "KraabUserbot", message: Message) -> None:
@@ -17361,7 +17355,7 @@ async def _handle_listen_list(bot: "KraabUserbot", message: Message) -> None:
 
     rules = chat_filter_config.list_rules()
     if not rules:
-        await bot._safe_reply(message, "📭 Нет явных правил. Все чаты используют дефолты.")
+        await message.reply("📭 Нет явных правил. Все чаты используют дефолты.")
         return
 
     lines = ["🎛️ **Явные правила фильтра:**\n"]
@@ -17371,7 +17365,7 @@ async def _handle_listen_list(bot: "KraabUserbot", message: Message) -> None:
     if len(rules) > 30:
         lines.append(f"... ещё +{len(rules) - 30}")
 
-    await bot._safe_reply(message, "\n".join(lines))
+    await message.reply("\n".join(lines))
 
 
 async def _handle_listen_stats(bot: "KraabUserbot", message: Message) -> None:
@@ -17384,7 +17378,7 @@ async def _handle_listen_stats(bot: "KraabUserbot", message: Message) -> None:
     for mode, count in sorted(stats.get("by_mode", {}).items()):
         lines.append(f"• `{mode}`: {count}")
 
-    await bot._safe_reply(message, "\n".join(lines))
+    await message.reply("\n".join(lines))
 
 
 async def handle_listen(bot: "KraabUserbot", message: Message) -> None:
@@ -17419,8 +17413,7 @@ async def handle_listen(bot: "KraabUserbot", message: Message) -> None:
         changed = chat_filter_config.reload()
         total = chat_filter_config.stats().get("total_rules", 0)
         status = "🔄 (changed)" if changed else "✅ (no changes)"
-        await bot._safe_reply(
-            message,
+        await message.reply(
             f"{status} Config reloaded. Total rules: {total}",
         )
         return
@@ -17433,23 +17426,22 @@ async def handle_listen(bot: "KraabUserbot", message: Message) -> None:
             "mention-only": "@mention и reply",
             "muted": "молчать",
         }[args]
-        await bot._safe_reply(message, f"✅ Чат `{chat_id}`: {mode_name}")
+        await message.reply(f"✅ Чат `{chat_id}`: {mode_name}")
         return
 
     if args == "reset":
         chat_filter_config.reset(chat_id)
-        await bot._safe_reply(message, f"🔄 Чат `{chat_id}`: вернулся к дефолту")
+        await message.reply(f"🔄 Чат `{chat_id}`: вернулся к дефолту")
         return
 
     # Показать текущий режим
     if not args:
         mode = chat_filter_config.get_mode(chat_id, is_group=is_group)
         mode_emoji = {"active": "🟢", "mention-only": "🟡", "muted": "🔴"}[mode]
-        await bot._safe_reply(message, f"{mode_emoji} Текущий режим: `{mode}`")
+        await message.reply(f"{mode_emoji} Текущий режим: `{mode}`")
         return
 
     # Неизвестная команда
-    await bot._safe_reply(
-        message,
+    await message.reply(
         "❌ Неизвестный режим. Используйте: active, mention-only, muted, reset, reload, list, stats",
     )

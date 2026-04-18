@@ -191,45 +191,82 @@ async def test_mark_memory_recall():
 
 @pytest.mark.asyncio
 async def test_handle_react_on():
-    """!react on → устанавливает env=true, отправляет подтверждение."""
+    """!react on → устанавливает env=true, отправляет подтверждение через message.reply."""
     bot = MagicMock()
     bot._get_command_args = MagicMock(return_value="on")
-    bot._safe_reply = AsyncMock()
     msg = _make_message()
+    msg.reply = AsyncMock()
     with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "false"}, clear=False):
         await ar.handle_react(bot, msg)
         # Проверяем внутри контекста, пока patch.dict ещё активен
         assert os.environ.get("AUTO_REACTIONS_ENABLED") == "true"
-    bot._safe_reply.assert_awaited_once()
-    text = bot._safe_reply.call_args[0][1]
+    msg.reply.assert_awaited_once()
+    text = msg.reply.call_args[0][0]
     assert "enabled" in text.lower()
 
 
 @pytest.mark.asyncio
 async def test_handle_react_off():
-    """!react off → устанавливает env=false, отправляет подтверждение."""
+    """!react off → устанавливает env=false, отправляет подтверждение через message.reply."""
     bot = MagicMock()
     bot._get_command_args = MagicMock(return_value="off")
-    bot._safe_reply = AsyncMock()
     msg = _make_message()
+    msg.reply = AsyncMock()
     with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "true"}, clear=False):
         await ar.handle_react(bot, msg)
         # Проверяем внутри контекста, пока patch.dict ещё активен
         assert os.environ.get("AUTO_REACTIONS_ENABLED") == "false"
-    bot._safe_reply.assert_awaited_once()
-    text = bot._safe_reply.call_args[0][1]
+    msg.reply.assert_awaited_once()
+    text = msg.reply.call_args[0][0]
     assert "disabled" in text.lower()
 
 
 @pytest.mark.asyncio
 async def test_handle_react_status():
-    """!react без args → показывает текущее состояние env."""
+    """!react без args → показывает текущее состояние env через message.reply."""
     bot = MagicMock()
     bot._get_command_args = MagicMock(return_value="")
-    bot._safe_reply = AsyncMock()
     msg = _make_message()
+    msg.reply = AsyncMock()
     with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "true"}):
         await ar.handle_react(bot, msg)
-    bot._safe_reply.assert_awaited_once()
-    text = bot._safe_reply.call_args[0][1]
+    msg.reply.assert_awaited_once()
+    text = msg.reply.call_args[0][0]
     assert "true" in text
+
+
+@pytest.mark.asyncio
+async def test_handle_react_on_no_attribute_error():
+    """handle_react 'on' не выбрасывает AttributeError даже если bot не имеет _safe_reply."""
+    bot = MagicMock(spec=["_get_command_args"])  # нет _safe_reply
+    bot._get_command_args = MagicMock(return_value="on")
+    msg = _make_message()
+    msg.reply = AsyncMock()
+    with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "false"}, clear=False):
+        # не должно падать
+        await ar.handle_react(bot, msg)
+    msg.reply.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_react_off_no_attribute_error():
+    """handle_react 'off' не выбрасывает AttributeError даже если bot не имеет _safe_reply."""
+    bot = MagicMock(spec=["_get_command_args"])  # нет _safe_reply
+    bot._get_command_args = MagicMock(return_value="off")
+    msg = _make_message()
+    msg.reply = AsyncMock()
+    with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "true"}, clear=False):
+        await ar.handle_react(bot, msg)
+    msg.reply.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_react_status_no_attribute_error():
+    """handle_react status не выбрасывает AttributeError даже если bot не имеет _safe_reply."""
+    bot = MagicMock(spec=["_get_command_args"])  # нет _safe_reply
+    bot._get_command_args = MagicMock(return_value="status")
+    msg = _make_message()
+    msg.reply = AsyncMock()
+    with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "true"}):
+        await ar.handle_react(bot, msg)
+    msg.reply.assert_awaited_once()
