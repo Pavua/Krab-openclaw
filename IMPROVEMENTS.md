@@ -914,3 +914,36 @@ redact (4/4 пойманы) → chunking (7 chunks) → FTS5 index → Model2Vec
 - `src/modules/web_app.py`: `swarm_artifacts_list`, `swarm_task_detail`, `ops_timeline`, `model_recommend`, `ops_cost_report`, `ops_executive_summary`
 - Browser diagnostics: `_probe_owner_chrome_devtools`, `_build_browser_access_paths`, `_collect_openclaw_browser_smoke_report`
 - `kraab` property через `deps["kraab_userbot"]` (ломающий API исправлен)
+
+## Wave 22-25 learnings (18.04.2026)
+
+### Root-causes discovered
+
+1. **Event loop stall at startup** (Wave 22-H): `swarm_task_board.load(200)` blocking 100+ms на synchronous JSON+pydantic. Fixed via `asyncio.to_thread` wrap (Wave 24-A). **Pattern:** любой >50-item JSON blob read в startup должен быть `to_thread`.
+
+2. **Hidden AttributeError `!swarm task clear`** (Wave 24-A): `SwarmTaskBoard.cleanup_old()` вызывался но не реализован. Silent fail. Added в Wave 24-A.
+
+3. **MTProto DC reconnect storm** (Wave 24-B): 5 параллельных Pyrogram handshakes + per-client `get_dialogs(50)` warmup создают storm. Recommendations: stagger 1.5s между startup + first-start gate для warmup.
+
+4. **Clock drift** — `msg_id is lower than stored` Pyrogram warning. Added `/api/system/clock_drift` endpoint (Wave 25-B) для diagnostics.
+
+### Architectural patterns reinforced
+
+- **Dependency injection for testability** (Wave 24-C): dashboard_summary передаёт все probes как parameters — full unit-test coverage без mock.patch.
+- **Timing instrumentation mandatory** (Wave 24-A): `elapsed_ms` logging в каждой load function + warning threshold (500ms default).
+- **Graceful fallback pattern**: любой sub-endpoint → `field=null` вместо 500. Dashboard degrade gracefully.
+
+### Backlog additions
+
+- [ ] Audit остальные singleton `__init__` loads (reminders_queue, access_control, chat_ban_cache) — apply async pattern если >20 items
+- [ ] Single listener client routing by role (eliminates 4-5 concurrent Pyrogram sessions) — long-term
+- [ ] NTP daemon health probe + auto-alert при drift > 5s
+- [ ] Profile swarm_research_pipeline (heaviest cron task)
+- [ ] pyproject.toml [tool.ruff] — tune per-directory rules (relax tests/ F401 check?)
+
+### New endpoints (since session 13 mid)
+
+- `/api/memory/stats` — Memory Layer summary (Wave 23-D, e07dfb1)
+- `/api/dashboard/summary` — V4 single-call aggregator (Wave 24-C, b257daa)
+- `/api/archive/growth` — 30-day size trend (Wave 21-D, 558b419)
+- `/api/system/clock_drift` — NTP offset diag (Wave 25-B)
