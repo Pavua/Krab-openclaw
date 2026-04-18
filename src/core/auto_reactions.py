@@ -12,6 +12,10 @@ Reactions:
 Включается через env AUTO_REACTIONS_ENABLED=true (default).
 Переключается командой !react on|off|status.
 """
+<<<<<<< HEAD
+=======
+
+>>>>>>> docs/readme-voice-channel
 from __future__ import annotations
 
 import os
@@ -53,9 +57,13 @@ async def set_reaction(
         if hasattr(bot, "send_reaction"):
             await bot.send_reaction(chat_id=chat_id, message_id=message_id, emoji=emoji)
         elif hasattr(bot, "client") and hasattr(bot.client, "send_reaction"):
+<<<<<<< HEAD
             await bot.client.send_reaction(
                 chat_id=chat_id, message_id=message_id, emoji=emoji
             )
+=======
+            await bot.client.send_reaction(chat_id=chat_id, message_id=message_id, emoji=emoji)
+>>>>>>> docs/readme-voice-channel
         else:
             logger.debug("auto_reaction_api_not_available", emoji=emoji)
             return False

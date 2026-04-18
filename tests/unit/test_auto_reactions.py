@@ -17,16 +17,15 @@
 12. handle_react "off" → AUTO_REACTIONS_ENABLED=false
 13. handle_react "status" (no args) → показывает текущее состояние
 """
+
 from __future__ import annotations
 
 import os
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import src.core.auto_reactions as ar
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
@@ -85,9 +84,7 @@ async def test_set_reaction_via_bot_send_reaction():
     with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "true"}):
         result = await ar.set_reaction(bot, msg.chat.id, msg.id, "✅")
     assert result is True
-    bot.send_reaction.assert_awaited_once_with(
-        chat_id=msg.chat.id, message_id=msg.id, emoji="✅"
-    )
+    bot.send_reaction.assert_awaited_once_with(chat_id=msg.chat.id, message_id=msg.id, emoji="✅")
 
 
 @pytest.mark.asyncio
