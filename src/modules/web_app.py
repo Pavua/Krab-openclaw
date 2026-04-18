@@ -10954,6 +10954,7 @@ class WebApp:
             if format == "json":
                 from fastapi.responses import JSONResponse
 
+<<<<<<< HEAD
                 return JSONResponse(
                     {
                         "ok": True,
@@ -10977,15 +10978,42 @@ class WebApp:
                         ],
                     }
                 )
+=======
+                return JSONResponse({
+                    "ok": True,
+                    "tasks": [
+                        {
+                            "task_id": t.task_id,
+                            "team": t.team,
+                            "title": t.title,
+                            "description": t.description,
+                            "status": t.status,
+                            "priority": t.priority,
+                            "created_by": t.created_by,
+                            "assigned_to": t.assigned_to,
+                            "created_at": t.created_at,
+                            "updated_at": t.updated_at,
+                            "result": t.result,
+                            "artifacts": t.artifacts,
+                            "parent_task_id": t.parent_task_id,
+                        }
+                        for t in tasks
+                    ]
+                })
+>>>>>>> 134f167
 
             # CSV export
             import csv
             import io
+<<<<<<< HEAD
 
+=======
+>>>>>>> 134f167
             from fastapi.responses import PlainTextResponse
 
             buf = io.StringIO()
             writer = csv.writer(buf)
+<<<<<<< HEAD
             writer.writerow(
                 [
                     "task_id",
@@ -11013,11 +11041,33 @@ class WebApp:
                         t.updated_at,
                     ]
                 )
+=======
+            writer.writerow([
+                "task_id", "team", "title", "status", "priority",
+                "created_by", "assigned_to", "created_at", "updated_at"
+            ])
+            for t in tasks:
+                writer.writerow([
+                    t.task_id,
+                    t.team,
+                    t.title,
+                    t.status,
+                    t.priority,
+                    t.created_by,
+                    t.assigned_to,
+                    t.created_at,
+                    t.updated_at,
+                ])
+>>>>>>> 134f167
 
             return PlainTextResponse(
                 buf.getvalue(),
                 media_type="text/csv",
+<<<<<<< HEAD
                 headers={"Content-Disposition": "attachment; filename=task_board.csv"},
+=======
+                headers={"Content-Disposition": "attachment; filename=task_board.csv"}
+>>>>>>> 134f167
             )
 
         @self.app.post("/api/swarm/listeners/toggle")
