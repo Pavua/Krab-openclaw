@@ -637,3 +637,245 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | Session 5 | 2071 |
 | Session 6 | 3633 |
 | Session 7 | ~6826+ |
+
+<!-- BEGIN:auto-endpoints -->
+
+### Auto-generated endpoints table (190 маршрутов)
+
+| Endpoint | Метод |
+|----------|-------|
+| `/` | GET |
+| `/api/assistant/attachment` | POST |
+| `/api/assistant/capabilities` | GET |
+| `/api/assistant/query` | POST |
+| `/api/assistant/stream` | GET |
+| `/api/browser/js` | POST |
+| `/api/browser/navigate` | POST |
+| `/api/browser/read` | POST |
+| `/api/browser/screenshot` | POST |
+| `/api/browser/status` | GET |
+| `/api/browser/tabs` | GET |
+| `/api/capabilities/registry` | GET |
+| `/api/channels/capabilities` | GET |
+| `/api/commands` | GET |
+| `/api/commands/usage` | GET |
+| `/api/commands/{name}` | GET |
+| `/api/context/checkpoint` | POST |
+| `/api/context/latest` | GET |
+| `/api/context/transition-pack` | POST |
+| `/api/costs/budget` | GET |
+| `/api/costs/history` | GET |
+| `/api/costs/report` | GET |
+| `/api/ctx` | GET |
+| `/api/dashboard/summary` | GET |
+| `/api/depth/status` | GET |
+| `/api/diagnostics/smoke` | POST |
+| `/api/ecosystem/capabilities` | GET |
+| `/api/ecosystem/health` | GET |
+| `/api/ecosystem/health/export` | GET |
+| `/api/endpoints` | GET |
+| `/api/health` | GET |
+| `/api/health/lite` | GET |
+| `/api/inbox/create` | POST |
+| `/api/inbox/events` | GET |
+| `/api/inbox/items` | GET |
+| `/api/inbox/stale-open` | GET |
+| `/api/inbox/stale-open/remediate` | POST |
+| `/api/inbox/stale-processing` | GET |
+| `/api/inbox/stale-processing/remediate` | POST |
+| `/api/inbox/status` | GET |
+| `/api/inbox/update` | POST |
+| `/api/krab/restart_userbot` | POST |
+| `/api/links` | GET |
+| `/api/memory/indexer` | GET |
+| `/api/memory/indexer/flush` | POST |
+| `/api/memory/stats` | GET |
+| `/api/model/apply` | POST |
+| `/api/model/catalog` | GET |
+| `/api/model/explain` | GET |
+| `/api/model/feedback` | GET/POST |
+| `/api/model/local/load-default` | POST |
+| `/api/model/local/status` | GET |
+| `/api/model/local/unload` | POST |
+| `/api/model/preflight` | POST |
+| `/api/model/provider-action` | POST |
+| `/api/model/recommend` | GET |
+| `/api/model/status` | GET |
+| `/api/model/switch` | POST |
+| `/api/mood/{chat_id}` | GET |
+| `/api/notifications/count` | GET |
+| `/api/notify` | POST |
+| `/api/notify/status` | GET |
+| `/api/notify/toggle` | POST |
+| `/api/openclaw/browser-mcp-readiness` | GET |
+| `/api/openclaw/browser-smoke` | GET |
+| `/api/openclaw/browser/open-owner-chrome` | POST |
+| `/api/openclaw/browser/start` | POST |
+| `/api/openclaw/channels/runtime-repair` | POST |
+| `/api/openclaw/channels/signal-guard-run` | POST |
+| `/api/openclaw/channels/status` | GET |
+| `/api/openclaw/cloud` | GET |
+| `/api/openclaw/cloud/diagnostics` | GET |
+| `/api/openclaw/cloud/runtime-check` | GET |
+| `/api/openclaw/cloud/switch-tier` | POST |
+| `/api/openclaw/cloud/tier/reset` | POST |
+| `/api/openclaw/cloud/tier/state` | GET |
+| `/api/openclaw/control-compat/status` | GET |
+| `/api/openclaw/cron/jobs` | GET |
+| `/api/openclaw/cron/jobs/create` | POST |
+| `/api/openclaw/cron/jobs/remove` | POST |
+| `/api/openclaw/cron/jobs/toggle` | POST |
+| `/api/openclaw/cron/status` | GET |
+| `/api/openclaw/deep-check` | GET |
+| `/api/openclaw/model-autoswitch/apply` | POST |
+| `/api/openclaw/model-autoswitch/status` | GET |
+| `/api/openclaw/model-compat/probe` | GET |
+| `/api/openclaw/model-routing/status` | GET |
+| `/api/openclaw/photo-smoke` | GET |
+| `/api/openclaw/remediation-plan` | GET |
+| `/api/openclaw/report` | GET |
+| `/api/openclaw/routing/effective` | GET |
+| `/api/openclaw/runtime-config` | GET |
+| `/api/ops/ack/{code}` | POST/DELETE |
+| `/api/ops/alerts` | GET |
+| `/api/ops/bundle` | GET |
+| `/api/ops/bundle/export` | GET |
+| `/api/ops/cost-report` | GET |
+| `/api/ops/diagnostics` | GET |
+| `/api/ops/executive-summary` | GET |
+| `/api/ops/history` | GET |
+| `/api/ops/maintenance/prune` | POST |
+| `/api/ops/metrics` | GET |
+| `/api/ops/models` | POST |
+| `/api/ops/report` | GET |
+| `/api/ops/report/export` | GET |
+| `/api/ops/runtime_snapshot` | GET |
+| `/api/ops/runway` | GET |
+| `/api/ops/timeline` | GET |
+| `/api/ops/usage` | GET |
+| `/api/policy` | GET |
+| `/api/policy/matrix` | GET |
+| `/api/provisioning/apply/{draft_id}` | POST |
+| `/api/provisioning/drafts` | GET/POST |
+| `/api/provisioning/preview/{draft_id}` | GET |
+| `/api/provisioning/templates` | GET |
+| `/api/queue` | GET |
+| `/api/reactions/stats` | GET |
+| `/api/runtime/chat-session/clear` | POST |
+| `/api/runtime/handoff` | GET |
+| `/api/runtime/operator-profile` | GET |
+| `/api/runtime/recover` | POST |
+| `/api/runtime/repair-active-shared-permissions` | POST |
+| `/api/runtime/summary` | GET |
+| `/api/silence/status` | GET |
+| `/api/silence/toggle` | POST |
+| `/api/sla` | GET |
+| `/api/stats` | GET |
+| `/api/stats/caches` | GET |
+| `/api/swarm/artifacts` | GET |
+| `/api/swarm/artifacts/cleanup` | POST |
+| `/api/swarm/events` | GET |
+| `/api/swarm/listeners` | GET |
+| `/api/swarm/listeners/toggle` | POST |
+| `/api/swarm/memory` | GET |
+| `/api/swarm/reports` | GET |
+| `/api/swarm/stats` | GET |
+| `/api/swarm/status` | GET |
+| `/api/swarm/task-board` | GET |
+| `/api/swarm/task-board/export` | GET |
+| `/api/swarm/task/{task_id}` | GET/DELETE |
+| `/api/swarm/task/{task_id}/priority` | POST |
+| `/api/swarm/task/{task_id}/update` | POST |
+| `/api/swarm/tasks` | GET |
+| `/api/swarm/tasks/create` | POST |
+| `/api/swarm/team/{team_name}` | GET |
+| `/api/swarm/teams` | GET |
+| `/api/system/clock_drift` | GET |
+| `/api/system/diagnostics` | GET |
+| `/api/system/info` | GET |
+| `/api/thinking/set` | POST |
+| `/api/thinking/status` | GET |
+| `/api/timeline` | GET |
+| `/api/transcriber/status` | GET |
+| `/api/translator/auto` | POST |
+| `/api/translator/bootstrap` | GET |
+| `/api/translator/control-plane` | GET |
+| `/api/translator/delivery-matrix` | GET |
+| `/api/translator/history` | GET |
+| `/api/translator/lang` | POST |
+| `/api/translator/languages` | GET |
+| `/api/translator/live-trial-preflight` | GET |
+| `/api/translator/mobile-readiness` | GET |
+| `/api/translator/mobile/bind` | POST |
+| `/api/translator/mobile/onboarding` | GET |
+| `/api/translator/mobile/onboarding/export` | POST |
+| `/api/translator/mobile/register` | POST |
+| `/api/translator/mobile/remove` | POST |
+| `/api/translator/mobile/trial-prep` | POST |
+| `/api/translator/readiness` | GET |
+| `/api/translator/session-inspector` | GET |
+| `/api/translator/session/action` | POST |
+| `/api/translator/session/escalate` | POST |
+| `/api/translator/session/policy` | POST |
+| `/api/translator/session/quick-phrase` | POST |
+| `/api/translator/session/runtime-tune` | POST |
+| `/api/translator/session/start` | POST |
+| `/api/translator/session/summary` | POST |
+| `/api/translator/session/toggle` | POST |
+| `/api/translator/status` | GET |
+| `/api/translator/test` | GET |
+| `/api/translator/translate` | POST |
+| `/api/uptime` | GET |
+| `/api/userbot/acl/status` | GET |
+| `/api/userbot/acl/update` | POST |
+| `/api/v1/health` | GET |
+| `/api/version` | GET |
+| `/api/voice/profile` | GET |
+| `/api/voice/runtime` | GET |
+| `/api/voice/runtime/update` | POST |
+| `/api/voice/toggle` | POST |
+
+<!-- END:auto-endpoints -->
+
+<!-- BEGIN:auto-commands -->
+
+### Auto-generated handlers (151 команд)
+
+`!acl`, `!afk`, `!agent`, `!alias`, `!archive`, `!ask`
+`!audio_message`, `!autodel`, `!b64`, `!backup`, `!blocked`, `!bookmark`
+`!browser`, `!budget`, `!calc`, `!cap`, `!catchup`, `!chatban`
+`!chatinfo`, `!chatmute`, `!claude_cli`, `!clear`, `!codex`, `!collect`
+`!color`, `!config`, `!contacts`, `!context`, `!convert`, `!costs`
+`!cron`, `!cronstatus`, `!currency`, `!debug`, `!decrypt`, `!define`
+`!del`, `!diagnose`, `!dice`, `!diff`, `!digest`, `!dns`
+`!emoji`, `!encrypt`, `!eval`, `!explain`, `!export`, `!fix`
+`!fwd`, `!gemini_cli`, `!grep`, `!hash`, `!health`, `!help`
+`!history`, `!hs`, `!id`, `!img`, `!inbox`, `!invite`
+`!ip`, `!json`, `!len`, `!link`, `!listen`, `!log`
+`!ls`, `!macos`, `!mark`, `!media`, `!members`, `!memo`
+`!memory`, `!model`, `!monitor`, `!new_chat_members`, `!news`, `!note`
+`!notify`, `!ocr`, `!opencode`, `!panel`, `!paste`, `!pin`
+`!ping`, `!poll`, `!profile`, `!purge`, `!qr`, `!quiz`
+`!quote`, `!rand`, `!rate`, `!react`, `!read`, `!reasoning`
+`!recall`, `!regex`, `!remember`, `!remind`, `!reminders`, `!report`
+`!restart`, `!rewrite`, `!rm_remind`, `!role`, `!run`, `!say`
+`!schedule`, `!scope`, `!screenshot`, `!search`, `!sed`, `!set`
+`!shop`, `!silence`, `!slowmode`, `!snippet`, `!spam`, `!stats`
+`!status`, `!sticker`, `!stopwatch`, `!summary`, `!swarm`, `!sysinfo`
+`!tag`, `!template`, `!time`, `!timer`, `!todo`, `!top`
+`!translate`, `!translate_auto`, `!translator`, `!tts`, `!typing`, `!unarchive`
+`!unpin`, `!uptime`, `!urban`, `!version`, `!voice`, `!watch`
+`!weather`, `!web`, `!welcome`, `!who`, `!whois`, `!write`
+`!yt`
+
+<!-- END:auto-commands -->
+
+<!-- BEGIN:auto-metrics -->
+
+### Auto-generated Prometheus (8 алертов, 8 метрик)
+
+Alerts: `ArchiveDbSizeCritical`, `ArchiveDbSizeWarning`, `CommandHandlerErrors`, `KrabDown`, `LLMErrorRateHigh`, `MemoryQueryLatencyHigh`, `MessageBatcherBackpressure`, `TelegramRateLimited`
+
+Metrics: `krab_alerts`, `krab_archive_db_size_bytes`, `krab_command_errors_total`, `krab_critical`, `krab_llm_errors_total`, `krab_memory_query_duration_seconds_bucket`, `krab_message_batcher_queue_depth`, `krab_telegram_flood_wait_total`
+
+<!-- END:auto-metrics -->
