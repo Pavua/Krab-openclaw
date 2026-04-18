@@ -5015,20 +5015,38 @@ async def handle_memory(bot: "KraabUserbot", message: Message) -> None:
 
     Поддерживаемые субкоманды:
     - `!memory recent [source_filter]` — последние записи workspace-памяти;
-    - `!memory stats` — агрегированная статистика по archive.db / indexer / validator.
+    - `!memory stats` — агрегированная статистика по archive.db / indexer / validator;
+    - `!memory clear` — preview чатов в archive.db;
+    - `!memory clear --chat=<id> [--confirm]` — selective delete по чату;
+    - `!memory clear --before=YYYY-MM-DD [--confirm]` — delete old messages.
     """
-    del bot
     raw_args = str(message.text or "").split(maxsplit=2)
     action = raw_args[1].strip().lower() if len(raw_args) > 1 else "recent"
-    source_filter = raw_args[2].strip() if len(raw_args) > 2 else ""
+    rest = raw_args[2].strip() if len(raw_args) > 2 else ""
 
     if action == "stats":
+        del bot
         await _handle_memory_stats(message)
         return
 
+    if action == "clear":
+        # Owner-only: деструктивная операция
+        me_id = getattr(getattr(bot, "me", None), "id", None)
+        sender_id = getattr(getattr(message, "from_user", None), "id", None)
+        if me_id is None or sender_id != me_id:
+            await message.reply("🚫 `!memory clear` доступен только владельцу.")
+            return
+        await _handle_memory_clear(message, rest)
+        return
+
+    del bot
+    source_filter = rest
+
     if action != "recent":
         raise UserInputError(
-            user_message="🧠 Формат: `!memory recent [source_filter]` | `!memory stats`"
+            user_message=(
+                "🧠 Формат: `!memory recent [source_filter]` | `!memory stats` | `!memory clear`"
+            )
         )
 
     rows = list_workspace_memory_entries(limit=8, source_filter=source_filter)
@@ -5051,6 +5069,119 @@ async def _handle_memory_stats(message: Message) -> None:
     validator_stats = _collect_memory_validator_stats()
     reply = format_memory_stats(archive_stats, indexer_stats, validator_stats)
     await message.reply(reply)
+
+
+async def _handle_memory_clear(message: Message, args_str: str) -> None:
+    """Selective cleanup archive.db — по чату или по дате.
+
+    Форматы:
+        !memory clear                              — preview чатов (топ 20)
+        !memory clear --chat=<id>                  — показать сколько удалится
+        !memory clear --chat=<id> --confirm        — удалить
+        !memory clear --before=YYYY-MM-DD          — показать сколько удалится
+        !memory clear --before=YYYY-MM-DD --confirm — удалить
+    """
+    import re
+    from datetime import datetime
+
+    from ..core.reset_helpers import (
+        clear_archive_db_for_chat,
+        delete_archive_messages_before,
+        list_archive_chats,
+    )
+
+    db_path = _ARCHIVE_DB_PATH_FOR_CLEAR
+    if not db_path.exists():
+        await message.reply("📭 Archive не существует — нечего удалять.")
+        return
+
+    chat_match = re.search(r"--chat=(\S+)", args_str)
+    before_match = re.search(r"--before=(\d{4}-\d{2}-\d{2})", args_str)
+    confirm = "--confirm" in args_str
+
+    # --- Preview mode: список чатов ---
+    if not chat_match and not before_match:
+        chats = list_archive_chats(db_path=db_path, limit=20)
+        try:
+            import sqlite3 as _sq3
+
+            with _sq3.connect(f"file:{db_path}?mode=ro", uri=True) as _c:
+                total = _c.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        except Exception:  # noqa: BLE001
+            total = sum(r["message_count"] for r in chats)
+
+        lines = [f"🧠 **Archive preview** — {_fmt_int_ru(total)} total messages\n"]
+        if chats:
+            lines.append("**Топ чатов:**")
+            for row in chats:
+                title_s = (row["title"] or f"chat_{row['chat_id']}")[:40]
+                lines.append(
+                    f"• `{row['chat_id']}` → {title_s}: {_fmt_int_ru(row['message_count'])} msgs"
+                )
+        else:
+            lines.append("_(чаты не найдены)_")
+        lines.append("\n**Использование:**")
+        lines.append("• `!memory clear --chat=<id> --confirm`")
+        lines.append("• `!memory clear --before=YYYY-MM-DD --confirm`")
+        await message.reply("\n".join(lines))
+        return
+
+    # --- Dry-run: предупреждение без --confirm ---
+    if not confirm:
+        if chat_match:
+            chat_id = chat_match.group(1)
+            from ..core.reset_helpers import count_archive_messages_for_chat
+
+            count = count_archive_messages_for_chat(chat_id, db_path=db_path)
+            await message.reply(
+                f"⚠️ Будет удалено **{_fmt_int_ru(count)}** сообщений для чата `{chat_id}`.\n"
+                f"Добавьте `--confirm` для подтверждения."
+            )
+        else:
+            date_str = before_match.group(1)  # type: ignore[union-attr]
+            try:
+                cutoff_ts = int(datetime.strptime(date_str, "%Y-%m-%d").timestamp())
+            except ValueError:
+                await message.reply(f"❌ Неверный формат даты: `{date_str}`. Ожидается YYYY-MM-DD.")
+                return
+            import sqlite3 as _sq3
+
+            try:
+                with _sq3.connect(f"file:{db_path}?mode=ro", uri=True) as _c:
+                    count = _c.execute(
+                        "SELECT COUNT(*) FROM messages WHERE date < ?", (cutoff_ts,)
+                    ).fetchone()[0]
+            except Exception:  # noqa: BLE001
+                count = 0
+            await message.reply(
+                f"⚠️ Будет удалено **{_fmt_int_ru(count)}** сообщений старше `{date_str}`.\n"
+                f"Добавьте `--confirm` для подтверждения."
+            )
+        return
+
+    # --- Confirmed delete ---
+    try:
+        if chat_match:
+            chat_id = chat_match.group(1)
+            deleted = clear_archive_db_for_chat(chat_id, db_path=db_path)
+            await message.reply(
+                f"🗑️ Удалено **{_fmt_int_ru(deleted)}** сообщений чата `{chat_id}` из archive.db.\n"
+                f"_(chunks + chunk_messages тоже очищены)_"
+            )
+        else:
+            date_str = before_match.group(1)  # type: ignore[union-attr]
+            try:
+                cutoff_ts = int(datetime.strptime(date_str, "%Y-%m-%d").timestamp())
+            except ValueError:
+                await message.reply(f"❌ Неверный формат даты: `{date_str}`. Ожидается YYYY-MM-DD.")
+                return
+            deleted = delete_archive_messages_before(cutoff_ts, db_path=db_path)
+            await message.reply(
+                f"🗑️ Удалено **{_fmt_int_ru(deleted)}** сообщений старше `{date_str}` из archive.db.\n"
+                f"_(осиротевшие chunks тоже очищены)_"
+            )
+    except Exception as exc:  # noqa: BLE001
+        await message.reply(f"❌ Ошибка при очистке archive: {exc}")
 
 
 def _collect_memory_archive_stats() -> dict[str, Any]:
@@ -11089,6 +11220,9 @@ _BUILTIN_QUOTES: list[str] = [
 
 # Путь к файлу с пользовательскими цитатами
 _SAVED_QUOTES_PATH = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "saved_quotes.json"
+
+# Путь к archive.db для команды !memory clear (тот же что в reset_helpers)
+_ARCHIVE_DB_PATH_FOR_CLEAR = pathlib.Path.home() / ".openclaw" / "krab_memory" / "archive.db"
 
 
 def _load_saved_quotes() -> list[dict]:
