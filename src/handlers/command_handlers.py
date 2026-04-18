@@ -16136,3 +16136,102 @@ async def handle_id(bot: "KraabUserbot", message: Message) -> None:
             lines.append(f"Author: `{reply_from.id}`")
 
     await message.reply("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# handle_listen — управление режимом ответов в чате (active/mention-only/muted)
+# ---------------------------------------------------------------------------
+
+
+async def _handle_listen_list(bot: "KraabUserbot", message: Message) -> None:
+    """Показать все чаты с явными правилами."""
+    from ..core.chat_filter_config import chat_filter_config
+    import datetime
+
+    rules = chat_filter_config.list_rules()
+    if not rules:
+        await bot._safe_reply(message, "📭 Нет явных правил. Все чаты используют дефолты.")
+        return
+
+    lines = ["🎛️ **Явные правила фильтра:**\n"]
+    for r in rules[:30]:
+        updated = datetime.datetime.fromtimestamp(r.updated_at).strftime("%Y-%m-%d %H:%M")
+        lines.append(f"• `{r.chat_id}` → `{r.mode}` ({updated})")
+    if len(rules) > 30:
+        lines.append(f"... ещё +{len(rules) - 30}")
+
+    await bot._safe_reply(message, "\n".join(lines))
+
+
+async def _handle_listen_stats(bot: "KraabUserbot", message: Message) -> None:
+    """Показать статистику по режимам."""
+    from ..core.chat_filter_config import chat_filter_config
+
+    stats = chat_filter_config.stats()
+    lines = ["📊 **Статистика фильтра:**\n"]
+    lines.append(f"Всего правил: {stats['total_rules']}")
+    for mode, count in sorted(stats.get("by_mode", {}).items()):
+        lines.append(f"• `{mode}`: {count}")
+
+    await bot._safe_reply(message, "\n".join(lines))
+
+
+async def handle_listen(bot: "KraabUserbot", message: Message) -> None:
+    """Управление режимом ответов Краба в чате.
+
+    Синтаксис:
+      !listen                — показать текущий режим
+      !listen active         — реагировать на все
+      !listen mention-only   — только на @mention или reply
+      !listen muted          — молчать
+      !listen reset          — вернуть к дефолту
+      !listen reload         — перезагрузить конфиг с диска
+      !listen list           — все чаты с явными правилами
+      !listen stats          — статистика по режимам
+    """
+    from ..core.chat_filter_config import chat_filter_config
+
+    args = (bot._get_command_args(message) or "").strip().lower()
+    chat_id = message.chat.id
+    is_group = message.chat.type in ("group", "supergroup")
+
+    if args == "list":
+        return await _handle_listen_list(bot, message)
+    if args == "stats":
+        return await _handle_listen_stats(bot, message)
+
+    if args == "reload":
+        changed = chat_filter_config.reload()
+        total = chat_filter_config.stats().get("total_rules", 0)
+        status = "🔄 (changed)" if changed else "✅ (no changes)"
+        await bot._safe_reply(
+            message,
+            f"{status} Config reloaded. Total rules: {total}",
+        )
+        return
+
+    if args in ("active", "mention-only", "muted"):
+        chat_filter_config.set_mode(chat_id, args)
+        mode_name = {
+            "active": "все сообщения",
+            "mention-only": "@mention и reply",
+            "muted": "молчать",
+        }[args]
+        await bot._safe_reply(message, f"✅ Чат `{chat_id}`: {mode_name}")
+        return
+
+    if args == "reset":
+        chat_filter_config.reset(chat_id)
+        await bot._safe_reply(message, f"🔄 Чат `{chat_id}`: вернулся к дефолту")
+        return
+
+    if not args:
+        mode = chat_filter_config.get_mode(chat_id, is_group=is_group)
+        mode_emoji = {"active": "🟢", "mention-only": "🟡", "muted": "🔴"}[mode]
+        await bot._safe_reply(message, f"{mode_emoji} Текущий режим: `{mode}`")
+        return
+
+    await bot._safe_reply(
+        message,
+        "❌ Неизвестный режим. Используйте: active, mention-only, muted, reset, reload, list, stats",
+    )
