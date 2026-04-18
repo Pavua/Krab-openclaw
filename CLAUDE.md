@@ -640,11 +640,12 @@ Endpoints session 7 (добавлены, ~180+ итого):
 
 <!-- BEGIN:auto-endpoints -->
 
-### Auto-generated endpoints table (190 маршрутов)
+### Auto-generated endpoints table (204 маршрутов)
 
 | Endpoint | Метод |
 |----------|-------|
 | `/` | GET |
+| `/api/archive/growth` | GET |
 | `/api/assistant/attachment` | POST |
 | `/api/assistant/capabilities` | GET |
 | `/api/assistant/query` | POST |
@@ -657,6 +658,13 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/browser/tabs` | GET |
 | `/api/capabilities/registry` | GET |
 | `/api/channels/capabilities` | GET |
+| `/api/chat_windows/clear` | POST |
+| `/api/chat_windows/config` | GET |
+| `/api/chat_windows/evict_idle` | POST |
+| `/api/chat_windows/list` | GET |
+| `/api/chat_windows/stats` | GET |
+| `/api/chrome/dedicated/launch` | POST |
+| `/api/chrome/dedicated/status` | GET |
 | `/api/commands` | GET |
 | `/api/commands/usage` | GET |
 | `/api/commands/{name}` | GET |
@@ -672,6 +680,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/diagnostics/smoke` | POST |
 | `/api/ecosystem/capabilities` | GET |
 | `/api/ecosystem/health` | GET |
+| `/api/ecosystem/health/debug` | GET |
 | `/api/ecosystem/health/export` | GET |
 | `/api/endpoints` | GET |
 | `/api/health` | GET |
@@ -686,10 +695,13 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/inbox/status` | GET |
 | `/api/inbox/update` | POST |
 | `/api/krab/restart_userbot` | POST |
+| `/api/krab_ear/status` | GET |
 | `/api/links` | GET |
 | `/api/memory/indexer` | GET |
 | `/api/memory/indexer/flush` | POST |
+| `/api/memory/search` | GET |
 | `/api/memory/stats` | GET |
+| `/api/message_batcher/stats` | GET |
 | `/api/model/apply` | POST |
 | `/api/model/catalog` | GET |
 | `/api/model/explain` | GET |
@@ -767,6 +779,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/runtime/recover` | POST |
 | `/api/runtime/repair-active-shared-permissions` | POST |
 | `/api/runtime/summary` | GET |
+| `/api/session10/summary` | GET |
 | `/api/silence/status` | GET |
 | `/api/silence/toggle` | POST |
 | `/api/sla` | GET |
@@ -834,39 +847,40 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/voice/runtime` | GET |
 | `/api/voice/runtime/update` | POST |
 | `/api/voice/toggle` | POST |
+| `/metrics` | GET |
 
 <!-- END:auto-endpoints -->
 
 <!-- BEGIN:auto-commands -->
 
-### Auto-generated handlers (151 команд)
+### Auto-generated handlers (154 команд)
 
 `!acl`, `!afk`, `!agent`, `!alias`, `!archive`, `!ask`
-`!audio_message`, `!autodel`, `!b64`, `!backup`, `!blocked`, `!bookmark`
-`!browser`, `!budget`, `!calc`, `!cap`, `!catchup`, `!chatban`
-`!chatinfo`, `!chatmute`, `!claude_cli`, `!clear`, `!codex`, `!collect`
-`!color`, `!config`, `!contacts`, `!context`, `!convert`, `!costs`
-`!cron`, `!cronstatus`, `!currency`, `!debug`, `!decrypt`, `!define`
-`!del`, `!diagnose`, `!dice`, `!diff`, `!digest`, `!dns`
-`!emoji`, `!encrypt`, `!eval`, `!explain`, `!export`, `!fix`
-`!fwd`, `!gemini_cli`, `!grep`, `!hash`, `!health`, `!help`
-`!history`, `!hs`, `!id`, `!img`, `!inbox`, `!invite`
-`!ip`, `!json`, `!len`, `!link`, `!listen`, `!log`
-`!ls`, `!macos`, `!mark`, `!media`, `!members`, `!memo`
-`!memory`, `!model`, `!monitor`, `!new_chat_members`, `!news`, `!note`
-`!notify`, `!ocr`, `!opencode`, `!panel`, `!paste`, `!pin`
-`!ping`, `!poll`, `!profile`, `!purge`, `!qr`, `!quiz`
-`!quote`, `!rand`, `!rate`, `!react`, `!read`, `!reasoning`
-`!recall`, `!regex`, `!remember`, `!remind`, `!reminders`, `!report`
-`!restart`, `!rewrite`, `!rm_remind`, `!role`, `!run`, `!say`
-`!schedule`, `!scope`, `!screenshot`, `!search`, `!sed`, `!set`
-`!shop`, `!silence`, `!slowmode`, `!snippet`, `!spam`, `!stats`
-`!status`, `!sticker`, `!stopwatch`, `!summary`, `!swarm`, `!sysinfo`
-`!tag`, `!template`, `!time`, `!timer`, `!todo`, `!top`
-`!translate`, `!translate_auto`, `!translator`, `!tts`, `!typing`, `!unarchive`
-`!unpin`, `!uptime`, `!urban`, `!version`, `!voice`, `!watch`
-`!weather`, `!web`, `!welcome`, `!who`, `!whois`, `!write`
-`!yt`
+`!audio_message`, `!autodel`, `!b64`, `!backup`, `!bench`, `!blocked`
+`!bookmark`, `!browser`, `!budget`, `!calc`, `!cap`, `!catchup`
+`!chatban`, `!chatinfo`, `!chatmute`, `!claude_cli`, `!clear`, `!codex`
+`!collect`, `!color`, `!config`, `!confirm`, `!contacts`, `!context`
+`!convert`, `!costs`, `!cron`, `!cronstatus`, `!currency`, `!debug`
+`!decrypt`, `!define`, `!del`, `!diagnose`, `!dice`, `!diff`
+`!digest`, `!dns`, `!emoji`, `!encrypt`, `!eval`, `!explain`
+`!export`, `!fix`, `!fwd`, `!gemini_cli`, `!grep`, `!hash`
+`!health`, `!help`, `!history`, `!hs`, `!id`, `!img`
+`!inbox`, `!invite`, `!ip`, `!json`, `!len`, `!link`
+`!listen`, `!log`, `!ls`, `!macos`, `!mark`, `!media`
+`!members`, `!memo`, `!memory`, `!model`, `!monitor`, `!new_chat_members`
+`!news`, `!note`, `!notify`, `!ocr`, `!opencode`, `!panel`
+`!paste`, `!pin`, `!ping`, `!poll`, `!profile`, `!purge`
+`!qr`, `!quiz`, `!quote`, `!rand`, `!rate`, `!react`
+`!read`, `!reasoning`, `!recall`, `!regex`, `!remember`, `!remind`
+`!reminders`, `!report`, `!reset`, `!restart`, `!rewrite`, `!rm_remind`
+`!role`, `!run`, `!say`, `!schedule`, `!scope`, `!screenshot`
+`!search`, `!sed`, `!set`, `!shop`, `!silence`, `!slowmode`
+`!snippet`, `!spam`, `!stats`, `!status`, `!sticker`, `!stopwatch`
+`!summary`, `!swarm`, `!sysinfo`, `!tag`, `!template`, `!time`
+`!timer`, `!todo`, `!top`, `!translate`, `!translate_auto`, `!translator`
+`!tts`, `!typing`, `!unarchive`, `!unpin`, `!uptime`, `!urban`
+`!version`, `!voice`, `!watch`, `!weather`, `!web`, `!welcome`
+`!who`, `!whois`, `!write`, `!yt`
 
 <!-- END:auto-commands -->
 
