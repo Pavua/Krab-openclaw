@@ -160,7 +160,24 @@ src/
   web/
     index.html          — главный HTML шаблон
     prototypes/         — Gemini-generated dashboard prototypes
+  voice_channel/
+    handler.py          — VoiceChannelHandler: SSE streaming, session state
+    state.py            — VoiceSessionState: buffer, model config
+  mcp_tools/
+    voice_assistant_tools.py — MCP tools для voice assistant
 ```
+
+## Voice Channel (Phase 1.4 voice assistant bridge)
+
+Интеграция Voice Gateway с OpenClaw через HTTP/SSE.
+
+- **Location**: `src/voice_channel/` + `src/mcp_tools/voice_assistant_tools.py`
+- **HTTP Endpoints**:
+  - `POST /v1/voice/message` — SSE streaming (Voice Gateway → tokens → OpenClaw → response)
+  - `GET /v1/voice/status` — session diagnostics
+- **Port**: 8081 (отдельно от OpenClaw :18789)
+- **MCP tools**: `voice:get_recent_dictations`, `voice:send_telegram`, `voice:search_memory`
+- **Model**: preferred_model="qwen3-30b-a3b-instruct-2507"
 
 ## Инфраструктура (LaunchAgents)
 
@@ -526,6 +543,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/voice/toggle` | POST | Переключить голосовой режим |
 | `/api/voice/profile` | GET | Голосовой профиль |
 | `/api/voice/runtime` | GET/POST | Runtime голосовых настроек |
+| `/api/krab_ear/status` | GET | KrabEar STT diarization status и readiness |
 | `/api/translator/auto` | POST | Авто-определение языка |
 | `/api/translator/lang` | POST | Смена пары языков |
 | `/api/translator/test` | GET | Быстрый тест перевода |
@@ -539,6 +557,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/translator/mobile/onboarding` | GET | Онбординг мобильный |
 | `/api/translator/bootstrap` | GET | Bootstrap данные |
 | `/api/swarm/task-board` | GET | Kanban-доска задач |
+| `/api/swarm/task-board/export?format=csv\|json` | GET | Export task board |
 | `/api/swarm/tasks` | GET | Список задач свёрма |
 | `/api/swarm/task/{id}` | GET | Детальная задача |
 | `/api/swarm/tasks/create` | POST | Создать задачу |

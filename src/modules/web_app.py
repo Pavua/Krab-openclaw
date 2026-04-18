@@ -8294,6 +8294,33 @@ class WebApp:
                 "voice": profile,
             }
 
+        @self.app.get("/api/krab_ear/status")
+        async def krab_ear_status():
+            """KrabEar STT diarization status and readiness."""
+            krab_ear = self.deps.get("krab_ear_client")
+            if not krab_ear:
+                return {
+                    "ok": False,
+                    "status": "unavailable",
+                    "error": "krab_ear_client_not_available",
+                }
+            try:
+                report = await krab_ear.health_report()
+                return {
+                    "ok": report.get("ok", False),
+                    "status": report.get("status", "unknown"),
+                    "latency_ms": report.get("latency_ms"),
+                    "source": report.get("source"),
+                    "detail": report.get("detail"),
+                }
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("krab_ear_status_failed", error=str(exc))
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "error": str(exc),
+                }
+
         @self.app.get("/api/openclaw/cron/status")
         async def openclaw_cron_status():
             """Возвращает truthful snapshot scheduler и recurring jobs из OpenClaw CLI."""
@@ -10896,6 +10923,68 @@ class WebApp:
                 return {"ok": False, "error": "priority must be low/medium/high/critical"}
             swarm_task_board.update_task(task_id, priority=level)
             return {"ok": True, "task_id": task_id, "priority": level}
+
+        @self.app.get("/api/swarm/task-board/export")
+        async def swarm_task_board_export(format: str = Query(default="csv")):
+            """Export full task board as CSV or JSON."""
+            from ..core.swarm_task_board import swarm_task_board
+
+            tasks = swarm_task_board.list_tasks(limit=500)
+
+            if format == "json":
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse({
+                    "ok": True,
+                    "tasks": [
+                        {
+                            "task_id": t.task_id,
+                            "team": t.team,
+                            "title": t.title,
+                            "description": t.description,
+                            "status": t.status,
+                            "priority": t.priority,
+                            "created_by": t.created_by,
+                            "assigned_to": t.assigned_to,
+                            "created_at": t.created_at,
+                            "updated_at": t.updated_at,
+                            "result": t.result,
+                            "artifacts": t.artifacts,
+                            "parent_task_id": t.parent_task_id,
+                        }
+                        for t in tasks
+                    ]
+                })
+
+            # CSV export
+            import csv
+            import io
+            from fastapi.responses import PlainTextResponse
+
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            writer.writerow([
+                "task_id", "team", "title", "status", "priority",
+                "created_by", "assigned_to", "created_at", "updated_at"
+            ])
+            for t in tasks:
+                writer.writerow([
+                    t.task_id,
+                    t.team,
+                    t.title,
+                    t.status,
+                    t.priority,
+                    t.created_by,
+                    t.assigned_to,
+                    t.created_at,
+                    t.updated_at,
+                ])
+
+            return PlainTextResponse(
+                buf.getvalue(),
+                media_type="text/csv",
+                headers={"Content-Disposition": "attachment; filename=task_board.csv"}
+            )
 
         @self.app.post("/api/swarm/listeners/toggle")
         async def swarm_listeners_toggle(
