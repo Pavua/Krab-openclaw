@@ -132,13 +132,12 @@ async def handle_react(bot, message) -> None:
     args = (bot._get_command_args(message) or "").strip().lower()
     if args in ("on", "enable"):
         os.environ["AUTO_REACTIONS_ENABLED"] = "true"
-        await bot._safe_reply(message, "✅ Auto-reactions enabled.")
+        await message.reply("✅ Auto-reactions enabled.")
     elif args in ("off", "disable"):
         os.environ["AUTO_REACTIONS_ENABLED"] = "false"
-        await bot._safe_reply(message, "🔇 Auto-reactions disabled.")
+        await message.reply("🔇 Auto-reactions disabled.")
     else:
         state = os.environ.get("AUTO_REACTIONS_ENABLED", "true")
-        await bot._safe_reply(
-            message,
+        await message.reply(
             f"🎛️ Auto-reactions: `{state}`\n\nToggle: `!react on` / `!react off`",
         )

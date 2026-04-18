@@ -20,7 +20,6 @@ import pytest
 
 from src.handlers.command_handlers import handle_listen
 
-
 # ─── фикстуры ────────────────────────────────────────────────────────────────
 
 
@@ -28,18 +27,18 @@ from src.handlers.command_handlers import handle_listen
 def mock_bot() -> MagicMock:
     """Mock KraabUserbot."""
     bot = MagicMock()
-    bot._safe_reply = AsyncMock()
     bot._get_command_args = MagicMock(return_value="")
     return bot
 
 
 @pytest.fixture
 def mock_message() -> MagicMock:
-    """Mock Message."""
+    """Mock Message с reply."""
     msg = MagicMock()
     msg.chat = MagicMock()
     msg.chat.id = -100123456
     msg.chat.type = "supergroup"
+    msg.reply = AsyncMock()
     return msg
 
 
@@ -56,7 +55,7 @@ async def test_listen_show_current_mode(mock_bot: MagicMock, mock_message: Magic
 
         await handle_listen(mock_bot, mock_message)
 
-        mock_bot._safe_reply.assert_called()
+        mock_message.reply.assert_called()
 
 
 # ─── !listen mode ────────────────────────────────────────────────────────────
@@ -73,7 +72,7 @@ async def test_listen_set_active(mock_bot: MagicMock, mock_message: MagicMock) -
         await handle_listen(mock_bot, mock_message)
 
         mock_cfg.set_mode.assert_called_once()
-        mock_bot._safe_reply.assert_called()
+        mock_message.reply.assert_called()
 
 
 @pytest.mark.asyncio
@@ -118,7 +117,7 @@ async def test_listen_list_empty(mock_bot: MagicMock, mock_message: MagicMock) -
 
         await handle_listen(mock_bot, mock_message)
 
-        mock_bot._safe_reply.assert_called()
+        mock_message.reply.assert_called()
 
 
 @pytest.mark.asyncio
@@ -131,7 +130,7 @@ async def test_listen_stats_shows_counts(mock_bot: MagicMock, mock_message: Magi
 
         await handle_listen(mock_bot, mock_message)
 
-        mock_bot._safe_reply.assert_called()
+        mock_message.reply.assert_called()
 
 
 # ─── регистрация команды в runtime ────────────────────────────────────────────
