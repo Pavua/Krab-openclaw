@@ -1,8 +1,100 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-04-17 (session 11)
+> Составлен: 2026-03-23 | Обновлён: 2026-04-18 (session 12)
 > Статус: Активная разработка
 > Владелец: По
+
+---
+
+## 📋 Session 12 (2026-04-18) — CHADO ARCHITECTURE + PROACTIVITY INTEGRATION
+
+**Commits (~130+)** across Waves 12-17 через parallel agent orchestration.
+
+### Chado-inspired architecture (from How2AI interview)
+
+Interview transcript: `.remember/chado_architecture_learnings.md`
+
+- **Per-chat ChatWindow + LRU** (`chat_window_manager.py`) — active chats в memory, тихие evict'ятся
+- **Priority Dispatcher** (`message_priority_dispatcher.py`) — P0 instant (DM/mention/reply/command), P1 normal (active chat), P2 low (muted)
+- **Per-chat Filter** (`chat_filter_config.py`) — `active` / `mention-only` / `muted` modes + `!listen` command
+- **Message Batcher** (`message_batcher.py`) — backpressure через buffering pending msgs пока LLM ещё занят
+- **Structured Reflector** — pydantic schema `{follow_ups: [{text, when, chat_id}]}` → auto-flush в reminders_queue
+- **Krab Identity** — centralizes self-recognition + mention detection (RU+EN+emoji+username)
+- **Group Identity Prefix** — "🦀 Краб: " в group chats
+
+### Memory Layer Phase 2 full-stack activated
+
+- Model2Vec embeddings encoded для 9131 chunks в 1.9 сек
+- Hybrid FTS+semantic RRF re-ranker
+- `/api/memory/search` endpoint + `!recall <query>` + MCP `krab_memory_search`
+- Auto-context RAG для `!ask` (opt-in через env)
+
+### Proactivity fully-wired
+
+- **Level 1 (cron):** `!cron quick "каждый день в 10:00" "prompt"` с natural language parser
+- **Level 2 (reminders):** `!remind <time|event> <action>` + queue persistence
+- **Level 3 (reflection):** structured reflector после swarm research → auto follow-ups
+
+### UX polish
+
+- `parse_mode="markdown"` default
+- Typing keepalive с explicit cancel
+- `!help` pagination fix (MESSAGE_TOO_LONG)
+- `!reset` fast-path (ACL registry miss → LLM roundtrip)
+- Group identity confusion fix (Krab≠owner)
+
+### Resilience
+
+- Auto-failover policy activated (opt-in)
+- Auto-restart launchctl "not loaded" detection
+- Archive.db size threshold alert (warn@500MB, crit@1GB)
+- Gateway recovery через launchctl bootstrap
+- codex-cli stagnation cancel (Live-verified 17.04 outage)
+
+### Observability
+
+- Correlation ID через structlog contextvars
+- Prometheus `/metrics` endpoint (14 metrics)
+- Prometheus alert rules (3 groups: critical/capacity/engagement)
+- Tool call indicator в buffered mode
+
+### New Telegram commands (10)
+
+`!confirm`, `!reset`, `!recall`, `!remind`, `!cron quick`, `!model info`, `!memory stats`, `!stats ecosystem`, `!digest`, `!listen`
+
+### New API endpoints (10)
+
+`/api/memory/search`, `/api/session10/summary`, `/api/chrome/dedicated/status|launch`, `/api/swarm/task-board/export`, `/api/krab_ear/status`, `/api/chat_windows/stats`, `/api/message_batcher/stats`, `/metrics`
+
+### New scripts
+
+- `maintenance_weekly.py`, `backup_archive_db.py`, `ci_health_report.py`
+- `cleanup_stale_worktrees.py`, `changelog_append.py`
+- `smoke_test_memory_retrieval.py`, `smoke_test_lm_studio_fallback.py`
+- `audit_command_aliases.py`, `generate_commands_cheatsheet.py`, `generate_docs_index.py`
+- `prometheus_metrics_smoke.py`
+
+### Tests
+
+- **+400+ new unit/integration tests** estimated
+- Memory Layer: 94% coverage
+- Wave 14 modules: provider_failover 100%, nightly_summary 88%, context_augmenter 86%
+- Live E2E via MCP: 9/10 PASS
+
+### Live state (18.04.2026)
+
+- Krab PID 29295 (fresh)
+- archive.db 43k+ msgs / 50+ MB / 9131 embeddings
+- codex-cli/gpt-5.4 primary (with Gemini fallbacks)
+- Dedicated Chrome on :9222 isolated profile
+
+### Known issues carried to Session 13
+
+- p0lrd Telegram Export >36h still in progress
+- Wave 17 integration (CW+Priority+Filter → `_process_message`) в работе
+- Chado Q4+ interview continues
+- Dashboard V4 frontend (delegate Gemini 3.1 Pro via spec)
+- Some locked worktrees (parent Claude Code PID) — cleanup post-session
 
 ---
 
