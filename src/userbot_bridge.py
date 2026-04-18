@@ -63,6 +63,7 @@ from .handlers import (
     handle_acl,
     handle_agent,
     handle_alias,
+    handle_archive,
     handle_ask,
     handle_autodel,
     handle_backup,
@@ -146,7 +147,9 @@ from .handlers import (
     handle_todo,
     handle_translate,
     handle_translator,
+    handle_unarchive,
     handle_unpin,
+    handle_uptime,
     handle_voice,
     handle_watch,
     handle_web,
@@ -973,6 +976,27 @@ class KraabUserbot(
         )
         async def wrap_bench(c, m):
             await run_cmd(handle_bench, m)
+
+        @self.client.on_message(
+            filters.command("uptime", prefixes=prefixes) & _make_command_filter("uptime"),
+            group=-1,
+        )
+        async def wrap_uptime(c, m):
+            await run_cmd(handle_uptime, m)
+
+        @self.client.on_message(
+            filters.command("archive", prefixes=prefixes) & _make_command_filter("archive"),
+            group=-1,
+        )
+        async def wrap_archive(c, m):
+            await run_cmd(handle_archive, m)
+
+        @self.client.on_message(
+            filters.command("unarchive", prefixes=prefixes) & _make_command_filter("unarchive"),
+            group=-1,
+        )
+        async def wrap_unarchive(c, m):
+            await run_cmd(handle_unarchive, m)
 
         @self.client.on_message(
             filters.command("health", prefixes=prefixes) & _make_command_filter("health"),

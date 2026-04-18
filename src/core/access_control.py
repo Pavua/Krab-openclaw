@@ -121,6 +121,15 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "profile",
         # Агрессивная очистка истории (многослойный reset)
         "reset",
+        # Wave 21-A: auto-reactions toggle + emoji reactions
+        "react",
+        # Wave 21-E: расширенный uptime (macOS + Krab + OpenClaw + LM Studio + Archive)
+        "uptime",
+        # Wave 22-F: запуск бенчмарков производительности (owner-only)
+        "bench",
+        # Memory Layer: архив чатов (!archive <query>, !archive growth, !archive stats)
+        "archive",
+        "unarchive",
     }
 )
 
@@ -157,6 +166,8 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "profile",
         # Деструктивная очистка истории — только владелец
         "reset",
+        # Wave 22-F: запуск бенчмарков (subprocess), только владелец
+        "bench",
     }
 )
 
