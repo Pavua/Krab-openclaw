@@ -49,6 +49,7 @@ class ChatFilterConfig:
     def __init__(self, state_path: Path = STATE_PATH):
         self._path = state_path
         self._rules: dict[str, ChatFilterRule] = {}
+        self._last_mtime: float = 0.0
         self._load()
 
     def _load(self) -> None:
@@ -56,6 +57,7 @@ class ChatFilterConfig:
         if not self._path.exists():
             return
         try:
+            self._last_mtime = self._path.stat().st_mtime
             data = json.loads(self._path.read_text())
             for chat_id, cfg in data.items():
                 self._rules[str(chat_id)] = ChatFilterRule(
@@ -76,22 +78,64 @@ class ChatFilterConfig:
         }
         try:
             self._path.write_text(json.dumps(data, indent=2))
+            # Обновить mtime после сохранения
+            self._last_mtime = self._path.stat().st_mtime
         except Exception as e:  # noqa: BLE001
             logger.warning("chat_filter_save_failed", error=str(e))
 
-    def get_mode(self, chat_id: str | int, *, is_group: bool = True) -> str:
+    def _maybe_reload(self) -> None:
+        """Проверить и перезагрузить config если файл изменился (hot-reload)."""
+        if not self._path.exists():
+            return
+        try:
+            current_mtime = self._path.stat().st_mtime
+            if current_mtime > self._last_mtime:
+                logger.info("chat_filter_hot_reload", old_rules=len(self._rules))
+                self._rules.clear()
+                self._load()
+                logger.info("chat_filter_hot_reload_done", new_rules=len(self._rules))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("chat_filter_maybe_reload_failed", error=str(e))
+
+    def reload(self) -> bool:
+        """Явно перезагрузить config из файла.
+
+        Returns:
+            True если config изменился, False если остался прежним или файла нет.
+        """
+        if not self._path.exists():
+            return False
+        try:
+            current_mtime = self._path.stat().st_mtime
+            old_rules = dict(self._rules)
+            self._rules.clear()
+            self._load()
+            # Сравнить: изменился ли config
+            changed = old_rules != self._rules or current_mtime != self._last_mtime
+            if changed:
+                logger.info("chat_filter_reload_changed", old_count=len(old_rules), new_count=len(self._rules))
+            return changed
+        except Exception as e:  # noqa: BLE001
+            logger.warning("chat_filter_reload_failed", error=str(e))
+            return False
+
+    def get_mode(self, chat_id: str | int, *, is_group: bool = True, default_if_group: str = None) -> str:
         """Получить mode для чата.
 
         Args:
             chat_id: ID чата.
             is_group: True для group/supergroup, False для DM (личный чат).
+            default_if_group: опциональный дефолт для группы (переопределяет DEFAULT_GROUP_MODE).
 
         Returns:
             Текущий mode ("active", "mention-only" или "muted").
         """
+        self._maybe_reload()  # Hot-reload перед доступом
         rule = self._rules.get(str(chat_id))
         if rule:
             return rule.mode
+        if default_if_group is not None:
+            return default_if_group if is_group else DEFAULT_DM_MODE
         return DEFAULT_GROUP_MODE if is_group else DEFAULT_DM_MODE
 
     def set_mode(self, chat_id: str | int, mode: str, note: str = "") -> bool:
