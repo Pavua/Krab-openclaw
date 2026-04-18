@@ -244,3 +244,111 @@ def test_banned_error_codes_contains_expected_codes() -> None:
 def test_singleton_is_chat_ban_cache_instance() -> None:
     """Модульный singleton существует и является ChatBanCache."""
     assert isinstance(chat_ban_cache, ChatBanCache)
+
+
+# ---------------------------------------------------------------------------
+# Wave 24-A: async load API + timing instrumentation
+# ---------------------------------------------------------------------------
+
+
+def test_load_logs_elapsed_ms(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """После _load_from_disk должен быть лог chat_ban_cache_loaded с elapsed_ms.
+
+    structlog пишет в stdout через renderer, поэтому ловим capsys а не caplog
+    (caplog подхватывает std logging, в который structlog не форвардится
+    в этом проекте).
+    """
+    path = tmp_path / "ban.json"
+    path.write_text(
+        json.dumps(
+            {
+                "-100": {
+                    "error_code": "UserBannedInChannel",
+                    "banned_at": "2026-04-09T00:00:00+00:00",
+                    "last_seen_at": "2026-04-09T00:00:00+00:00",
+                    "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+                    "hit_count": 1,
+                    "last_error_code": "UserBannedInChannel",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    ChatBanCache(storage_path=path)
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "chat_ban_cache_loaded" in combined
+    assert "elapsed_ms" in combined
+
+
+def test_load_async_method_exists_and_callable() -> None:
+    """load_async возвращает coroutine."""
+    import inspect
+
+    c = ChatBanCache()
+    coro = c.load_async()
+    assert inspect.iscoroutine(coro)
+    coro.close()
+
+
+def test_load_async_loads_entries_in_thread(tmp_path: Path) -> None:
+    """load_async загружает записи через asyncio.to_thread."""
+    import asyncio
+
+    path = tmp_path / "ban.json"
+    expires = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    entries = {
+        f"-{100 + i}": {
+            "error_code": "UserBannedInChannel",
+            "banned_at": "2026-04-09T00:00:00+00:00",
+            "last_seen_at": "2026-04-09T00:00:00+00:00",
+            "expires_at": expires,
+            "hit_count": 1,
+            "last_error_code": "UserBannedInChannel",
+        }
+        for i in range(55)
+    }
+    path.write_text(json.dumps(entries), encoding="utf-8")
+
+    c = ChatBanCache()  # path не задан → load_from_disk в __init__ no-op
+    assert c.list_entries() == []
+
+    async def _run() -> None:
+        c._storage_path = path  # type: ignore[attr-defined]
+        await c.load_async()
+
+    asyncio.run(_run())
+    assert len(c.list_entries()) == 55
+
+
+def test_configure_default_path_async_reloads(tmp_path: Path) -> None:
+    """Async configure сбрасывает state и подгружает новый путь."""
+    import asyncio
+
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    c = ChatBanCache(storage_path=first)
+    c.mark_banned(-900, "UserBannedInChannel")
+    assert c.is_banned(-900) is True
+
+    expires = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    second.write_text(
+        json.dumps(
+            {
+                "-901": {
+                    "error_code": "ChatWriteForbidden",
+                    "banned_at": "2026-04-09T00:00:00+00:00",
+                    "last_seen_at": "2026-04-09T00:00:00+00:00",
+                    "expires_at": expires,
+                    "hit_count": 1,
+                    "last_error_code": "ChatWriteForbidden",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    asyncio.run(c.configure_default_path_async(second))
+
+    assert c.is_banned(-900) is False
+    assert c.is_banned(-901) is True

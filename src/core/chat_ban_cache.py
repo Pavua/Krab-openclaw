@@ -42,8 +42,10 @@ expires_at)` в persisted JSON. На входе в `_process_message` прове
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -52,6 +54,11 @@ from typing import Any
 from .logger import get_logger
 
 logger = get_logger(__name__)
+
+# Порог (мс) для warning-лога при медленной загрузке с диска (Wave 24-A pattern).
+# Текущий prod-файл пустой (~3 байта), но если cache начнёт расти и blocking JSON
+# parse на startup превысит этот порог, это сразу всплывёт в логах.
+_SLOW_LOAD_WARN_MS = 500.0
 
 
 # Telegram error codes, которые означают «на этот чат слать бесполезно».
@@ -261,20 +268,34 @@ class ChatBanCache:
         return str(chat_id or "").strip()
 
     def _load_from_disk(self) -> None:
+        """Синхронная загрузка ban cache с диска.
+
+        Wave 24-A pattern: добавлена инструментация elapsed_ms. Файл обычно
+        крошечный (<1KB, <20 записей), поэтому async-обёртка не нужна — но
+        таймер логируется, чтобы отловить деградацию если cache разрастётся.
+        Для вызова из async контекста используй load_async().
+        """
+        t0 = time.monotonic()
         path = self._storage_path
         if path is None or not path.exists():
             return
         try:
             raw = json.loads(path.read_text(encoding="utf-8") or "{}")
         except (json.JSONDecodeError, OSError) as exc:
+            elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
             logger.warning(
                 "chat_ban_cache_load_failed",
                 path=str(path),
                 error=str(exc),
+                error_type=type(exc).__name__,
+                elapsed_ms=elapsed_ms,
             )
             return
         if not isinstance(raw, dict):
-            logger.warning("chat_ban_cache_load_malformed", path=str(path))
+            elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
+            logger.warning(
+                "chat_ban_cache_load_malformed", path=str(path), elapsed_ms=elapsed_ms
+            )
             return
         now = self._now()
         loaded = 0
@@ -294,8 +315,46 @@ class ChatBanCache:
                     continue
             self._entries[str(key)] = dict(value)
             loaded += 1
+        elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
         if loaded or skipped:
-            logger.info("chat_ban_cache_loaded", loaded=loaded, skipped=skipped)
+            logger.info(
+                "chat_ban_cache_loaded",
+                loaded=loaded,
+                skipped=skipped,
+                elapsed_ms=elapsed_ms,
+            )
+        if elapsed_ms > _SLOW_LOAD_WARN_MS:
+            # Раз file пустой сейчас, это говорит либо о деградации диска,
+            # либо о том что cache сильно разросся — в обоих случаях надо знать.
+            logger.warning(
+                "chat_ban_cache_slow_load",
+                loaded=loaded,
+                skipped=skipped,
+                elapsed_ms=elapsed_ms,
+                threshold_ms=_SLOW_LOAD_WARN_MS,
+            )
+
+    async def load_async(self) -> None:
+        """Асинхронная обёртка над _load_from_disk (Wave 24-A pattern).
+
+        Оборачивает sync disk read в asyncio.to_thread, чтобы event-loop не
+        блокировался на больших ban cache файлах. Текущий prod-файл крошечный,
+        но API введено заранее для единообразия с swarm_task_board/swarm_memory
+        и чтобы bootstrap в userbot_bridge мог использовать одинаковый паттерн.
+        """
+        await asyncio.to_thread(self._load_from_disk)
+
+    async def configure_default_path_async(self, storage_path: Path) -> None:
+        """Async вариант configure_default_path (Wave 24-A pattern).
+
+        Устанавливает путь без disk I/O, затем делегирует загрузку в thread.
+        Использовать в bootstrap вместо sync configure_default_path, когда
+        мы уже внутри event-loop (userbot_bridge.start).
+        """
+        with self._lock:
+            self._storage_path = storage_path
+            self._entries = {}
+        await self.load_async()
 
     def _persist_to_disk(self) -> None:
         path = self._storage_path
