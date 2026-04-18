@@ -22,11 +22,13 @@ from typing import TYPE_CHECKING, AsyncIterator, Dict, Optional
 
 from structlog import get_logger
 
+from ..config import config
 from .voice_state import VoiceSession
 
 if TYPE_CHECKING:
     from ..memory_engine import MemoryManager
     from ..mcp_client import MCPClientManager
+    from ..model_manager import ModelManager
     from ..openclaw_client import OpenClawClient
 
 logger = get_logger(__name__)
@@ -39,9 +41,6 @@ _VOICE_SYSTEM_PROMPT_TEMPLATE = (
     "Use tools if needed."
 )
 
-# Preferred model: hint to OpenClaw; falls through to current route if not loaded.
-_PREFERRED_MODEL = "qwen3-30b-a3b-instruct-2507"
-
 
 class VoiceChannelHandler:
     """
@@ -49,6 +48,10 @@ class VoiceChannelHandler:
 
     Принимает транскрибированный текст (уже в виде строки — STT выполнен
     в Krab Ear), прокидывает через OpenClaw brain, отдаёт токены стримом.
+
+    LRU eviction (VA Phase 1.6):
+    - Предпочитает qwen3-30b при наличии в памяти.
+    - Если qwen3-4b также loaded, выгружает его если idle > 5мин.
     """
 
     def __init__(
@@ -56,10 +59,12 @@ class VoiceChannelHandler:
         openclaw: "OpenClawClient",
         memory: "MemoryManager",
         mcp: Optional["MCPClientManager"] = None,
+        model_manager: Optional["ModelManager"] = None,
     ) -> None:
         self._openclaw = openclaw
         self._memory = memory
         self._mcp = mcp
+        self._model_manager = model_manager
         self._sessions: Dict[str, VoiceSession] = {}
 
     # ------------------------------------------------------------------
@@ -105,6 +110,20 @@ class VoiceChannelHandler:
         session = self.get_or_create_session(chat_id, language)
         session.push_transcript(message_text, language)
 
+        # LRU eviction (VA Phase 1.6): если model_manager доступен,
+        # записываем использование qwen3-30b и выгружаем idle модели.
+        preferred_model = getattr(config, "KRAB_MODEL_QWEN3_30B", "qwen3-30b-a3b-instruct-2507")
+        if self._model_manager:
+            self._model_manager.record_usage(preferred_model)
+            try:
+                evicted = await self._model_manager.maybe_evict_idle(
+                    keep_model=preferred_model, max_total_models=1
+                )
+                if evicted:
+                    logger.info("voice_lru_evicted_models", evicted=evicted)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("voice_lru_eviction_failed", error=str(exc))
+
         # Опциональный контекст памяти (best-effort, не ронять поток при сбое).
         memory_context = ""
         try:
@@ -130,7 +149,7 @@ class VoiceChannelHandler:
                 message=message_text,
                 chat_id=chat_id,
                 system_prompt=system_prompt,
-                preferred_model=_PREFERRED_MODEL,
+                preferred_model=preferred_model,
             ):
                 token_count += 1
                 yield token

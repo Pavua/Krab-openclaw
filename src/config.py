@@ -482,6 +482,16 @@ class Config:
     # Voice Gateway POSTает сюда транскрипты → ответ LLM стримится как SSE.
     KRAB_VOICE_PORT: int = int(os.getenv("KRAB_VOICE_PORT", "8081"))
 
+    # Voice Assistant preferred model (VA Phase 1.6).
+    # Используется в voice_channel для preferred routing к qwen3-30b.
+    KRAB_MODEL_QWEN3_30B: str = os.getenv(
+        "KRAB_MODEL_QWEN3_30B", "qwen3-30b-a3b-instruct-2507"
+    )
+
+    # LRU eviction TTL (секунды): если модель не использовалась дольше,
+    # она выгружается при загрузке другой модели (LRU policy).
+    KRAB_LRU_EVICT_AFTER_SEC: float = float(os.getenv("KRAB_LRU_EVICT_AFTER_SEC", "300"))
+
     @classmethod
     def validate(cls) -> list[str]:
         """Проверяет обязательные настройки и возвращает список ошибок"""
