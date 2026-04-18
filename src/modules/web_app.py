@@ -10467,6 +10467,13 @@ class WebApp:
                 "disk_used_pct": psutil.disk_usage("/").percent,
             }
 
+        @self.app.get("/api/memory/stats")
+        async def memory_stats():
+            """Статистика Memory Layer для Dashboard V4."""
+            from ..core.memory_stats import collect_memory_stats
+
+            return collect_memory_stats()
+
         @self.app.get("/api/translator/test")
         async def translator_test_api(text: str = Query(default=""), tgt: str = Query(default="")):
             """Тестовый перевод через API (GET для простоты)."""
