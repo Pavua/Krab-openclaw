@@ -2035,11 +2035,10 @@ class KraabUserbot(
 
         # WAKE UP CHECK
         try:
-            # Wait for OpenClaw to spin up (up to 180s)
+            # Wait for OpenClaw to spin up — timeout из OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC (default 90s).
             # После рестарта gateway через LaunchAgent crash-loop стабилизация занимает 3-5 мин.
-            # 180 сек = достаточный запас; wait_for_healthy возвращает True как только /health OK.
-            logger.info("waiting_for_openclaw")
-            is_claw_ready = await openclaw_client.wait_for_healthy(timeout=180)
+            logger.info("waiting_for_openclaw", timeout_sec=config.OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC)
+            is_claw_ready = await openclaw_client.wait_for_healthy(timeout=config.OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC)
 
             status_emoji = "✅" if is_claw_ready else "⚠️"
             status_text = "Online" if is_claw_ready else "Gateway Unreachable (Check logs)"
