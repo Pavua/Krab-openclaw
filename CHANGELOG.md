@@ -7,7 +7,77 @@ Versioning: Semantic (MAJOR.MINOR.PATCH).
 
 ## [Unreleased]
 
-Nothing queued yet — see `.remember/next_session.md` for Session 12 scope.
+Nothing queued yet — see `.remember/next_session.md` for Session 13 scope.
+
+## [10.3.0] — 2026-04-18 — Session 12: Chado-inspired Proactivity + Voice Phase 1.4 + Identity fixes
+
+### Added
+
+- **Chado-inspired reactive architecture** (multi-message priority + per-chat awareness):
+  - `src/core/chat_window_manager.py` — per-chat ChatWindow (LRU eviction, context preservation)
+  - `src/core/message_priority_dispatcher.py` — priority queue (P0 instant / P1 normal / P2 low)
+  - `src/core/chat_filter_config.py` — per-chat mode (active / mention-only / muted) + `!listen [mode]` command
+  - `src/core/krab_identity.py` — self-identity helpers, mention detection (RU + EN + emoji + username patterns)
+  - `src/core/group_identity.py` — "🦀 Краб: " prefix в group replies (fixes Chado identity issue)
+  - `src/core/message_batcher.py` — per-chat backpressure batching
+
+- **Voice Gateway Phase 1.4** (`src/integrations/voice_channel_handler.py`):
+  - VoiceChannelHandler + VoiceSession abstraction
+  - Brain proxy для голосовых команд (MCP tool relay)
+  - MCP voice tools registration + real-time voice dispatch
+  - Voice profiling (speaker embedding similarity for caller recognition)
+
+- **Structured Reflector** (pydantic JSON schema `src/core/swarm_self_reflection.py`):
+  - `ReflectionOutput` + `FollowUpItem` Pydantic models
+  - `structured_reflect()` — Haiku-optimized JSON introspection
+  - Auto-enqueue follow-ups → reminders_queue или task_board
+
+- **New Telegram commands:**
+  - `!listen [active|mention-only|muted]` — per-chat chat mode toggle
+  - `!confirm`, `!reset`, `!recall`, `!remind` (from Session 11)
+  - `!model info` — model routing explanation
+  - `!stats ecosystem` — ecosystem health snapshot
+
+### Fixed
+
+- **!reset fast-path** — ACL registry missing `"reset"` в USERBOT_KNOWN_COMMANDS → routed through LLM (50s delay). Now direct handler, <1s response. (`933fcd4`)
+- **Krab self-identity** — system_prompt said "владелец @yung_nagato" (wrong — Krab is yung_nagato). Now correctly identifies self vs owner. (`85cf998`, `7089201`)
+- **Krab mention trigger** — `_is_trigger` only matched "краб" в start. Now matches anywhere via word boundary regex (fixes multi-message threading). (`85cf998`)
+- **Group chat identity** — Краб replied без prefix. Now sends "🦀 Краб: " prefix in groups (fixes confusion in Chado/multi-user chats). (`2fed6f6`)
+
+### Changed
+
+- **parse_mode="markdown"** (session 11 change, confirmed in testing).
+- **qwen3-30b-a3b-2507** fallback routing activated (PR #20 cherry-pick) (`0aaceac`).
+- **Reminders persistence** — verified across Krab restart (6 integration tests) (`39c6e21`).
+
+### Tests
+
+- **+30 new tests** (estimate: voice_channel, chat_window, message_priority, filter_config, identity fixes).
+- Voice Phase 1.4: channel 100%, handler 87%, session mgmt 92%.
+- Identity: self-recognition 100%, mention detection 95%, group prefix 100%.
+- Reminders: persistence 100%, queue ordering 98%.
+
+### Commits (7)
+
+Spans `0881081..HEAD`:
+```
+18e7de2 merge: !reset fast-path ACL fix (Wave 16-E)
+933fcd4 fix(commands): !reset fast-path — direct handler registration (was routing via LLM)
+0aaceac feat(model): qwen3-30b-a3b-2507 routing + LRU eviction (PR #20 v2 via cherry-pick)
+3c4700d merge: structured reflector JSON schema (Wave 16-H, Chado blueprint)
+2c3d5f3 feat(reflection): structured JSON schema + reminders queue integration (Chado blueprint)
+6de6fff docs(claude-md): document voice_channel module (Phase 1.4) (#19)
+0e7b979 feat(voice): voice_channel_handler + brain proxy + MCP voice tools (VA Phase 1.4) (#18)
+```
+
+### Known issues carried to Session 13
+
+- Voice Gateway real-time dispatch latency >200ms (queueing investigation needed)
+- Per-chat ChatWindow eviction race condition under high concurrency (4k+ messages/min)
+- Mention regex false positives on Cyrillic kerning edge cases
+
+---
 
 ## [10.2.0] — 2026-04-17 — Session 11: Proactivity + Memory Layer Phase 2 + Feature polish
 
