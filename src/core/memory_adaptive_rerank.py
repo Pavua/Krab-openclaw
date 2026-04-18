@@ -31,6 +31,21 @@ class ScoredChunk:
     metadata: dict[str, Any]
 
 
+_MMR_CAP = 5  # Максимум чанков для MMR-перебора: O(n²) → O(cap²)
+
+
+def _precompute_token_sets(chunks: list[ScoredChunk]) -> list[set[str]]:
+    """Однократно токенизируем все чанки — O(n) вместо O(n²) split."""
+    return [set(c.text.lower().split()) for c in chunks]
+
+
+def _jaccard_sets(a: set[str], b: set[str]) -> float:
+    """Jaccard по заранее вычисленным множествам токенов."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
 def _token_overlap_sim(a: ScoredChunk, b: ScoredChunk) -> float:
     """Jaccard over tokens — дешёвая похожесть по пересечению слов."""
     toks_a = set(a.text.lower().split())
@@ -45,29 +60,52 @@ def apply_mmr(
     diversity: float = 0.3,
     similarity_fn: Optional[Callable[[ScoredChunk, ScoredChunk], float]] = None,
 ) -> list[ScoredChunk]:
-    """Maximal Marginal Relevance — outcome = (1-λ)·relevance - λ·max_sim."""
+    """Maximal Marginal Relevance — outcome = (1-λ)·relevance - λ·max_sim.
+
+    Оптимизации (Wave 29-AB):
+    - Cap: MMR работает только на первых _MMR_CAP чанках → O(cap²) вместо O(n²).
+    - Pre-computed token sets: токенизация O(n) одноразово, similarity O(k).
+    """
     if not chunks or diversity == 0:
         return list(chunks)
+
+    # Разделяем: top cap для MMR + хвост без изменений
+    mmr_input = chunks[:_MMR_CAP]
+    tail = list(chunks[_MMR_CAP:])
+
     if similarity_fn is None:
-        similarity_fn = _token_overlap_sim
+        # Однократно вычисляем token-sets для cap-кандидатов
+        token_sets = _precompute_token_sets(mmr_input)
+
+        def _fast_sim(a: ScoredChunk, b: ScoredChunk) -> float:
+            # Lookup по индексу в mmr_input — нет повторной токенизации
+            idx_a = mmr_input.index(a) if a in mmr_input else -1
+            idx_b = mmr_input.index(b) if b in mmr_input else -1
+            sa = token_sets[idx_a] if idx_a >= 0 else set(a.text.lower().split())
+            sb = token_sets[idx_b] if idx_b >= 0 else set(b.text.lower().split())
+            return _jaccard_sets(sa, sb)
+
+        similarity_fn_eff: Callable[[ScoredChunk, ScoredChunk], float] = _fast_sim
+    else:
+        similarity_fn_eff = similarity_fn
 
     # Первый элемент берём с максимальной релевантностью
-    selected: list[ScoredChunk] = [chunks[0]]
-    remaining = list(chunks[1:])
+    selected: list[ScoredChunk] = [mmr_input[0]]
+    remaining = list(mmr_input[1:])
 
     while remaining:
         best_idx = 0
         best_mmr = float("-inf")
         for i, cand in enumerate(remaining):
-            max_sim = max(similarity_fn(cand, sel) for sel in selected)
+            max_sim = max(similarity_fn_eff(cand, sel) for sel in selected)
             mmr = (1 - diversity) * cand.score - diversity * max_sim
             if mmr > best_mmr:
                 best_mmr = mmr
                 best_idx = i
         selected.append(remaining.pop(best_idx))
 
-    logger.debug("mmr_applied", input_count=len(chunks), diversity=diversity)
-    return selected
+    logger.debug("mmr_applied", input_count=len(chunks), mmr_cap=_MMR_CAP, diversity=diversity)
+    return selected + tail
 
 
 def apply_temporal_decay(

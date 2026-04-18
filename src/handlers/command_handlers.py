@@ -7466,16 +7466,200 @@ async def handle_bench(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(f"❌ Benchmark failed: {exc}")
 
 
+async def _health_deep_report(bot: "KraabUserbot") -> str:
+    """Собирает расширенный диагностический отчёт (!health deep). Owner-only.
+
+    Возвращает markdown-строку до 4000 символов (Telegram-лимит).
+    """
+    import os as _os
+    import sqlite3 as _sqlite3
+    from pathlib import Path as _Path
+
+    import psutil as _psutil
+
+    from ..core.lm_studio_health import fetch_lm_studio_models_list as _fetch_lm_models
+    from ..core.memory_validator import memory_validator as _mv
+    from ..core.scheduler import krab_scheduler as _ks
+    from ..core.subprocess_env import clean_subprocess_env  # noqa: PLC0415
+
+    sections: list[str] = ["🏥 **Health Deep**", "══════════════════"]
+
+    # ── 1. Krab uptime + memory + CPU ───────────────────────────────────────
+    try:
+        elapsed = int(time.time() - bot._session_start_time)
+        hrs, rem = divmod(elapsed, 3600)
+        mins = rem // 60
+        uptime_str = f"{hrs}h {mins}m" if hrs else f"{mins}m"
+        rss_mb = int(_psutil.Process(_os.getpid()).memory_info().rss / 1024 / 1024)
+        load1, load5, _ = _os.getloadavg()
+        sections.append(
+            f"**Krab process**\n"
+            f"• Uptime: {uptime_str}\n"
+            f"• RSS: {rss_mb} MB\n"
+            f"• Load avg (1m/5m): {load1:.2f} / {load5:.2f}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        sections.append(f"**Krab process** ❌ {exc}")
+
+    # ── 2. OpenClaw gateway healthz + последний route ───────────────────────
+    try:
+        oc_ok = await openclaw_client.health_check()
+        route_meta: dict[str, Any] = {}
+        if hasattr(openclaw_client, "get_last_runtime_route"):
+            route_meta = openclaw_client.get_last_runtime_route() or {}
+        oc_model = str(route_meta.get("model") or "").strip()
+        if not oc_model:
+            oc_model = str(get_runtime_primary_model() or getattr(config, "MODEL", "") or "unknown")
+        oc_icon = "✅" if oc_ok else "❌"
+        oc_status = "up" if oc_ok else "offline"
+        sections.append(
+            f"**OpenClaw gateway**\n"
+            f"• Status: {oc_icon} {oc_status}\n"
+            f"• Active model: `{oc_model}`"
+        )
+    except Exception as exc:  # noqa: BLE001
+        sections.append(f"**OpenClaw gateway** ❌ {exc}")
+
+    # ── 3. LM Studio status + active model ──────────────────────────────────
+    try:
+        lm_ok = await is_lm_studio_available(config.LM_STUDIO_URL, timeout=2.0)
+        if lm_ok:
+            lm_models = await _fetch_lm_models(config.LM_STUDIO_URL, timeout=3.0)
+            if lm_models:
+                names = [m.get("name") or m.get("id", "?") for m in lm_models[:3]]
+                lm_detail = ", ".join(names)
+            else:
+                lm_detail = "нет загруженных моделей"
+            sections.append(f"**LM Studio**\n• Status: ✅ online\n• Models: {lm_detail}")
+        else:
+            sections.append("**LM Studio**\n• Status: ❌ offline")
+    except Exception as exc:  # noqa: BLE001
+        sections.append(f"**LM Studio** ❌ {exc}")
+
+    # ── 4. Archive.db integrity ──────────────────────────────────────────────
+    try:
+        db_path = _Path("~/.openclaw/krab_memory/archive.db").expanduser()
+        if db_path.exists():
+            conn = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            try:
+                integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+                msg_count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+                chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+                # FTS5 orphan: rowid в fts5 без записи в messages
+                try:
+                    fts_orphans = conn.execute(
+                        "SELECT COUNT(*) FROM fts5_messages WHERE rowid NOT IN "
+                        "(SELECT rowid FROM messages)"
+                    ).fetchone()[0]
+                except _sqlite3.OperationalError:
+                    fts_orphans = "n/a"
+                # vec_chunks orphan: chunk_id не в chunks
+                try:
+                    vec_orphans = conn.execute(
+                        "SELECT COUNT(*) FROM vec_chunks WHERE chunk_id NOT IN "
+                        "(SELECT id FROM chunks)"
+                    ).fetchone()[0]
+                except _sqlite3.OperationalError:
+                    vec_orphans = "n/a"
+            finally:
+                conn.close()
+            size_mb = db_path.stat().st_size / 1024 / 1024
+            integ_icon = "✅" if integrity == "ok" else "❌"
+            sections.append(
+                f"**Archive.db**\n"
+                f"• Integrity: {integ_icon} {integrity}\n"
+                f"• Messages: {msg_count:,} | Chunks: {chunk_count:,}\n"
+                f"• Size: {size_mb:.1f} MB\n"
+                f"• FTS5 orphans: {fts_orphans} | vec orphans: {vec_orphans}"
+            )
+        else:
+            sections.append("**Archive.db** ⚠️ файл не найден")
+    except Exception as exc:  # noqa: BLE001
+        sections.append(f"**Archive.db** ❌ {exc}")
+
+    # ── 5. Reminders / scheduler pending count ───────────────────────────────
+    try:
+        all_reminders = _ks.list_reminders()
+        remind_count = len(all_reminders)
+        remind_icon = "✅" if remind_count == 0 else "ℹ️"
+        sections.append(f"**Reminders** {remind_icon}\n• Pending: {remind_count}")
+    except Exception as exc:  # noqa: BLE001
+        sections.append(f"**Reminders** ❌ {exc}")
+
+    # ── 6. Memory validator pending !confirm queue ───────────────────────────
+    try:
+        pending = _mv.list_pending()
+        pend_count = len(pending)
+        pend_icon = "✅" if pend_count == 0 else "⚠️"
+        sections.append(
+            f"**Memory validator** {pend_icon}\n• Pending !confirm: {pend_count}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        sections.append(f"**Memory validator** ❌ {exc}")
+
+    # ── 7. Recent SIGTERM count (last 500 lines krab_main.log) ──────────────
+    try:
+        log_path = _Path("~/.openclaw/krab_runtime_state/krab_main.log").expanduser()
+        if log_path.exists():
+            result = subprocess.run(  # noqa: S603
+                ["tail", "-n", "500", str(log_path)],
+                capture_output=True, text=True, timeout=5,
+                env=clean_subprocess_env(),
+            )
+            sigterm_count = result.stdout.count("SIGTERM")
+            sig_icon = "✅" if sigterm_count == 0 else "⚠️"
+            sections.append(
+                f"**Log (last 500 lines)** {sig_icon}\n• SIGTERM events: {sigterm_count}"
+            )
+        else:
+            sections.append("**Log** ⚠️ файл лога не найден")
+    except Exception as exc:  # noqa: BLE001
+        sections.append(f"**Log** ❌ {exc}")
+
+    # ── 8. System load average + free memory ────────────────────────────────
+    try:
+        vm = _psutil.virtual_memory()
+        total_gb = vm.total / 1024**3
+        avail_gb = vm.available / 1024**3
+        used_pct = vm.percent
+        load1, load5, load15 = _os.getloadavg()
+        sections.append(
+            f"**System**\n"
+            f"• RAM: {avail_gb:.1f} GB free / {total_gb:.1f} GB ({used_pct:.0f}% used)\n"
+            f"• Load avg: {load1:.2f} / {load5:.2f} / {load15:.2f}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        sections.append(f"**System** ❌ {exc}")
+
+    report = "\n\n".join(sections)
+    # Обрезаем по Telegram-лимиту
+    if len(report) > 4000:
+        report = report[:3990] + "\n…(truncated)"
+    return report
+
+
 async def handle_health(bot: "KraabUserbot", message: Message) -> None:
     """
-    Глубокая диагностика всех подсистем Краба (!health).
+    Диагностика подсистем Краба (!health [deep]).
 
-    Каждая строка — ✅ OK / ⚠️ Warning / ❌ Error.
+    !health      — стандартный health-check (ок / warning / error по строке).
+    !health deep — расширенная диагностика: uptime, archive.db integrity,
+                   LM Studio, SIGTERM count, memory validator, system load.
     Owner-only команда.
     """
     from ..core.swarm_bus import TEAM_REGISTRY
     from ..core.swarm_scheduler import swarm_scheduler
     from ..core.telegram_rate_limiter import telegram_rate_limiter
+
+    # Проверяем субкоманду deep
+    raw_args = (bot._get_command_args(message) if hasattr(bot, "_get_command_args") else "").strip().lower()
+    if raw_args == "deep":
+        access_profile = bot._get_access_profile(message.from_user)
+        if access_profile.level != AccessLevel.OWNER:
+            raise UserInputError(user_message="🔒 `!health deep` доступен только владельцу.")
+        deep_report = await _health_deep_report(bot)
+        await message.reply(deep_report)
+        return
 
     lines: list[str] = ["🏥 **Health Check**", "─────────────────"]
 
