@@ -97,6 +97,7 @@ from .handlers import (
     handle_hs,
     handle_id,
     handle_inbox,
+    handle_loglevel,
     handle_ls,
     handle_macos,
     handle_memo,
@@ -759,6 +760,13 @@ class KraabUserbot(
         )
         async def wrap_panel(c, m):
             await run_cmd(handle_panel, m)
+
+        @self.client.on_message(
+            filters.command(["loglevel", "verbose", "debug_level"], prefixes=prefixes) & _make_command_filter("loglevel"),
+            group=-1,
+        )
+        async def wrap_loglevel(c, m):
+            await run_cmd(handle_loglevel, m)
 
         @self.client.on_message(
             filters.command("restart", prefixes=prefixes) & _make_command_filter("restart"),
