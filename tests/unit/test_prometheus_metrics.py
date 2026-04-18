@@ -211,3 +211,175 @@ def test_metrics_endpoint_error_fallback(monkeypatch):
     resp = client.get("/metrics")
     assert resp.status_code == 500
     assert "# ERROR" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Новые метрики: commands / llm_latency / chat_filter / chat_windows
+# ---------------------------------------------------------------------------
+
+
+def test_metrics_include_command_counters():
+    """command_registry.bump_command → krab_command_invocations_total в output."""
+    from src.core.command_registry import _command_usage
+
+    _command_usage.clear()
+    _command_usage["help"] = 7
+    _command_usage["search"] = 3
+
+    from src.core.prometheus_metrics import collect_metrics
+
+    text = collect_metrics()
+    assert "krab_command_invocations_total" in text
+    assert 'command="help"' in text
+    assert 'command="search"' in text
+    # Значения присутствуют
+    assert "} 7" in text or "7\n" in text
+
+    _command_usage.clear()
+
+
+def test_metrics_command_counter_empty_when_no_usage():
+    """Если usage пуст — метрика не падает, просто отсутствует."""
+    from src.core.command_registry import _command_usage
+
+    _command_usage.clear()
+
+    from src.core.prometheus_metrics import collect_metrics
+
+    text = collect_metrics()
+    # Не должно быть ошибок — generated_at всегда есть
+    assert "krab_metrics_generated_at" in text
+
+
+def test_metrics_include_llm_latency_histogram():
+    """llm_latency_tracker.observe → histogram в Prometheus output."""
+    from src.core.llm_latency_tracker import llm_latency_tracker
+
+    llm_latency_tracker.reset()
+    llm_latency_tracker.observe(provider="google", model="gemini-3-pro", duration_s=0.8)
+    llm_latency_tracker.observe(provider="google", model="gemini-3-pro", duration_s=2.0)
+
+    from src.core.prometheus_metrics import collect_metrics
+
+    text = collect_metrics()
+    assert "krab_llm_route_latency_seconds_bucket" in text
+    assert "krab_llm_route_latency_seconds_sum" in text
+    assert "krab_llm_route_latency_seconds_count" in text
+    assert 'provider="google"' in text
+    assert 'model="gemini-3-pro"' in text
+
+    llm_latency_tracker.reset()
+
+
+def test_metrics_llm_latency_multiple_providers():
+    """Разные провайдеры — отдельные series в histogram."""
+    from src.core.llm_latency_tracker import llm_latency_tracker
+
+    llm_latency_tracker.reset()
+    llm_latency_tracker.observe(provider="google", model="gemini-3-pro", duration_s=0.5)
+    llm_latency_tracker.observe(provider="openai", model="gpt-5.4", duration_s=1.5)
+
+    from src.core.prometheus_metrics import collect_metrics
+
+    text = collect_metrics()
+    assert 'provider="google"' in text
+    assert 'provider="openai"' in text
+
+    llm_latency_tracker.reset()
+
+
+def test_metrics_llm_latency_empty_when_no_observations():
+    """Если нет наблюдений — histogram отсутствует, не падает."""
+    from src.core.llm_latency_tracker import llm_latency_tracker
+
+    llm_latency_tracker.reset()
+
+    from src.core.prometheus_metrics import collect_metrics
+
+    text = collect_metrics()
+    # generated_at всегда есть
+    assert "krab_metrics_generated_at" in text
+    # Histogram может отсутствовать (нет данных)
+    # — не падает — это главное
+
+
+def test_metrics_include_chat_filter_modes():
+    """chat_filter_config.set_mode → krab_chat_filter_modes_total в output."""
+    from src.core.chat_filter_config import chat_filter_config
+
+    # Сбросим состояние
+    chat_filter_config._modes.clear()
+    chat_filter_config.set_mode("chat_a", "muted")
+    chat_filter_config.set_mode("chat_b", "mention-only")
+
+    from src.core.prometheus_metrics import collect_metrics
+
+    text = collect_metrics()
+    assert "krab_chat_filter_modes_total" in text
+    assert 'mode="muted"' in text
+    assert 'mode="mention-only"' in text
+
+    chat_filter_config._modes.clear()
+
+
+def test_metrics_chat_filter_empty_when_no_overrides():
+    """Если нет явных режимов — метрика не падает."""
+    from src.core.chat_filter_config import chat_filter_config
+
+    chat_filter_config._modes.clear()
+
+    from src.core.prometheus_metrics import collect_metrics
+
+    text = collect_metrics()
+    assert "krab_metrics_generated_at" in text
+
+
+def test_metrics_include_chat_windows():
+    """chat_window_manager.get_or_create → krab_chat_windows_active в output."""
+    from src.core.chat_window_manager import chat_window_manager
+
+    chat_window_manager._windows.clear()
+    chat_window_manager.get_or_create("test_cw_1")
+    chat_window_manager.get_or_create("test_cw_2")
+    chat_window_manager.get_or_create("test_cw_1").push({"text": "hello"})
+
+    from src.core.prometheus_metrics import collect_metrics
+
+    text = collect_metrics()
+    assert "krab_chat_windows_active" in text
+    assert "krab_chat_windows_capacity" in text
+    assert "krab_chat_windows_total_messages" in text
+
+    chat_window_manager._windows.clear()
+
+
+def test_metrics_chat_windows_counts_messages():
+    """total_messages корректно считает буферизованные сообщения."""
+    from src.core.chat_window_manager import chat_window_manager
+
+    chat_window_manager._windows.clear()
+    w = chat_window_manager.get_or_create("cnt_test")
+    for i in range(5):
+        w.push({"id": i})
+
+    stats = chat_window_manager.stats()
+    assert stats["total_messages"] == 5
+    assert stats["active_windows"] == 1
+
+    chat_window_manager._windows.clear()
+
+
+def test_metrics_chat_windows_zero_when_empty():
+    """Пустой менеджер → нулевые счётчики."""
+    from src.core.chat_window_manager import chat_window_manager
+
+    chat_window_manager._windows.clear()
+
+    from src.core.prometheus_metrics import collect_metrics
+
+    text = collect_metrics()
+    assert "krab_chat_windows_active" in text
+    # Значение 0
+    assert "krab_chat_windows_active 0" in text
+
+    chat_window_manager._windows.clear()
