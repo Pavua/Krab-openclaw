@@ -254,6 +254,8 @@ class EcosystemHealthService:
 
         # [Session 10] Собираем статистику по новым подсистемам
         session_10 = self._collect_session_10_stats()
+        # [Session 12] Wave 16 Chado-inspired modules
+        session_12 = self._collect_session_12_stats()
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -279,6 +281,7 @@ class EcosystemHealthService:
             "recommendations": recommendations[:8],  # Лимит рекомендаций
             "_diagnostics": diagnostics,  # [R20] Latency-диагностика
             "session_10": session_10,  # [Session 10] Новые подсистемы
+            "session_12": session_12,  # [Session 12] Wave 16 modules
         }
 
     def _collect_session_10_stats(self) -> dict[str, Any]:
@@ -481,6 +484,57 @@ class EcosystemHealthService:
             tracked = 0
 
         return {"tracked_chats": tracked}
+
+    # -------------------------------------------------------------------------
+    # [Session 12] Wave 16 Chado-inspired modules
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _collect_chat_windows() -> dict[str, Any]:
+        """Per-chat ChatWindow LRU stats."""
+        try:
+            from .chat_window_manager import chat_window_manager  # type: ignore
+
+            return {"available": True, **chat_window_manager.stats()}
+        except (ImportError, Exception) as e:
+            return {"available": False, "error": str(e)}
+
+    @staticmethod
+    def _collect_message_batcher() -> dict[str, Any]:
+        """Message batcher pending counts."""
+        try:
+            from .message_batcher import message_batcher  # type: ignore
+
+            return {"available": True, **message_batcher.stats()}
+        except (ImportError, Exception) as e:
+            return {"available": False, "error": str(e)}
+
+    @staticmethod
+    def _collect_chat_filter() -> dict[str, Any]:
+        """Per-chat filter config stats."""
+        try:
+            from .chat_filter_config import chat_filter_config  # type: ignore
+
+            return {"available": True, **chat_filter_config.stats()}
+        except (ImportError, Exception) as e:
+            return {"available": False, "error": str(e)}
+
+    def _collect_session_12_stats(self) -> dict[str, Any]:
+        """[Session 12] Агрегирует статистику Wave 16 Chado-inspired modules.
+
+        Собирает:
+        - chat_windows    — per-chat ChatWindow LRU stats
+        - message_batcher — batcher pending counts
+        - chat_filter     — per-chat filter config stats
+
+        Все подмодули импортируются лениво в try/except — если модуль
+        отсутствует, возвращаем {"available": False}, endpoint не падает.
+        """
+        return {
+            "chat_windows": self._collect_chat_windows(),
+            "message_batcher": self._collect_message_batcher(),
+            "chat_filter": self._collect_chat_filter(),
+        }
 
     def _collect_resource_metrics(self) -> dict[str, Any]:
         """[R11] Метрики потребления ресурсов macOS."""
