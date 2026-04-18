@@ -157,6 +157,7 @@ from .command_handlers import (
     handle_write,
     handle_yt,
 )
+from .loglevel_command import handle_loglevel
 
 __all__ = [
     "handle_acl",
@@ -310,6 +311,7 @@ __all__ = [
     "handle_yt",
     "handle_invite",
     "handle_log",
+    "handle_loglevel",
     "handle_members",
     "handle_media",
     "handle_profile",
