@@ -76,3 +76,57 @@ groups:
         annotations:
           summary: "Telegram FLOOD_WAIT > 5 occurrences in 15m"
           description: "Telegram API rate limiter active, slow down userbot actions"
+
+      - alert: MemoryValidatorPendingHigh
+        expr: krab_memory_validator_pending > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory validator queue has {{ $value }} pending confirmations"
+          description: "Много pending !confirm items — возможно user забывает подтверждать memory injections"
+
+      - alert: ArchiveChunksStalled
+        expr: delta(krab_archive_chunks_embedded_total[30m]) == 0 and krab_archive_messages_total > krab_archive_chunks_total * 4
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Archive chunk embedding stalled"
+          description: "Новые messages есть, но chunks не создаются 30 мин — embedder может быть застрял"
+
+      - alert: RemindersQueueBacklog
+        expr: krab_reminders_pending_total > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} reminders pending"
+          description: "Reminders queue backlogged — scheduler может быть остановлен"
+
+      - alert: ChatFilterModeMuteDominant
+        expr: sum(rate(krab_chat_filter_modes_total{mode="muted"}[15m])) / sum(rate(krab_chat_filter_modes_total[15m])) > 0.8
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "> 80% chats in muted mode"
+          description: "Большинство чатов в muted — возможно user хочет reconsider global silence"
+
+      - alert: CommandInvocationSpike
+        expr: rate(krab_command_invocations_total[5m]) > 10
+        for: 3m
+        labels:
+          severity: info
+        annotations:
+          summary: "Command invocation rate {{ $value }}/sec — unusually high"
+          description: "Spike в использовании команд — возможно автоматизация или loop"
+
+      - alert: MemoryValidatorConfirmFailedSpike
+        expr: rate(krab_memory_validator_confirm_failed_total[10m]) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory confirm failures at {{ $value }}/sec"
+          description: "User часто использует !reset вместо !confirm — UX friction"
