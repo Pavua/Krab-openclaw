@@ -7292,6 +7292,83 @@ async def handle_digest(bot: "KraabUserbot", message: Message) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# !bench — запуск бенчмарков производительности через subprocess
+# ---------------------------------------------------------------------------
+
+
+async def handle_bench(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !bench [fast|full|fts|semantic] — запуск subset бенчмарков перфоманса.
+
+    Пресеты:
+      fast     — 20 итераций (по умолчанию, ~15 сек)
+      full     — 100 итераций (~60 сек)
+      fts      — 50 итераций для FTS (~30 сек)
+      semantic — 10 итераций для семантического поиска (~20 сек)
+
+    Только для владельца (owner-only).
+    """
+    # Доступ только для владельца
+    access = bot._get_access_profile(message.from_user)
+    if access.level != AccessLevel.OWNER:
+        await bot._safe_reply(message, "⛔ Только для владельца.")
+        return
+
+    # Парсим аргументы
+    args = (bot._get_command_args(message) or "").strip().lower()
+    preset = args if args in ("fast", "full", "fts", "semantic") else "fast"
+
+    # Bump command в реестр
+    from ..core.command_registry import bump_command
+    bump_command("bench")
+
+    # Маппинг пресетов на количество итераций
+    iterations_map = {
+        "fast": 20,
+        "full": 100,
+        "fts": 50,
+        "semantic": 10,
+    }
+    iterations = iterations_map.get(preset, 20)
+
+    # Отправляем статус
+    status_msg = await bot._safe_reply(
+        message, f"⏱ Benchmark `{preset}` (iterations={iterations})..."
+    )
+
+    try:
+        krab_root = pathlib.Path.home() / "Antigravity_AGENTS" / "Краб"
+        result = subprocess.run(
+            [sys.executable, "scripts/benchmark_suite.py", "--iterations", str(iterations)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(krab_root),
+        )
+
+        # Берём последние 1500 символов для вывода
+        output = (
+            result.stdout[-1500:] if len(result.stdout) > 1500 else result.stdout
+        )
+
+        if not output:
+            output = "(empty output)"
+
+        await bot._safe_reply(
+            message,
+            f"📊 **Benchmark results ({preset})**:\n```\n{output}\n```",
+        )
+        logger.info("handle_bench_done", preset=preset, iterations=iterations)
+
+    except subprocess.TimeoutExpired:
+        await bot._safe_reply(message, "⚠️ Benchmark timed out после 120 сек")
+        logger.warning("handle_bench_timeout", preset=preset)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_bench_error", preset=preset, error=str(exc))
+        await bot._safe_reply(message, f"❌ Benchmark failed: {exc}")
+
+
 async def handle_health(bot: "KraabUserbot", message: Message) -> None:
     """
     Глубокая диагностика всех подсистем Краба (!health).

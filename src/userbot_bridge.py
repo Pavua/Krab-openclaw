@@ -66,6 +66,7 @@ from .handlers import (
     handle_ask,
     handle_autodel,
     handle_backup,
+    handle_bench,
     handle_bookmark,
     handle_browser,
     handle_budget,
@@ -965,6 +966,13 @@ class KraabUserbot(
         )
         async def wrap_diagnose(c, m):
             await run_cmd(handle_diagnose, m)
+
+        @self.client.on_message(
+            filters.command("bench", prefixes=prefixes) & _make_command_filter("bench"),
+            group=-1,
+        )
+        async def wrap_bench(c, m):
+            await run_cmd(handle_bench, m)
 
         @self.client.on_message(
             filters.command("health", prefixes=prefixes) & _make_command_filter("health"),
