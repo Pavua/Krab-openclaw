@@ -889,3 +889,183 @@ class TestSession10GeminiNonce:
 
         result = EcosystemHealthService._session_10_gemini_nonce()
         assert result["tracked_chats"] == 3
+
+
+# ---------------------------------------------------------------------------
+# [Session 12] Wave 16 Chado-inspired modules
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_submodule(name: str, **attrs):
+    """Создаёт временный types.ModuleType с атрибутами attrs."""
+    import types
+
+    mod = types.ModuleType(name)
+    for k, v in attrs.items():
+        setattr(mod, k, v)
+    return mod
+
+
+class TestSession12ChatWindows:
+    """[Session 12] _collect_chat_windows()."""
+
+    def test_missing_module_returns_available_false(self, monkeypatch):
+        """Если chat_window_manager.py отсутствует → available=False."""
+        import sys
+
+        import src.core as _pkg
+
+        monkeypatch.setitem(sys.modules, "src.core.chat_window_manager", None)
+        monkeypatch.delattr(_pkg, "chat_window_manager", raising=False)
+
+        result = EcosystemHealthService._collect_chat_windows()
+        assert result["available"] is False
+        assert "error" in result
+
+    def test_success_merges_stats(self, monkeypatch):
+        """Если модуль есть и stats() возвращает dict — результат merged."""
+        import sys
+
+        import src.core as _pkg
+
+        fake_manager = MagicMock()
+        fake_manager.stats.return_value = {"window_count": 7, "lru_evictions": 2}
+        fake_mod = _make_fake_submodule(
+            "src.core.chat_window_manager", chat_window_manager=fake_manager
+        )
+
+        monkeypatch.setitem(sys.modules, "src.core.chat_window_manager", fake_mod)
+        monkeypatch.setattr(_pkg, "chat_window_manager", fake_mod, raising=False)
+
+        result = EcosystemHealthService._collect_chat_windows()
+        assert result["available"] is True
+        assert result["window_count"] == 7
+        assert result["lru_evictions"] == 2
+
+
+class TestSession12MessageBatcher:
+    """[Session 12] _collect_message_batcher()."""
+
+    def test_missing_module_returns_available_false(self, monkeypatch):
+        """Если message_batcher.py отсутствует → available=False."""
+        import sys
+
+        import src.core as _pkg
+
+        monkeypatch.setitem(sys.modules, "src.core.message_batcher", None)
+        monkeypatch.delattr(_pkg, "message_batcher", raising=False)
+
+        result = EcosystemHealthService._collect_message_batcher()
+        assert result["available"] is False
+        assert "error" in result
+
+    def test_success_merges_stats(self, monkeypatch):
+        """Если модуль есть — stats() разворачивается в результат."""
+        import sys
+
+        import src.core as _pkg
+
+        fake_batcher = MagicMock()
+        fake_batcher.stats.return_value = {"pending": 3, "flushed_total": 100}
+        fake_mod = _make_fake_submodule(
+            "src.core.message_batcher", message_batcher=fake_batcher
+        )
+
+        monkeypatch.setitem(sys.modules, "src.core.message_batcher", fake_mod)
+        monkeypatch.setattr(_pkg, "message_batcher", fake_mod, raising=False)
+
+        result = EcosystemHealthService._collect_message_batcher()
+        assert result["available"] is True
+        assert result["pending"] == 3
+        assert result["flushed_total"] == 100
+
+
+class TestSession12ChatFilter:
+    """[Session 12] _collect_chat_filter()."""
+
+    def test_missing_module_returns_available_false(self, monkeypatch):
+        """Если chat_filter_config.py отсутствует → available=False."""
+        import sys
+
+        import src.core as _pkg
+
+        monkeypatch.setitem(sys.modules, "src.core.chat_filter_config", None)
+        monkeypatch.delattr(_pkg, "chat_filter_config", raising=False)
+
+        result = EcosystemHealthService._collect_chat_filter()
+        assert result["available"] is False
+        assert "error" in result
+
+    def test_success_merges_stats(self, monkeypatch):
+        """Если модуль есть — stats() разворачивается в результат."""
+        import sys
+
+        import src.core as _pkg
+
+        fake_cfg = MagicMock()
+        fake_cfg.stats.return_value = {"chats_configured": 5, "default_policy": "allow"}
+        fake_mod = _make_fake_submodule(
+            "src.core.chat_filter_config", chat_filter_config=fake_cfg
+        )
+
+        monkeypatch.setitem(sys.modules, "src.core.chat_filter_config", fake_mod)
+        monkeypatch.setattr(_pkg, "chat_filter_config", fake_mod, raising=False)
+
+        result = EcosystemHealthService._collect_chat_filter()
+        assert result["available"] is True
+        assert result["chats_configured"] == 5
+        assert result["default_policy"] == "allow"
+
+
+class TestSession12Block:
+    """[Session 12] session_12 блок в collect()."""
+
+    @pytest.mark.asyncio
+    async def test_collect_has_session_12_block(self, healthy_service):
+        """collect() содержит session_12 с тремя ключами Wave 16."""
+        with patch("httpx.AsyncClient") as mock_httpx:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_httpx.return_value.__aenter__ = AsyncMock(return_value=mock_httpx.return_value)
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_httpx.return_value.get = AsyncMock(return_value=mock_response)
+
+            result = await healthy_service.collect()
+
+        assert "session_12" in result
+        s12 = result["session_12"]
+        for key in ("chat_windows", "message_batcher", "chat_filter"):
+            assert key in s12, f"session_12 missing key: {key}"
+
+    @pytest.mark.asyncio
+    async def test_session_12_each_has_available_key(self, healthy_service):
+        """Каждый субблок session_12 содержит ключ 'available'."""
+        with patch("httpx.AsyncClient") as mock_httpx:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_httpx.return_value.__aenter__ = AsyncMock(return_value=mock_httpx.return_value)
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_httpx.return_value.get = AsyncMock(return_value=mock_response)
+
+            result = await healthy_service.collect()
+
+        s12 = result["session_12"]
+        for key in ("chat_windows", "message_batcher", "chat_filter"):
+            assert "available" in s12[key], f"session_12.{key} missing 'available' key"
+
+    @pytest.mark.asyncio
+    async def test_session_10_block_still_intact(self, healthy_service):
+        """session_10 block не сломан после добавления session_12."""
+        with patch("httpx.AsyncClient") as mock_httpx:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_httpx.return_value.__aenter__ = AsyncMock(return_value=mock_httpx.return_value)
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_httpx.return_value.get = AsyncMock(return_value=mock_response)
+
+            result = await healthy_service.collect()
+
+        assert "session_10" in result
+        s10 = result["session_10"]
+        for key in ("memory_validator", "memory_archive", "dedicated_chrome", "auto_restart", "gemini_nonce"):
+            assert key in s10, f"session_10 missing key after session_12 addition: {key}"

@@ -11570,6 +11570,19 @@ class WebApp:
             if os.environ.get("KRAB_KNOWN_ISSUE_CHROME_PROMPTS") == "1":
                 known_issues.append("chrome_prompts_from_extension")
 
+            # ── session_12 (Wave 16 Chado-inspired modules) ──────────────────
+            health_svc = self.deps.get("health_service")
+            if health_svc is None:
+                router = self.deps.get("router")
+                if router is not None:
+                    health_svc = EcosystemHealthService(router=router)
+            session_12: dict[str, Any] = {}
+            if health_svc is not None:
+                try:
+                    session_12 = health_svc._collect_session_12_stats()
+                except Exception as exc:
+                    logger.debug("session12_stats_failed", error=str(exc))
+
             return {
                 "ok": True,
                 "generated_at": int(time.time()),
@@ -11581,6 +11594,7 @@ class WebApp:
                 "auto_restart": auto_restart,
                 "observability": observability,
                 "known_issues": known_issues,
+                "session_12": session_12,
             }
 
         @self.app.get("/api/system/diagnostics")
