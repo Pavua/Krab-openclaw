@@ -77,10 +77,8 @@ from .handlers import (
     handle_codex,
     handle_collect,
     handle_config,
-    handle_confirm,
     handle_context,
     handle_costs,
-    handle_cron,
     handle_cronstatus,
     handle_debug,
     handle_del,
@@ -98,7 +96,6 @@ from .handlers import (
     handle_help,
     handle_hs,
     handle_id,
-    handle_listen,
     handle_inbox,
     handle_ls,
     handle_macos,
@@ -125,7 +122,6 @@ from .handlers import (
     handle_remind,
     handle_reminders,
     handle_report,
-    handle_reset,
     handle_restart,
     handle_rewrite,
     handle_rm_remind,
@@ -493,13 +489,10 @@ class KraabUserbot(
         self._telegram_watchdog_task: Optional[asyncio.Task] = None
         self._background_task_reaper_task: Optional[asyncio.Task] = None
         self._proactive_watch_task: Optional[asyncio.Task] = None
-        self._auto_restart_task: Optional[asyncio.Task] = None
         self._memory_indexer_task: Optional[asyncio.Task] = None
         self._error_digest_task: Optional[asyncio.Task] = None
         self._silence_schedule_task: Optional[asyncio.Task] = None
         self._command_usage_save_task: Optional[asyncio.Task] = None
-        # Wave 7-D: фоновый loop очереди напоминаний (time/event).
-        self._reminders_task: Optional[asyncio.Task] = None
         self._swarm_team_clients: dict[str, Any] = {}  # team → Pyrogram Client
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
@@ -557,7 +550,6 @@ class KraabUserbot(
             try:
                 _cmd_name = handler.__name__.removeprefix("handle_")
                 from .core.command_registry import bump_command
-
                 bump_command(_cmd_name)
             except Exception:  # noqa: BLE001
                 pass
@@ -605,12 +597,6 @@ class KraabUserbot(
         )
         async def wrap_clear(c, m):
             await run_cmd(handle_clear, m)
-
-        @self.client.on_message(
-            filters.command("reset", prefixes=prefixes) & _make_command_filter("reset"), group=-1
-        )
-        async def wrap_reset(c, m):
-            await run_cmd(handle_reset, m)
 
         @self.client.on_message(
             filters.command("config", prefixes=prefixes) & _make_command_filter("config"), group=-1
@@ -825,8 +811,7 @@ class KraabUserbot(
             await run_cmd(handle_fix, m)
 
         @self.client.on_message(
-            filters.command("rewrite", prefixes=prefixes) & _make_command_filter("rewrite"),
-            group=-1,
+            filters.command("rewrite", prefixes=prefixes) & _make_command_filter("rewrite"), group=-1
         )
         async def wrap_rewrite(c, m):
             await run_cmd(handle_rewrite, m)
@@ -863,13 +848,6 @@ class KraabUserbot(
         )
         async def wrap_remember(c, m):
             await run_cmd(handle_remember, m)
-
-        @self.client.on_message(
-            filters.command("confirm", prefixes=prefixes) & _make_command_filter("confirm"),
-            group=-1,
-        )
-        async def wrap_confirm(c, m):
-            await run_cmd(handle_confirm, m)
 
         @self.client.on_message(
             filters.command("recall", prefixes=prefixes) & _make_command_filter("recall"), group=-1
@@ -1051,13 +1029,6 @@ class KraabUserbot(
         )
         async def wrap_cronstatus(c, m):
             await run_cmd(handle_cronstatus, m)
-
-        @self.client.on_message(
-            filters.command("cron", prefixes=prefixes) & _make_command_filter("cron"),
-            group=-1,
-        )
-        async def wrap_cron(c, m):
-            await run_cmd(handle_cron, m)
 
         @self.client.on_message(
             filters.command("schedule", prefixes=prefixes) & _make_command_filter("schedule"),
@@ -1356,9 +1327,9 @@ class KraabUserbot(
           costs_detail       — подробная разбивка по моделям
           health_recheck     — повторный health check
         """
-        action = data[len("action:") :]
+        action = data[len("action:"):]
         if action.startswith("swarm_team:"):
-            team = action[len("swarm_team:") :]
+            team = action[len("swarm_team:"):]
             await cq.answer(f"🐝 {team}")
             await cq.message.reply(
                 f"🐝 Используй команду:\n`!swarm {team} <тема>`\n\n"
@@ -1367,7 +1338,6 @@ class KraabUserbot(
         elif action == "costs_detail":
             await cq.answer("📊 Загружаю детали…")
             from .core.cost_analytics import cost_analytics
-
             report = cost_analytics.build_usage_report_dict()
             by_model: dict = report.get("by_model", {})
             if not by_model:
@@ -1383,7 +1353,8 @@ class KraabUserbot(
         elif action == "health_recheck":
             await cq.answer("🔄 Перепроверяю…")
             await cq.message.reply(
-                "🔄 Запускаю повторный health check…\nИспользуй `!health` для полного отчёта."
+                "🔄 Запускаю повторный health check…\n"
+                "Используй `!health` для полного отчёта."
             )
         else:
             await cq.answer(f"⚠️ Неизвестный action: {action}")
@@ -1505,7 +1476,6 @@ class KraabUserbot(
             await asyncio.sleep(300)  # 5 минут
             try:
                 from .core.command_registry import save_usage as _save_usage
-
                 _save_usage()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("command_usage_periodic_save_failed", error=str(exc))
@@ -1520,18 +1490,6 @@ class KraabUserbot(
         # Запускаем периодическую сводку ошибок (каждые 6 часов)
         if self._error_digest_task is None or self._error_digest_task.done():
             self._error_digest_task = proactive_watch.start_error_digest_loop()
-        # Auto-restart upstream services (session 10): регистрируем notify callback
-        # и запускаем health-probe loop. AUTO_RESTART_ENABLED env-flag решает,
-        # реально пытаться ли restart или только отдать telemetry.
-        try:
-            from .core.auto_restart_policy import auto_restart_manager  # noqa: PLC0415
-
-            auto_restart_manager.set_notification_callback(self._send_proactive_watch_alert)
-            art_task = getattr(self, "_auto_restart_task", None)
-            if art_task is None or art_task.done():
-                self._auto_restart_task = proactive_watch.start_auto_restart_loop()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("auto_restart_setup_failed", error=str(exc))
         # WeeklyDigest: подключаем Telegram delivery callback + запускаем loop
         try:
             from .core.weekly_digest import weekly_digest  # noqa: PLC0415
@@ -1542,16 +1500,6 @@ class KraabUserbot(
                 self._weekly_digest_task = weekly_digest.start_weekly_digest_loop()
         except Exception as exc:  # noqa: BLE001
             logger.warning("weekly_digest_setup_failed", error=str(exc))
-        # NightlySummary: ежедневный digest в DM owner
-        try:
-            from .core.nightly_summary import nightly_summary_service  # noqa: PLC0415
-
-            nightly_summary_service.bind_bot(self.client)
-            nst = getattr(self, "_nightly_summary_task", None)
-            if nst is None or nst.done():
-                self._nightly_summary_task = nightly_summary_service.start()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("nightly_summary_setup_failed", error=str(exc))
 
     async def _run_proactive_watch_loop(self) -> None:
         """
@@ -1846,77 +1794,6 @@ class KraabUserbot(
         )
         return True
 
-    def _activate_provider_failover(self) -> None:
-        """
-        Регистрирует apply-callback и owner-notification-callback для
-        `provider_failover.failover_policy`.
-
-        Почему как отдельный метод:
-        - держит `start()` читаемым;
-        - позволяет unit-тестить activation изолированно от Telegram lifecycle.
-
-        Безопасный для legacy: graceful-fallback если модуль `provider_failover`
-        отсутствует (например при rollback).
-        """
-        try:
-            from .core.provider_failover import failover_policy  # noqa: PLC0415
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("provider_failover_import_failed", error=str(exc))
-            return
-
-        async def _failover_apply(from_provider: str, to_provider: str) -> None:
-            """Применяет model switch через existing openclaw_client API."""
-            try:
-                if hasattr(openclaw_client, "set_primary_model"):
-                    result = openclaw_client.set_primary_model(to_provider)
-                    if asyncio.iscoroutine(result):
-                        await result
-                elif hasattr(openclaw_client, "switch_model"):
-                    result = openclaw_client.switch_model(to_provider)
-                    if asyncio.iscoroutine(result):
-                        await result
-                else:
-                    # Fallback на runtime-config — пишем в config.MODEL как
-                    # !model set делает в handlers/command_handlers.py.
-                    try:
-                        config.update_setting("MODEL", to_provider)
-                        config.MODEL = to_provider
-                        logger.info(
-                            "provider_failover_applied_via_config",
-                            from_provider=from_provider,
-                            to_provider=to_provider,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning(
-                            "failover_no_switch_method",
-                            to_provider=to_provider,
-                            error=str(exc),
-                        )
-            except Exception as exc:  # noqa: BLE001
-                logger.error("failover_switch_failed", error=str(exc))
-
-        async def _failover_notify(msg: str) -> None:
-            """Отправляет owner DM с предупреждением о switch."""
-            try:
-                if self.client is None:
-                    logger.warning("failover_notify_no_client")
-                    return
-                owner_ids = getattr(config, "OWNER_USER_IDS", []) or []
-                target: Any = "me"
-                if owner_ids:
-                    raw = owner_ids[0]
-                    target = int(raw) if str(raw).isdigit() else raw
-                await self.client.send_message(target, msg)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("failover_notify_send_failed", error=str(exc))
-
-        try:
-            failover_policy.set_failover_callback(_failover_apply)
-            failover_policy.set_notification_callback(_failover_notify)
-            logger.info("provider_failover_callbacks_registered")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("provider_failover_activation_failed", error=str(exc))
-
     async def start(self):
         """Запуск юзербота"""
         self._set_startup_state(state="starting")
@@ -1960,17 +1837,6 @@ class KraabUserbot(
             telegram_rate_limiter.configure(max_per_sec=max(1, _rate_max), window_sec=1.0)
         except Exception as _exc:  # noqa: BLE001
             logger.warning("telegram_rate_limiter_bootstrap_failed", error=str(_exc))
-
-        # Chado: priority dispatcher start (logging/metrics layer)
-        try:
-            from .core.message_priority_dispatcher import (
-                priority_dispatcher as _pd,  # noqa: PLC0415
-            )
-
-            _pd.start()
-        except Exception as _pd_exc:  # noqa: BLE001
-            logger.warning("priority_dispatcher_start_failed", error=str(_pd_exc))
-
         start_timeout_sec = int(getattr(config, "TELEGRAM_START_TIMEOUT_SEC", 35))
         max_attempts = int(getattr(config, "TELEGRAM_START_ATTEMPTS", 3))
         relogin_timeout_sec = int(getattr(config, "TELEGRAM_RELOGIN_TIMEOUT_SEC", 300))
@@ -2099,22 +1965,6 @@ class KraabUserbot(
         except Exception as exc:  # noqa: BLE001
             logger.warning("scheduler_runtime_sync_failed", error=str(exc))
 
-        # Dedicated Chrome auto-launch (opt-in через DEDICATED_CHROME_ENABLED=true).
-        # Избегаем Remote Debugging Trust Prompt в обычном Chrome владельца,
-        # запуская изолированный Chrome с /tmp/krab-chrome profile на порту 9222.
-        if os.environ.get("DEDICATED_CHROME_ENABLED", "false").lower() in (
-            "true",
-            "1",
-            "yes",
-        ):
-            try:
-                from .integrations.dedicated_chrome import launch_dedicated_chrome
-
-                ok, status = await asyncio.to_thread(launch_dedicated_chrome)
-                logger.info("dedicated_chrome_startup", ok=ok, status=status)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("dedicated_chrome_startup_failed", error=str(exc))
-
         # WAKE UP CHECK
         try:
             # Wait for OpenClaw to spin up (up to 180s)
@@ -2137,17 +1987,9 @@ class KraabUserbot(
         # Загружаем счётчики вызовов команд с диска
         try:
             from .core.command_registry import load_usage as _load_usage
-
             _load_usage()
         except Exception as _exc:
             logger.warning("command_usage_load_failed", error=str(_exc))
-
-        # Provider auto-failover — регистрируем callbacks после инициализации Krab,
-        # до handlers и фоновых задач. Policy feed'ит health-таблицу из
-        # `_set_last_runtime_route`, но без зарегистрированных callbacks реальный
-        # switch не выполнится даже если threshold breached.
-        # Активируется через PROVIDER_FAILOVER_ENABLED=true (safety default off).
-        self._activate_provider_failover()
 
         # Запуск фоновых задач (Safe Start)
         self._ensure_maintenance_started()
@@ -2157,40 +1999,6 @@ class KraabUserbot(
         self._ensure_silence_schedule_started()
         self._ensure_memory_indexer_started()
         self._command_usage_save_task = asyncio.create_task(self._command_usage_save_loop())
-
-        # Wave 7-D: запускаем reminders_queue loop + регистрируем fire callback.
-        # Callback отправляет DM owner'у при срабатывании напоминания. Ошибка при
-        # старте loop — не fatal, юзербот продолжает работать без reminders.
-        try:
-            from .core.reminders_queue import reminders_queue  # noqa: PLC0415
-
-            async def _fire_reminder_callback(reminder):
-                """Срабатывает когда reminder истекает/матчится — DM owner'у."""
-                owner_id = reminder.owner_user_id
-                try:
-                    chat_id: Any = (
-                        int(owner_id) if str(owner_id).lstrip("-").isdigit() else owner_id
-                    )
-                except (TypeError, ValueError):
-                    chat_id = owner_id
-                text = f"🔔 **Напоминание:** {reminder.action_payload}"
-                try:
-                    assert self.client is not None
-                    await self.client.send_message(
-                        chat_id, text, parse_mode=enums.ParseMode.MARKDOWN
-                    )
-                except Exception as _send_exc:  # noqa: BLE001
-                    logger.warning(
-                        "reminder_fire_send_failed",
-                        id=reminder.id,
-                        error=str(_send_exc),
-                    )
-
-            reminders_queue.set_fire_callback(_fire_reminder_callback)
-            self._reminders_task = asyncio.create_task(reminders_queue.start_loop())
-            logger.info("reminders_queue_started")
-        except Exception as _rem_exc:  # noqa: BLE001
-            logger.warning("reminders_queue_start_failed", error=str(_rem_exc))
 
         # Reserve bot (Phase 2.1) — запускаем после userbot, не блокируем старт при ошибке
         try:
@@ -2226,8 +2034,7 @@ class KraabUserbot(
                                 _lockf.unlink()
                                 logger.info(
                                     "swarm_stale_lock_cleaned",
-                                    team=team,
-                                    file=str(_lockf),
+                                    team=team, file=str(_lockf),
                                 )
                             except OSError:
                                 pass
@@ -2407,27 +2214,13 @@ class KraabUserbot(
         await self._cancel_background_task("_telegram_watchdog_task")
         await self._cancel_background_task("_background_task_reaper_task")
         await self._cancel_background_task("_proactive_watch_task")
-        await self._cancel_background_task("_auto_restart_task")
         await self._cancel_background_task("_silence_schedule_task")
         await self._cancel_background_task("_memory_indexer_task")
-        # Wave 7-D: reminders queue loop
-        await self._cancel_background_task("_reminders_task")
         try:
             from .core.memory_indexer_worker import get_indexer as _get_idx
-
             await _get_idx().stop(drain=True, timeout=10.0)
         except Exception as _stop_exc:  # noqa: BLE001
             logger.debug("memory_indexer_stop_failed", error=str(_stop_exc))
-        # Chado: priority dispatcher stop
-        try:
-            from .core.message_priority_dispatcher import (
-                priority_dispatcher as _pd,  # noqa: PLC0415
-            )
-
-            _pd.stop()
-        except Exception as _pd_stop_exc:  # noqa: BLE001
-            logger.debug("priority_dispatcher_stop_failed", error=str(_pd_stop_exc))
-
         # Per-team swarm clients — остановить до основного клиента
         await self._stop_swarm_team_clients()
         try:
@@ -3081,27 +2874,6 @@ class KraabUserbot(
         """Определяет ошибку Telegram при превышении лимита длины сообщения (4096 chars)."""
         return "MESSAGE_TOO_LONG" in str(exc).upper()
 
-    @staticmethod
-    def _is_markdown_parse_error(exc: Exception) -> bool:
-        """Определяет ошибку Telegram парсинга markdown (невалидные entities).
-
-        Ловим только RPC-ошибки Telegram, которые сигнализируют о невалидном
-        markdown — BAD_REQUEST с упоминанием entities/markdown/"can't parse".
-        Избегаем слишком широкого "PARSE", чтобы не триггериться на TypeError
-        вида "got an unexpected keyword argument 'parse_mode'".
-        """
-        text = str(exc).upper()
-        markers = (
-            "CAN'T PARSE ENTITIES",
-            "CANT_PARSE_ENTITIES",
-            "MESSAGE_ENTITIES_INVALID",
-            "ENTITIES_TOO_LONG",
-            "MARKDOWN_PARSE",
-            "PARSE_MARKDOWN",
-            "UNSUPPORTED_START_TAG",
-        )
-        return any(marker in text for marker in markers)
-
     async def _send_message_reaction(self, message: Message, emoji: str) -> None:
         """
         Ставит реакцию на сообщение через pyrofork send_reaction.
@@ -3178,7 +2950,6 @@ class KraabUserbot(
             # Передаём в ReactionEngine для накопления feedback
             try:
                 from .core.reaction_engine import reaction_engine  # noqa: PLC0415
-
                 reaction_engine.record_reaction(
                     chat_id=chat_id,
                     message_id=message_id,
@@ -3200,14 +2971,10 @@ class KraabUserbot(
             # Информация об отправителе
             sender = message.from_user
             sender_name = (
-                (
-                    getattr(sender, "username", None)
-                    or getattr(sender, "first_name", None)
-                    or str(getattr(sender, "id", "?"))
-                )
-                if sender
-                else "Unknown"
-            )
+                getattr(sender, "username", None)
+                or getattr(sender, "first_name", None)
+                or str(getattr(sender, "id", "?"))
+            ) if sender else "Unknown"
             # Название чата
             chat_title = (
                 getattr(message.chat, "title", None)
@@ -3236,27 +3003,14 @@ class KraabUserbot(
         except Exception as exc:
             logger.warning("monitor_alert_error", error=str(exc))
 
-    async def _safe_edit(
-        self,
-        msg: Message,
-        text: str,
-        parse_mode: Any = enums.ParseMode.MARKDOWN,
-    ) -> Message:
+    async def _safe_edit(self, msg: Message, text: str) -> Message:
         """
         Безопасно редактирует сообщение через _telegram_send_queue (с retry).
-
-        По умолчанию использует ``parse_mode=ParseMode.MARKDOWN`` — звёздочки,
-        подчёркивания, backticks рендерятся как форматирование. Если Telegram
-        возвращает ошибку парсинга entities, автоматически retry-им без
-        parse_mode, чтобы текст всё равно дошёл до пользователя.
-
         Возвращает актуальный Message:
         - исходный, если edit не потребовался;
         - результат edit;
         - новый message при fallback на send_message.
         """
-        from .core.markdown_escape import looks_like_parse_error  # noqa: PLC0415
-
         current_text = (getattr(msg, "text", None) or getattr(msg, "caption", None) or "").strip()
         target_text = (text or "").strip()
         # Telegram EditMessage не принимает пустой/невидимый текст.
@@ -3266,129 +3020,50 @@ class KraabUserbot(
             return msg
         chat_id: int = msg.chat.id
         _text = target_text  # захват для lambda
-        _pm = parse_mode  # захват для lambda
         try:
-            edited = await _telegram_send_queue.run(
-                chat_id, lambda: msg.edit(_text, parse_mode=_pm)
-            )
+            edited = await _telegram_send_queue.run(chat_id, lambda: msg.edit(_text))
             return edited or msg
         except Exception as exc:  # noqa: BLE001 - фильтруем MESSAGE_NOT_MODIFIED
             if self._is_message_not_modified_error(exc):
                 return msg
-            if self._is_markdown_parse_error(exc) and _pm is not None:
-                # Markdown не распарсился — retry без parse_mode чтобы не терять текст.
-                logger.warning("telegram_edit_parse_mode_fallback", error=str(exc))
-                try:
-                    edited = await _telegram_send_queue.run(
-                        chat_id, lambda: msg.edit(_text, parse_mode=None)
-                    )
-                    return edited or msg
-                except Exception as exc2:  # noqa: BLE001
-                    if self._is_message_not_modified_error(exc2):
-                        return msg
-                    exc = exc2  # продолжим обрабатывать как обычную ошибку
             if self._is_message_id_invalid_error(exc) or self._is_message_empty_error(exc):
                 logger.warning("telegram_edit_fallback_send_new", error=str(exc))
                 return await _telegram_send_queue.run(
-                    chat_id,
-                    lambda: self.client.send_message(chat_id, _text, parse_mode=_pm),
+                    chat_id, lambda: self.client.send_message(chat_id, _text)
                 )
             if self._is_message_too_long_error(exc):
                 # Текст превысил лимит Telegram (4096). Отрезаем и отправляем новым сообщением.
                 logger.warning("telegram_edit_too_long_fallback_send_new", error=str(exc))
                 _truncated = _text[:4000]
                 return await _telegram_send_queue.run(
-                    chat_id,
-                    lambda: self.client.send_message(chat_id, _truncated, parse_mode=_pm),
+                    chat_id, lambda: self.client.send_message(chat_id, _truncated)
                 )
-            # Fallback при parse-ошибке — перешлём plain text, чтобы не потерять ответ.
-            if _pm is not None and looks_like_parse_error(exc):
-                logger.warning(
-                    "telegram_edit_parse_fallback_plain",
-                    error=str(exc),
-                    text_preview=_text[:200],
-                )
-                try:
-                    edited = await _telegram_send_queue.run(
-                        chat_id, lambda: msg.edit(_text, parse_mode=None)
-                    )
-                    return edited or msg
-                except Exception as exc2:  # noqa: BLE001
-                    if self._is_message_not_modified_error(exc2):
-                        return msg
-                    logger.warning("telegram_edit_plain_fallback_send_new", error=str(exc2))
-                    return await _telegram_send_queue.run(
-                        chat_id,
-                        lambda: self.client.send_message(chat_id, _text, parse_mode=None),
-                    )
             raise
 
-    async def _safe_reply_or_send_new(
-        self,
-        msg: Message,
-        text: str,
-        parse_mode: Any = enums.ParseMode.MARKDOWN,
-    ) -> Message:
+    async def _safe_reply_or_send_new(self, msg: Message, text: str) -> Message:
         """
         Безопасно отвечает на сообщение через reply с fallback на send_message.
-
-        По умолчанию применяет ``parse_mode=ParseMode.MARKDOWN`` — звёздочки,
-        подчёркивания и backticks превращаются в bold/italic/code в Telegram
-        вместо "голых" символов. Если markdown не распарсился — retry без
-        parse_mode, чтобы сообщение всё равно было доставлено.
 
         Это защищает private owner-path от silent-drop, когда Telegram принимает
         обычную отправку в чат, но валит именно reply на конкретный message id.
         Оба вызова идут через _telegram_send_queue (с retry при FLOOD_WAIT/timeout).
         """
-        from .core.markdown_escape import looks_like_parse_error  # noqa: PLC0415
-
         target_text = (text or "").strip() or "…"
         chat_id: int = msg.chat.id
         _text = target_text  # захват для lambda
-        _pm = parse_mode  # захват для lambda
         try:
-            sent = await _telegram_send_queue.run(chat_id, lambda: msg.reply(_text, parse_mode=_pm))
+            sent = await _telegram_send_queue.run(chat_id, lambda: msg.reply(_text))
             return sent or msg
         except Exception as exc:  # noqa: BLE001
-            # Ошибка парсинга markdown — пробуем без parse_mode (текст важнее форматирования).
-            if self._is_markdown_parse_error(exc) and _pm is not None:
-                logger.warning(
-                    "telegram_reply_parse_mode_fallback",
-                    chat_id=str(chat_id),
-                    error=str(exc),
-                )
-                try:
-                    sent = await _telegram_send_queue.run(
-                        chat_id, lambda: msg.reply(_text, parse_mode=None)
-                    )
-                    return sent or msg
-                except Exception as exc2:  # noqa: BLE001
-                    exc = exc2  # fallthrough в send_message fallback
             logger.warning(
                 "telegram_reply_fallback_send_new",
                 chat_id=str(chat_id),
                 message_id=str(getattr(msg, "id", "") or ""),
                 error=str(exc),
             )
-            # send_message fallback — пробуем с markdown, потом без.
-            try:
-                return await _telegram_send_queue.run(
-                    chat_id,
-                    lambda: self.client.send_message(chat_id, _text, parse_mode=_pm),
-                )
-            except Exception as exc3:  # noqa: BLE001
-                if self._is_markdown_parse_error(exc3) and _pm is not None:
-                    logger.warning(
-                        "telegram_send_parse_mode_fallback",
-                        chat_id=str(chat_id),
-                        error=str(exc3),
-                    )
-                    return await _telegram_send_queue.run(
-                        chat_id,
-                        lambda: self.client.send_message(chat_id, _text, parse_mode=None),
-                    )
-                raise
+            return await _telegram_send_queue.run(
+                chat_id, lambda: self.client.send_message(chat_id, _text)
+            )
 
     # _get_chat_processing_lock -> BackgroundTasksMixin (src/userbot/background_tasks.py)
 
@@ -3614,18 +3289,17 @@ class KraabUserbot(
         _ack_model = ""
         try:
             from .userbot.llm_flow import _current_runtime_primary_model  # noqa: PLC0415
-
             _ack_model = _current_runtime_primary_model() or ""
         except Exception:
             pass
         _ack_model_hint = f"\nТекущий маршрут: `{_ack_model}`" if _ack_model else ""
         _ack_text = (
-            f"🦀 Принял запрос.\n\n🛠️ Собираю контекст и запускаю маршрут...{_ack_model_hint}"
+            f"🦀 Принял запрос.\n\n"
+            f"🛠️ Собираю контекст и запускаю маршрут...{_ack_model_hint}"
         )
         # Progress-уведомления только в личных чатах (PRIVATE). В группах — молчим
         # и отправляем только финальный ответ.
         from pyrogram import enums as _pg_enums  # noqa: PLC0415
-
         _chat_type = getattr(getattr(message, "chat", None), "type", None)
         _is_private_chat = _chat_type == _pg_enums.ChatType.PRIVATE
         _show_progress_notices = _is_private_chat or is_self
@@ -3641,8 +3315,7 @@ class KraabUserbot(
                     logger.warning("initial_request_ack_failed", chat_id=chat_id, error=str(exc))
                     try:
                         temp_msg = await self.client.send_message(
-                            message.chat.id,
-                            _ack_text,
+                            message.chat.id, _ack_text,
                         )
                     except Exception as send_exc:  # noqa: BLE001
                         logger.warning(
@@ -3655,8 +3328,9 @@ class KraabUserbot(
                 # Групповой чат — только typing indicator, без текстового ack
                 try:
                     from pyrogram import enums as _e  # noqa: PLC0415
-
-                    await self.client.send_chat_action(message.chat.id, _e.ChatAction.TYPING)
+                    await self.client.send_chat_action(
+                        message.chat.id, _e.ChatAction.TYPING
+                    )
                 except Exception:
                     pass
                 temp_msg = message
@@ -3970,7 +3644,9 @@ class KraabUserbot(
         # следующий message handler.
         request_id = uuid.uuid4().hex[:12]
         _chat_id_for_ctx = str(getattr(getattr(message, "chat", None), "id", "") or "unknown")
-        _user_id_for_ctx = str(getattr(getattr(message, "from_user", None), "id", "") or "")
+        _user_id_for_ctx = str(
+            getattr(getattr(message, "from_user", None), "id", "") or ""
+        )
         bind_contextvars(
             request_id=request_id,
             chat_id=_chat_id_for_ctx,
@@ -3980,117 +3656,6 @@ class KraabUserbot(
             user = message.from_user
             if not user or user.is_bot:
                 return
-
-            # === CHADO INTEGRATION: CW + Filter + Priority ===
-            # Вставлено Session 13.X. Все импорты — graceful (деградирует без падения).
-            try:
-                from pyrogram.enums import ChatType as _ChatType  # noqa: PLC0415
-
-                _chado_text = message.text or message.caption or ""
-                _chado_sender_id = int(getattr(user, "id", 0) or 0)
-                _chado_chat_id = str(getattr(message.chat, "id", ""))
-
-                # 1. Update ChatWindow (LRU touch + append)
-                try:
-                    from .core.chat_window_manager import (
-                        chat_window_manager as _cwm,  # noqa: PLC0415
-                    )
-
-                    _cw = _cwm.get_or_create(_chado_chat_id)
-                    _cw.touch()
-                    if _chado_text:
-                        _cw.append_message("user", _chado_text)
-                except Exception as _cw_exc:  # noqa: BLE001
-                    logger.debug("chat_window_update_failed", error=str(_cw_exc))
-
-                # 2. Determine context flags
-                _chado_is_group = getattr(message.chat, "type", None) in (
-                    _ChatType.GROUP,
-                    _ChatType.SUPERGROUP,
-                )
-                _chado_is_command = _chado_text[:1] in ("!", "/", ".") if _chado_text else False
-                _chado_reply_user_id = 0
-                if message.reply_to_message and message.reply_to_message.from_user:
-                    _chado_reply_user_id = int(
-                        getattr(message.reply_to_message.from_user, "id", 0) or 0
-                    )
-                _chado_is_reply_to_self = bool(self.me and _chado_reply_user_id == self.me.id)
-
-                # 3. Krab mention check
-                _chado_has_mention = False
-                try:
-                    from .core.krab_identity import (
-                        is_krab_mentioned as _is_mentioned,  # noqa: PLC0415
-                    )
-
-                    _chado_has_mention = _is_mentioned(_chado_text)
-                except Exception as _id_exc:  # noqa: BLE001
-                    logger.debug("krab_identity_check_failed", error=str(_id_exc))
-
-                # 4. Group filter — только для не-командных сообщений в группах
-                if _chado_is_group and not _chado_is_command:
-                    try:
-                        from .core.chat_filter_config import (
-                            chat_filter_config as _cfc,  # noqa: PLC0415
-                        )
-
-                        _chado_mode = _cfc.get_mode(
-                            _chado_chat_id,
-                            is_group=True,
-                        )
-                        if _chado_mode == "muted":
-                            logger.debug("chat_muted_skip", chat_id=_chado_chat_id)
-                            return
-                        if _chado_mode == "mention-only" and not (
-                            _chado_has_mention or _chado_is_reply_to_self
-                        ):
-                            logger.debug(
-                                "chat_mention_only_skip",
-                                chat_id=_chado_chat_id,
-                                has_mention=_chado_has_mention,
-                            )
-                            return
-                        # mode == "active" → продолжаем
-                    except Exception as _cfc_exc:  # noqa: BLE001
-                        logger.debug("chat_filter_config_check_failed", error=str(_cfc_exc))
-
-                # 5. Priority classify (logging/metrics only — реальный dispatch Phase 2)
-                try:
-                    from .core.chat_filter_config import (
-                        chat_filter_config as _cfc2,  # noqa: PLC0415
-                    )
-                    from .core.message_priority_dispatcher import (  # noqa: PLC0415
-                        classify_priority as _classify_priority,
-                    )
-
-                    _chado_is_dm = getattr(message.chat, "type", None) == _ChatType.PRIVATE
-                    _chado_chat_mode = (
-                        _cfc2.get_mode(_chado_chat_id, is_group=_chado_is_group)
-                        if _chado_is_group
-                        else "active"
-                    )
-                    _prio, _prio_reason = _classify_priority(
-                        message_text=_chado_text,
-                        chat_type=str(getattr(message.chat, "type", "")),
-                        is_dm=_chado_is_dm,
-                        is_reply_to_self=_chado_is_reply_to_self,
-                        has_mention=_chado_has_mention,
-                        chat_mode=_chado_chat_mode,
-                    )
-                    logger.debug(
-                        "message_classified",
-                        priority=int(_prio),
-                        reason=_prio_reason,
-                        chat_id=_chado_chat_id,
-                        has_mention=_chado_has_mention,
-                    )
-                except Exception as _prio_exc:  # noqa: BLE001
-                    logger.debug("priority_classify_failed", error=str(_prio_exc))
-
-            except Exception as _chado_exc:  # noqa: BLE001
-                # Деградация — Chado layer не должен ломать основной обработчик
-                logger.warning("chado_integration_error", error=str(_chado_exc))
-            # === END CHADO INTEGRATION ===
 
             # Swarm intervention: если owner пишет в swarm-группу — перехватываем
             if self.me and user.id == self.me.id and message.chat and message.text:
@@ -4164,22 +3729,6 @@ class KraabUserbot(
                         self._send_monitor_alert(message=message, matched_keyword=_matched_kw)
                     )
 
-            # Wave 7-D: event-based reminders. Проверяем pending event-reminders
-            # на совпадение по (chat_id, regex). Матчи запускаем fire-and-forget,
-            # чтобы не блокировать основной обработчик. Ошибка check_event_match —
-            # не fatal, просто логгируем на DEBUG.
-            if chat_id:
-                try:
-                    from .core.reminders_queue import reminders_queue as _rq  # noqa: PLC0415
-
-                    _text_for_rq = message.text or message.caption or ""
-                    if _text_for_rq:
-                        _matched_rems = _rq.check_event_match(chat_id, _text_for_rq)
-                        for _rem in _matched_rems:
-                            asyncio.create_task(_rq.fire_event_reminder(_rem))
-                except Exception as _rem_exc:  # noqa: BLE001
-                    logger.debug("reminders_event_check_failed", error=str(_rem_exc))
-
             # SPAM GUARD: проверяем входящее сообщение (если spam_guard включён
             # для чата). Только чужие сообщения, не команды — fire-and-forget.
             if not _is_self_for_guard and not _is_command_for_guard and chat_id:
@@ -4196,7 +3745,9 @@ class KraabUserbot(
                         if _spam_reason:
                             from .handlers.command_handlers import apply_spam_action
 
-                            asyncio.create_task(apply_spam_action(self, message, _spam_reason))
+                            asyncio.create_task(
+                                apply_spam_action(self, message, _spam_reason)
+                            )
                 except Exception as _spam_exc:  # noqa: BLE001
                     logger.debug("spam_guard_check_failed", error=str(_spam_exc))
 
@@ -4206,9 +3757,7 @@ class KraabUserbot(
                     indexer = get_indexer()
                     await indexer.enqueue(message)
                 except Exception as _idx_exc:  # noqa: BLE001
-                    logger.debug(
-                        "memory_indexer_enqueue_failed", error=str(_idx_exc), chat_id=chat_id
-                    )
+                    logger.debug("memory_indexer_enqueue_failed", error=str(_idx_exc), chat_id=chat_id)
 
             # AUTO-TRANSLATE: если для чата включён автоперевод (!translate auto),
             # переводим входящее текстовое сообщение (не от self, не команду).

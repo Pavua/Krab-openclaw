@@ -597,6 +597,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/context/latest` | GET | Последний контекст |
 | `/api/ecosystem/health` | GET | Здоровье экосистемы |
 | `/api/ecosystem/health/export` | GET | Экспорт health |
+| `/api/ecosystem/health/debug` | GET | Raw output коллекторов + full dict; опция ?section=<name> для фильтрации |
 | `/api/ecosystem/capabilities` | GET | Возможности экосистемы |
 | `/api/session10/summary` | GET | Aggregated Session 10 stats для V4 Hub |
 | `/api/system/diagnostics` | GET | Диагностика системы |

@@ -477,6 +477,14 @@ _COMMANDS: list[CommandInfo] = [
         usage="!cap [name on|off|reset]",
         owner_only=True,
     ),
+    CommandInfo(
+        name="listen",
+        category="modes",
+        description="Режим ответов Краба в текущем чате",
+        usage="!listen [active|mention-only|muted|reset|list|stats]",
+        owner_only=True,
+        aliases=["mode"],
+    ),
     # ── users ────────────────────────────────────────────────────────────────
     CommandInfo(
         name="blocked",

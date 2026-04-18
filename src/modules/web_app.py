@@ -95,10 +95,12 @@ logger = structlog.get_logger("WebApp")
 
 # ── Хелперы memory_indexer для health/lite ────────────────────────────────────
 
+
 def _resolve_memory_indexer_state() -> str:
     """running | stopped | degraded — для health/lite."""
     try:
         from src.core.memory_indexer_worker import get_indexer
+
         stats = get_indexer().get_stats()
         if not stats.is_running:
             return "stopped"
@@ -113,6 +115,7 @@ def _resolve_memory_indexer_queue_size() -> int:
     """Размер очереди индексера или 0 при ошибке."""
     try:
         from src.core.memory_indexer_worker import get_indexer
+
         return get_indexer().get_stats().queue_size
     except Exception:
         return 0
@@ -7681,9 +7684,7 @@ class WebApp:
                         "chat_id": sr.chat_id,
                         "text": preview,
                         "score": float(sr.score),
-                        "timestamp": sr.timestamp.isoformat()
-                        if sr.timestamp
-                        else None,
+                        "timestamp": sr.timestamp.isoformat() if sr.timestamp else None,
                         "mode": effective_mode,
                     }
                 )
@@ -7900,7 +7901,9 @@ class WebApp:
             """V4 — скрипт dark/light theme toggle с localStorage."""
             js = config.BASE_DIR / "src" / "web" / "v4" / "theme-toggle.js"
             if js.exists():
-                return FileResponse(js, media_type="application/javascript", headers=_no_store_headers())
+                return FileResponse(
+                    js, media_type="application/javascript", headers=_no_store_headers()
+                )
             return HTMLResponse("// not found", media_type="application/javascript")
 
         # ── Costs + Swarm API endpoints (backend для Gemini dashboards) ────
@@ -8651,9 +8654,7 @@ class WebApp:
             """Количество уведомлений для badge в UI."""
             try:
                 items = inbox_service.list_items(status="open", limit=100)
-                attention = [
-                    i for i in items if i.get("severity") in ("error", "warning")
-                ]
+                attention = [i for i in items if i.get("severity") in ("error", "warning")]
                 return {"ok": True, "total": len(items), "attention": len(attention)}
             except Exception:
                 return {"ok": True, "total": 0, "attention": 0}
@@ -9224,9 +9225,7 @@ class WebApp:
                     "ok": True,
                     "total_translations": total,
                     "total_latency_ms": stats.get("total_latency_ms", 0),
-                    "avg_latency_ms": round(
-                        stats.get("total_latency_ms", 0) / max(1, total)
-                    ),
+                    "avg_latency_ms": round(stats.get("total_latency_ms", 0) / max(1, total)),
                     "last_pair": state.get("last_language_pair", ""),
                     "last_original": state.get("last_translated_original", ""),
                     "last_translation": state.get("last_translated_translation", ""),
@@ -10526,12 +10525,14 @@ class WebApp:
         async def list_commands():
             """Полный список команд с метаданными из command_registry."""
             from ..core.command_registry import registry as _reg
+
             return _reg.to_api_response()
 
         @self.app.get("/api/commands/usage")
         async def get_command_usage():
             """Статистика вызовов команд (отсортировано по убыванию)."""
             from ..core.command_registry import get_usage as _get_usage
+
             usage = _get_usage()
             return {
                 "ok": True,
@@ -10544,9 +10545,11 @@ class WebApp:
         async def get_command(name: str):
             """Детальная информация о конкретной команде."""
             from ..core.command_registry import registry as _reg
+
             cmd = _reg.get(name)
             if cmd is None:
                 from fastapi import HTTPException
+
                 raise HTTPException(
                     status_code=404,
                     detail=f"Команда '{name}' не найдена",
@@ -10951,6 +10954,31 @@ class WebApp:
             if format == "json":
                 from fastapi.responses import JSONResponse
 
+<<<<<<< HEAD
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "tasks": [
+                            {
+                                "task_id": t.task_id,
+                                "team": t.team,
+                                "title": t.title,
+                                "description": t.description,
+                                "status": t.status,
+                                "priority": t.priority,
+                                "created_by": t.created_by,
+                                "assigned_to": t.assigned_to,
+                                "created_at": t.created_at,
+                                "updated_at": t.updated_at,
+                                "result": t.result,
+                                "artifacts": t.artifacts,
+                                "parent_task_id": t.parent_task_id,
+                            }
+                            for t in tasks
+                        ],
+                    }
+                )
+=======
                 return JSONResponse({
                     "ok": True,
                     "tasks": [
@@ -10972,14 +11000,48 @@ class WebApp:
                         for t in tasks
                     ]
                 })
+>>>>>>> 134f167
 
             # CSV export
             import csv
             import io
+<<<<<<< HEAD
+
+=======
+>>>>>>> 134f167
             from fastapi.responses import PlainTextResponse
 
             buf = io.StringIO()
             writer = csv.writer(buf)
+<<<<<<< HEAD
+            writer.writerow(
+                [
+                    "task_id",
+                    "team",
+                    "title",
+                    "status",
+                    "priority",
+                    "created_by",
+                    "assigned_to",
+                    "created_at",
+                    "updated_at",
+                ]
+            )
+            for t in tasks:
+                writer.writerow(
+                    [
+                        t.task_id,
+                        t.team,
+                        t.title,
+                        t.status,
+                        t.priority,
+                        t.created_by,
+                        t.assigned_to,
+                        t.created_at,
+                        t.updated_at,
+                    ]
+                )
+=======
             writer.writerow([
                 "task_id", "team", "title", "status", "priority",
                 "created_by", "assigned_to", "created_at", "updated_at"
@@ -10996,11 +11058,16 @@ class WebApp:
                     t.created_at,
                     t.updated_at,
                 ])
+>>>>>>> 134f167
 
             return PlainTextResponse(
                 buf.getvalue(),
                 media_type="text/csv",
+<<<<<<< HEAD
+                headers={"Content-Disposition": "attachment; filename=task_board.csv"},
+=======
                 headers={"Content-Disposition": "attachment; filename=task_board.csv"}
+>>>>>>> 134f167
             )
 
         @self.app.post("/api/swarm/listeners/toggle")
@@ -11401,8 +11468,12 @@ class WebApp:
             return {"ok": True, "report": report}
 
         @self.app.get("/api/ecosystem/health/debug")
-        async def ecosystem_health_debug():
-            """[Session 12] Диагностика session_12 block — raw вывод коллекторов."""
+        async def ecosystem_health_debug(section: str = ""):
+            """Raw health collector output + full dict для diagnose.
+
+            Query params:
+            - section: filter one section (session_10, session_12, runtime_route, etc.)
+            """
             try:
                 health_svc = self.deps.get("health_service")
                 if health_svc is None:
@@ -11410,17 +11481,27 @@ class WebApp:
                     if router is None:
                         return {"error": "router_not_found_in_deps"}
                     from ..core.ecosystem_health import EcosystemHealthService
+
                     health_svc = EcosystemHealthService(router=router)
                 direct = health_svc._collect_session_12_stats()
                 full = await health_svc.collect()
-                return {
+
+                response = {
                     "direct": direct,
                     "full_has_session_12": "session_12" in full,
-                    "full_session_12": full.get("session_12"),
                     "full_keys": list(full.keys()),
                 }
+
+                if section:
+                    response["section_filter"] = section
+                    response["full_section"] = full.get(section)
+                else:
+                    response["full_session_12"] = full.get("session_12")
+
+                return response
             except Exception as exc:
                 import traceback
+
                 return {"error": str(exc), "trace": traceback.format_exc()[:500]}
 
         @self.app.get("/api/ecosystem/capabilities")
@@ -11568,9 +11649,7 @@ class WebApp:
 
             # ── observability (env-driven флаги + stagnation threshold) ─────
             try:
-                stagnation_threshold = int(
-                    os.environ.get("LLM_STAGNATION_THRESHOLD_SEC") or 120
-                )
+                stagnation_threshold = int(os.environ.get("LLM_STAGNATION_THRESHOLD_SEC") or 120)
             except (TypeError, ValueError):
                 stagnation_threshold = 120
 
@@ -13860,8 +13939,7 @@ class WebApp:
                 "running": is_dedicated_chrome_running(port),
                 "port": port,
                 "binary": find_chrome_binary(),
-                "profile_dir": os.environ.get("DEDICATED_CHROME_PROFILE_DIR")
-                or "/tmp/krab-chrome",
+                "profile_dir": os.environ.get("DEDICATED_CHROME_PROFILE_DIR") or "/tmp/krab-chrome",
             }
 
         @self.app.post("/api/chrome/dedicated/launch")

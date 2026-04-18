@@ -134,6 +134,8 @@ def test_full_profile_cannot_execute_owner_only_commands(
         "opencode",
         "hs",
         "cap",
+        "listen",
+        "mode",
         "chatban",
         "alias",
         "welcome",
