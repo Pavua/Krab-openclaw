@@ -29,6 +29,14 @@ Optional модули (memory_validator, reminders_queue, auto_restart_manager) 
 | `krab_llm_route_ok{provider,model}` | gauge | Last LLM route status (1=ok, 0=error) |
 | `krab_reminders_pending_total` | gauge | Pending reminders |
 | `krab_auto_restart_attempts_total{service}` | counter | Auto-restart attempts за последний час |
+| `krab_command_invocations_total{command}` | counter | Количество вызовов каждой команды с момента запуска |
+| `krab_llm_route_latency_seconds_bucket{provider,model,le}` | histogram | LLM-запросы по bucket'ам latency (seconds) |
+| `krab_llm_route_latency_seconds_sum{provider,model}` | histogram | Суммарная latency LLM-запросов |
+| `krab_llm_route_latency_seconds_count{provider,model}` | histogram | Количество LLM-запросов |
+| `krab_chat_filter_modes_total{mode}` | counter | Чаты в режиме active / mention-only / muted |
+| `krab_chat_windows_active` | gauge | Количество активных ChatWindow (in-memory буферы) |
+| `krab_chat_windows_capacity` | gauge | Суммарная ёмкость всех ChatWindow (сообщений) |
+| `krab_chat_windows_total_messages` | gauge | Сообщений, сейчас буферизованных в ChatWindow |
 | `krab_metrics_generated_at` | gauge | Unix timestamp когда metrics были сгенерированы |
 
 ## Scrape config (prometheus.yml)
@@ -179,5 +187,5 @@ Size: <N> bytes, lines: <M>
 ## Связанные документы
 
 - `src/core/prometheus_metrics.py` — реализация коллектора
-- `tests/unit/test_prometheus_metrics.py` — 18 unit-тестов
+- `tests/unit/test_prometheus_metrics.py` — 30 unit-тестов
 - `docs/ops_incident_runbook.md` — общий ops-runbook

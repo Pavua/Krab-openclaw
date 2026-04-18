@@ -185,6 +185,104 @@ def collect_metrics() -> str:
     except Exception:
         pass
 
+    # === Command invocations ===
+    try:
+        from src.core.command_registry import get_usage  # type: ignore[import-not-found]
+
+        usage = get_usage()
+        if usage:
+            for cmd, count in usage.items():
+                lines.append(
+                    _format_metric(
+                        "krab_command_invocations_total",
+                        count,
+                        labels={"command": cmd[:30]},
+                        help_text="Total invocations per command",
+                        mtype="counter",
+                    )
+                )
+    except Exception:
+        pass
+
+    # === LLM route latency histogram ===
+    try:
+        from src.core.llm_latency_tracker import (
+            llm_latency_tracker,  # type: ignore[import-not-found]
+        )
+
+        for series in llm_latency_tracker.snapshot():
+            provider = series["provider"]
+            model = series["model"]
+            metric_name = "krab_llm_route_latency_seconds"
+            # Заголовок один раз на имя (упрощённо — выводим перед первым bucket)
+            lines.append(f"# HELP {metric_name} LLM route latency histogram (seconds)")
+            lines.append(f"# TYPE {metric_name} histogram")
+            for le_str, cnt in series["buckets"].items():
+                label_str = (
+                    f'provider="{_sanitize_label(provider)}",'
+                    f'model="{_sanitize_label(model)}",'
+                    f'le="{le_str}"'
+                )
+                lines.append(f"{metric_name}_bucket{{{label_str}}} {cnt}")
+            # sum / count
+            label_str_base = (
+                f'provider="{_sanitize_label(provider)}",'
+                f'model="{_sanitize_label(model)}"'
+            )
+            lines.append(f"{metric_name}_sum{{{label_str_base}}} {series['sum']:.6f}")
+            lines.append(f"{metric_name}_count{{{label_str_base}}} {series['count']}")
+    except Exception:
+        pass
+
+    # === Chat filter modes ===
+    try:
+        from src.core.chat_filter_config import chat_filter_config  # type: ignore[import-not-found]
+
+        stats = chat_filter_config.stats()
+        for mode, count in stats.get("by_mode", {}).items():
+            lines.append(
+                _format_metric(
+                    "krab_chat_filter_modes_total",
+                    count,
+                    labels={"mode": mode},
+                    help_text="Chats per filter mode",
+                    mtype="counter",
+                )
+            )
+    except Exception:
+        pass
+
+    # === ChatWindow stats ===
+    try:
+        from src.core.chat_window_manager import (
+            chat_window_manager,  # type: ignore[import-not-found]
+        )
+
+        cw = chat_window_manager.stats()
+        lines.append(
+            _format_metric(
+                "krab_chat_windows_active",
+                cw.get("active_windows", 0),
+                help_text="Active ChatWindow instances",
+            )
+        )
+        lines.append(
+            _format_metric(
+                "krab_chat_windows_capacity",
+                cw.get("capacity", 0),
+                help_text="Total ChatWindow capacity (sum of all window sizes)",
+            )
+        )
+        lines.append(
+            _format_metric(
+                "krab_chat_windows_total_messages",
+                cw.get("total_messages", 0),
+                help_text="Total messages buffered across all ChatWindows",
+            )
+        )
+    except Exception:
+        pass
+
     # === Timestamps ===
     lines.append(
         _format_metric(
