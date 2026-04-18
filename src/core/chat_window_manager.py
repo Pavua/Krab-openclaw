@@ -16,7 +16,7 @@ from typing import Any
 
 # Константы с поддержкой env-override
 CAPACITY: int = int(os.environ.get("CHAT_WINDOW_CAPACITY", "100"))
-MESSAGE_CAP_PER_WINDOW: int = int(os.environ.get("CHAT_WINDOW_MESSAGE_CAP", "20"))
+MESSAGE_CAP_PER_WINDOW: int = int(os.environ.get("CHAT_WINDOW_MESSAGE_CAP", "50"))
 IDLE_EVICTION_SEC: int = int(os.environ.get("CHAT_WINDOW_IDLE_SEC", "3600"))
 
 
@@ -112,6 +112,13 @@ class ChatWindowManager:
     def list_windows(self) -> list[dict[str, Any]]:
         """Список всех окон в виде dict."""
         return [w.to_dict() for w in self._windows.values()]
+
+    def remove(self, chat_id: int) -> bool:
+        """Удалить окно для указанного чата. Возвращает True если окно существовало."""
+        if chat_id in self._windows:
+            del self._windows[chat_id]
+            return True
+        return False
 
     def clear_all(self) -> int:
         """Очистить все окна. Возвращает число удалённых."""
