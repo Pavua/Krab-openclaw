@@ -38,6 +38,14 @@ LLM_STAGNATION_CANCEL_REASON = "llm_stagnation_detected"
 
 logger = get_logger(__name__)
 
+# TODO Session 13.X: wire auto_reactions (src/core/auto_reactions.py):
+# - mark_accepted(bot, message)       при старте обработки (!ask, !agent, etc.)
+# - mark_memory_recall(bot, message)  если auto_context augmented (RAG hit)
+# - mark_agent_mode(bot, message)     когда tool_calls count > 0
+# - mark_completed(bot, message)      on success (перед отправкой ответа)
+# - mark_failed(bot, message, error)  on exception в конце flow
+# Пример импорта: from ..core.auto_reactions import mark_accepted, mark_completed, ...
+
 
 # ---------------------------------------------------------------------------
 # Module-level helpers (ранее в userbot_bridge.py, используются _run_llm_request_flow)

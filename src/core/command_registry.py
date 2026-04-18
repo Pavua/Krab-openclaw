@@ -891,6 +891,14 @@ _COMMANDS: list[CommandInfo] = [
         owner_only=True,
     ),
     CommandInfo(
+        name="loglevel",
+        category="system",
+        description="Runtime лог-уровень: показать или сменить (owner-only)",
+        usage="!loglevel [TRACE|DEBUG|INFO|WARNING|ERROR|CRITICAL]",
+        aliases=["verbose", "debug_level"],
+        owner_only=True,
+    ),
+    CommandInfo(
         name="sticker",
         category="system",
         description="Информация о стикере (reply): pack, emoji, file_id",
