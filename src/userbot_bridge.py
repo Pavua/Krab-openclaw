@@ -1959,6 +1959,17 @@ class KraabUserbot(
             telegram_rate_limiter.configure(max_per_sec=max(1, _rate_max), window_sec=1.0)
         except Exception as _exc:  # noqa: BLE001
             logger.warning("telegram_rate_limiter_bootstrap_failed", error=str(_exc))
+
+        # Chado: priority dispatcher start (logging/metrics layer)
+        try:
+            from .core.message_priority_dispatcher import (
+                priority_dispatcher as _pd,  # noqa: PLC0415
+            )
+
+            _pd.start()
+        except Exception as _pd_exc:  # noqa: BLE001
+            logger.warning("priority_dispatcher_start_failed", error=str(_pd_exc))
+
         start_timeout_sec = int(getattr(config, "TELEGRAM_START_TIMEOUT_SEC", 35))
         max_attempts = int(getattr(config, "TELEGRAM_START_ATTEMPTS", 3))
         relogin_timeout_sec = int(getattr(config, "TELEGRAM_RELOGIN_TIMEOUT_SEC", 300))
@@ -2406,6 +2417,16 @@ class KraabUserbot(
             await _get_idx().stop(drain=True, timeout=10.0)
         except Exception as _stop_exc:  # noqa: BLE001
             logger.debug("memory_indexer_stop_failed", error=str(_stop_exc))
+        # Chado: priority dispatcher stop
+        try:
+            from .core.message_priority_dispatcher import (
+                priority_dispatcher as _pd,  # noqa: PLC0415
+            )
+
+            _pd.stop()
+        except Exception as _pd_stop_exc:  # noqa: BLE001
+            logger.debug("priority_dispatcher_stop_failed", error=str(_pd_stop_exc))
+
         # Per-team swarm clients — остановить до основного клиента
         await self._stop_swarm_team_clients()
         try:
@@ -3962,6 +3983,120 @@ class KraabUserbot(
             user = message.from_user
             if not user or user.is_bot:
                 return
+
+            # === CHADO INTEGRATION: CW + Filter + Priority ===
+            # Вставлено Session 13.X. Все импорты — graceful (деградирует без падения).
+            try:
+                from pyrogram.enums import ChatType as _ChatType  # noqa: PLC0415
+
+                _chado_text = message.text or message.caption or ""
+                _chado_sender_id = int(getattr(user, "id", 0) or 0)
+                _chado_chat_id = str(getattr(message.chat, "id", ""))
+
+                # 1. Update ChatWindow (LRU touch + append)
+                try:
+                    from .core.chat_window_manager import (
+                        chat_window_manager as _cwm,  # noqa: PLC0415
+                    )
+
+                    _cw = _cwm.get_or_create(_chado_chat_id)
+                    _cw.touch()
+                    if _chado_text:
+                        _cw.append_message("user", _chado_text)
+                except Exception as _cw_exc:  # noqa: BLE001
+                    logger.debug("chat_window_update_failed", error=str(_cw_exc))
+
+                # 2. Determine context flags
+                _chado_is_group = getattr(message.chat, "type", None) in (
+                    _ChatType.GROUP, _ChatType.SUPERGROUP
+                )
+                _chado_is_command = (
+                    _chado_text[:1] in ("!", "/", ".") if _chado_text else False
+                )
+                _chado_reply_user_id = 0
+                if message.reply_to_message and message.reply_to_message.from_user:
+                    _chado_reply_user_id = int(
+                        getattr(message.reply_to_message.from_user, "id", 0) or 0
+                    )
+                _chado_is_reply_to_self = bool(
+                    self.me and _chado_reply_user_id == self.me.id
+                )
+
+                # 3. Krab mention check
+                _chado_has_mention = False
+                try:
+                    from .core.krab_identity import (
+                        is_krab_mentioned as _is_mentioned,  # noqa: PLC0415
+                    )
+
+                    _chado_has_mention = _is_mentioned(_chado_text)
+                except Exception as _id_exc:  # noqa: BLE001
+                    logger.debug("krab_identity_check_failed", error=str(_id_exc))
+
+                # 4. Group filter — только для не-командных сообщений в группах
+                if _chado_is_group and not _chado_is_command:
+                    try:
+                        from .core.chat_filter_config import (
+                            chat_filter_config as _cfc,  # noqa: PLC0415
+                        )
+
+                        _chado_mode = _cfc.get_mode(
+                            _chado_chat_id,
+                            is_group=True,
+                        )
+                        if _chado_mode == "muted":
+                            logger.debug("chat_muted_skip", chat_id=_chado_chat_id)
+                            return
+                        if _chado_mode == "mention-only" and not (
+                            _chado_has_mention or _chado_is_reply_to_self
+                        ):
+                            logger.debug(
+                                "chat_mention_only_skip",
+                                chat_id=_chado_chat_id,
+                                has_mention=_chado_has_mention,
+                            )
+                            return
+                        # mode == "active" → продолжаем
+                    except Exception as _cfc_exc:  # noqa: BLE001
+                        logger.debug("chat_filter_config_check_failed", error=str(_cfc_exc))
+
+                # 5. Priority classify (logging/metrics only — реальный dispatch Phase 2)
+                try:
+                    from .core.chat_filter_config import (
+                        chat_filter_config as _cfc2,  # noqa: PLC0415
+                    )
+                    from .core.message_priority_dispatcher import (  # noqa: PLC0415
+                        classify_priority as _classify_priority,
+                    )
+
+                    _chado_is_dm = getattr(message.chat, "type", None) == _ChatType.PRIVATE
+                    _chado_chat_mode = (
+                        _cfc2.get_mode(_chado_chat_id, is_group=_chado_is_group)
+                        if _chado_is_group
+                        else "active"
+                    )
+                    _prio, _prio_reason = _classify_priority(
+                        message_text=_chado_text,
+                        chat_type=str(getattr(message.chat, "type", "")),
+                        is_dm=_chado_is_dm,
+                        is_reply_to_self=_chado_is_reply_to_self,
+                        has_mention=_chado_has_mention,
+                        chat_mode=_chado_chat_mode,
+                    )
+                    logger.debug(
+                        "message_classified",
+                        priority=int(_prio),
+                        reason=_prio_reason,
+                        chat_id=_chado_chat_id,
+                        has_mention=_chado_has_mention,
+                    )
+                except Exception as _prio_exc:  # noqa: BLE001
+                    logger.debug("priority_classify_failed", error=str(_prio_exc))
+
+            except Exception as _chado_exc:  # noqa: BLE001
+                # Деградация — Chado layer не должен ломать основной обработчик
+                logger.warning("chado_integration_error", error=str(_chado_exc))
+            # === END CHADO INTEGRATION ===
 
             # Swarm intervention: если owner пишет в swarm-группу — перехватываем
             if self.me and user.id == self.me.id and message.chat and message.text:
