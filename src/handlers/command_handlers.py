@@ -6397,13 +6397,9 @@ def _format_ecosystem_report(report: dict[str, Any]) -> str:
             lines.append(f"• 🧠 Archive: {msgs_str} msgs, {size_mb} MB")
         dc = s10.get("dedicated_chrome") or {}
         if isinstance(dc, dict) and dc.get("enabled"):
-<<<<<<< HEAD
-            lines.append(f"• 🌐 Chrome: running={dc.get('running')} port={dc.get('port')}")
-=======
             lines.append(
                 f"• 🌐 Chrome: running={dc.get('running')} port={dc.get('port')}"
             )
->>>>>>> 134f167
         ar = s10.get("auto_restart") or {}
         if isinstance(ar, dict) and ar:
             lines.append(
@@ -17299,37 +17295,25 @@ async def handle_listen(bot: "KraabUserbot", message: Message) -> None:
       !listen mention-only   — только на @mention или reply
       !listen muted          — молчать
       !listen reset          — вернуть к дефолту
-<<<<<<< HEAD
-=======
       !listen reload         — перезагрузить конфиг с диска
->>>>>>> 134f167
       !listen list           — все чаты с явными правилами
       !listen stats          — статистика по режимам
     """
     from ..core.chat_filter_config import chat_filter_config
-<<<<<<< HEAD
     from ..core.command_registry import bump_command
 
     bump_command("listen")
-=======
->>>>>>> 134f167
 
     args = (bot._get_command_args(message) or "").strip().lower()
     chat_id = message.chat.id
     is_group = message.chat.type in ("group", "supergroup")
 
-<<<<<<< HEAD
     # Специальные команды
-=======
->>>>>>> 134f167
     if args == "list":
         return await _handle_listen_list(bot, message)
     if args == "stats":
         return await _handle_listen_stats(bot, message)
 
-<<<<<<< HEAD
-    # Управление режимом текущего чата
-=======
     if args == "reload":
         changed = chat_filter_config.reload()
         total = chat_filter_config.stats().get("total_rules", 0)
@@ -17340,7 +17324,7 @@ async def handle_listen(bot: "KraabUserbot", message: Message) -> None:
         )
         return
 
->>>>>>> 134f167
+    # Управление режимом текущего чата
     if args in ("active", "mention-only", "muted"):
         chat_filter_config.set_mode(chat_id, args)
         mode_name = {
