@@ -7715,6 +7715,8 @@ async def handle_archive(bot: "KraabUserbot", message: Message) -> None:
       !archive          — архивировать текущий чат
       !unarchive        — разархивировать текущий чат
       !archive list     — показать список архивированных чатов (до 20)
+      !archive stats    — статистика archive.db (размер, кол-во, чанки)
+      !archive growth   — рост archive.db за период
     """
     access_profile = bot._get_access_profile(message.from_user)
     if access_profile.level != AccessLevel.OWNER:
@@ -7744,6 +7746,71 @@ async def handle_archive(bot: "KraabUserbot", message: Message) -> None:
                 reply = "\n".join(lines)
             else:
                 reply = "📦 Архив пуст."
+
+    elif args == "stats":
+        # Статистика archive.db: размер, кол-во сообщений, чанков, последняя запись
+        import sqlite3
+
+        from src.core.archive_growth_monitor import ARCHIVE_DB
+
+        if not ARCHIVE_DB.exists():
+            reply = "📊 archive.db не найден — Memory Layer не инициализирован."
+        else:
+            size_mb = ARCHIVE_DB.stat().st_size / 1024 / 1024
+            try:
+                conn = sqlite3.connect(f"file:{ARCHIVE_DB}?mode=ro", uri=True)
+                msg_count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+                # chunks могут отсутствовать если индексация не запускалась
+                try:
+                    chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+                except sqlite3.OperationalError:
+                    chunk_count = 0
+                # последняя запись по полю date
+                try:
+                    last_row = conn.execute(
+                        "SELECT MAX(date) FROM messages"
+                    ).fetchone()[0]
+                    last_write = last_row if last_row else "—"
+                except sqlite3.OperationalError:
+                    last_write = "—"
+                conn.close()
+                reply = (
+                    f"📊 **Archive.db stats**\n"
+                    f"• Размер: `{size_mb:.2f} MB`\n"
+                    f"• Сообщений: `{msg_count:,}`\n"
+                    f"• Чанков: `{chunk_count:,}`\n"
+                    f"• Последнее сообщение: `{last_write}`"
+                )
+            except Exception as exc:
+                reply = f"❌ Ошибка чтения archive.db: `{exc}`"
+
+    elif args == "growth":
+        # Динамика роста archive.db из истории снапшотов
+        from src.core.archive_growth_monitor import growth_summary, take_snapshot
+
+        snap = take_snapshot()
+        summary = growth_summary()
+        if snap is None:
+            reply = "📈 archive.db не найден — данные недоступны."
+        elif isinstance(summary.get("summary"), str):
+            # Недостаточно данных
+            reply = (
+                f"📈 **Archive.db growth**\n"
+                f"• Снапшотов: `{summary['snapshots']}`\n"
+                f"• Текущий размер: `{snap.size_mb:.2f} MB`\n"
+                f"• Сообщений сейчас: `{snap.message_count:,}`\n"
+                f"• {summary['summary']}"
+            )
+        else:
+            reply = (
+                f"📈 **Archive.db growth** (за {summary['days_tracked']:.1f} дн.)\n"
+                f"• Снапшотов: `{summary['snapshots']}`\n"
+                f"• Размер: `{summary['first_size_mb']:.2f}` → `{summary['latest_size_mb']:.2f} MB`\n"
+                f"• Рост: `+{summary['growth_mb_per_day']:.2f} MB/день`\n"
+                f"• Сообщений: `{summary['latest_messages']:,}` "
+                f"(+{summary['growth_messages_per_day']:.0f}/день)"
+            )
+
     else:
         # Архивируем текущий чат
         chat_id = message.chat.id
