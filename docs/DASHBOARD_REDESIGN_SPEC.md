@@ -1300,3 +1300,70 @@ async def provisioning_page(): return FileResponse("src/web/provisioning.html")
 
 _Сгенерировано: 12.04.2026. Автор: Claude Code (session 7 subagent)._
 _На основе анализа: `src/modules/web_app.py` (13811 строк, ~190 endpoints), `docs/DASHBOARD_SPEC.md`._
+
+---
+
+## Wave 17-22 additions (post-spec-v1)
+
+_Добавлено: 18.04.2026. После сессий 8-11 появились новые модули и endpoints, которые
+нужно отразить в V4 frontend-дашборде (Gemini 3.1 Pro delegation)._
+
+### New modules to surface
+
+| Модуль | Endpoint | Что показывать |
+|--------|----------|----------------|
+| ChatWindow stats | `/api/chat_windows/stats` | per-chat message history cache LRU (hit/miss, eviction rate) |
+| Message Batcher backpressure | `/api/message_batcher/stats` | queue depth viz, drop count, flush latency p50/p95 |
+| Chat Filter config | `/api/chat_filter/config` | editable chat mode matrix (active/mention/muted) |
+| Memory Layer Phase 2 | `/api/memory/search` | hybrid FTS+semantic поиск по archive.db |
+| Archive growth | `/api/archive/growth` | 30-day size/msg-count trend chart |
+| Auto-reactions | `/api/reactions/recent` | recent 20 реакций log (chat/emoji/reason) |
+| Commands usage | `/api/commands/usage` | top-20 команд за 7 дней, bar chart |
+| Ecosystem health debug | `/api/ecosystem/health/debug` | session timeline по сервисам |
+
+### New widgets needed (for Gemini)
+
+1. **Archive growth chart** — line graph по дням; двойная ось (MB слева, msg count справа);
+   source: `/api/archive/growth` (list of `{date, bytes, messages}`); 30 дней; hover tooltip.
+2. **Chat filter matrix** — таблица `chat_id × mode`; inline edit (toggle pills active/mention/muted);
+   save через POST на `/api/chat_filter/config`; search/filter по chat_id или названию.
+3. **Memory search playground** — textarea input; radio toggle FTS / semantic / hybrid;
+   results list с score + snippet + chat/date; debounced search (300ms).
+4. **Command usage** — horizontal bar chart last 7 days; top-20; цвет акцент `#FF4B5C`;
+   click на bar → drill-down детали.
+5. **Reaction timeline** — вертикальный список последних 20 реакций:
+   time (relative) / chat / emoji (large) / reason (auto/manual/rule); auto-refresh 30s.
+6. **Ecosystem health panel** — status pill-ы по всем сервисам (OpenClaw, MCP×3, Inbox,
+   KrabEar, Voice Gateway, LM Studio); green/yellow/red; click → детальная карточка.
+
+### Breaking changes from v1 spec
+
+- **Endpoint count**: 155 → **189** (см. `/api/endpoints` — self-documenting).
+- **Telemetry stream**: убрали custom SSE → теперь **Prometheus metrics на `/metrics`**
+  (text/plain; используй fetch + простой парсер `# HELP` / `metric_name value`).
+- **Auth**: session cookie → `OWNER_PANEL_TOKEN` (env, если задан).
+  Header: `X-Krab-Panel-Token: <value>`; localStorage ключ: `krab_panel_token`.
+
+### Data model additions (TypeScript-ish)
+
+```ts
+interface ChatWindowStats { chat_id: number; size: number; hits: number; misses: number; evictions: number }
+interface BatcherStats { queue_depth: number; flush_p50_ms: number; flush_p95_ms: number; drops: number }
+interface ChatFilterEntry { chat_id: number; title: string; mode: "active" | "mention" | "muted" }
+interface ArchiveGrowthPoint { date: string; bytes: number; messages: number }
+interface MemorySearchResult { chunk_id: string; chat_id: number; score: number; snippet: string; ts: string }
+interface CommandUsagePoint { command: string; count: number; last_used: string }
+interface ReactionEvent { ts: string; chat_id: number; emoji: string; reason: string }
+```
+
+### Gemini delegation note
+
+> Use the latest spec (v1, sections 1-15) **plus this Wave 17-22 append**. Keep v1 visual
+> language: dark mode, accent красный `#FF4B5C`, Outfit font, nano_theme.css tokens.
+> Add per-chat data models (see table above). Responsive breakpoints: **640 / 1024 / 1600 px**.
+> Auth: `X-Krab-Panel-Token` header if `localStorage['krab_panel_token']` set.
+> Telemetry: parse Prometheus `/metrics` text format (no SSE fallback).
+
+---
+
+_Append: 18.04.2026 (Wave 17-22 sync). Источник: `/api/endpoints`, Session 11 handoff._
