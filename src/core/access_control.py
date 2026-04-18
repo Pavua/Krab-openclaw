@@ -116,6 +116,8 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "history",
         # Управление профилем userbot-аккаунта
         "profile",
+        # Агрессивная очистка истории (многослойный reset)
+        "reset",
     }
 )
 
@@ -147,6 +149,8 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "back",
         # Профиль userbot-аккаунта — изменяет данные аккаунта, только владелец
         "profile",
+        # Деструктивная очистка истории — только владелец
+        "reset",
     }
 )
 
