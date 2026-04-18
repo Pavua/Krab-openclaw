@@ -98,6 +98,7 @@ from .handlers import (
     handle_help,
     handle_hs,
     handle_id,
+    handle_listen,
     handle_inbox,
     handle_ls,
     handle_macos,
@@ -3347,9 +3348,7 @@ class KraabUserbot(
         _text = target_text  # захват для lambda
         _pm = parse_mode  # захват для lambda
         try:
-            sent = await _telegram_send_queue.run(
-                chat_id, lambda: msg.reply(_text, parse_mode=_pm)
-            )
+            sent = await _telegram_send_queue.run(chat_id, lambda: msg.reply(_text, parse_mode=_pm))
             return sent or msg
         except Exception as exc:  # noqa: BLE001
             # Ошибка парсинга markdown — пробуем без parse_mode (текст важнее форматирования).
@@ -3971,9 +3970,7 @@ class KraabUserbot(
         # следующий message handler.
         request_id = uuid.uuid4().hex[:12]
         _chat_id_for_ctx = str(getattr(getattr(message, "chat", None), "id", "") or "unknown")
-        _user_id_for_ctx = str(
-            getattr(getattr(message, "from_user", None), "id", "") or ""
-        )
+        _user_id_for_ctx = str(getattr(getattr(message, "from_user", None), "id", "") or "")
         bind_contextvars(
             request_id=request_id,
             chat_id=_chat_id_for_ctx,
@@ -4008,19 +4005,16 @@ class KraabUserbot(
 
                 # 2. Determine context flags
                 _chado_is_group = getattr(message.chat, "type", None) in (
-                    _ChatType.GROUP, _ChatType.SUPERGROUP
+                    _ChatType.GROUP,
+                    _ChatType.SUPERGROUP,
                 )
-                _chado_is_command = (
-                    _chado_text[:1] in ("!", "/", ".") if _chado_text else False
-                )
+                _chado_is_command = _chado_text[:1] in ("!", "/", ".") if _chado_text else False
                 _chado_reply_user_id = 0
                 if message.reply_to_message and message.reply_to_message.from_user:
                     _chado_reply_user_id = int(
                         getattr(message.reply_to_message.from_user, "id", 0) or 0
                     )
-                _chado_is_reply_to_self = bool(
-                    self.me and _chado_reply_user_id == self.me.id
-                )
+                _chado_is_reply_to_self = bool(self.me and _chado_reply_user_id == self.me.id)
 
                 # 3. Krab mention check
                 _chado_has_mention = False

@@ -1310,9 +1310,9 @@ async def handle_confirm(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(f"❌ Critical Memory Error: {e}")
 
 
-MEMORY_SEARCH_URL = os.environ.get(
-    "KRAB_PANEL_URL", "http://127.0.0.1:8080"
-).rstrip("/") + "/api/memory/search"
+MEMORY_SEARCH_URL = (
+    os.environ.get("KRAB_PANEL_URL", "http://127.0.0.1:8080").rstrip("/") + "/api/memory/search"
+)
 
 
 async def _recall_memory_layer(query: str, limit: int = 5) -> list[dict]:
@@ -4445,6 +4445,7 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
         # Добавляем event-based reminders из reminders_queue (Wave 7-D)
         try:
             from ..core.reminders_queue import reminders_queue as _rq
+
             owner_id = str(getattr(message.from_user, "id", "") or "")
             event_rows = _rq.list_pending(owner_id=owner_id) if owner_id else []
         except Exception:  # noqa: BLE001
@@ -4471,9 +4472,7 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
                 when = datetime.datetime.fromtimestamp(r.fire_at).strftime("%d.%m %H:%M")
                 lines.append(f"- `{r.id}` · `{when}` · {r.action_payload[:120]}")
             elif r.trigger_type.value == "event":
-                lines.append(
-                    f"- `{r.id}` · when `{r.match_pattern}` · {r.action_payload[:120]}"
-                )
+                lines.append(f"- `{r.id}` · when `{r.match_pattern}` · {r.action_payload[:120]}")
         payload = "\n".join(lines)
         chunks = _split_text_for_telegram(payload, limit=3600)
         await message.reply(chunks[0])
@@ -4490,6 +4489,7 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
             # Пробуем cancel через reminders_queue (event-based / Wave 7-D)
             try:
                 from ..core.reminders_queue import reminders_queue as _rq
+
                 ok = _rq.cancel(rid)
             except Exception:  # noqa: BLE001
                 ok = False
@@ -4857,14 +4857,12 @@ async def handle_cron(bot: "KraabUserbot", message: Message) -> None:
         "`!cron disable <name>` — выключить job\n"
         "`!cron run <name>` — запустить job немедленно\n"
         "`!cron status` — общая статистика\n"
-        "`!cron quick \"<время>\" \"<промпт>\"` — создать job в текущем чате\n"
-        "   Пример: `!cron quick \"каждый день в 10:00\" \"AI-ресёрч и саммари\"`"
+        '`!cron quick "<время>" "<промпт>"` — создать job в текущем чате\n'
+        '   Пример: `!cron quick "каждый день в 10:00" "AI-ресёрч и саммари"`'
     )
 
 
-async def _handle_cron_quick(
-    bot: "KraabUserbot", message: Message, args: str
-) -> None:
+async def _handle_cron_quick(bot: "KraabUserbot", message: Message, args: str) -> None:
     """
     !cron quick "<время>" "<промпт>" — создаёт per-chat recurring cron job.
 
@@ -4882,8 +4880,8 @@ async def _handle_cron_quick(
     if not raw:
         await bot._safe_reply(
             message,
-            "❌ Формат: `!cron quick \"<время>\" \"<промпт>\"`\n"
-            "Пример: `!cron quick \"каждый день в 10:00\" \"AI+crypto ресёрч, саммари\"`",
+            '❌ Формат: `!cron quick "<время>" "<промпт>"`\n'
+            'Пример: `!cron quick "каждый день в 10:00" "AI+crypto ресёрч, саммари"`',
         )
         return
 
@@ -4892,8 +4890,7 @@ async def _handle_cron_quick(
     except ValueError:
         await bot._safe_reply(
             message,
-            "❌ Не распарсил аргументы. Используй кавычки: "
-            "`!cron quick \"время\" \"промпт\"`",
+            '❌ Не распарсил аргументы. Используй кавычки: `!cron quick "время" "промпт"`',
         )
         return
 
@@ -4901,7 +4898,7 @@ async def _handle_cron_quick(
         await bot._safe_reply(
             message,
             "❌ Нужно 2 аргумента: время + промпт. "
-            "Пример: `!cron quick \"каждые 2 часа\" \"проверь BTC/ETH\"`",
+            'Пример: `!cron quick "каждые 2 часа" "проверь BTC/ETH"`',
         )
         return
 
@@ -4950,9 +4947,7 @@ async def _handle_cron_quick(
     )
     if not ok:
         short = raw_out[:200] if raw_out else "no output"
-        logger.warning(
-            "cron_quick_create_failed", name=job_name, spec=cron_spec, raw=short
-        )
+        logger.warning("cron_quick_create_failed", name=job_name, spec=cron_spec, raw=short)
         await bot._safe_reply(message, f"❌ Ошибка создания job:\n`{short}`")
         return
 
@@ -6271,9 +6266,7 @@ def _format_ecosystem_report(report: dict[str, Any]) -> str:
             lines.append(f"• 🧠 Archive: {msgs_str} msgs, {size_mb} MB")
         dc = s10.get("dedicated_chrome") or {}
         if isinstance(dc, dict) and dc.get("enabled"):
-            lines.append(
-                f"• 🌐 Chrome: running={dc.get('running')} port={dc.get('port')}"
-            )
+            lines.append(f"• 🌐 Chrome: running={dc.get('running')} port={dc.get('port')}")
         ar = s10.get("auto_restart") or {}
         if isinstance(ar, dict) and ar:
             lines.append(
@@ -9172,10 +9165,7 @@ async def handle_ask(bot: "KraabUserbot", message: Message) -> None:
     )
     if augmented.enabled and augmented.chunks_used:
         # Добавляем recall-префикс перед исходным prompt
-        prompt = (
-            f"{augmented.augmented_prompt}\n\n"
-            f"Текст:\n\"\"\"\n{source_text}\n\"\"\""
-        )
+        prompt = f'{augmented.augmented_prompt}\n\nТекст:\n"""\n{source_text}\n"""'
 
     # Отправляем статус и запускаем стриминг
     msg = await message.reply("🤔 Думаю...")
@@ -17120,3 +17110,98 @@ async def handle_id(bot: "KraabUserbot", message: Message) -> None:
             lines.append(f"Author: `{reply_from.id}`")
 
     await message.reply("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# handle_listen — управление режимом ответов в чате (active/mention-only/muted)
+# ---------------------------------------------------------------------------
+
+
+async def _handle_listen_list(bot: "KraabUserbot", message: Message) -> None:
+    """Показать все чаты с явными правилами."""
+    from ..core.chat_filter_config import chat_filter_config
+    import datetime
+
+    rules = chat_filter_config.list_rules()
+    if not rules:
+        await bot._safe_reply(message, "📭 Нет явных правил. Все чаты используют дефолты.")
+        return
+
+    lines = ["🎛️ **Явные правила фильтра:**\n"]
+    for r in rules[:30]:
+        updated = datetime.datetime.fromtimestamp(r.updated_at).strftime("%Y-%m-%d %H:%M")
+        lines.append(f"• `{r.chat_id}` → `{r.mode}` ({updated})")
+    if len(rules) > 30:
+        lines.append(f"... ещё +{len(rules) - 30}")
+
+    await bot._safe_reply(message, "\n".join(lines))
+
+
+async def _handle_listen_stats(bot: "KraabUserbot", message: Message) -> None:
+    """Показать статистику по режимам."""
+    from ..core.chat_filter_config import chat_filter_config
+
+    stats = chat_filter_config.stats()
+    lines = ["📊 **Статистика фильтра:**\n"]
+    lines.append(f"Всего правил: {stats['total_rules']}")
+    for mode, count in sorted(stats.get("by_mode", {}).items()):
+        lines.append(f"• `{mode}`: {count}")
+
+    await bot._safe_reply(message, "\n".join(lines))
+
+
+async def handle_listen(bot: "KraabUserbot", message: Message) -> None:
+    """Управление режимом ответов Краба в чате.
+
+    Синтаксис:
+      !listen                — показать текущий режим
+      !listen active         — реагировать на все
+      !listen mention-only   — только на @mention или reply
+      !listen muted          — молчать
+      !listen reset          — вернуть к дефолту
+      !listen list           — все чаты с явными правилами
+      !listen stats          — статистика по режимам
+    """
+    from ..core.chat_filter_config import chat_filter_config
+    from ..core.command_registry import bump_command
+
+    bump_command("listen")
+
+    args = (bot._get_command_args(message) or "").strip().lower()
+    chat_id = message.chat.id
+    is_group = message.chat.type in ("group", "supergroup")
+
+    # Специальные команды
+    if args == "list":
+        return await _handle_listen_list(bot, message)
+    if args == "stats":
+        return await _handle_listen_stats(bot, message)
+
+    # Управление режимом текущего чата
+    if args in ("active", "mention-only", "muted"):
+        chat_filter_config.set_mode(chat_id, args)
+        mode_name = {
+            "active": "все сообщения",
+            "mention-only": "@mention и reply",
+            "muted": "молчать",
+        }[args]
+        await bot._safe_reply(message, f"✅ Чат `{chat_id}`: {mode_name}")
+        return
+
+    if args == "reset":
+        chat_filter_config.reset(chat_id)
+        await bot._safe_reply(message, f"🔄 Чат `{chat_id}`: вернулся к дефолту")
+        return
+
+    # Показать текущий режим
+    if not args:
+        mode = chat_filter_config.get_mode(chat_id, is_group=is_group)
+        mode_emoji = {"active": "🟢", "mention-only": "🟡", "muted": "🔴"}[mode]
+        await bot._safe_reply(message, f"{mode_emoji} Текущий режим: `{mode}`")
+        return
+
+    # Неизвестная команда
+    await bot._safe_reply(
+        message,
+        "❌ Неизвестный режим. Используйте: active, mention-only, muted, reset, list, stats",
+    )

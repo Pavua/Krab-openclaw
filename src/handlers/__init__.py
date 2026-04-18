@@ -189,6 +189,7 @@ __all__ = [
     "handle_chatban",
     "handle_chatinfo",
     "handle_id",
+    "handle_listen",
     "handle_contacts",
     "handle_clear",
     "handle_confirm",
