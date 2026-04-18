@@ -17,6 +17,9 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Счётчик использований adaptive rerank (mutable singleton для hot-path инкремента).
+_ADAPTIVE_RERANK_COUNTER: list[int] = [0]
+
 
 def _sanitize_label(value: str) -> str:
     """Escape кавычек и переводов строк в значении label."""
@@ -282,6 +285,16 @@ def collect_metrics() -> str:
         )
     except Exception:
         pass
+
+    # === Adaptive rerank usage ===
+    lines.append(
+        _format_metric(
+            "krab_memory_adaptive_rerank_used_total",
+            _ADAPTIVE_RERANK_COUNTER[0],
+            help_text="Total adaptive rerank invocations (MEMORY_ADAPTIVE_RERANK_ENABLED=1)",
+            mtype="counter",
+        )
+    )
 
     # === Timestamps ===
     lines.append(
