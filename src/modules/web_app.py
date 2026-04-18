@@ -10474,6 +10474,19 @@ class WebApp:
 
             return collect_memory_stats()
 
+        @self.app.get("/api/system/clock_drift")
+        async def system_clock_drift():
+            """Дрейф системных часов относительно NTP (диагностика Pyrogram msg_id)."""
+            from ..core.clock_drift_check import check_clock_drift
+
+            result = await check_clock_drift()
+            return {
+                "local_ts": result.local_ts,
+                "ntp_offset_sec": result.ntp_offset_sec,
+                "status": result.status,
+                "message": result.message,
+            }
+
         @self.app.get("/api/dashboard/summary")
         async def dashboard_summary():
             """Агрегатор для Dashboard V4 — один запрос вместо 15.
