@@ -104,6 +104,13 @@ class Config:
     RESTORE_PREFERRED_ON_IDLE_UNLOAD: bool = os.getenv(
         "RESTORE_PREFERRED_ON_IDLE_UNLOAD", "0"
     ).strip().lower() in ("1", "true", "yes")
+    # qwen3-30b routing: preferred LLM для voice channel + text (VA Phase 1.6)
+    KRAB_MODEL_QWEN3_30B: str = os.getenv(
+        "KRAB_MODEL_QWEN3_30B", "qwen3-30b-a3b-instruct-2507"
+    )
+    # LRU eviction TTL (секунды): если модель не использовалась дольше,
+    # она выгружается при загрузке другой модели (LRU policy).
+    KRAB_LRU_EVICT_AFTER_SEC: float = float(os.getenv("KRAB_LRU_EVICT_AFTER_SEC", "300"))
     # Таймауты stream-ответа OpenClaw (сек):
     # - CHUNK: ожидание нового чанка стриминга (между порциями данных);
     # - FIRST_CHUNK: ожидание первого чанка для текстового запроса;
@@ -556,6 +563,10 @@ class Config:
                         "true",
                         "yes",
                     )
+                elif key == "KRAB_MODEL_QWEN3_30B":
+                    cls.KRAB_MODEL_QWEN3_30B = value
+                elif key == "KRAB_LRU_EVICT_AFTER_SEC":
+                    cls.KRAB_LRU_EVICT_AFTER_SEC = float(value)
                 elif key == "OPENCLAW_CHUNK_TIMEOUT_SEC":
                     cls.OPENCLAW_CHUNK_TIMEOUT_SEC = float(value)
                 elif key == "OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC":
