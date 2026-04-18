@@ -10542,6 +10542,21 @@ class WebApp:
                 "usage": usage,
             }
 
+        @self.app.get("/api/commands/usage/top")
+        async def get_command_usage_top(limit: int = 10):
+            """Топ-N команд по количеству вызовов (count DESC, name ASC при ничьей)."""
+            from ..core.command_registry import get_usage as _get_usage
+
+            raw = _get_usage()
+            clamped = max(1, min(limit, 100))
+            sorted_items = sorted(raw.items(), key=lambda x: (-x[1], x[0]))
+            top = [{"command": cmd, "count": cnt} for cmd, cnt in sorted_items[:clamped]]
+            return {
+                "ok": True,
+                "top": top,
+                "total_commands": len(raw),
+            }
+
         @self.app.get("/api/commands/{name}")
         async def get_command(name: str):
             """Детальная информация о конкретной команде."""
