@@ -3484,9 +3484,10 @@ async def handle_sysinfo(bot: "KraabUserbot", message: Message) -> None:
 
 
 async def handle_uptime(bot: "KraabUserbot", message: Message) -> None:
-    """Uptime системы macOS + Краба + OpenClaw gateway."""
+    """Uptime: macOS + Краб + OpenClaw gateway + LM Studio + Archive."""
     import re
     import time as _t
+    from pathlib import Path
 
     lines: list[str] = ["⏱️ **Uptime**", "─────────────"]
 
@@ -3530,6 +3531,30 @@ async def handle_uptime(bot: "KraabUserbot", message: Message) -> None:
                 lines.append("OpenClaw: ❌ Offline")
     except Exception:
         lines.append("OpenClaw: ❌ Недоступен")
+
+    # LM Studio health check
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get("http://127.0.0.1:1234/v1/models")
+            if resp.status_code == 200:
+                lines.append("LM Studio: ✅ Online")
+            else:
+                lines.append(f"LM Studio: ⚠️ Status {resp.status_code}")
+    except Exception:
+        lines.append("LM Studio: 💤 Offline/Idle")
+
+    # Archive database info
+    try:
+        arch_path = Path.home() / ".openclaw" / "krab_memory" / "archive.db"
+        if arch_path.exists():
+            size_mb = arch_path.stat().st_size / 1024 / 1024
+            mtime_ago = int(_t.time() - arch_path.stat().st_mtime)
+            time_ago_str = _format_uptime_str(mtime_ago)
+            lines.append(f"Archive: `{size_mb:.1f} MB` (last write {time_ago_str} ago)")
+        else:
+            lines.append("Archive: Empty")
+    except Exception:
+        lines.append("Archive: N/A")
 
     await message.reply("\n".join(lines))
 
@@ -17255,8 +17280,9 @@ async def handle_id(bot: "KraabUserbot", message: Message) -> None:
 
 async def _handle_listen_list(bot: "KraabUserbot", message: Message) -> None:
     """Показать все чаты с явными правилами."""
-    from ..core.chat_filter_config import chat_filter_config
     import datetime
+
+    from ..core.chat_filter_config import chat_filter_config
 
     rules = chat_filter_config.list_rules()
     if not rules:
