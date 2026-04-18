@@ -10474,6 +10474,27 @@ class WebApp:
 
             return collect_memory_stats()
 
+        @self.app.get("/api/dashboard/summary")
+        async def dashboard_summary():
+            """Агрегатор для Dashboard V4 — один запрос вместо 15.
+
+            Собирает uptime, version, service status, archive/memory stats,
+            activity counters и alerts. Graceful fallback — при ошибке любого
+            источника поле возвращается null, 500 не выбрасывается.
+            """
+            # boot_ts ленится так же, как в /api/uptime
+            import time as _t
+
+            from ..core.dashboard_summary import collect_dashboard_summary
+
+            boot = getattr(self, "_boot_ts", None)
+            if not boot:
+                self._boot_ts = _t.time()
+                boot = self._boot_ts
+
+            router = self.deps.get("router")
+            return collect_dashboard_summary(boot_ts=boot, router=router)
+
         @self.app.get("/api/translator/test")
         async def translator_test_api(text: str = Query(default=""), tgt: str = Query(default="")):
             """Тестовый перевод через API (GET для простоты)."""
