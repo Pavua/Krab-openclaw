@@ -7,7 +7,86 @@ Versioning: Semantic (MAJOR.MINOR.PATCH).
 
 ## [Unreleased]
 
-Nothing queued yet — see `.remember/next_session.md` for Session 13 scope.
+Nothing queued yet — see `.remember/next_session.md` for Session 14 scope.
+
+## [10.4.0] — 2026-04-19 — Session 13: Chado architecture live + Wave 21-29 stability batch
+
+### Added
+
+- **Chado multi-message architecture** (Waves 17-20):
+  - `ChatWindow` per-chat context + LRU eviction
+  - `MessagePriorityDispatcher` (P0/P1/P2 queue)
+  - `ChatFilterConfig` per-chat modes (`!listen [active|mention-only|muted]`)
+  - `KrabIdentity` + `GroupIdentity` self-awareness helpers (Chado blueprint)
+  - `MessageBatcher` per-chat backpressure handling
+
+- **Memory Phase 2** LIVE (Wave 17-19):
+  - Model2Vec embeddings + sqlite-vec hybrid search
+  - `/api/memory/stats` endpoint
+  - `!archive stats/growth` subcommands (archive growth daily snapshot)
+  - Memory query expansion with synonyms (RU+EN)
+
+- **Stability & monitoring** (Waves 21-26):
+  - Auto-reactions module recovery (`src/core/auto_reactions.py`)
+  - LaunchAgent weekly maintenance (VACUUM + log rotation)
+  - Archive growth monitor + daily snapshots
+  - Extended `!uptime` command
+  - Prometheus alerts YAML (14 alerts total: ArchiveDbSizeCritical, CommandHandlerErrors, KrabDown, LLMErrorRateHigh, MemoryQueryLatencyHigh, MessageBatcherBackpressure, TelegramRateLimited + 7 new)
+  - Chat filters user guide
+  - Async task_board load (event loop stall fix)
+  - `/api/dashboard/summary` single-call aggregator
+  - Stagger swarm startup 1.5s + warmup gate
+  - `/api/system/clock_drift` endpoint
+  - MCP e2e verify probe
+  - Archive.db VACUUM + log rotation
+  - Per-dir ruff config
+
+- **Refinements** (Waves 27-29):
+  - Routing fix: `USERBOT_KNOWN_COMMANDS` frozenset
+  - `sync_docs.py` composite regen (204 endpoints / 154 handlers auto-sync to CLAUDE.md)
+  - Swarm research_pipeline profile + non-blocking persist
+  - `/api/commands/usage/top` endpoint
+  - Memory adaptive rerank opt-in (env `MEMORY_ADAPTIVE_RERANK_ENABLED`)
+  - Dashboard V4 spec finalized
+  - `!bench _safe_reply` safety sweep (18 calls fixed)
+  - p0lrd bootstrap probe — export ready
+  - `!cron BROKEN` diagnosis (OpenClaw CLI freeze → Session 14)
+  - sqlite-vec FTS5/vec_chunks repair script
+  - `!memory rebuild` command (WIP)
+  - 7 orphan agent worktrees removed (-600MB)
+  - Regression test for `handle_confirm/handle_bench`
+
+### Fixed
+
+- **!bench _safe_reply** — 18 unsafe reply calls (react/cron_quick/listen) corrected to safe-reply protocol (`e.g., 29-G`)
+- **Swarm startup race** — stagger 1.5s + warmup gate prevents cascade (Wave 25)
+- **Event loop stall** — async task_board load refactored (Wave 24)
+- **Routing** — USERBOT_KNOWN_COMMANDS now frozenset (Wave 27)
+- **how2ai diagnosis** — not blocked, flaky OpenClaw root cause (29-I)
+
+### Changed
+
+- **CLAUDE.md** auto-sync via `sync_docs.py` (204 endpoints / 154 handlers, ~10x faster regen)
+- **Swarm research** — non-blocking persist + profile instrumentation
+- **Archive monitoring** — daily snapshot + growth stats exposed (`!archive stats/growth`)
+
+### Tests
+
+- **+240+ new tests** (estimated across stability modules, memory Phase 2 e2e, adapter regression, cron/bench safety)
+- **Prometheus coverage** — 14 alerts + 8 metrics fully covered
+- Total: **~7700 tests** (up from ~7465)
+
+### Commits (29+)
+
+Spans Wave 17-29 (post-reboot). Full scope via `git log --oneline` for waves 17-29.
+
+### Known issues carried to Session 14
+
+- p0lrd Telegram Export >24h (still exporting, старый аккаунт)
+- OpenClaw CLI freeze (detected in 29-I, diagnosis needed)
+- 27 orphan worktrees (prune post-session)
+
+---
 
 ## [10.3.0] — 2026-04-18 — Session 12: Chado-inspired Proactivity + Voice Phase 1.4 + Identity fixes
 
