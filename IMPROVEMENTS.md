@@ -947,3 +947,31 @@ redact (4/4 пойманы) → chunking (7 chunks) → FTS5 index → Model2Vec
 - `/api/dashboard/summary` — V4 single-call aggregator (Wave 24-C, b257daa)
 - `/api/archive/growth` — 30-day size trend (Wave 21-D, 558b419)
 - `/api/system/clock_drift` — NTP offset diag (Wave 25-B)
+
+## Wave 29 learnings (18-19.04.2026)
+
+### Root-causes discovered
+
+1. **`_safe_reply` AttributeError cascade** (Wave 29-A): 18 handler calls shipped references к `bot._safe_reply()` который никогда не существовал как public method. Wave 21-22 handlers added быстро без contract validation. **Observation:** handler contracts дрейфуют от reality. **Prevention:** для новых handlers писать unit-test на `inspect(bot)` existence перед production deploy.
+
+2. **Stale .pyc imports after merge conflicts** (Wave 27→29): merge `--theirs` resolution оставлял stale bytecode, breaking imports в `src/core/`, `src/userbot/`. **Root cause:** Python caches imports, `__pycache__` не пересчитывается после file touch. **Prevention:** добавить `scripts/clear_pycache.py` + integrate в `new start_krab.command` pre-start hook.
+
+3. **Merge marker leaks with --theirs** (Wave 29-A): `git merge -X theirs` оставлял `<<<<<<<` conflict markers в file content вместо полного resolution. Silent file corruption. **Prevention:** добавить `grep -c "<<<<<<<" src/` в pre-commit hook, fail если count > 0.
+
+4. **sqlite-vec + FTS5 orphaned rows** (Wave 29-B, Phase 2): 9180 orphaned `vec_chunks` + 1775 orphaned `FTS5 docsize` rows после Phase 2 encode. **Root cause:** chunks recreated via bulk INSERT, indexes не rebuilt. **Prevention:** encoder must always upsert in transaction с `VACUUM` + index rebuild.
+
+5. **auto_restart_policy over-aggressive during CPU starvation** (Wave 29-C): system auto-restart посылала `openclaw gateway stop` когда `channels.status` висел 56s from CPU load 12.0 (4-core). **Root cause:** policy не considers system load. **Prevention:** prefer passive observe (metric alert) до active restart если load > 3× CPU_COUNT.
+
+6. **Flaky mtime-comparison hot-reload** (Wave 28→29): `mtime > last_mtime + 0.05s` flaky под system load (timer resolution ~0.1s). Handlers skipped reload cycles. **Prevention:** use inequality `(mtime != last_mtime)` вместо threshold,더 reliable.
+
+7. **launchd KeepAlive=true без ExitTimeout** (Wave 29-D): Krab startup loop висел unlimited без bounded recovery. **Prevention:** add `ExitTimeout=120` в `ai.krab.core.plist` + `ai.openclaw.gateway.plist` pending user approval.
+
+8. **Wave numbering scalability with suffix pattern** (Wave 29-A through 29-Z): 26 sub-waves (A–Z) per major wave scaled well for parallel agents. Session 11–13 successfully managed 29-A...29-H concurrent. **Pattern:** adoption for Wave 30+ justified.
+
+### Session 14 recommendations
+
+- [ ] **Implement pycache cleaner:** `scripts/clear_pycache.py` with recursive `__pycache__/` removal, integrate into `new start_krab.command`.
+- [ ] **Add merge-marker grep to pre-commit:** fail if `grep -c "<<<<<<<" src/handlers/ handlers/ userbot/` > 0.
+- [ ] **Update launchd plists:** add `<key>ExitTimeout</key><integer>120</integer>` to both `ai.krab.core.plist` and `ai.openclaw.gateway.plist`.
+- [ ] **Add ThrottleInterval** (optional): `ai.openclaw.gateway.plist` — set `<key>ThrottleInterval</key><integer>5</integer>` to space out rapid restarts.
+- [ ] **Audit remaining singleton loaders:** apply async-to-thread pattern for any >20-item singletons.
