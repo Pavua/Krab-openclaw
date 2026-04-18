@@ -18,6 +18,7 @@ src/core/swarm_memory.py
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import asdict, dataclass, field
@@ -33,6 +34,9 @@ _STATE_PATH = Path.home() / ".openclaw" / "krab_runtime_state" / "swarm_memory.j
 
 # Сколько записей хранить на команду (FIFO)
 _MAX_ENTRIES_PER_TEAM = 50
+
+# Порог warning для медленной загрузки с диска (Wave 22-H).
+_SLOW_LOAD_WARN_MS = 500.0
 
 # Сколько последних записей инжектировать в system_hint ролей
 _INJECT_RECENT_COUNT = 5
@@ -88,20 +92,41 @@ class SwarmMemory:
     # -- persistence ----------------------------------------------------------
 
     def _load(self) -> None:
+        """Синхронная загрузка. Для async-контекста см. load_async()."""
+        t0 = time.monotonic()
         if not self._path.exists():
             self._data = {}
             return
         try:
             raw = self._path.read_text(encoding="utf-8")
             self._data = json.loads(raw) if raw.strip() else {}
+            elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
             logger.info(
                 "swarm_memory_loaded",
                 teams=len(self._data),
                 total=sum(len(v) for v in self._data.values()),
+                elapsed_ms=elapsed_ms,
             )
+            if elapsed_ms > _SLOW_LOAD_WARN_MS:
+                logger.warning(
+                    "swarm_memory_slow_load",
+                    teams=len(self._data),
+                    elapsed_ms=elapsed_ms,
+                    threshold_ms=_SLOW_LOAD_WARN_MS,
+                )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("swarm_memory_load_failed", error=str(exc))
+            elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
+            logger.warning(
+                "swarm_memory_load_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                elapsed_ms=elapsed_ms,
+            )
             self._data = {}
+
+    async def load_async(self) -> None:
+        """Async обёртка: запускает _load в thread executor."""
+        await asyncio.to_thread(self._load)
 
     def _save(self) -> None:
         try:

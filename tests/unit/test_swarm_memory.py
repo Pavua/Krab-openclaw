@@ -178,3 +178,46 @@ class TestSwarmMemoryCorruptedFile:
         # Должен работать после recovery
         mem.save_run(team="traders", topic="t", result="r")
         assert len(mem.get_recent("traders")) == 1
+
+
+class TestSwarmMemoryAsyncLoad:
+    """Wave 22-H: async-ified load + elapsed_ms instrumentation."""
+
+    def test_load_logs_elapsed_ms(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
+        """_load логирует elapsed_ms после успешной загрузки."""
+        import json
+        import logging
+
+        path = tmp_path / "mem.json"
+        path.write_text(json.dumps({"coders": []}), encoding="utf-8")
+
+        with caplog.at_level(logging.INFO, logger="src.core.swarm_memory"):
+            SwarmMemory(state_path=path)
+
+        # Проверяем что событие залогировано
+        loaded_records = [
+            r for r in caplog.records if "swarm_memory_loaded" in r.getMessage()
+        ]
+        assert loaded_records
+
+    def test_load_async_completes(self, tmp_path: Path):
+        """load_async() перезагружает state через thread."""
+        import asyncio
+        import json
+
+        path = tmp_path / "mem.json"
+        path.write_text(
+            json.dumps({"traders": [{"run_id": "x", "team": "traders", "topic": "t",
+                                     "result_summary": "r", "delegations": [],
+                                     "created_at": "2026-01-01T00:00:00+00:00",
+                                     "duration_sec": 0.0, "metadata": {}}]}),
+            encoding="utf-8",
+        )
+
+        mem = SwarmMemory(state_path=path)
+        # Принудительно сбросим кеш и перечитаем async
+        mem._data = {}
+
+        asyncio.run(mem.load_async())
+        assert "traders" in mem._data
+        assert len(mem._data["traders"]) == 1

@@ -1821,6 +1821,29 @@ class KraabUserbot(
             chat_capability_cache.configure_default_path(
                 _runtime_state_dir / "chat_capability_cache.json"
             )
+            # Wave 22-H: async-ified JSON loads для больших state-файлов.
+            # Singleton уже загрузил state при import; здесь перечитываем
+            # в thread, чтобы event-loop не тормозил на 100+ items.
+            try:
+                from .core.swarm_task_board import (  # noqa: PLC0415
+                    swarm_task_board as _tb_singleton,
+                )
+                from .core.swarm_memory import (  # noqa: PLC0415
+                    swarm_memory as _sm_singleton,
+                )
+
+                await _tb_singleton.configure_default_path_async(
+                    _runtime_state_dir / "swarm_task_board.json"
+                )
+                # swarm_memory читает из дефолтного пути; принудительно
+                # перечитываем через thread чтобы не блокировать loop.
+                await _sm_singleton.load_async()
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning(
+                    "swarm_state_async_bootstrap_failed",
+                    error=str(_exc),
+                    error_type=type(_exc).__name__,
+                )
         except Exception as _exc:  # noqa: BLE001
             # silent-failure-hunter review (B.7): raised from warning → error.
             # Если configure упал, singleton остался in-memory only, persist
