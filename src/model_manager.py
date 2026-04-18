@@ -84,6 +84,10 @@ class ModelManager:
         self._active_requests: int = 0
         self._lock = asyncio.Lock()
         self._maintenance_task: Optional[asyncio.Task] = None
+        # LRU eviction tracking (VA Phase 1.6)
+        self._lru_idle_timeout_sec: float = float(
+            getattr(config, "KRAB_LRU_EVICT_AFTER_SEC", 300)
+        )
         # Временное исключение локальных моделей, которые гарантированно не загружаются
         # (например, битые пути/удалённые файлы в LM Studio registry).
         self._local_model_excluded_until: dict[str, float] = {}
@@ -980,6 +984,68 @@ class ModelManager:
         now = time.time()
         self._last_access[model_id] = now
         self._last_any_activity_ts = now
+
+    def record_usage(self, model_id: str) -> None:
+        """Записывает использование модели для LRU tracking (VA Phase 1.6)."""
+        self.touch(model_id)
+
+    async def maybe_evict_idle(
+        self, keep_model: str, max_total_models: int = 1
+    ) -> list[str]:
+        """
+        Выгружает idle модели, держа keep_model загруженной.
+
+        LRU eviction policy (VA Phase 1.6):
+        - Отслеживает последний доступ каждой модели (_last_access);
+        - Если idle > KRAB_LRU_EVICT_AFTER_SEC и другая модель also loaded,
+          выгружает oldest-idle модель.
+        - Хранит keep_model в памяти (не выгружает).
+        - Максимум max_total_models одновременно.
+
+        Returns:
+            List модели-IDs которые были выгружены.
+        """
+        evicted: list[str] = []
+
+        async with self._lock:
+            loaded = await self.get_loaded_models(force_refresh=True)
+            if not loaded or len(loaded) <= max_total_models:
+                return []
+
+            now = time.time()
+            # Определяем какие модели idle
+            idle_candidates: list[tuple[str, float]] = []
+            for model_id in dict.fromkeys(loaded):
+                if model_id == keep_model:
+                    continue
+                last_access = self._last_access.get(model_id, 0.0)
+                idle_sec = now - last_access
+                if idle_sec >= self._lru_idle_timeout_sec:
+                    idle_candidates.append((model_id, idle_sec))
+
+            # Сортируем по idle времени (oldest first) и выгружаем
+            idle_candidates.sort(key=lambda x: x[1], reverse=True)
+            target_count = max(max_total_models - 1, 0)  # Оставляем место для keep_model
+
+            for model_id, idle_sec in idle_candidates[: len(loaded) - target_count - 1]:
+                logger.info(
+                    "lru_evicting_idle_model",
+                    model=model_id,
+                    idle_sec=round(idle_sec, 2),
+                    keep_model=keep_model,
+                )
+                await self._do_unload_model(model_id)
+                evicted.append(model_id)
+                if self._current_model == model_id:
+                    self._current_model = None
+
+            if evicted:
+                self._invalidate_loaded_models_cache()
+
+        if evicted:
+            await asyncio.sleep(0.5)
+
+        return evicted
 
     def mark_request_started(self) -> None:
         """
