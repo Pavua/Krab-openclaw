@@ -66,6 +66,7 @@ from .command_handlers import (
     handle_id,
     handle_img,
     handle_inbox,
+    handle_listen,
     handle_invite,
     handle_ip,
     handle_json,
