@@ -73,6 +73,9 @@ async def generate_summary() -> str:
     # --- Pending reminders ---
     _append_reminder_stats(lines)
 
+    # --- Archive growth: daily snapshot + anomaly alert ---
+    _append_archive_growth_snapshot(lines)
+
     return "\n".join(lines)
 
 
@@ -109,9 +112,7 @@ def _append_swarm_stats(lines: list[str], today_ts: float) -> None:
         from .swarm_artifact_store import swarm_artifact_store
 
         all_artifacts = swarm_artifact_store.list_artifacts(limit=200)
-        today_artifacts = [
-            a for a in all_artifacts if float(a.get("timestamp", 0)) >= today_ts
-        ]
+        today_artifacts = [a for a in all_artifacts if float(a.get("timestamp", 0)) >= today_ts]
         if today_artifacts:
             teams: dict[str, int] = {}
             for a in today_artifacts:
@@ -151,9 +152,7 @@ def _append_inbox_stats(lines: list[str]) -> None:
         errors = [it for it in open_items if it.get("severity") == "error"]
         warnings = [it for it in open_items if it.get("severity") == "warning"]
         if errors or warnings:
-            lines.append(
-                f"**Inbox**: {len(errors)} ошибок, {len(warnings)} предупреждений"
-            )
+            lines.append(f"**Inbox**: {len(errors)} ошибок, {len(warnings)} предупреждений")
             # Показываем последние 3 error
             for it in errors[-3:]:
                 lines.append(f"  • ❌ {str(it.get('title', ''))[:60]}")
@@ -172,6 +171,26 @@ def _append_reminder_stats(lines: list[str]) -> None:
             lines.append(f"**Reminders**: {len(pending)} pending")
     except Exception as exc:  # noqa: BLE001
         logger.debug("nightly_summary_reminders_error", error=str(exc))
+
+
+def _append_archive_growth_snapshot(lines: list[str]) -> None:
+    """Добавляет снимок архива и алерт на аномалию в growth."""
+    try:
+        from .archive_growth_monitor import append_snapshot_and_check_anomaly
+
+        snap, anomaly_msg = append_snapshot_and_check_anomaly()
+        if anomaly_msg:
+            lines.append("")
+            lines.append(anomaly_msg)
+            logger.info("nightly_summary_archive_anomaly_included", msg=anomaly_msg)
+        elif snap:
+            logger.info(
+                "nightly_summary_archive_snapshot_taken",
+                size_mb=snap.size_mb,
+                message_count=snap.message_count,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("nightly_summary_archive_growth_error", error=str(exc))
 
 
 async def send_nightly_summary(
@@ -194,7 +213,9 @@ async def send_nightly_summary(
                 return False
             owner_chat_id = str(ids[0])
 
-        chat_id: Any = int(owner_chat_id) if str(owner_chat_id).lstrip("-").isdigit() else owner_chat_id
+        chat_id: Any = (
+            int(owner_chat_id) if str(owner_chat_id).lstrip("-").isdigit() else owner_chat_id
+        )
         await bot.send_message(chat_id, summary, parse_mode="markdown")
         logger.info("nightly_summary_sent", chat_id=owner_chat_id)
         return True
@@ -245,9 +266,7 @@ class NightlySummaryService:
 
     def start(self) -> "asyncio.Task[None]":
         """Запускает фоновую задачу и возвращает Task."""
-        task = asyncio.get_event_loop().create_task(
-            self._loop(), name="krab_nightly_summary"
-        )
+        task = asyncio.get_event_loop().create_task(self._loop(), name="krab_nightly_summary")
         logger.info(
             "nightly_summary_loop_started",
             hour=int(os.environ.get("NIGHTLY_SUMMARY_HOUR", "23")),

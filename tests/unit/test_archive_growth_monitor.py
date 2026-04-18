@@ -140,3 +140,67 @@ def test_growth_summary_insufficient_data(temp_state):
         save_history([])
         summary = growth_summary()
         assert summary["summary"] == "Not enough data"
+
+
+@pytest.mark.asyncio
+async def test_nightly_summary_integration_with_anomaly(temp_db, temp_state):
+    """Test archive growth snapshot integrated in nightly summary with anomaly."""
+    from src.core.nightly_summary import generate_summary
+
+    with (
+        patch("src.core.archive_growth_monitor.ARCHIVE_DB", temp_db),
+        patch("src.core.archive_growth_monitor.STATE_PATH", temp_state / "archive_growth.json"),
+        patch("src.core.archive_growth_monitor.ANOMALY_MB_PER_DAY", 5.0),
+        patch("src.core.nightly_summary._append_cost_stats"),
+        patch("src.core.nightly_summary._append_inbox_stats"),
+        patch("src.core.nightly_summary._append_swarm_stats"),
+        patch("src.core.nightly_summary._append_reminder_stats"),
+    ):
+        # Create history with old snapshot
+        day_ago = int(time.time()) - 86400
+        old_snap = GrowthSnapshot(ts=day_ago - 100, size_mb=10.0, message_count=100)
+        save_history([old_snap])
+
+        # Mock current snapshot to trigger anomaly
+        with patch("src.core.archive_growth_monitor.take_snapshot") as mock_snap:
+            mock_snap.return_value = GrowthSnapshot(
+                ts=int(time.time()), size_mb=30.0, message_count=500
+            )
+
+            summary = await generate_summary()
+            assert "🦀 **Krab Daily Digest**" in summary
+            assert "⚠️" in summary  # Anomaly warning should be present
+            assert "grew" in summary.lower()
+
+
+@pytest.mark.asyncio
+async def test_nightly_summary_integration_no_anomaly(temp_db, temp_state):
+    """Test archive growth snapshot integrated in nightly summary without anomaly."""
+    from src.core.nightly_summary import generate_summary
+
+    with (
+        patch("src.core.archive_growth_monitor.ARCHIVE_DB", temp_db),
+        patch("src.core.archive_growth_monitor.STATE_PATH", temp_state / "archive_growth.json"),
+        patch("src.core.archive_growth_monitor.ANOMALY_MB_PER_DAY", 50.0),
+        patch("src.core.nightly_summary._append_cost_stats"),
+        patch("src.core.nightly_summary._append_inbox_stats"),
+        patch("src.core.nightly_summary._append_swarm_stats"),
+        patch("src.core.nightly_summary._append_reminder_stats"),
+    ):
+        # Create history with old snapshot
+        day_ago = int(time.time()) - 86400
+        old_snap = GrowthSnapshot(ts=day_ago - 100, size_mb=10.0, message_count=100)
+        save_history([old_snap])
+
+        # Mock current small growth
+        with patch("src.core.archive_growth_monitor.take_snapshot") as mock_snap:
+            mock_snap.return_value = GrowthSnapshot(
+                ts=int(time.time()), size_mb=15.0, message_count=150
+            )
+
+            summary = await generate_summary()
+            assert "🦀 **Krab Daily Digest**" in summary
+            # Should NOT have anomaly warning
+            assert not any(
+                anomaly_phrase in summary for anomaly_phrase in ["⚠️ Archive.db grew", "Threshold"]
+            )
