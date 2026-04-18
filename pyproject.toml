@@ -27,6 +27,32 @@ target-version = "py311"
 select = ["E", "F", "I", "N", "W"]
 ignore = ["E501"]  # line too long
 
+# Per-directory overrides — src/ остаётся strict, остальное послабляется.
+[tool.ruff.lint.per-file-ignores]
+# Тесты: unused imports нормальны (fixture-side-effects), длинные строки в assertions,
+# имена функций вида test_handle_URL часто ломают N802, локальные переменные для diagnostics.
+"tests/**/*.py" = [
+    "F401",   # unused-import (fixtures/side-effect imports)
+    "F841",   # unused-variable (debugging assertions)
+    "E402",   # module-import-not-at-top (sys.path manipulation before imports)
+    "E501",   # line-too-long (long expected strings)
+    "E741",   # ambiguous-variable-name (l/I/O в математических тестах)
+    "N802",   # invalid-function-name (test_handle_URL, test_API_*)
+    "N806",   # non-lowercase-variable-in-function
+    "N814",   # camelcase-imported-as-constant
+]
+
+# Скрипты — одноразовые утилиты, разрешаем print и прочие вольности.
+"scripts/**/*.py" = [
+    "E501",
+    "F401",   # одноразовые импорты ради side-effect
+    "F541",   # f-string без placeholder (часто в логах-шаблонах)
+    "E402",
+]
+
+# Документация с примерами кода — минимум требований.
+"docs/**/*.py" = ["F401", "E501"]
+
 [project]
 name = "kraab"
 version = "1.0.0"

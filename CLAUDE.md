@@ -266,6 +266,7 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - **Subprocess** — всегда `env=clean_subprocess_env()` для subprocess'ов
 - **Handoff** — после изменений обновляй memory и IMPROVEMENTS.md
 - **Проверяй после правок**: `pytest tests/ -q`, `ruff check src/`
+- **Ruff per-dir config** (`pyproject.toml`): `src/` остаётся strict (E/F/I/N/W), `tests/` послабляет F401/F841/E402/E741/N802/N806/N814, `scripts/` — F401/F541/E402/E501, `docs/` — F401/E501.
 
 ## Phase 7 статус (12.04.2026)
 
