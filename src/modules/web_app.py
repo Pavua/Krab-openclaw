@@ -11400,6 +11400,29 @@ class WebApp:
             report = await health_service.collect()
             return {"ok": True, "report": report}
 
+        @self.app.get("/api/ecosystem/health/debug")
+        async def ecosystem_health_debug():
+            """[Session 12] Диагностика session_12 block — raw вывод коллекторов."""
+            try:
+                health_svc = self.deps.get("health_service")
+                if health_svc is None:
+                    router = self.deps.get("router")
+                    if router is None:
+                        return {"error": "router_not_found_in_deps"}
+                    from ..core.ecosystem_health import EcosystemHealthService
+                    health_svc = EcosystemHealthService(router=router)
+                direct = health_svc._collect_session_12_stats()
+                full = await health_svc.collect()
+                return {
+                    "direct": direct,
+                    "full_has_session_12": "session_12" in full,
+                    "full_session_12": full.get("session_12"),
+                    "full_keys": list(full.keys()),
+                }
+            except Exception as exc:
+                import traceback
+                return {"error": str(exc), "trace": traceback.format_exc()[:500]}
+
         @self.app.get("/api/ecosystem/capabilities")
         async def ecosystem_capabilities():
             """Возвращает capability-срез по control plane и внешним voice/audio сервисам."""

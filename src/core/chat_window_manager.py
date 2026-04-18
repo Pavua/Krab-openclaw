@@ -85,3 +85,7 @@ class ChatWindowManager:
             "capacity": self._capacity,
             "total_messages": sum(w.message_count for w in self._windows.values()),
         }
+
+
+# Глобальный синглтон для импорта из ecosystem_health и других модулей
+chat_window_manager = ChatWindowManager()
