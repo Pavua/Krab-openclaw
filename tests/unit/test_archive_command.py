@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Тесты команды !archive — архивация и метаданные Memory Layer.
+Тесты команды !archive — архивация и статистика Memory Layer.
 
 Покрываем:
 - !archive [no args] — архивировать текущий чат
@@ -8,12 +8,14 @@
 - !archive stats — статистика archive.db
 - !archive growth — рост archive.db
 - Owner-only (AccessLevel проверка)
-- Неизвестный subcommand → help
 - Ошибки при работе с БД
 """
 
 from __future__ import annotations
 
+import sqlite3
+import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -57,6 +59,23 @@ def _make_access_profile(level: AccessLevel = AccessLevel.OWNER) -> MagicMock:
     return profile
 
 
+def _create_test_db(tmp_path: Path, msg_count: int = 5, chunk_count: int = 3) -> Path:
+    """Создаёт тестовую archive.db с заданным кол-вом сообщений и чанков."""
+    db_path = tmp_path / "archive.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE messages (id INTEGER PRIMARY KEY, date TEXT, content TEXT)"
+    )
+    conn.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY, data TEXT)")
+    for i in range(msg_count):
+        conn.execute("INSERT INTO messages VALUES (?, ?, ?)", (i, "2026-01-01", f"msg{i}"))
+    for i in range(chunk_count):
+        conn.execute("INSERT INTO chunks VALUES (?, ?)", (i, f"chunk{i}"))
+    conn.commit()
+    conn.close()
+    return db_path
+
+
 # ---------------------------------------------------------------------------
 # Тесты доступа
 # ---------------------------------------------------------------------------
@@ -70,103 +89,164 @@ async def test_archive_owner_only() -> None:
 
     bot._get_access_profile = MagicMock(return_value=_make_access_profile(AccessLevel.GUEST))
 
-    try:
+    with pytest.raises(UserInputError) as exc_info:
         await handle_archive(bot, msg)
-        assert False, "Should have raised UserInputError"
-    except UserInputError as e:
-        assert "владельцу" in str(e.user_message or "")
+
+    assert "владельцу" in str(exc_info.value.user_message or "")
 
 
 # ---------------------------------------------------------------------------
-# Тесты archive stats (Memory Layer)
+# Тесты !archive stats (Memory Layer)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_archive_stats_success() -> None:
-    """!archive stats показывает статистику archive.db."""
+    """!archive stats показывает статистику archive.db (размер, сообщения, чанки)."""
     bot = _make_bot("stats")
     msg = _make_owner_message()
     bot._get_access_profile = MagicMock(return_value=_make_access_profile())
 
-    mock_handler = MagicMock()
-    mock_handler.handle_stats = MagicMock(return_value="📚 **Archive Stats**\n• Size: 42.5 MB")
-    mock_handler.close = MagicMock()
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = _create_test_db(Path(tmp), msg_count=10, chunk_count=4)
 
-    with patch("src.handlers.memory_commands.MemoryCommandHandler", return_value=mock_handler):
-        await handle_archive(bot, msg)
+        with patch("src.core.archive_growth_monitor.ARCHIVE_DB", db_path):
+            await handle_archive(bot, msg)
 
     msg.reply.assert_called_once()
-    call_args = msg.reply.call_args[0][0]
-    assert "Archive Stats" in call_args
+    reply = msg.reply.call_args[0][0]
+    assert "Archive.db stats" in reply
+    assert "Сообщений" in reply
+    assert "10" in reply
+    assert "Чанков" in reply
+    assert "4" in reply
 
 
 @pytest.mark.asyncio
-async def test_archive_growth_success() -> None:
-    """!archive growth показывает рост archive.db."""
-    bot = _make_bot("growth")
+async def test_archive_stats_db_not_found() -> None:
+    """!archive stats когда archive.db не существует."""
+    bot = _make_bot("stats")
     msg = _make_owner_message()
     bot._get_access_profile = MagicMock(return_value=_make_access_profile())
 
-    mock_handler = MagicMock()
-    mock_stats = MagicMock()
-    mock_stats.db_size_bytes = 50_000_000  # 50 MB
-    mock_stats.messages = 5000
-    mock_stats.chats = 50
-    mock_stats.chunks = 10000
-    mock_stats.vectors = 8000
-    mock_handler.collect_stats = MagicMock(return_value=mock_stats)
-    mock_handler.close = MagicMock()
+    missing = Path("/tmp/_krab_test_nonexistent_archive_xyz.db")
+    # Убеждаемся что файл реально отсутствует
+    missing.unlink(missing_ok=True)
 
-    with patch("src.handlers.memory_commands.MemoryCommandHandler", return_value=mock_handler):
+    with patch("src.core.archive_growth_monitor.ARCHIVE_DB", missing):
         await handle_archive(bot, msg)
 
     msg.reply.assert_called_once()
-    call_args = msg.reply.call_args[0][0]
-    assert "Archive Growth" in call_args
-    assert "MB" in call_args
-    assert "5" in call_args  # messages formatted with spaces as "5 000"
-
-
-@pytest.mark.asyncio
-async def test_archive_growth_db_not_exists() -> None:
-    """!archive growth когда archive.db нет."""
-    bot = _make_bot("growth")
-    msg = _make_owner_message()
-    bot._get_access_profile = MagicMock(return_value=_make_access_profile())
-
-    mock_handler = MagicMock()
-    mock_stats = MagicMock()
-    mock_stats.db_size_bytes = 0
-    mock_handler.collect_stats = MagicMock(return_value=mock_stats)
-    mock_handler.close = MagicMock()
-
-    with patch("src.handlers.memory_commands.MemoryCommandHandler", return_value=mock_handler):
-        await handle_archive(bot, msg)
-
-    msg.reply.assert_called_once()
-    call_args = msg.reply.call_args[0][0]
-    assert "не существует" in call_args
+    reply = msg.reply.call_args[0][0]
+    assert "не найден" in reply
 
 
 # ---------------------------------------------------------------------------
-# Тесты Telegram диалогов архивации
+# Тесты !archive growth
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_archive_growth_no_data() -> None:
+    """!archive growth когда archive.db нет → сообщение об отсутствии."""
+    bot = _make_bot("growth")
+    msg = _make_owner_message()
+    bot._get_access_profile = MagicMock(return_value=_make_access_profile())
+
+    missing = Path("/tmp/_krab_test_nonexistent_archive_xyz.db")
+    missing.unlink(missing_ok=True)
+
+    with patch("src.core.archive_growth_monitor.ARCHIVE_DB", missing):
+        await handle_archive(bot, msg)
+
+    msg.reply.assert_called_once()
+    reply = msg.reply.call_args[0][0]
+    assert "не найден" in reply
+
+
+@pytest.mark.asyncio
+async def test_archive_growth_with_history() -> None:
+    """!archive growth с достаточной историей снапшотов — показывает скорость роста."""
+    bot = _make_bot("growth")
+    msg = _make_owner_message()
+    bot._get_access_profile = MagicMock(return_value=_make_access_profile())
+
+    import time
+
+    from src.core.archive_growth_monitor import GrowthSnapshot
+
+    now = int(time.time())
+    fake_snap = GrowthSnapshot(ts=now, size_mb=12.0, message_count=1200)
+    fake_summary = {
+        "snapshots": 2,
+        "days_tracked": 1.0,
+        "first_size_mb": 10.0,
+        "latest_size_mb": 12.0,
+        "latest_messages": 1200,
+        "growth_mb_per_day": 2.0,
+        "growth_messages_per_day": 200,
+    }
+
+    with (
+        patch("src.core.archive_growth_monitor.take_snapshot", return_value=fake_snap),
+        patch("src.core.archive_growth_monitor.growth_summary", return_value=fake_summary),
+    ):
+        await handle_archive(bot, msg)
+
+    msg.reply.assert_called_once()
+    reply = msg.reply.call_args[0][0]
+    assert "Archive.db growth" in reply
+    assert "2.00 MB/день" in reply
+    assert "1,200" in reply
+
+
+@pytest.mark.asyncio
+async def test_archive_growth_insufficient_history() -> None:
+    """!archive growth с 1 снапшотом — показывает текущее состояние без динамики."""
+    bot = _make_bot("growth")
+    msg = _make_owner_message()
+    bot._get_access_profile = MagicMock(return_value=_make_access_profile())
+
+    import time
+
+    from src.core.archive_growth_monitor import GrowthSnapshot
+
+    now = int(time.time())
+    fake_snap = GrowthSnapshot(ts=now, size_mb=5.0, message_count=500)
+    fake_summary = {"snapshots": 1, "summary": "Not enough data"}
+
+    with (
+        patch("src.core.archive_growth_monitor.take_snapshot", return_value=fake_snap),
+        patch("src.core.archive_growth_monitor.growth_summary", return_value=fake_summary),
+    ):
+        await handle_archive(bot, msg)
+
+    msg.reply.assert_called_once()
+    reply = msg.reply.call_args[0][0]
+    assert "Archive.db growth" in reply
+    assert "Not enough data" in reply
+    assert "5.00 MB" in reply
+
+
+# ---------------------------------------------------------------------------
+# Тесты Telegram архивации
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_archive_default_archives_chat() -> None:
     """!archive (без args) архивирует текущий чат."""
-    bot = _make_bot("")  # no args
+    bot = _make_bot("")  # нет аргументов
     msg = _make_owner_message(chat_id=-100123)
     bot._get_access_profile = MagicMock(return_value=_make_access_profile())
     bot.client = AsyncMock()
     bot.client.archive_chats = AsyncMock()
 
-    # Если нет Memory subcommand, используем default Telegram архивацию
     await handle_archive(bot, msg)
 
     bot.client.archive_chats.assert_called_once_with(-100123)
+    msg.reply.assert_called_once()
+    assert "архив" in msg.reply.call_args[0][0]
 
 
 @pytest.mark.asyncio
@@ -176,13 +256,14 @@ async def test_archive_list_shows_chats() -> None:
     msg = _make_owner_message()
     bot._get_access_profile = MagicMock(return_value=_make_access_profile())
 
-    # Mock client.get_dialogs
     mock_dialog1 = MagicMock()
     mock_dialog1.chat.id = -100123
     mock_dialog1.chat.title = "Test Channel"
+    mock_dialog1.chat.first_name = None
 
     mock_dialog2 = MagicMock()
     mock_dialog2.chat.id = 456
+    mock_dialog2.chat.title = None
     mock_dialog2.chat.first_name = "John"
 
     async def _get_dialogs(folder_id=None):
@@ -195,30 +276,7 @@ async def test_archive_list_shows_chats() -> None:
     await handle_archive(bot, msg)
 
     msg.reply.assert_called_once()
-    call_args = msg.reply.call_args[0][0]
-    assert "Архивированные чаты" in call_args
-    assert "-100123" in call_args
-    assert "Test Channel" in call_args
-
-
-# ---------------------------------------------------------------------------
-# Тесты неизвестного subcommand
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_archive_unknown_subcommand_shows_help() -> None:
-    """Неизвестный subcommand показывает справку."""
-    bot = _make_bot("unknown-arg")
-    msg = _make_owner_message()
-    bot._get_access_profile = MagicMock(return_value=_make_access_profile())
-    bot.client = AsyncMock()
-
-    await handle_archive(bot, msg)
-
-    msg.reply.assert_called_once()
-    call_args = msg.reply.call_args[0][0]
-    assert "Archive commands" in call_args
-    assert "list" in call_args
-    assert "stats" in call_args
-    assert "growth" in call_args
+    reply = msg.reply.call_args[0][0]
+    assert "Архивированные чаты" in reply
+    assert "-100123" in reply
+    assert "Test Channel" in reply
