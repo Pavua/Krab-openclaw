@@ -49,6 +49,7 @@ from src.core.capability_registry import (  # noqa: E402
     build_policy_matrix,
     build_system_control_snapshot,
 )
+from src.core.chat_window_manager import chat_window_manager  # noqa: E402
 from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
 from src.core.inbox_service import inbox_service  # noqa: E402
 from src.core.lm_studio_auth import build_lm_studio_auth_headers  # noqa: E402
@@ -14733,6 +14734,64 @@ class WebApp:
             response_payload = {"ok": True, "result": result}
             self._idempotency_set("provisioning_apply", f"{draft_id}:{idem_key}", response_payload)
             return response_payload
+
+        # ── Chat Window Manager endpoints ────────────────────────────────────
+
+        @self.app.get("/api/chat_windows/config")
+        async def chat_windows_config():
+            """Возвращает env-конфигурацию ChatWindowManager."""
+
+            from src.core.chat_window_manager import (
+                CAPACITY,
+                IDLE_EVICTION_SEC,
+                MESSAGE_CAP_PER_WINDOW,
+            )
+            return {
+                "ok": True,
+                "capacity": CAPACITY,
+                "message_cap_per_window": MESSAGE_CAP_PER_WINDOW,
+                "idle_eviction_sec": IDLE_EVICTION_SEC,
+            }
+
+        @self.app.get("/api/chat_windows/list")
+        async def chat_windows_list():
+            """Список всех активных окон с метаданными."""
+            windows = chat_window_manager.list_windows()
+            return {
+                "ok": True,
+                "total": len(windows),
+                "windows": windows,
+            }
+
+        @self.app.post("/api/chat_windows/evict_idle")
+        async def chat_windows_evict_idle(
+            max_age_sec: int = Query(default=3600),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Выгнать окна, неактивные дольше max_age_sec."""
+            self._assert_write_access(x_krab_web_key, token)
+            from src.core.chat_window_manager import IDLE_EVICTION_SEC
+            timeout = max_age_sec if max_age_sec > 0 else IDLE_EVICTION_SEC
+            count = chat_window_manager.evict_idle(timeout_sec=timeout)
+            return {
+                "ok": True,
+                "evicted": count,
+                "timeout_sec": timeout,
+            }
+
+        @self.app.post("/api/chat_windows/clear")
+        async def chat_windows_clear(
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Очистить все окна (owner-only)."""
+            self._assert_write_access(x_krab_web_key, token)
+            count = chat_window_manager.clear_all()
+            return {
+                "ok": True,
+                "cleared": count,
+            }
 
     async def start(self):
         """Запуск сервера в фоне."""
