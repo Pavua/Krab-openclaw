@@ -87,3 +87,89 @@ def count_archive_messages_for_chat(chat_id: str, db_path: Path | None = None) -
     except sqlite3.Error as exc:
         logger.warning("archive_db_count_failed", chat_id=chat_id, error=str(exc))
         return 0
+
+
+def list_archive_chats(
+    db_path: Path | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Возвращает список чатов из archive.db с количеством сообщений.
+
+    Каждый элемент: {"chat_id": str, "title": str | None, "message_count": int}.
+    Отсортировано по убыванию message_count. Если БД нет — пустой список.
+    """
+    path = Path(db_path) if db_path else _ARCHIVE_DB_PATH
+    if not path.exists():
+        return []
+    try:
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
+            # Считаем messages per chat_id напрямую из таблицы messages,
+            # join с chats за title (LEFT JOIN — чат может быть без записи в chats).
+            rows = conn.execute(
+                """
+                SELECT m.chat_id,
+                       c.title,
+                       COUNT(*) AS message_count
+                FROM messages m
+                LEFT JOIN chats c ON c.chat_id = m.chat_id
+                GROUP BY m.chat_id
+                ORDER BY message_count DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("archive_db_list_chats_failed", error=str(exc))
+        return []
+    return [{"chat_id": r[0], "title": r[1], "message_count": r[2]} for r in rows]
+
+
+def delete_archive_messages_before(
+    cutoff_ts: int,
+    db_path: Path | None = None,
+) -> int:
+    """Удаляет messages старше cutoff_ts (unix-timestamp) из archive.db.
+
+    Также удаляет осиротевшие chunks (у которых не осталось chunk_messages).
+    Возвращает количество удалённых messages. При ошибке — 0.
+    """
+    path = Path(db_path) if db_path else _ARCHIVE_DB_PATH
+    if not path.exists():
+        logger.info("archive_db_not_found_for_date_delete", path=str(path))
+        return 0
+
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(str(path))
+        conn.execute("PRAGMA foreign_keys = ON")
+
+        cur = conn.execute("SELECT COUNT(*) FROM messages WHERE date < ?", (cutoff_ts,))
+        count = int(cur.fetchone()[0])
+        if count == 0:
+            return 0
+
+        # Удаляем chunk_messages, ссылающиеся на удаляемые messages.
+        conn.execute(
+            "DELETE FROM chunk_messages WHERE message_id IN "
+            "(SELECT message_id FROM messages WHERE date < ?)",
+            (cutoff_ts,),
+        )
+        # Удаляем chunks, у которых не осталось chunk_messages (осиротевшие).
+        conn.execute(
+            "DELETE FROM chunks WHERE chunk_id NOT IN "
+            "(SELECT DISTINCT chunk_id FROM chunk_messages)"
+        )
+        # Удаляем сами messages.
+        conn.execute("DELETE FROM messages WHERE date < ?", (cutoff_ts,))
+        conn.commit()
+        logger.info("archive_db_deleted_before_date", cutoff_ts=cutoff_ts, deleted=count)
+        return count
+    except sqlite3.Error as exc:
+        logger.warning("archive_db_delete_before_failed", cutoff_ts=cutoff_ts, error=str(exc))
+        return 0
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
