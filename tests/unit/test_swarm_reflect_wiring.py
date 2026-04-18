@@ -163,3 +163,156 @@ async def test_swarm_research_passes_real_task_board_singleton(
     await command_handlers.handle_swarm(bot, message)
 
     assert captured.get("task_board") is real_board
+
+
+# ---------------------------------------------------------------------------
+# Structured reflect wiring tests (SWARM_STRUCTURED_REFLECT env toggle)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_calls_structured_reflect_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pipeline.run(structured=True) → structured_reflect вызван и flush выполнен."""
+    import src.core.swarm_self_reflection as reflect_module
+
+    captured: dict[str, object] = {"called": False, "flushed": 0}
+
+    async def mock_structured_reflect(
+        task_id: str,
+        task_title: str,
+        task_description: str,
+        task_result: str,
+        llm_caller: object,
+    ) -> reflect_module.ReflectionOutput:
+        captured["called"] = True
+        return reflect_module.ReflectionOutput(insights=["insight1"], follow_ups=[])
+
+    def mock_flush(reflection: reflect_module.ReflectionOutput, owner_id: str = "self") -> int:
+        captured["flushed"] = 1
+        return 1
+
+    monkeypatch.setattr(reflect_module, "structured_reflect", mock_structured_reflect)
+    monkeypatch.setattr(reflect_module, "flush_followups_to_reminders", mock_flush)
+
+    # Stub openclaw_client с async generator send_message_stream
+    async def _empty_stream(*_a: object, **_kw: object):  # noqa: ANN202
+        return
+        yield  # делает функцию async generator
+
+    stub_client = type("Client", (), {"send_message_stream": _empty_stream})()
+
+    # Stub AgentRoom.run_round
+    import src.core.swarm as swarm_module
+
+    async def mock_run_round(self: object, *_a: object, **_kw: object) -> str:  # noqa: ANN001
+        return "research result"
+
+    monkeypatch.setattr(swarm_module.AgentRoom, "run_round", mock_run_round)
+
+    import src.core.swarm_research_pipeline as pipeline_module
+
+    pipeline = pipeline_module.SwarmResearchPipeline()
+    await pipeline.run(
+        raw_topic="тест structured",
+        router_factory=lambda _: object(),
+        swarm_bus=object(),
+        openclaw_client=stub_client,
+        reflect=True,
+        structured=True,
+    )
+
+    assert captured["called"] is True, "structured_reflect должен быть вызван"
+    assert captured["flushed"] == 1, "flush_followups_to_reminders должен быть вызван"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_skips_structured_when_env_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SWARM_STRUCTURED_REFLECT=false + structured=None → structured_reflect НЕ вызван."""
+    monkeypatch.setenv("SWARM_STRUCTURED_REFLECT", "false")
+
+    import src.core.swarm_self_reflection as reflect_module
+
+    called: dict[str, bool] = {"structured": False}
+
+    async def mock_structured_reflect(**_kw: object) -> reflect_module.ReflectionOutput:
+        called["structured"] = True
+        return reflect_module.ReflectionOutput()
+
+    monkeypatch.setattr(reflect_module, "structured_reflect", mock_structured_reflect)
+
+    import src.core.swarm as swarm_module
+
+    async def mock_run_round(self: object, *_a: object, **_kw: object) -> str:  # noqa: ANN001
+        return "result"
+
+    monkeypatch.setattr(swarm_module.AgentRoom, "run_round", mock_run_round)
+
+    # Переприменяем env-флаг в модуле (он вычитывается при импорте)
+    import src.core.swarm_research_pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "SWARM_STRUCTURED_REFLECT", False)
+
+    async def _empty_stream(*_a: object, **_kw: object):  # noqa: ANN202
+        return
+        yield
+
+    stub_client = type("Client", (), {"send_message_stream": _empty_stream})()
+
+    pipeline = pipeline_module.SwarmResearchPipeline()
+    await pipeline.run(
+        raw_topic="тест disabled",
+        router_factory=lambda _: object(),
+        swarm_bus=object(),
+        openclaw_client=stub_client,
+        reflect=True,
+        structured=None,  # использует env-флаг → False
+    )
+
+    assert called["structured"] is False, "structured_reflect НЕ должен быть вызван при флаге False"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_skips_structured_when_explicit_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """structured=False явно → structured_reflect НЕ вызван, даже если env=true."""
+    import src.core.swarm_self_reflection as reflect_module
+
+    called: dict[str, bool] = {"structured": False}
+
+    async def mock_structured_reflect(**_kw: object) -> reflect_module.ReflectionOutput:
+        called["structured"] = True
+        return reflect_module.ReflectionOutput()
+
+    monkeypatch.setattr(reflect_module, "structured_reflect", mock_structured_reflect)
+
+    import src.core.swarm as swarm_module
+
+    async def mock_run_round(self: object, *_a: object, **_kw: object) -> str:  # noqa: ANN001
+        return "result"
+
+    monkeypatch.setattr(swarm_module.AgentRoom, "run_round", mock_run_round)
+
+    import src.core.swarm_research_pipeline as pipeline_module
+
+    async def _empty_stream(*_a: object, **_kw: object):  # noqa: ANN202
+        return
+        yield
+
+    stub_client = type("Client", (), {"send_message_stream": _empty_stream})()
+
+    pipeline = pipeline_module.SwarmResearchPipeline()
+    await pipeline.run(
+        raw_topic="тест explicit false",
+        router_factory=lambda _: object(),
+        swarm_bus=object(),
+        openclaw_client=stub_client,
+        reflect=True,
+        structured=False,
+    )
+
+    assert called["structured"] is False, "structured_reflect НЕ должен быть вызван при structured=False"

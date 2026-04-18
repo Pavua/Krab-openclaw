@@ -12,6 +12,7 @@ Research Pipeline для Swarm — выделенный модуль (Phase 7).
 from __future__ import annotations
 
 import dataclasses
+import os
 import time
 from typing import TYPE_CHECKING, Callable
 
@@ -22,6 +23,12 @@ from .swarm_bus import TEAM_REGISTRY
 
 if TYPE_CHECKING:
     pass
+
+# Включает structured reflection path (Haiku-style, schema-validated).
+# Можно отключить через env: SWARM_STRUCTURED_REFLECT=false
+SWARM_STRUCTURED_REFLECT: bool = os.environ.get(
+    "SWARM_STRUCTURED_REFLECT", "true"
+).lower() in ("true", "1", "yes")
 
 logger = get_logger(__name__)
 
@@ -99,6 +106,7 @@ class SwarmResearchPipeline:
         openclaw_client: object | None = None,
         task_board: object | None = None,
         reflect: bool = True,
+        structured: bool | None = None,
     ) -> str:
         """
         Запускает research pipeline.
@@ -110,10 +118,14 @@ class SwarmResearchPipeline:
             openclaw_client: Опциональный клиент для self-reflection LLM-вызова.
             task_board: Опциональный SwarmTaskBoard для follow-up задач.
             reflect: Включает self-reflection hook (Proactivity Level 3).
+            structured: Включает structured reflection path (schema-validated).
+                None = использовать SWARM_STRUCTURED_REFLECT env-флаг.
 
         Returns:
             Финальный текст исследования.
         """
+        # Определяем флаг structured (env → default, явный аргумент — override)
+        use_structured = SWARM_STRUCTURED_REFLECT if structured is None else structured
         team_key = self.config.team_key
         research_prompt = self.build_prompt(raw_topic)
 
@@ -152,11 +164,14 @@ class SwarmResearchPipeline:
 
         # Self-Reflection hook (Proactivity Level 3, Session 11)
         if reflect and openclaw_client is not None:
+            task_id = f"research:{team_key}:{int(time.time())}"
+
+            # Legacy path
             try:
                 from .swarm_self_reflection import enqueue_followups, reflect_on_task
 
                 reflection = await reflect_on_task(
-                    task_id=f"research:{team_key}:{int(time.time())}",
+                    task_id=task_id,
                     task_title=f"Research: {raw_topic}",
                     task_description=research_prompt,
                     task_result=result_text,
@@ -175,6 +190,56 @@ class SwarmResearchPipeline:
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
+
+            # Structured path (schema-validated, light model)
+            if use_structured:
+                try:
+                    from .swarm_self_reflection import (
+                        flush_followups_to_reminders,
+                        structured_reflect,
+                    )
+
+                    async def _llm_caller(prompt: str) -> str:
+                        """Обёртка над openclaw_client для structured reflection."""
+                        chunks: list[str] = []
+                        try:
+                            async for piece in openclaw_client.send_message_stream(
+                                message=prompt,
+                                chat_id="__reflection__",
+                                force_cloud=True,
+                                disable_tools=True,
+                            ):
+                                if isinstance(piece, str):
+                                    chunks.append(piece)
+                        except Exception as _exc:  # noqa: BLE001
+                            logger.warning(
+                                "structured_reflect_stream_failed",
+                                error=str(_exc),
+                            )
+                        return "".join(chunks)
+
+                    structured_result = await structured_reflect(
+                        task_id=task_id,
+                        task_title=f"Research: {raw_topic}",
+                        task_description=research_prompt,
+                        task_result=result_text,
+                        llm_caller=_llm_caller,
+                    )
+
+                    flushed = flush_followups_to_reminders(structured_result)
+                    logger.info(
+                        "structured_reflect_completed",
+                        task_id=task_id,
+                        insights=len(structured_result.insights),
+                        follow_ups_total=len(structured_result.follow_ups),
+                        flushed_to_reminders=flushed,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "structured_reflect_failed",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
 
         return result_text
 
