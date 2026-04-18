@@ -43,6 +43,7 @@ class AccessControlMixin:
     def _is_trigger(self, text: str) -> bool:
         """Проверяет есть ли триггер в сообщении"""
         from ..config import config  # noqa: PLC0415
+        from ..core.krab_identity import is_krab_mentioned  # noqa: PLC0415
 
         if not text:
             return False
@@ -53,9 +54,9 @@ class AccessControlMixin:
             if text_lower.startswith(prefix.lower()):
                 return True
 
-        # Просто упоминание имени в начале или конце (опционально)
-        # Но по просьбе пользователя: "может и просто откликаться на Краб"
-        if text_lower.startswith("краб"):
+        # Mention detection: реагируем на "Краб", "Krab", "🦀", "@yung_nagato"
+        # в любом месте сообщения (не только в начале)
+        if is_krab_mentioned(text):
             return True
 
         return False
@@ -171,8 +172,12 @@ class AccessControlMixin:
         """
         from ..config import config  # noqa: PLC0415
         from ..core.access_control import AccessLevel  # noqa: PLC0415
+        from ..core.krab_identity import get_identity_system_prompt  # noqa: PLC0415
         from ..core.openclaw_workspace import load_workspace_prompt_bundle  # noqa: PLC0415
         from ..employee_templates import get_role_prompt  # noqa: PLC0415
+
+        # Всегда prepend identity block — Краб должен знать кто он и кто owner
+        identity_block = get_identity_system_prompt()
 
         resolved_level = (
             str(access_level.value if isinstance(access_level, AccessLevel) else access_level or "")
@@ -180,7 +185,7 @@ class AccessControlMixin:
             .lower()
         )
         if is_allowed_sender or not bool(getattr(config, "NON_OWNER_SAFE_MODE_ENABLED", True)):
-            base_prompt = get_role_prompt(self.current_role)
+            base_prompt = f"{identity_block}\n\n{get_role_prompt(self.current_role)}"
             workspace_bundle = load_workspace_prompt_bundle()
             if workspace_bundle:
                 base_prompt = (
