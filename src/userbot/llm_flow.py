@@ -32,13 +32,29 @@ from ..core.openclaw_task_poller import (
 
 logger = get_logger(__name__)
 
-# TODO Session 13.X: wire auto_reactions (src/core/auto_reactions.py):
-# - mark_accepted(bot, message)       при старте обработки (!ask, !agent, etc.)
-# - mark_memory_recall(bot, message)  если auto_context augmented (RAG hit)
-# - mark_agent_mode(bot, message)     когда tool_calls count > 0
-# - mark_completed(bot, message)      on success (перед отправкой ответа)
-# - mark_failed(bot, message, error)  on exception в конце flow
-# Пример импорта: from ..core.auto_reactions import mark_accepted, mark_completed, ...
+# Auto-reactions integrated — see core/auto_reactions.py for reaction types.
+# Enabled via AUTO_REACTIONS_ENABLED env (default true).
+try:
+    from ..core.auto_reactions import (
+        mark_accepted,
+        mark_agent_mode,
+        mark_completed,
+        mark_failed,
+        mark_memory_recall,
+    )
+    _HAS_AUTO_REACTIONS = True
+except ImportError:
+    _HAS_AUTO_REACTIONS = False
+
+
+async def _safe_react(func, bot, message, *args):
+    """Wrapper — silently ignore failures, чтобы не ломать LLM flow."""
+    if not _HAS_AUTO_REACTIONS:
+        return
+    try:
+        await func(bot, message, *args)
+    except Exception as _ar_exc:  # noqa: BLE001
+        logger.debug("auto_react_skip", func=func.__name__, error=str(_ar_exc))
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +401,10 @@ class LLMFlowMixin:
         last_edit_time = 0.0
         timeout_error_was_sent = False
         _reaction_sent = False  # флаг: уже поставили ✅/❌ на исходное сообщение
+        _agent_marked = False  # флаг: уже отметили agent_mode реакцией
+
+        # Auto-reaction: запрос принят
+        await _safe_react(mark_accepted, self, message)
         # Progress-уведомления только в личных чатах или для self-сообщений.
         # В группах обрабатываем молча — финальный ответ всё равно отправляем.
         _show_progress = show_progress_notices
@@ -414,6 +434,14 @@ class LLMFlowMixin:
             query=query,
             has_images=bool(images),
         )
+
+        # Auto-reaction: если Memory Layer активен — RAG подключён к контексту
+        try:
+            from ..core.memory_adapter import is_memory_layer_available as _mem_avail
+            if _mem_avail():
+                await _safe_react(mark_memory_recall, self, message)
+        except Exception:  # noqa: BLE001
+            pass
 
         # Гостевой режим: отключаем tools/exec для GUEST-уровня
         _guest_disable_tools = (
@@ -591,6 +619,11 @@ class LLMFlowMixin:
                     # Отслеживаем последнюю активность инструментов
                     if tool_summary != last_tool_summary:
                         last_tool_activity_ts = time.monotonic()
+
+                    # Auto-reaction: агентный режим при первом появлении tool_summary
+                    if tool_summary and not _agent_marked:
+                        _agent_marked = True
+                        await _safe_react(mark_agent_mode, self, message)
 
                     # Idle-detection: нет ни чанков, ни активности инструментов слишком долго
                     idle_sec = time.monotonic() - last_tool_activity_ts
@@ -1069,6 +1102,12 @@ class LLMFlowMixin:
             _chat_type = getattr(getattr(message, "chat", None), "type", None)
             if _chat_type not in (enums.ChatType.PRIVATE, enums.ChatType.BOT):
                 full_response = self.escape_urls_for_restricted_groups(full_response)
+
+            # Auto-reaction: завершение (успешное или с ошибкой)
+            if timeout_error_was_sent:
+                await _safe_react(mark_failed, self, message, full_response[:120])
+            else:
+                await _safe_react(mark_completed, self, message)
 
             delivery_result = await self._deliver_response_parts(
                 source_message=message,
