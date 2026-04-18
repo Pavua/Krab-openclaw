@@ -7443,6 +7443,16 @@ class WebApp:
 
             return {"ok": True, **message_batcher.stats()}
 
+        @self.app.get("/api/chat_windows/stats")
+        async def chat_windows_stats():
+            """Статистика per-chat ChatWindow LRU manager (Chado blueprint)."""
+            try:
+                from ..core.chat_window_manager import chat_window_manager
+
+                return {"ok": True, **chat_window_manager.stats()}
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": str(exc)}
+
         @self.app.get("/api/health")
         async def get_health():
             """Единый health статусов для web-панели."""
