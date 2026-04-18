@@ -17340,24 +17340,15 @@ async def handle_listen(bot: "KraabUserbot", message: Message) -> None:
         await bot._safe_reply(message, f"🔄 Чат `{chat_id}`: вернулся к дефолту")
         return
 
-<<<<<<< HEAD
     # Показать текущий режим
-=======
->>>>>>> 134f167
     if not args:
         mode = chat_filter_config.get_mode(chat_id, is_group=is_group)
         mode_emoji = {"active": "🟢", "mention-only": "🟡", "muted": "🔴"}[mode]
         await bot._safe_reply(message, f"{mode_emoji} Текущий режим: `{mode}`")
         return
 
-<<<<<<< HEAD
     # Неизвестная команда
     await bot._safe_reply(
         message,
-        "❌ Неизвестный режим. Используйте: active, mention-only, muted, reset, list, stats",
-=======
-    await bot._safe_reply(
-        message,
         "❌ Неизвестный режим. Используйте: active, mention-only, muted, reset, reload, list, stats",
->>>>>>> 134f167
     )
