@@ -7436,6 +7436,13 @@ class WebApp:
                 else {"enabled": False, "count": 0},
             }
 
+        @self.app.get("/api/message_batcher/stats")
+        async def batcher_stats():
+            """Статистика per-chat message batcher (backpressure буфер)."""
+            from ..core.message_batcher import message_batcher
+
+            return {"ok": True, **message_batcher.stats()}
+
         @self.app.get("/api/health")
         async def get_health():
             """Единый health статусов для web-панели."""
