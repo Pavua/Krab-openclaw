@@ -7312,7 +7312,7 @@ async def handle_bench(bot: "KraabUserbot", message: Message) -> None:
     # Доступ только для владельца
     access = bot._get_access_profile(message.from_user)
     if access.level != AccessLevel.OWNER:
-        await bot._safe_reply(message, "⛔ Только для владельца.")
+        await message.reply("⛔ Только для владельца.")
         return
 
     # Парсим аргументы
@@ -7333,9 +7333,7 @@ async def handle_bench(bot: "KraabUserbot", message: Message) -> None:
     iterations = iterations_map.get(preset, 20)
 
     # Отправляем статус
-    status_msg = await bot._safe_reply(
-        message, f"⏱ Benchmark `{preset}` (iterations={iterations})..."
-    )
+    await message.reply(f"⏱ Benchmark `{preset}` (iterations={iterations})...")
 
     try:
         krab_root = pathlib.Path.home() / "Antigravity_AGENTS" / "Краб"
@@ -7355,18 +7353,17 @@ async def handle_bench(bot: "KraabUserbot", message: Message) -> None:
         if not output:
             output = "(empty output)"
 
-        await bot._safe_reply(
-            message,
+        await message.reply(
             f"📊 **Benchmark results ({preset})**:\n```\n{output}\n```",
         )
         logger.info("handle_bench_done", preset=preset, iterations=iterations)
 
     except subprocess.TimeoutExpired:
-        await bot._safe_reply(message, "⚠️ Benchmark timed out после 120 сек")
+        await message.reply("⚠️ Benchmark timed out после 120 сек")
         logger.warning("handle_bench_timeout", preset=preset)
     except Exception as exc:  # noqa: BLE001
         logger.error("handle_bench_error", preset=preset, error=str(exc))
-        await bot._safe_reply(message, f"❌ Benchmark failed: {exc}")
+        await message.reply(f"❌ Benchmark failed: {exc}")
 
 
 async def handle_health(bot: "KraabUserbot", message: Message) -> None:
