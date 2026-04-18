@@ -29,8 +29,10 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Awaitable, Callable, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Awaitable, Callable, Literal, Optional
+
+from pydantic import BaseModel, Field, ValidationError
 
 from .logger import get_logger
 
@@ -64,6 +66,172 @@ REFLECTION_PROMPT_TEMPLATE = """Ты reviewer только что завершё
 }}
 """
 
+
+# ─── Pydantic schema (Chado blueprint) ────────────────────────────────────────
+
+
+class FollowUpItem(BaseModel):
+    """Schema-validated follow-up от reflector."""
+
+    text: str = Field(..., min_length=3, max_length=500, description="Action description")
+    when: str = Field("manual", description="Time spec: 'manual' | 'in N hours' | 'tomorrow HH:MM'")
+    chat_id: Optional[str] = Field(None, description="Target chat if specific")
+    priority: Literal["low", "medium", "high", "critical"] = "medium"
+
+
+class ReflectionOutput(BaseModel):
+    """Schema-validated structured reflection output."""
+
+    insights: list[str] = Field(default_factory=list, max_length=5)
+    unresolved: list[str] = Field(default_factory=list, max_length=5)
+    follow_ups: list[FollowUpItem] = Field(default_factory=list, max_length=10)
+
+
+STRUCTURED_REFLECTION_PROMPT = """Ты — reflector для Krab (AI agent).
+
+Task just completed:
+- Title: {task_title}
+- Description: {task_description}
+- Status: {task_status}
+- Result (first 2000 chars): {task_result_preview}
+- Historical context (last 5 actions): {history_snippet}
+
+Return STRICT JSON matching this schema (no markdown wrapping):
+
+{{
+  "insights": ["string", ...],          // ≤5 key learnings
+  "unresolved": ["string", ...],        // ≤5 open questions
+  "follow_ups": [                        // ≤10 actionable next tasks
+    {{
+      "text": "string",                 // 3-500 chars
+      "when": "manual|in N hours|tomorrow HH:MM",
+      "chat_id": null,
+      "priority": "low|medium|high|critical"
+    }}
+  ]
+}}
+
+Output ONLY the JSON object, no surrounding text."""
+
+
+async def structured_reflect(
+    task_id: str,
+    task_title: str,
+    task_description: str,
+    task_result: str,
+    task_status: str = "completed",
+    llm_caller: Optional[Callable[[str], Awaitable[str]]] = None,
+    history_snippet: str = "",
+) -> ReflectionOutput:
+    """
+    Structured reflection — Haiku-style lightweight call, schema-validated output.
+
+    Returns validated ReflectionOutput. On parse failure — returns empty (no hallucinated tasks).
+    """
+    if llm_caller is None:
+        return ReflectionOutput()
+
+    prompt = STRUCTURED_REFLECTION_PROMPT.format(
+        task_title=task_title[:200],
+        task_description=task_description[:500],
+        task_status=task_status,
+        task_result_preview=(task_result or "")[:2000],
+        history_snippet=history_snippet[:500],
+    )
+
+    try:
+        response = await llm_caller(prompt)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("structured_reflect_llm_call_failed", task_id=task_id, error=str(exc))
+        return ReflectionOutput()
+
+    raw = response if isinstance(response, str) else str(response)
+    # Снять markdown code fence если есть
+    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+    raw = re.sub(r"\s*```$", "", raw)
+    # Найти первый JSON объект
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not m:
+        logger.warning("structured_reflect_no_json", task_id=task_id)
+        return ReflectionOutput()
+
+    try:
+        data = json.loads(m.group())
+    except json.JSONDecodeError as exc:
+        logger.warning("structured_reflect_invalid_json", task_id=task_id, error=str(exc))
+        return ReflectionOutput()
+
+    try:
+        validated = ReflectionOutput.model_validate(data)
+        logger.info(
+            "structured_reflect_success",
+            task_id=task_id,
+            insights=len(validated.insights),
+            follow_ups=len(validated.follow_ups),
+        )
+        return validated
+    except ValidationError as exc:
+        logger.warning(
+            "structured_reflect_schema_validation_failed",
+            task_id=task_id,
+            error=str(exc),
+        )
+        return ReflectionOutput()
+
+
+def flush_followups_to_reminders(
+    reflection: ReflectionOutput,
+    owner_id: str = "self",
+) -> int:
+    """Convert follow_ups → reminders_queue entries. Returns count flushed."""
+    try:
+        from .reminders_queue import reminders_queue
+    except ImportError:
+        return 0
+
+    flushed = 0
+    for fup in reflection.follow_ups:
+        when = fup.when.lower().strip()
+        if when == "manual":
+            continue  # Manual items don't go to queue
+
+        # "in N hours" / "in N minutes"
+        m = re.match(r"in\s+(\d+)\s*(hour|hours|h|min|minutes|m)\b", when)
+        if m:
+            n = int(m.group(1))
+            unit = m.group(2)
+            multiplier = 3600 if unit.startswith("h") else 60
+            fire_at = int(time.time()) + n * multiplier
+            reminders_queue.add_time_reminder(
+                owner_id=owner_id,
+                fire_at=fire_at,
+                action=f"[{fup.priority}] {fup.text}",
+                action_type="notify",
+            )
+            flushed += 1
+            continue
+
+        # "tomorrow HH:MM"
+        m = re.match(r"tomorrow\s+(\d{1,2}):(\d{2})", when)
+        if m:
+            h, mn = int(m.group(1)), int(m.group(2))
+            now = datetime.now(timezone.utc).astimezone()
+            target = (now + timedelta(days=1)).replace(
+                hour=h, minute=mn, second=0, microsecond=0
+            )
+            reminders_queue.add_time_reminder(
+                owner_id=owner_id,
+                fire_at=int(target.timestamp()),
+                action=f"[{fup.priority}] {fup.text}",
+                action_type="notify",
+            )
+            flushed += 1
+            continue
+
+    return flushed
+
+
+# ─── Тип LLM-caller ───────────────────────────────────────────────────────────
 
 # Тип LLM-caller: принимает prompt, возвращает текст ответа.
 # Делаем инъекцию через callable, чтобы не тащить зависимость от openclaw_client
