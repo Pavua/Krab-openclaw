@@ -1,4 +1,11 @@
-# Wave 29-AA: Adaptive Rerank Benchmark Results
+# Wave 29-AB: Post-Optimization Adaptive Rerank Benchmark Results
+
+> **Wave 29-AB optimizations applied:** cap MMR to top-5 + pre-computed token sets.
+> Average overhead dropped from **+261ms** (Wave 29-AA, pre-opt) to **+5.3ms** (~49x improvement).
+
+---
+
+# Wave 29-AA: Adaptive Rerank Benchmark Results (pre-optimization)
 
 Date: 2026-04-19 | Runs per query: 10 | top_k=10
 
@@ -6,16 +13,16 @@ Date: 2026-04-19 | Runs per query: 10 | top_k=10
 
 | Query | Status | Base mean | Base p50 | Base p95 | Adap mean | Adap p50 | Adap p95 | Overhead (ms) |
 |-------|--------|-----------|----------|----------|-----------|----------|----------|---------------|
-| Krab architecture | ok | 32.4 | 1.9 | 169.9 | 138.2 | 63.3 | 444.9 | +105.8 |
-| archive statistics | ok | 0.9 | 0.5 | 2.7 | 131.8 | 105.2 | 331.4 | +130.9 |
-| voice gateway | ok | 2.3 | 1.7 | 5.1 | 395.7 | 339.7 | 930.0 | +393.3 |
-| memory layer | ok | 1.8 | 1.2 | 4.6 | 425.4 | 415.5 | 658.8 | +423.6 |
-| swarm research pipeline | ok | 1.6 | 0.7 | 5.6 | 258.3 | 242.4 | 556.8 | +256.7 |
+| Krab architecture | ok | 17.2 | 2.2 | 85.0 | 10.8 | 2.8 | 47.2 | -6.4 |
+| archive statistics | ok | 0.6 | 0.3 | 2.1 | 1.3 | 1.2 | 1.6 | +0.7 |
+| voice gateway | ok | 18.1 | 1.7 | 83.4 | 2.4 | 1.9 | 4.3 | -15.7 |
+| memory layer | ok | 1.4 | 0.8 | 4.0 | 1.5 | 1.5 | 1.8 | +0.1 |
+| swarm research pipeline | ok | 1.4 | 0.7 | 4.1 | 30.9 | 2.4 | 155.0 | +29.5 |
 | translator session | partial (base_err=DatabaseError: database disk image is malformed, adap_err=DatabaseError: database disk image is malformed) | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
-| openclaw model routing | ok | 39.9 | 1.8 | 194.9 | 321.9 | 356.5 | 433.9 | +282.0 |
-| dashboard redesign | ok | 21.0 | 1.3 | 105.4 | 220.5 | 242.2 | 377.2 | +199.5 |
-| command handlers | ok | 21.8 | 1.1 | 102.8 | 119.5 | 146.8 | 213.9 | +97.6 |
-| hybrid retrieval FTS | ok | 1.3 | 0.7 | 3.7 | 460.9 | 520.1 | 755.0 | +459.6 |
+| openclaw model routing | ok | 15.2 | 2.7 | 69.2 | 38.4 | 6.2 | 134.2 | +23.3 |
+| dashboard redesign | ok | 1.1 | 0.6 | 3.3 | 1.2 | 1.1 | 1.5 | +0.1 |
+| command handlers | ok | 0.8 | 0.6 | 1.4 | 1.0 | 0.9 | 1.1 | +0.2 |
+| hybrid retrieval FTS | ok | 1.0 | 0.7 | 2.6 | 17.1 | 2.1 | 84.4 | +16.1 |
 
 ## Quality (Jaccard top-10 overlap)
 
@@ -34,7 +41,7 @@ Date: 2026-04-19 | Runs per query: 10 | top_k=10
 
 ## Summary
 
-- Average overhead (adaptive vs baseline): **+261.0 ms**
+- Average overhead (adaptive vs baseline): **+5.3 ms**
 - Average Jaccard top-10 overlap: **1.000**
 - Queries with results: 9/10
 
