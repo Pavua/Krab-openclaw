@@ -1817,7 +1817,12 @@ class KraabUserbot(
                 os.environ.get("KRAB_RUNTIME_STATE_DIR")
                 or str(Path.home() / ".openclaw" / "krab_runtime_state")
             ).expanduser()
-            chat_ban_cache.configure_default_path(_runtime_state_dir / "chat_ban_cache.json")
+            # Wave 24-A follow-up: chat_ban_cache использует async вариант для
+            # единообразия — файл сейчас крошечный, но timing instrumentation
+            # + threshold warning даст сигнал если cache разрастётся.
+            await chat_ban_cache.configure_default_path_async(
+                _runtime_state_dir / "chat_ban_cache.json"
+            )
             chat_capability_cache.configure_default_path(
                 _runtime_state_dir / "chat_capability_cache.json"
             )
@@ -2050,6 +2055,11 @@ class KraabUserbot(
         if not accounts:
             return {}
 
+        # Wave 24-B: отслеживаем уже прогретые клиенты, чтобы не повторять get_dialogs
+        if not hasattr(self, "_swarm_clients_warmed"):
+            self._swarm_clients_warmed: set[str] = set()
+
+        startup_t0 = time.monotonic()
         started: dict[str, Any] = {}
         for team, acct in accounts.items():
             session_name = acct.get("session_name", f"swarm_{team}")
@@ -2087,16 +2097,22 @@ class KraabUserbot(
                 )
                 # Warm-up peer cache: get_dialogs загружает все чаты включая недавно
                 # добавленные группы (иначе send_message → CHAT_ID_INVALID).
-                try:
-                    async for _ in cl.get_dialogs(limit=50):
-                        pass
-                    logger.info("swarm_team_client_warmed_up", team=team)
-                except Exception as warm_exc:  # noqa: BLE001
-                    logger.warning(
-                        "swarm_team_client_warmup_failed",
-                        team=team,
-                        error=str(warm_exc),
-                    )
+                # Wave 24-B: прогреваем только при первом запуске клиента, иначе
+                # 5 параллельных get_dialogs триггерят DC reconnect flood.
+                if team not in self._swarm_clients_warmed:
+                    try:
+                        async for _ in cl.get_dialogs(limit=50):
+                            pass
+                        self._swarm_clients_warmed.add(team)
+                        logger.info("swarm_team_client_warmed_up", team=team)
+                    except Exception as warm_exc:  # noqa: BLE001
+                        logger.warning(
+                            "swarm_team_client_warmup_failed",
+                            team=team,
+                            error=str(warm_exc),
+                        )
+                else:
+                    logger.debug("swarm_warmup_skipped_already_warmed", team=team)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "swarm_team_client_start_failed",
@@ -2104,6 +2120,15 @@ class KraabUserbot(
                     session=session_name,
                     error=repr(exc),
                 )
+            # Wave 24-B: stagger startup чтобы не триггерить DC reconnect flood
+            await asyncio.sleep(1.5)
+
+        logger.info(
+            "swarm_clients_startup_complete",
+            count=len(accounts),
+            started=len(started),
+            elapsed_ms=round((time.monotonic() - startup_t0) * 1000, 1),
+        )
         return started
 
     async def _stop_swarm_team_clients(self) -> None:
