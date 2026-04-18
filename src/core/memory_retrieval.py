@@ -60,6 +60,7 @@ class SearchResult:
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -67,6 +68,7 @@ from typing import Iterable, Optional
 
 from structlog import get_logger
 
+from src.core.memory_adaptive_rerank import rerank_adaptive
 from src.core.memory_archive import ArchivePaths, open_archive
 
 logger = get_logger(__name__)
@@ -264,13 +266,47 @@ class HybridRetriever:
         decay_fn = DECAY_MODES.get(effective_mode, decay_gentle)
 
         # Собираем SearchResult'ы.
-        return self._materialize_results(
+        results = self._materialize_results(
             conn,
             fused=fused,
             top_k=top_k,
             with_context=with_context,
             decay_fn=decay_fn,
         )
+
+        # Opt-in: адаптивный реранкинг (Phase 3). Безопасный fallback — existing pipeline.
+        if os.getenv("MEMORY_ADAPTIVE_RERANK_ENABLED", "0") == "1" and results:
+            try:
+                chunks = [
+                    {
+                        "id": r.message_id,
+                        "score": r.score,
+                        "text": r.text_redacted,
+                        "metadata": {"timestamp": r.timestamp.timestamp()},
+                    }
+                    for r in results
+                ]
+                reranked = rerank_adaptive(chunks, query=query)
+                # Восстанавливаем порядок SearchResult по новому скору.
+                score_by_id = {c["id"]: c["score"] for c in reranked}
+                results = sorted(results, key=lambda r: score_by_id.get(r.message_id, 0.0), reverse=True)
+                logger.debug("memory_adaptive_rerank_applied", query_len=len(query), count=len(results))
+                try:
+                    from src.core.prometheus_metrics import _ADAPTIVE_RERANK_COUNTER
+                    _ADAPTIVE_RERANK_COUNTER[0] += 1
+                except Exception:
+                    pass
+            except Exception as exc:  # noqa: BLE001
+                import traceback as _tb
+                logger.warning(
+                    "memory_adaptive_rerank_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    traceback=_tb.format_exc(),
+                    fallback="hybrid_reranker",
+                )
+
+        return results
 
     def close(self) -> None:
         """Закрывает БД-подключение. Безопасно при повторном вызове."""
