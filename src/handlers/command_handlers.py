@@ -41,6 +41,7 @@ from ..core.exceptions import UserInputError
 from ..core.inbox_service import inbox_service
 from ..core.lm_studio_health import is_lm_studio_available
 from ..core.logger import get_logger
+from ..core.memory_validator import memory_validator
 from ..core.model_aliases import normalize_model_alias
 from ..core.openclaw_runtime_models import get_runtime_primary_model
 from ..core.openclaw_workspace import (
@@ -1070,7 +1071,9 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(f"📡 Группа привязана к команде **{team}**\nChat ID: `{chat_id}`")
         return
 
-    # !swarm research <тема> — research pipeline с обязательным web_search
+    # !swarm research <тема> — research pipeline с обязательным web_search.
+    # После завершения research hook self-reflection создаёт follow-up задачи
+    # в swarm_task_board (или reminders_queue для time-based триггеров).
     if args.lower().startswith("research") or args.lower().startswith("исследование"):
         from ..core.swarm_research_pipeline import SwarmResearchPipeline
 
@@ -1101,11 +1104,25 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
                     system_prompt=system_prompt,
                 )
 
+            # Self-reflection singletons (optional — graceful degradation).
+            # openclaw_client импортирован на уровне модуля; task_board подтягиваем локально.
+            _reflect_board = None
+            try:
+                from ..core.swarm_task_board import swarm_task_board as _reflect_board
+            except Exception as _reflect_exc:  # noqa: BLE001
+                logger.warning(
+                    "swarm_research_reflect_wiring_failed",
+                    error=str(_reflect_exc),
+                )
+
             pipeline = SwarmResearchPipeline()
             result_text = await pipeline.run(
                 raw_topic,
                 router_factory=_router_factory,
                 swarm_bus=swarm_bus,
+                openclaw_client=openclaw_client,
+                task_board=_reflect_board,
+                reflect=True,
             )
             chunks = _split_text_for_telegram(result_text)
             await msg.edit(chunks[0])
@@ -1228,11 +1245,17 @@ async def handle_remember(bot: "KraabUserbot", message: Message) -> None:
     text = bot._get_command_args(message)
     if not text:
         raise UserInputError(user_message="🧠 Что запомнить? Напиши: `!remember <текст>`")
+    # Memory Injection Validator: persistent-инструкции требуют !confirm от owner.
+    author = str(getattr(getattr(message, "from_user", None), "username", "") or "")
+    safe, warn_msg, _ = memory_validator.stage(text, source="userbot", author=author)
+    if not safe:
+        await message.reply(warn_msg)
+        return
     try:
         workspace_saved = append_workspace_memory_entry(
             text,
             source="userbot",
-            author=str(getattr(getattr(message, "from_user", None), "username", "") or ""),
+            author=author,
         )
         vector_saved = memory_manager.save_fact(text)
         success = workspace_saved or vector_saved
@@ -1244,19 +1267,116 @@ async def handle_remember(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(f"❌ Critical Memory Error: {e}")
 
 
+async def handle_confirm(bot: "KraabUserbot", message: Message) -> None:
+    """!confirm <hash> — подтверждает staged memory write (owner-only).
+
+    Без аргументов — показывает список ожидающих подтверждения.
+    """
+    # Owner-check через ACL (унификация с остальными owner-only командами).
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        await message.reply("⛔ Только для владельца.")
+        return
+
+    hash_code = (bot._get_command_args(message) or "").strip().upper()
+    if not hash_code:
+        pending = memory_validator.list_pending()
+        if not pending:
+            await message.reply("📭 Нет ожидающих подтверждений.")
+            return
+        lines = [f"• `{p.hash}` — {p.text[:60]}{'…' if len(p.text) > 60 else ''}" for p in pending]
+        await message.reply("⏳ Ожидают подтверждения:\n" + "\n".join(lines))
+        return
+
+    ok, reply_msg, pending = memory_validator.confirm(hash_code)
+    if not ok or pending is None:
+        await message.reply(reply_msg)
+        return
+
+    # Выполняем отложенную запись — дублирует логику handle_remember.
+    try:
+        workspace_saved = append_workspace_memory_entry(
+            pending.text,
+            source=pending.source or "userbot",
+            author=pending.author,
+        )
+        vector_saved = memory_manager.save_fact(pending.text)
+        success = workspace_saved or vector_saved
+        if success:
+            await message.reply(f"{reply_msg}. Запись сохранена.")
+        else:
+            await message.reply("❌ Подтверждено, но запись не удалась.")
+    except (ValueError, RuntimeError, OSError) as e:
+        await message.reply(f"❌ Critical Memory Error: {e}")
+
+
+MEMORY_SEARCH_URL = (
+    os.environ.get("KRAB_PANEL_URL", "http://127.0.0.1:8080").rstrip("/") + "/api/memory/search"
+)
+
+
+async def _recall_memory_layer(query: str, limit: int = 5) -> list[dict]:
+    """Зовёт /api/memory/search (hybrid) и возвращает список результатов.
+
+    Для надёжности использует httpx с коротким timeout. Все ошибки
+    (недоступность endpoint'а, отсутствующая БД) проглатываются — вызов
+    из handle_recall не должен ронять UX из-за опционального слоя.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                MEMORY_SEARCH_URL,
+                params={"q": query, "mode": "hybrid", "limit": limit},
+            )
+            data = resp.json()
+    except Exception as exc:  # noqa: BLE001 — endpoint может быть не запущен
+        logger.debug("recall_memory_layer_failed", error=str(exc))
+        return []
+
+    if not isinstance(data, dict) or not data.get("ok"):
+        return []
+    results = data.get("results") or []
+    if not isinstance(results, list):
+        return []
+    return results[:limit]
+
+
+def _format_memory_layer_section(results: list[dict]) -> str:
+    """Форматирует результаты Memory Layer для вставки в !recall ответ."""
+    lines: list[str] = []
+    for i, r in enumerate(results, start=1):
+        text = str(r.get("text") or "")
+        preview = text[:150].replace("\n", " ").strip()
+        mode = r.get("mode", "hybrid")
+        score = r.get("score")
+        try:
+            score_str = f"{float(score):.2f}" if score is not None else "—"
+        except (TypeError, ValueError):
+            score_str = "—"
+        lines.append(f"{i}. [{mode} score={score_str}]\n   `{preview}`")
+    return "\n".join(lines)
+
+
 async def handle_recall(bot: "KraabUserbot", message: Message) -> None:
-    """Вспомнить факт."""
+    """Вспомнить факт — workspace + vector + Memory Layer archive (hybrid)."""
     text = bot._get_command_args(message)
     if not text:
         raise UserInputError(user_message="🧠 Что вспомнить? Напиши: `!recall <запрос>`")
     try:
         workspace_facts = recall_workspace_memory(text)
         vector_facts = memory_manager.recall(text)
+        memory_layer_results = await _recall_memory_layer(text, limit=5)
+
         sections: list[str] = []
         if workspace_facts:
             sections.append(f"**OpenClaw workspace:**\n{workspace_facts}")
         if vector_facts and vector_facts not in workspace_facts:
             sections.append(f"**Local vector memory:**\n{vector_facts}")
+        if memory_layer_results:
+            sections.append(
+                "**Memory Layer archive (hybrid):**\n"
+                + _format_memory_layer_section(memory_layer_results)
+            )
         facts = "\n\n".join(section for section in sections if section).strip()
         if facts:
             await message.reply(f"🧠 **Вспомнил:**\n\n{facts}")
@@ -1524,7 +1644,7 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
             f"**Облачная модель:** `{cloud_model}`\n"
             f"**LM Studio URL:** `{config.LM_STUDIO_URL}`\n"
             f"**FORCE_CLOUD:** `{force_cloud}`\n\n"
-            "_Подкоманды: `local`, `cloud`, `auto`, `set <model_id>`, `load <name>`, `unload`, `scan`_"
+            "_Подкоманды: `info`, `local`, `cloud`, `auto`, `set <model_id>`, `load <name>`, `unload`, `scan`_"
         )
         await message.reply(text)
         return
@@ -1606,6 +1726,12 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
             await msg.edit(f"❌ Ошибка выгрузки: `{str(e)[:200]}`")
         return
 
+    if sub == "info":
+        # Собираем снимок текущего маршрута, providers health и fallback chain.
+        text = await _format_model_info()
+        await message.reply(text)
+        return
+
     if sub in ("scan", "list"):
         msg = await message.reply("🔍 Сканирую доступные модели...")
         try:
@@ -1658,9 +1784,97 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
     raise UserInputError(
         user_message=(
             f"❓ Неизвестная подкоманда `{sub}`.\n"
-            "Доступные: `local`, `cloud`, `auto`, `set`, `load`, `unload`, `scan`"
+            "Доступные: `local`, `cloud`, `auto`, `set`, `load`, `unload`, `scan`, `info`"
         )
     )
+
+
+async def _format_model_info() -> str:
+    """Формирует Markdown-отчёт для `!model info`.
+
+    Источники:
+    - openclaw_client.get_last_runtime_route() — активный маршрут последнего запроса;
+    - http://127.0.0.1:8080/api/openclaw/cloud — providers health через локальный web-app;
+    - get_cloud_fallback_chain() — fallback цепочка из конфига;
+    - is_lm_studio_available() — статус LM Studio.
+    """
+    from ..core.cloud_gateway import get_cloud_fallback_chain  # noqa: PLC0415
+
+    # 1) Активный маршрут — используем публичный accessor, с fallback на атрибут.
+    try:
+        last_route = openclaw_client.get_last_runtime_route() or {}
+    except Exception:
+        last_route = getattr(openclaw_client, "_last_runtime_route", {}) or {}
+
+    # 2) Providers health — коротко, через локальный web-app (1.5s таймаут).
+    cloud_report: dict[str, Any] = {}
+    try:
+        async with httpx.AsyncClient(timeout=1.5) as client:
+            resp = await client.get("http://127.0.0.1:8080/api/openclaw/cloud")
+            if resp.status_code == 200:
+                payload = resp.json() or {}
+                cloud_report = payload.get("report", {}) if isinstance(payload, dict) else {}
+    except Exception:
+        cloud_report = {}
+
+    # 3) Fallback chain.
+    try:
+        fallback_chain = get_cloud_fallback_chain()
+    except Exception:
+        fallback_chain = []
+
+    # 4) LM Studio availability.
+    try:
+        lm_available = bool(await is_lm_studio_available())
+    except Exception:
+        lm_available = False
+
+    lines: list[str] = ["🤖 **Model Info**", "", "**Active route:**"]
+    provider = str(last_route.get("provider") or "n/a")
+    model_id = str(last_route.get("model") or "n/a")
+    tier = str(last_route.get("active_tier") or "n/a")
+    status = str(last_route.get("status") or "n/a")
+    ts_raw = last_route.get("timestamp")
+    if isinstance(ts_raw, int) and ts_raw > 0:
+        ts_str = datetime.datetime.fromtimestamp(ts_raw).strftime("%H:%M:%S")
+        status_line = f"✅ {status} ({ts_str})" if status == "ok" else f"⚠️ {status} ({ts_str})"
+    else:
+        status_line = status
+    lines.append(f"• Provider: `{provider}`")
+    lines.append(f"• Model: `{model_id}`")
+    lines.append(f"• Tier: `{tier}`")
+    lines.append(f"• Last status: {status_line}")
+
+    # Fallback chain.
+    lines.append("")
+    lines.append("**Fallback chain:**")
+    if fallback_chain:
+        for idx, mid in enumerate(fallback_chain[:6], start=1):
+            lines.append(f"{idx}. {mid}")
+    else:
+        lines.append("_(пусто или недоступно)_")
+
+    # Providers health.
+    lines.append("")
+    lines.append("**Providers health:**")
+    providers = cloud_report.get("providers", {}) if isinstance(cloud_report, dict) else {}
+    if providers:
+        for name, info in providers.items():
+            if not isinstance(info, dict):
+                continue
+            ok = info.get("ok")
+            http_status = info.get("http_status")
+            provider_status = info.get("provider_status", "n/a")
+            icon = "✅" if ok else "❌"
+            http_hint = f" (http {http_status})" if http_status else ""
+            lines.append(f"• {name}: {icon} {provider_status}{http_hint}")
+    else:
+        lines.append("• google: ⚠️ недоступно (cloud API off)")
+
+    lm_state = "ready" if lm_available else "idle"
+    lines.append(f"• LM Studio: {lm_state}")
+
+    return "\n".join(lines)
 
 
 async def handle_clear(bot: "KraabUserbot", message: Message) -> None:
@@ -1699,6 +1913,218 @@ async def handle_clear(bot: "KraabUserbot", message: Message) -> None:
         openclaw_client.clear_session(chat_id)
         res = "🧹 **Память очищена. Клешни как новые!**"
 
+    if message.from_user and message.from_user.id == bot.me.id:
+        await message.edit(res)
+    else:
+        await message.reply(res)
+
+
+# ---------------------------------------------------------------------------
+# !reset — агрессивная многослойная очистка истории
+# ---------------------------------------------------------------------------
+
+
+async def handle_reset(bot: "KraabUserbot", message: Message) -> None:
+    """Очищает все слои истории одной операцией.
+
+    Syntax:
+        !reset                    — Krab + OpenClaw + Gemini (archive НЕ включён)
+        !reset --all              — все чаты (Krab + OpenClaw + Gemini, требует --force)
+        !reset --layer=krab       — только Krab history_cache.db
+        !reset --layer=openclaw   — только OpenClaw session
+        !reset --layer=gemini     — только Gemini cache invalidate (nonce)
+        !reset --layer=archive    — удалить из archive.db (opt-in destructive)
+        !reset --dry-run          — показать что удалится, не удалять
+        !reset --force            — пропустить confirmation для --all
+
+    Возвращает отчёт по каждому слою. Owner-only для --all (destructive).
+    Archive destructive → не включён в default scope: требует явного --layer=archive.
+    """
+    from ..core.gemini_cache_nonce import invalidate_gemini_cache_for_chat
+    from ..core.reset_helpers import (
+        clear_archive_db_for_chat,
+        count_archive_messages_for_chat,
+    )
+
+    # Разрешённые значения для --layer=<...>. Неизвестные — ошибка (предсказуемое API).
+    valid_layers = {"krab", "openclaw", "gemini", "archive"}
+
+    chat_id = str(message.chat.id)
+    raw_args = ""
+    if hasattr(bot, "_get_command_args"):
+        try:
+            raw_args = (bot._get_command_args(message) or "").strip()
+        except Exception:  # noqa: BLE001
+            raw_args = ""
+
+    tokens = raw_args.split() if raw_args else []
+    is_all = "--all" in tokens
+    is_force = "--force" in tokens
+    # Безопасный alias: пользователь может написать `!reset dry-run` с телефона.
+    # Раньше такой вариант не считался dry-run и мог уйти в реальное выполнение reset.
+    dry_run_aliases = {"--dry-run", "dry-run", "dryrun", "dry"}
+    dry_run = any(token.lower() in dry_run_aliases for token in tokens)
+    layer: str | None = None
+    for token in tokens:
+        if token.startswith("--layer="):
+            layer = token.split("=", 1)[1].strip().lower() or None
+
+    # Валидация --layer=<value>: неизвестные слои возвращают ошибку, а не silent pass.
+    if layer is not None and layer not in valid_layers:
+        await message.reply(f"❌ Unknown layer: `{layer}`. Valid: {sorted(valid_layers)}")
+        return
+
+    # Owner-check для --all. Userbot — message.from_user.id должен совпадать с bot.me.id.
+    if is_all:
+        me_id = getattr(getattr(bot, "me", None), "id", None)
+        sender_id = getattr(getattr(message, "from_user", None), "id", None)
+        if me_id is None or sender_id != me_id:
+            await message.reply("🚫 `!reset --all` доступен только владельцу.")
+            return
+
+    # Confirmation flow для --all без --force (и не dry-run)
+    if is_all and not is_force and not dry_run:
+        await message.reply(
+            "⚠️ `!reset --all` удалит историю из **ВСЕХ** чатов (все слои).\n"
+            "Это необратимо.\n\nПовтори с флагом `--force`:\n`!reset --all --force`"
+        )
+        return
+
+    # Список целевых чатов
+    if is_all:
+        target_chat_ids = [str(cid) for cid in openclaw_client._sessions.keys()]
+        # Если _sessions пустой, но просили --all — всё равно пытаемся обработать
+        # текущий чат как минимум, чтобы не вернуть no-op-отчёт без смысла.
+        if not target_chat_ids:
+            target_chat_ids = [chat_id]
+    else:
+        target_chat_ids = [chat_id]
+
+    # Audit log: destructive --all --force execution — фиксируем факт для post-mortem.
+    if is_all and is_force and not dry_run:
+        sender_id = getattr(getattr(message, "from_user", None), "id", None)
+        logger.warning(
+            "reset_all_force_executed",
+            chat_count=len(target_chat_ids),
+            user_id=sender_id,
+            layer=layer or "all",
+        )
+
+    # ── dry-run: только превью ────────────────────────────────────────────
+    impact = {"krab": 0, "openclaw": 0, "gemini": 0, "archive": 0}
+
+    if layer in (None, "krab"):
+        for cid in target_chat_ids:
+            try:
+                if history_cache.get(f"chat_history:{cid}"):
+                    impact["krab"] += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("reset_krab_probe_failed", chat_id=cid, error=str(exc))
+
+    if layer in (None, "openclaw"):
+        impact["openclaw"] = sum(1 for cid in target_chat_ids if cid in openclaw_client._sessions)
+
+    if layer in (None, "gemini"):
+        # Nonce-инвалидация — per chat, независимо от текущего состояния
+        impact["gemini"] = len(target_chat_ids)
+
+    if layer == "archive":
+        for cid in target_chat_ids:
+            impact["archive"] += count_archive_messages_for_chat(cid)
+
+    if dry_run:
+        scope = "все чаты" if is_all else "текущий чат"
+        # Archive не в default scope — честно предупреждаем в превью.
+        archive_hint = ""
+        if layer is None:
+            archive_hint = (
+                "\n⚠️ Archive НЕ включён в default scope. "
+                "Используй `--layer=archive` для очистки archive.db."
+            )
+        preview = (
+            f"🔍 **Dry-run** (nothing deleted)\n"
+            f"Scope: {scope}\n"
+            f"Layer filter: `{layer or 'all'}`\n\n"
+            f"Удалилось бы:\n"
+            f"• Krab cache: {impact['krab']}\n"
+            f"• OpenClaw: {impact['openclaw']}\n"
+            f"• Gemini cache invalidate: {impact['gemini']}\n"
+            f"• Archive: {impact['archive']}{archive_hint}"
+        )
+        if message.from_user and message.from_user.id == bot.me.id:
+            await message.edit(preview)
+        else:
+            await message.reply(preview)
+        return
+
+    # ── EXECUTE ───────────────────────────────────────────────────────────
+    stats = {"krab": 0, "openclaw": 0, "gemini": 0, "archive": 0}
+
+    # Progress message для длинного --all (>10 чатов).
+    # Обновляем каждые 10 итераций, чтобы не спамить Telegram API.
+    total = len(target_chat_ids)
+    progress_msg = None
+    if total > 10:
+        try:
+            progress_msg = await message.reply(f"🔄 Reset: 0 / {total}...")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("reset_progress_init_failed", error=str(exc))
+            progress_msg = None
+
+    for idx, cid in enumerate(target_chat_ids):
+        if layer in (None, "krab"):
+            # Избегаем double-count: clear_session() ниже тоже удаляет chat_history:*,
+            # поэтому инкрементим stats только если ключ реально был.
+            key = f"chat_history:{cid}"
+            try:
+                if history_cache.get(key):
+                    history_cache.delete(key)
+                    stats["krab"] += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("reset_krab_failed", chat_id=cid, error=str(exc))
+
+        if layer in (None, "openclaw"):
+            try:
+                openclaw_client.clear_session(cid)
+                stats["openclaw"] += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("reset_openclaw_failed", chat_id=cid, error=str(exc))
+
+        if layer in (None, "gemini"):
+            try:
+                invalidate_gemini_cache_for_chat(cid)
+                stats["gemini"] += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("reset_gemini_failed", chat_id=cid, error=str(exc))
+
+        if layer == "archive":
+            try:
+                stats["archive"] += clear_archive_db_for_chat(cid)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("reset_archive_failed", chat_id=cid, error=str(exc))
+
+        # Прогресс каждые 10 чатов — не спамим и не валим на edit-ошибке.
+        if progress_msg is not None and (idx + 1) % 10 == 0 and (idx + 1) < total:
+            try:
+                await progress_msg.edit(f"🔄 Reset: {idx + 1} / {total}...")
+            except Exception:  # noqa: BLE001
+                pass
+
+    # Удаляем progress-message перед финальным отчётом (best-effort).
+    if progress_msg is not None:
+        try:
+            await progress_msg.delete()
+        except Exception:  # noqa: BLE001
+            pass
+
+    scope = "всех чатов" if is_all else "текущего чата"
+    res = (
+        f"🗑️ **Reset выполнен** ({scope})\n"
+        f"• Krab cache: {stats['krab']}\n"
+        f"• OpenClaw: {stats['openclaw']}\n"
+        f"• Gemini: {stats['gemini']}\n"
+        f"• Archive: {stats['archive']}"
+    )
     if message.from_user and message.from_user.id == bot.me.id:
         await message.edit(res)
     else:
@@ -3058,9 +3484,10 @@ async def handle_sysinfo(bot: "KraabUserbot", message: Message) -> None:
 
 
 async def handle_uptime(bot: "KraabUserbot", message: Message) -> None:
-    """Uptime системы macOS + Краба + OpenClaw gateway."""
+    """Uptime: macOS + Краб + OpenClaw gateway + LM Studio + Archive."""
     import re
     import time as _t
+    from pathlib import Path
 
     lines: list[str] = ["⏱️ **Uptime**", "─────────────"]
 
@@ -3104,6 +3531,30 @@ async def handle_uptime(bot: "KraabUserbot", message: Message) -> None:
                 lines.append("OpenClaw: ❌ Offline")
     except Exception:
         lines.append("OpenClaw: ❌ Недоступен")
+
+    # LM Studio health check
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get("http://127.0.0.1:1234/v1/models")
+            if resp.status_code == 200:
+                lines.append("LM Studio: ✅ Online")
+            else:
+                lines.append(f"LM Studio: ⚠️ Status {resp.status_code}")
+    except Exception:
+        lines.append("LM Studio: 💤 Offline/Idle")
+
+    # Archive database info
+    try:
+        arch_path = Path.home() / ".openclaw" / "krab_memory" / "archive.db"
+        if arch_path.exists():
+            size_mb = arch_path.stat().st_size / 1024 / 1024
+            mtime_ago = int(_t.time() - arch_path.stat().st_mtime)
+            time_ago_str = _format_uptime_str(mtime_ago)
+            lines.append(f"Archive: `{size_mb:.1f} MB` (last write {time_ago_str} ago)")
+        else:
+            lines.append("Archive: Empty")
+    except Exception:
+        lines.append("Archive: N/A")
 
     await message.reply("\n".join(lines))
 
@@ -3968,8 +4419,8 @@ async def handle_debug(bot: "KraabUserbot", message: Message) -> None:
 
 
 _REMIND_HELP = (
-    "⏰ **Напоминания — форматы:**\n\n"
-    "**Создать:**\n"
+    "⏰ **Напоминания — Формат:**\n\n"
+    "**Создать (по времени):**\n"
     "- `!remind me in 30m купить молоко`\n"
     "- `!remind in 2 hours позвонить`\n"
     "- `!remind at 15:00 встреча`\n"
@@ -3977,6 +4428,9 @@ _REMIND_HELP = (
     "- `!remind через 20 минут проверить почту`\n"
     "- `!remind в 18:30 созвон`\n"
     "- `!remind 10m | выпить воды`\n\n"
+    "**Создать (по событию):**\n"
+    "- `!remind when upload photos then notify me`\n"
+    "- `!remind когда upload photos сделай напомнить`\n\n"
     "**Управление:**\n"
     "- `!remind list` — список активных\n"
     "- `!remind cancel <id>` — отменить\n"
@@ -4013,7 +4467,16 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
     # --- Субкоманда: list ---
     if raw_args.lower() in ("list", "список", "ls"):
         rows = krab_scheduler.list_reminders(chat_id=str(message.chat.id))
-        if not rows:
+        # Добавляем event-based reminders из reminders_queue (Wave 7-D)
+        try:
+            from ..core.reminders_queue import reminders_queue as _rq
+
+            owner_id = str(getattr(message.from_user, "id", "") or "")
+            event_rows = _rq.list_pending(owner_id=owner_id) if owner_id else []
+        except Exception:  # noqa: BLE001
+            event_rows = []
+
+        if not rows and not event_rows:
             await message.reply("⏰ Активных напоминаний нет.")
             return
         lines = ["⏰ **Активные напоминания:**"]
@@ -4028,6 +4491,13 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
             text = str(item.get("text") or "")
             rid = str(item.get("reminder_id") or "")
             lines.append(f"- `{rid}` · `{due_label}` · {text}")
+        # Event-based rows
+        for r in event_rows:
+            if r.trigger_type.value == "time" and r.fire_at:
+                when = datetime.datetime.fromtimestamp(r.fire_at).strftime("%d.%m %H:%M")
+                lines.append(f"- `{r.id}` · `{when}` · {r.action_payload[:120]}")
+            elif r.trigger_type.value == "event":
+                lines.append(f"- `{r.id}` · when `{r.match_pattern}` · {r.action_payload[:120]}")
         payload = "\n".join(lines)
         chunks = _split_text_for_telegram(payload, limit=3600)
         await message.reply(chunks[0])
@@ -4040,6 +4510,14 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
     if cancel_match:
         rid = cancel_match.group(1)
         ok = krab_scheduler.remove_reminder(rid)
+        if not ok:
+            # Пробуем cancel через reminders_queue (event-based / Wave 7-D)
+            try:
+                from ..core.reminders_queue import reminders_queue as _rq
+
+                ok = _rq.cancel(rid)
+            except Exception:  # noqa: BLE001
+                ok = False
         if ok:
             await message.reply(f"🗑️ Напоминание `{rid}` отменено.")
         else:
@@ -4049,6 +4527,30 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
     # --- Без аргументов: справка ---
     if not raw_args:
         raise UserInputError(user_message=_REMIND_HELP)
+
+    # --- Event-based: "when X then Y" / "когда X сделай Y" ---
+    # Используем reminders_queue (Wave 7-D) для persistence
+    from ..core.remind_parser import parse_remind_args
+    from ..core.reminders_queue import reminders_queue
+
+    _spec = parse_remind_args(raw_args)
+    if _spec is not None and _spec.get("type") == "event":
+        owner_id = str(getattr(message.from_user, "id", "") or "")
+        chat_id = str(message.chat.id)
+        rid = reminders_queue.add_event_reminder(
+            owner_id=owner_id,
+            chat_id=chat_id,
+            pattern=str(_spec["pattern"]),
+            action=str(_spec["action"]),
+        )
+        await message.reply(
+            "👁️ Event-напоминание создано в этом чате.\n"
+            f"- ID: `{rid}`\n"
+            f"- Pattern: `{_spec['pattern']}`\n"
+            f"- Action: {_spec['action']}\n\n"
+            f"Отменить: `!remind cancel {rid}`"
+        )
+        return
 
     # --- Создание напоминания ---
     time_spec, reminder_text = split_reminder_input(raw_args)
@@ -4367,6 +4869,11 @@ async def handle_cron(bot: "KraabUserbot", message: Message) -> None:
             await msg.edit(text)
         return
 
+    # ---------- !cron quick — human-friendly создание per-chat job ----------
+    if sub in {"quick", "быстро", "add"}:
+        await _handle_cron_quick(bot, message, arg)
+        return
+
     # ---------- Неизвестная субкоманда ----------
     await message.reply(
         "🗓 **!cron** — управление OpenClaw cron jobs\n\n"
@@ -4374,7 +4881,110 @@ async def handle_cron(bot: "KraabUserbot", message: Message) -> None:
         "`!cron enable <name>` — включить job\n"
         "`!cron disable <name>` — выключить job\n"
         "`!cron run <name>` — запустить job немедленно\n"
-        "`!cron status` — общая статистика"
+        "`!cron status` — общая статистика\n"
+        '`!cron quick "<время>" "<промпт>"` — создать job в текущем чате\n'
+        '   Пример: `!cron quick "каждый день в 10:00" "AI-ресёрч и саммари"`'
+    )
+
+
+async def _handle_cron_quick(bot: "KraabUserbot", message: Message, args: str) -> None:
+    """
+    !cron quick "<время>" "<промпт>" — создаёт per-chat recurring cron job.
+
+    Время понимается human-friendly (см. cron_spec_parser):
+      - "каждый день в HH:MM" / "every day at HH:MM"
+      - "каждые N часов" / "every N hours"
+      - "каждый понедельник в HH:MM" / "every monday at HH:MM"
+      - прямой cron `M H D Mo Dow`
+    """
+    import shlex
+
+    from ..core.cron_spec_parser import parse_cron_expression  # noqa: PLC0415
+
+    raw = (args or "").strip()
+    if not raw:
+        await bot._safe_reply(
+            message,
+            '❌ Формат: `!cron quick "<время>" "<промпт>"`\n'
+            'Пример: `!cron quick "каждый день в 10:00" "AI+crypto ресёрч, саммари"`',
+        )
+        return
+
+    try:
+        parts = shlex.split(raw)
+    except ValueError:
+        await bot._safe_reply(
+            message,
+            '❌ Не распарсил аргументы. Используй кавычки: `!cron quick "время" "промпт"`',
+        )
+        return
+
+    if len(parts) < 2:
+        await bot._safe_reply(
+            message,
+            "❌ Нужно 2 аргумента: время + промпт. "
+            'Пример: `!cron quick "каждые 2 часа" "проверь BTC/ETH"`',
+        )
+        return
+
+    time_expr = parts[0]
+    prompt = " ".join(parts[1:]).strip()
+    if not prompt:
+        await bot._safe_reply(message, "❌ Промпт не может быть пустым.")
+        return
+
+    cron_spec = parse_cron_expression(time_expr)
+    if not cron_spec:
+        await bot._safe_reply(
+            message,
+            f"❌ Не распарсил время: `{time_expr}`.\nПримеры:\n"
+            "• `каждый день в 10:00`\n"
+            "• `каждые 2 часа`\n"
+            "• `каждый понедельник в 09:00`\n"
+            "• `0 10 * * *` (прямой cron)",
+        )
+        return
+
+    chat_id = message.chat.id if getattr(message, "chat", None) else 0
+    # Имя job должно быть уникальным и читаемым: tg-quick-<chat_id>-<timestamp>
+    job_name = f"tg-quick-{chat_id}-{int(time.time())}"
+    description = f"quick per-chat job (chat_id={chat_id})"
+
+    # Нативный `openclaw cron add` — уже существующий контракт (см. web_app.py openclaw_cron_job_create).
+    # create_subprocess_exec гарантирует, что аргументы не интерпретируются shell.
+    ok, raw_out = await _cron_run_openclaw(
+        "cron",
+        "add",
+        "--json",
+        "--name",
+        job_name,
+        "--every",
+        cron_spec,
+        "--session",
+        "main",
+        "--wake",
+        "now",
+        "--description",
+        description,
+        "--system-event",
+        prompt,
+        timeout=45.0,
+    )
+    if not ok:
+        short = raw_out[:200] if raw_out else "no output"
+        logger.warning("cron_quick_create_failed", name=job_name, spec=cron_spec, raw=short)
+        await bot._safe_reply(message, f"❌ Ошибка создания job:\n`{short}`")
+        return
+
+    prompt_preview = prompt[:80] + ("…" if len(prompt) > 80 else "")
+    await bot._safe_reply(
+        message,
+        "✅ **Cron создан**\n"
+        f"• Имя: `{job_name}`\n"
+        f"• Расписание: `{cron_spec}` (из `{time_expr}`)\n"
+        f"• Промпт: `{prompt_preview}`\n"
+        f"• Chat: `{chat_id}`\n"
+        f"Выключить: `!cron disable {job_name}`",
     )
 
 
@@ -4421,19 +5031,43 @@ async def handle_watch(bot: "KraabUserbot", message: Message) -> None:
 
 async def handle_memory(bot: "KraabUserbot", message: Message) -> None:
     """
-    Короткий просмотр общей памяти OpenClaw без поиска по словам.
+    Команды работы с общей памятью и Memory Layer архивом.
 
-    Пока сознательно ограничиваемся read-only режимом:
-    - `!remember` уже отвечает за запись фактов;
-    - эта команда нужна для последних записей и owner-digest слоёв.
+    Поддерживаемые субкоманды:
+    - `!memory recent [source_filter]` — последние записи workspace-памяти;
+    - `!memory stats` — агрегированная статистика по archive.db / indexer / validator;
+    - `!memory clear` — preview чатов в archive.db;
+    - `!memory clear --chat=<id> [--confirm]` — selective delete по чату;
+    - `!memory clear --before=YYYY-MM-DD [--confirm]` — delete old messages.
     """
-    del bot
     raw_args = str(message.text or "").split(maxsplit=2)
     action = raw_args[1].strip().lower() if len(raw_args) > 1 else "recent"
-    source_filter = raw_args[2].strip() if len(raw_args) > 2 else ""
+    rest = raw_args[2].strip() if len(raw_args) > 2 else ""
+
+    if action == "stats":
+        del bot
+        await _handle_memory_stats(message)
+        return
+
+    if action == "clear":
+        # Owner-only: деструктивная операция
+        me_id = getattr(getattr(bot, "me", None), "id", None)
+        sender_id = getattr(getattr(message, "from_user", None), "id", None)
+        if me_id is None or sender_id != me_id:
+            await message.reply("🚫 `!memory clear` доступен только владельцу.")
+            return
+        await _handle_memory_clear(message, rest)
+        return
+
+    del bot
+    source_filter = rest
 
     if action != "recent":
-        raise UserInputError(user_message="🧠 Формат: `!memory recent [source_filter]`")
+        raise UserInputError(
+            user_message=(
+                "🧠 Формат: `!memory recent [source_filter]` | `!memory stats` | `!memory clear`"
+            )
+        )
 
     rows = list_workspace_memory_entries(limit=8, source_filter=source_filter)
     if not rows:
@@ -4446,6 +5080,247 @@ async def handle_memory(bot: "KraabUserbot", message: Message) -> None:
             f"- `{item['date']} {item['time']}` [{item['source']}{author_suffix}] {item['text']}"
         )
     await message.reply("\n".join(lines))
+
+
+async def _handle_memory_stats(message: Message) -> None:
+    """Собирает архив/индексер/валидатор статистику и отправляет reply."""
+    archive_stats = _collect_memory_archive_stats()
+    indexer_stats = _collect_memory_indexer_stats()
+    validator_stats = _collect_memory_validator_stats()
+    reply = format_memory_stats(archive_stats, indexer_stats, validator_stats)
+    await message.reply(reply)
+
+
+async def _handle_memory_clear(message: Message, args_str: str) -> None:
+    """Selective cleanup archive.db — по чату или по дате.
+
+    Форматы:
+        !memory clear                              — preview чатов (топ 20)
+        !memory clear --chat=<id>                  — показать сколько удалится
+        !memory clear --chat=<id> --confirm        — удалить
+        !memory clear --before=YYYY-MM-DD          — показать сколько удалится
+        !memory clear --before=YYYY-MM-DD --confirm — удалить
+    """
+    import re
+    from datetime import datetime
+
+    from ..core.reset_helpers import (
+        clear_archive_db_for_chat,
+        delete_archive_messages_before,
+        list_archive_chats,
+    )
+
+    db_path = _ARCHIVE_DB_PATH_FOR_CLEAR
+    if not db_path.exists():
+        await message.reply("📭 Archive не существует — нечего удалять.")
+        return
+
+    chat_match = re.search(r"--chat=(\S+)", args_str)
+    before_match = re.search(r"--before=(\d{4}-\d{2}-\d{2})", args_str)
+    confirm = "--confirm" in args_str
+
+    # --- Preview mode: список чатов ---
+    if not chat_match and not before_match:
+        chats = list_archive_chats(db_path=db_path, limit=20)
+        try:
+            import sqlite3 as _sq3
+
+            with _sq3.connect(f"file:{db_path}?mode=ro", uri=True) as _c:
+                total = _c.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        except Exception:  # noqa: BLE001
+            total = sum(r["message_count"] for r in chats)
+
+        lines = [f"🧠 **Archive preview** — {_fmt_int_ru(total)} total messages\n"]
+        if chats:
+            lines.append("**Топ чатов:**")
+            for row in chats:
+                title_s = (row["title"] or f"chat_{row['chat_id']}")[:40]
+                lines.append(
+                    f"• `{row['chat_id']}` → {title_s}: {_fmt_int_ru(row['message_count'])} msgs"
+                )
+        else:
+            lines.append("_(чаты не найдены)_")
+        lines.append("\n**Использование:**")
+        lines.append("• `!memory clear --chat=<id> --confirm`")
+        lines.append("• `!memory clear --before=YYYY-MM-DD --confirm`")
+        await message.reply("\n".join(lines))
+        return
+
+    # --- Dry-run: предупреждение без --confirm ---
+    if not confirm:
+        if chat_match:
+            chat_id = chat_match.group(1)
+            from ..core.reset_helpers import count_archive_messages_for_chat
+
+            count = count_archive_messages_for_chat(chat_id, db_path=db_path)
+            await message.reply(
+                f"⚠️ Будет удалено **{_fmt_int_ru(count)}** сообщений для чата `{chat_id}`.\n"
+                f"Добавьте `--confirm` для подтверждения."
+            )
+        else:
+            date_str = before_match.group(1)  # type: ignore[union-attr]
+            try:
+                cutoff_ts = int(datetime.strptime(date_str, "%Y-%m-%d").timestamp())
+            except ValueError:
+                await message.reply(f"❌ Неверный формат даты: `{date_str}`. Ожидается YYYY-MM-DD.")
+                return
+            import sqlite3 as _sq3
+
+            try:
+                with _sq3.connect(f"file:{db_path}?mode=ro", uri=True) as _c:
+                    count = _c.execute(
+                        "SELECT COUNT(*) FROM messages WHERE date < ?", (cutoff_ts,)
+                    ).fetchone()[0]
+            except Exception:  # noqa: BLE001
+                count = 0
+            await message.reply(
+                f"⚠️ Будет удалено **{_fmt_int_ru(count)}** сообщений старше `{date_str}`.\n"
+                f"Добавьте `--confirm` для подтверждения."
+            )
+        return
+
+    # --- Confirmed delete ---
+    try:
+        if chat_match:
+            chat_id = chat_match.group(1)
+            deleted = clear_archive_db_for_chat(chat_id, db_path=db_path)
+            await message.reply(
+                f"🗑️ Удалено **{_fmt_int_ru(deleted)}** сообщений чата `{chat_id}` из archive.db.\n"
+                f"_(chunks + chunk_messages тоже очищены)_"
+            )
+        else:
+            date_str = before_match.group(1)  # type: ignore[union-attr]
+            try:
+                cutoff_ts = int(datetime.strptime(date_str, "%Y-%m-%d").timestamp())
+            except ValueError:
+                await message.reply(f"❌ Неверный формат даты: `{date_str}`. Ожидается YYYY-MM-DD.")
+                return
+            deleted = delete_archive_messages_before(cutoff_ts, db_path=db_path)
+            await message.reply(
+                f"🗑️ Удалено **{_fmt_int_ru(deleted)}** сообщений старше `{date_str}` из archive.db.\n"
+                f"_(осиротевшие chunks тоже очищены)_"
+            )
+    except Exception as exc:  # noqa: BLE001
+        await message.reply(f"❌ Ошибка при очистке archive: {exc}")
+
+
+def _collect_memory_archive_stats() -> dict[str, Any]:
+    """Read-only снимок archive.db: counts + size. Graceful fallback."""
+    import sqlite3 as _sqlite3
+    from pathlib import Path as _Path
+
+    db_path = _Path("~/.openclaw/krab_memory/archive.db").expanduser()
+    stats: dict[str, Any] = {"exists": db_path.exists()}
+    if not stats["exists"]:
+        return stats
+    try:
+        conn = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            stats["messages"] = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            stats["chats"] = conn.execute("SELECT COUNT(*) FROM chats").fetchone()[0]
+            stats["chunks"] = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        finally:
+            conn.close()
+        stats["size_mb"] = db_path.stat().st_size / 1024 / 1024
+    except Exception as exc:  # noqa: BLE001 — stats команда не должна падать
+        stats["error"] = str(exc)
+    return stats
+
+
+def _collect_memory_indexer_stats() -> dict[str, Any]:
+    """Снимок состояния real-time индексера; при недоступности — заглушка."""
+    try:
+        from ..core.memory_indexer_worker import get_indexer  # noqa: PLC0415
+
+        snap = get_indexer().get_stats()
+        return {
+            "state": "running" if getattr(snap, "is_running", False) else "stopped",
+            "queue_size": getattr(snap, "queue_size", 0),
+            "queue_maxsize": getattr(snap, "queue_maxsize", 0),
+            "processed_total": getattr(snap, "processed_total", 0),
+            "failed": dict(getattr(snap, "failed", {}) or {}),
+        }
+    except Exception:  # noqa: BLE001 — индексер опционален
+        return {"state": "unavailable"}
+
+
+def _collect_memory_validator_stats() -> dict[str, Any]:
+    """Снимок счётчиков memory_validator; при отсутствии модуля — заглушка."""
+    try:
+        from ..core.memory_validator import memory_validator  # noqa: PLC0415
+
+        stats = dict(getattr(memory_validator, "stats", {}) or {})
+        try:
+            stats["pending_count"] = len(memory_validator.list_pending())
+        except Exception:  # noqa: BLE001
+            stats.setdefault("pending_count", 0)
+        return stats
+    except Exception:  # noqa: BLE001 — модуля может не быть
+        return {"error": "not loaded"}
+
+
+def _fmt_int_ru(value: int) -> str:
+    """Целое с пробелом-разделителем тысяч (RU-стиль)."""
+    return f"{int(value):,}".replace(",", " ")
+
+
+def format_memory_stats(
+    archive: dict[str, Any],
+    indexer: dict[str, Any],
+    validator: dict[str, Any],
+) -> str:
+    """Формирует Markdown-сообщение с агрегатом статистики Memory Layer."""
+    lines: list[str] = ["🧠 **Memory Layer Stats**", ""]
+
+    # Archive block
+    lines.append("**Archive.db:**")
+    if archive.get("exists"):
+        if "error" in archive:
+            lines.append(f"• Error: {archive['error']}")
+        else:
+            lines.append(f"• Messages: **{_fmt_int_ru(archive.get('messages', 0))}**")
+            lines.append(f"• Chats: {archive.get('chats', 0)}")
+            lines.append(f"• Chunks: {_fmt_int_ru(archive.get('chunks', 0))}")
+            size_mb = archive.get("size_mb", 0)
+            lines.append(f"• Size: {size_mb:.1f} MB")
+    else:
+        lines.append("• Not initialized")
+
+    # Indexer block
+    lines.append("")
+    lines.append("**Indexer:**")
+    state = indexer.get("state", "unknown")
+    lines.append(f"• State: `{state}`")
+    if state != "unavailable":
+        q_size = indexer.get("queue_size", 0)
+        q_max = indexer.get("queue_maxsize") or 0
+        if q_max:
+            lines.append(f"• Queue: {q_size} / {q_max}")
+        else:
+            lines.append(f"• Queue: {q_size}")
+        lines.append(f"• Processed: {_fmt_int_ru(indexer.get('processed_total', 0))}")
+        failed = indexer.get("failed") or {}
+        if failed:
+            parts = ", ".join(f"{k}={v}" for k, v in failed.items())
+            lines.append(f"• Failed: {parts}")
+
+    # Validator block
+    lines.append("")
+    lines.append("**Validator:**")
+    if "error" in validator:
+        lines.append(f"• {validator['error']}")
+    else:
+        lines.append(f"• Safe: {_fmt_int_ru(validator.get('safe_total', 0))}")
+        lines.append(f"• Blocked: {validator.get('injection_blocked_total', 0)}")
+        lines.append(f"• Confirmed: {validator.get('confirmed_total', 0)}")
+        lines.append(f"• Pending: {validator.get('pending_count', 0)}")
+
+    # Timestamp
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines.append("")
+    lines.append(f"_Последнее обновление: {ts}_")
+
+    return "\n".join(lines)
 
 
 async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
@@ -6072,13 +6947,204 @@ async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
     await message.reply(f"🤫 Тишина в этом чате на **{minutes}** мин.\n`!тишина стоп` чтобы снять.")
 
 
+def _costs_filter_calls(calls: list, *, days: int | None = None) -> list:
+    """Вернуть вызовы за последние `days` дней (None = все)."""
+    if days is None:
+        return calls
+    import time as _time
+
+    cutoff = _time.time() - days * 86400
+    return [r for r in calls if r.timestamp >= cutoff]
+
+
+def _costs_aggregate(calls: list) -> dict:
+    """Агрегировать список CallRecord в сводку."""
+    from collections import defaultdict as _dd
+
+    by_model: dict = _dd(lambda: {"cost_usd": 0.0, "calls": 0, "tokens": 0})
+    by_provider: dict = _dd(lambda: {"cost_usd": 0.0, "calls": 0})
+    total_cost = 0.0
+    total_tokens = 0
+    for r in calls:
+        total_cost += r.cost_usd
+        total_tokens += r.input_tokens + r.output_tokens
+        by_model[r.model_id]["cost_usd"] += r.cost_usd
+        by_model[r.model_id]["calls"] += 1
+        by_model[r.model_id]["tokens"] += r.input_tokens + r.output_tokens
+        # Провайдер — часть до «/»
+        provider = r.model_id.split("/")[0] if "/" in r.model_id else r.model_id
+        by_provider[provider]["cost_usd"] += r.cost_usd
+        by_provider[provider]["calls"] += 1
+    return {
+        "total_cost": total_cost,
+        "total_tokens": total_tokens,
+        "calls_count": len(calls),
+        "by_model": dict(by_model),
+        "by_provider": dict(by_provider),
+    }
+
+
+def _costs_ascii_trend(calls: list, days: int = 30) -> str:
+    """Построить ASCII-график расходов за последние `days` дней."""
+    import datetime
+
+    now = datetime.date.today()
+    # Сгруппировать вызовы по дате
+    daily: dict[datetime.date, float] = {}
+    for d in range(days):
+        day = now - datetime.timedelta(days=days - 1 - d)
+        daily[day] = 0.0
+    for r in calls:
+        day = datetime.date.fromtimestamp(r.timestamp)
+        if day in daily:
+            daily[day] += r.cost_usd
+
+    values = [daily[d] for d in sorted(daily)]
+    max_v = max(values) if values else 0.0
+    total = sum(values)
+    avg = total / len(values) if values else 0.0
+
+    bars = " ▁▂▃▄▅▆▇█"
+
+    def _bar(v: float) -> str:
+        if max_v == 0:
+            return " "
+        idx = round((v / max_v) * (len(bars) - 1))
+        return bars[idx]
+
+    bar_line = "".join(_bar(v) for v in values)
+
+    lines = [
+        f"📈 **Тренд за {days} дней ($):**",
+        f"`{bar_line}`",
+        f"↑ {days}d ago {'·' * max(0, len(values) - 10)} ↑ today",
+        f"avg=${avg:.2f}/d · total=${total:.4f}",
+    ]
+    return "\n".join(lines)
+
+
+async def _handle_costs_today(bot: "KraabUserbot", message: Message) -> None:
+    """!costs today — расходы за сегодня."""
+    calls = _costs_filter_calls(getattr(cost_analytics, "_calls", []), days=1)
+    agg = _costs_aggregate(calls)
+    lines = [
+        "💰 **Costs: сегодня**",
+        "─────────────────",
+        f"Вызовов: {agg['calls_count']} | Токенов: {agg['total_tokens']}",
+        f"Стоимость: ${agg['total_cost']:.4f}",
+    ]
+    if agg["by_model"]:
+        lines.append("")
+        lines.append("**По моделям:**")
+        for mid, data in sorted(agg["by_model"].items(), key=lambda x: -x[1]["cost_usd"]):
+            lines.append(f"• {mid}: ${data['cost_usd']:.4f} ({data['calls']} calls)")
+    await message.reply("\n".join(lines))
+
+
+async def _handle_costs_week(bot: "KraabUserbot", message: Message) -> None:
+    """!costs week — расходы за 7 дней."""
+    calls = _costs_filter_calls(getattr(cost_analytics, "_calls", []), days=7)
+    agg = _costs_aggregate(calls)
+    lines = [
+        "💰 **Costs: 7 дней**",
+        "─────────────────",
+        f"Вызовов: {agg['calls_count']} | Токенов: {agg['total_tokens']}",
+        f"Стоимость: ${agg['total_cost']:.4f}",
+        f"Средняя в день: ${agg['total_cost'] / 7:.4f}",
+    ]
+    if agg["by_model"]:
+        lines.append("")
+        lines.append("**По моделям:**")
+        for mid, data in sorted(agg["by_model"].items(), key=lambda x: -x[1]["cost_usd"]):
+            lines.append(f"• {mid}: ${data['cost_usd']:.4f} ({data['calls']} calls)")
+    await message.reply("\n".join(lines))
+
+
+async def _handle_costs_breakdown(bot: "KraabUserbot", message: Message) -> None:
+    """!costs breakdown — разбивка по провайдерам."""
+    calls = getattr(cost_analytics, "_calls", [])
+    agg = _costs_aggregate(calls)
+    lines = [
+        "💰 **Costs: по провайдерам**",
+        "─────────────────",
+        f"Всего: ${agg['total_cost']:.4f} | Вызовов: {agg['calls_count']}",
+        "",
+        "**По провайдерам:**",
+    ]
+    total = agg["total_cost"] or 1.0  # защита от деления на 0
+    for provider, data in sorted(agg["by_provider"].items(), key=lambda x: -x[1]["cost_usd"]):
+        pct = round(data["cost_usd"] / total * 100, 1)
+        lines.append(f"• {provider}: ${data['cost_usd']:.4f} ({pct}%, {data['calls']} calls)")
+    if agg["by_model"]:
+        lines.append("")
+        lines.append("**По моделям:**")
+        for mid, data in sorted(agg["by_model"].items(), key=lambda x: -x[1]["cost_usd"])[:8]:
+            lines.append(f"• {mid}: ${data['cost_usd']:.4f} ({data['calls']} calls)")
+    await message.reply("\n".join(lines))
+
+
+async def _handle_costs_budget(bot: "KraabUserbot", message: Message) -> None:
+    """!costs budget — бюджет vs фактические расходы."""
+    budget = cost_analytics.get_monthly_budget_usd()
+    cost_month = cost_analytics.get_monthly_cost_usd()
+    cost_session = cost_analytics.get_cost_so_far_usd()
+    forecast = cost_analytics.monthly_calls_forecast()
+    lines = [
+        "💰 **Costs: бюджет**",
+        "─────────────────",
+        f"Сессия: ${cost_session:.4f}",
+        f"Месяц: ${cost_month:.4f}",
+    ]
+    if budget > 0:
+        pct = min(100, round(cost_month / budget * 100, 1))
+        remaining = max(0.0, budget - cost_month)
+        bar_filled = round(pct / 10)
+        bar = "█" * bar_filled + "░" * (10 - bar_filled)
+        lines += [
+            f"Бюджет: ${budget:.2f}",
+            f"[{bar}] {pct}%",
+            f"Остаток: ${remaining:.4f}",
+        ]
+        if pct >= 90:
+            lines.append("⚠️ Бюджет почти исчерпан!")
+        elif pct >= 75:
+            lines.append("⚡ Более 75% бюджета израсходовано.")
+    else:
+        lines.append("Бюджет: не задан (`!budget 10.00` чтобы задать)")
+    if forecast is not None:
+        lines.append(f"Прогноз вызовов (конец месяца): ~{int(forecast)}")
+    await message.reply("\n".join(lines))
+
+
+async def _handle_costs_trend(bot: "KraabUserbot", message: Message) -> None:
+    """!costs trend — ASCII-тренд за 30 дней."""
+    calls = getattr(cost_analytics, "_calls", [])
+    trend_text = _costs_ascii_trend(calls, days=30)
+    await message.reply(trend_text)
+
+
 async def handle_costs(bot: "KraabUserbot", message: Message) -> None:
-    """!costs — текущий cost report прямо в Telegram (owner-only)."""
+    """!costs [today|week|breakdown|budget|trend] — cost report (owner-only)."""
     # Проверка: только владелец
     access_profile = bot._get_access_profile(message.from_user)
     if access_profile.level != AccessLevel.OWNER:
         raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
 
+    args = (bot._get_command_args(message) or "").strip().lower()
+    sub = args.split()[0] if args else ""
+
+    if sub == "today":
+        return await _handle_costs_today(bot, message)
+    if sub == "week":
+        return await _handle_costs_week(bot, message)
+    if sub == "breakdown":
+        return await _handle_costs_breakdown(bot, message)
+    if sub == "budget":
+        return await _handle_costs_budget(bot, message)
+    if sub == "trend":
+        return await _handle_costs_trend(bot, message)
+
+    # Default — текущий month summary
     report = cost_analytics.build_usage_report_dict()
 
     cost_session = report.get("cost_session_usd", 0.0)
@@ -6171,45 +7237,136 @@ async def handle_budget(bot: "KraabUserbot", message: Message) -> None:
 
 
 async def handle_digest(bot: "KraabUserbot", message: Message) -> None:
-    """!digest — немедленно сгенерировать и отправить weekly digest (owner-only)."""
+    """
+    !digest — немедленно сгенерировать и отправить daily + weekly digest (owner-only).
+
+    Отправляет:
+    1. Nightly Summary (daily) — данные за сегодня.
+    2. Weekly Digest — данные за 7 дней (swarm/cost/inbox сводка).
+    """
     # Проверка: только владелец
     access_profile = bot._get_access_profile(message.from_user)
     if access_profile.level != AccessLevel.OWNER:
         raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
 
-    await message.reply("⏳ Генерирую digest, подожди...")
+    await message.reply("⏳ Генерирую digest...")
 
+    # --- Nightly (daily) summary ---
+    try:
+        from ..core.nightly_summary import generate_summary  # noqa: PLC0415
+
+        daily_text = await generate_summary()
+        await message.reply(daily_text, parse_mode="markdown")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("handle_digest_nightly_failed", error=str(exc))
+        await message.reply(f"⚠️ Daily summary не удался: {exc}")
+
+    # --- Weekly digest ---
     try:
         result = await weekly_digest.generate_digest()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("handle_digest_failed", error=str(exc))
-        await message.reply(f"❌ Ошибка генерации digest: {exc}")
+        logger.warning("handle_digest_weekly_failed", error=str(exc))
+        await message.reply(f"❌ Weekly digest не удался: {exc}")
         return
 
     if not result.get("ok"):
         err = result.get("error", "неизвестная ошибка")
-        await message.reply(f"❌ Digest не удался: {err}")
+        await message.reply(f"❌ Weekly digest не удался: {err}")
         return
 
     rounds = result.get("total_rounds", 0)
     cost = result.get("cost_week_usd", 0.0)
     attention = result.get("attention_count", 0)
 
-    # Digest уже доставлен через telegram_callback если он настроен;
-    # иначе выводим итоговую сводку
     if not weekly_digest._telegram_callback:
         await message.reply(
-            f"✅ **Weekly Digest сгенерирован**\n"
-            f"Swarm rounds: {rounds}\n"
+            f"✅ **Weekly Digest**\n"
+            f"Swarm rounds (7д): {rounds}\n"
             f"Cost (7д): ${cost:.4f}\n"
-            f"Attention items: {attention}\n\n"
-            "_Для автодоставки в чат настрой telegram_callback._"
+            f"Attention items: {attention}"
         )
     else:
         await message.reply(
-            f"✅ Digest отправлен.\n"
+            f"✅ Weekly digest отправлен.\n"
             f"Rounds: {rounds} | Cost 7д: ${cost:.4f} | Attention: {attention}"
         )
+
+
+# ---------------------------------------------------------------------------
+# !bench — запуск бенчмарков производительности через subprocess
+# ---------------------------------------------------------------------------
+
+
+async def handle_bench(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !bench [fast|full|fts|semantic] — запуск subset бенчмарков перфоманса.
+
+    Пресеты:
+      fast     — 20 итераций (по умолчанию, ~15 сек)
+      full     — 100 итераций (~60 сек)
+      fts      — 50 итераций для FTS (~30 сек)
+      semantic — 10 итераций для семантического поиска (~20 сек)
+
+    Только для владельца (owner-only).
+    """
+    # Доступ только для владельца
+    access = bot._get_access_profile(message.from_user)
+    if access.level != AccessLevel.OWNER:
+        await bot._safe_reply(message, "⛔ Только для владельца.")
+        return
+
+    # Парсим аргументы
+    args = (bot._get_command_args(message) or "").strip().lower()
+    preset = args if args in ("fast", "full", "fts", "semantic") else "fast"
+
+    # Bump command в реестр
+    from ..core.command_registry import bump_command
+    bump_command("bench")
+
+    # Маппинг пресетов на количество итераций
+    iterations_map = {
+        "fast": 20,
+        "full": 100,
+        "fts": 50,
+        "semantic": 10,
+    }
+    iterations = iterations_map.get(preset, 20)
+
+    # Отправляем статус
+    status_msg = await bot._safe_reply(
+        message, f"⏱ Benchmark `{preset}` (iterations={iterations})..."
+    )
+
+    try:
+        krab_root = pathlib.Path.home() / "Antigravity_AGENTS" / "Краб"
+        result = subprocess.run(
+            [sys.executable, "scripts/benchmark_suite.py", "--iterations", str(iterations)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(krab_root),
+        )
+
+        # Берём последние 1500 символов для вывода
+        output = (
+            result.stdout[-1500:] if len(result.stdout) > 1500 else result.stdout
+        )
+
+        if not output:
+            output = "(empty output)"
+
+        await bot._safe_reply(
+            message,
+            f"📊 **Benchmark results ({preset})**:\n```\n{output}\n```",
+        )
+        logger.info("handle_bench_done", preset=preset, iterations=iterations)
+
+    except subprocess.TimeoutExpired:
+        await bot._safe_reply(message, "⚠️ Benchmark timed out после 120 сек")
+        logger.warning("handle_bench_timeout", preset=preset)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_bench_error", preset=preset, error=str(exc))
+        await bot._safe_reply(message, f"❌ Benchmark failed: {exc}")
 
 
 async def handle_health(bot: "KraabUserbot", message: Message) -> None:
@@ -6558,34 +7715,20 @@ async def handle_unpin(bot: "KraabUserbot", message: Message) -> None:
 
 async def handle_archive(bot: "KraabUserbot", message: Message) -> None:
     """
-    Архивация и разархивация чатов + метаданные archive.db. Owner-only.
+    Архивация и разархивация чатов. Owner-only.
 
     Форматы:
-      !archive              — архивировать текущий чат
-      !archive list         — показать список архивированных чатов (до 20)
-      !archive growth       — рост archive.db за 30 дней
-      !archive stats        — статистика archive.db (размер, сообщения, chunks)
+      !archive          — архивировать текущий чат
+      !unarchive        — разархивировать текущий чат
+      !archive list     — показать список архивированных чатов (до 20)
     """
     access_profile = bot._get_access_profile(message.from_user)
     if access_profile.level != AccessLevel.OWNER:
         raise UserInputError(user_message="🔒 `!archive` доступен только владельцу.")
 
     args = bot._get_command_args(message).strip().lower()
-    sub = args.split()[0] if args else ""
 
-    # Memory Layer subcommands
-    if sub in ("growth", "stats"):
-        from ..handlers.memory_commands import MemoryCommandHandler
-
-        handler = MemoryCommandHandler()
-        try:
-            if sub == "growth":
-                reply = await _handle_archive_growth(handler)
-            else:  # stats
-                reply = handler.handle_stats()
-        finally:
-            handler.close()
-    elif args == "list":
+    if args == "list":
         # Получаем список архивированных диалогов
         try:
             archived = []
@@ -6607,50 +7750,19 @@ async def handle_archive(bot: "KraabUserbot", message: Message) -> None:
                 reply = "\n".join(lines)
             else:
                 reply = "📦 Архив пуст."
-    elif not args:
-        # Архивируем текущий чат (default)
+    else:
+        # Архивируем текущий чат
         chat_id = message.chat.id
         try:
             await bot.client.archive_chats(chat_id)
             reply = "📦 Чат добавлен в архив."
         except Exception as exc:
             reply = f"❌ Не удалось архивировать: `{exc}`"
-    else:
-        # Неизвестный subcommand
-        reply = (
-            "📦 **Archive commands:**\n"
-            "• `!archive` — архивировать текущий чат\n"
-            "• `!archive list` — архивированные чаты\n"
-            "• `!archive stats` — статистика archive.db\n"
-            "• `!archive growth` — рост за 30 дней"
-        )
 
     if message.from_user and message.from_user.id == bot.me.id:
         await message.edit(reply)
     else:
         await message.reply(reply)
-
-
-async def _handle_archive_growth(handler) -> str:
-    """Получить информацию о росте archive.db за 30 дней."""
-    try:
-        stats = handler.collect_stats()
-        if not stats.db_size_bytes:
-            return "📭 Archive.db не существует."
-
-        size_mb = stats.db_size_bytes / 1024 / 1024
-        lines = [
-            f"📊 **Archive Growth (Memory Layer)**\n",
-            f"• Current size: **{size_mb:.1f} MB**",
-            f"• Messages: **{stats.messages:,}**".replace(",", " "),
-            f"• Chats: {stats.chats}",
-            f"• Chunks: {stats.chunks:,}".replace(",", " "),
-        ]
-        if stats.vectors >= 0:
-            lines.append(f"• Vectors: {stats.vectors:,}".replace(",", " "))
-        return "\n".join(lines)
-    except Exception as e:
-        return f"❌ Error reading archive: `{e}`"
 
 
 async def handle_unarchive(bot: "KraabUserbot", message: Message) -> None:
@@ -8208,16 +9320,41 @@ async def handle_alias(bot: "KraabUserbot", message: Message) -> None:
         )
 
 
+def _parse_ask_memory_flags(question: str) -> tuple[str, "bool | None"]:
+    """
+    Извлекает `--with-memory` / `--no-memory` флаги из вопроса.
+
+    Returns:
+        (cleaned_question, force_enable) — force_enable: True / False / None.
+    """
+    tokens = (question or "").split()
+    force_enable: "bool | None" = None
+    remaining: list[str] = []
+    for tok in tokens:
+        low = tok.lower()
+        if low in ("--with-memory", "--memory", "--with-mem"):
+            force_enable = True
+            continue
+        if low in ("--no-memory", "--no-mem"):
+            force_enable = False
+            continue
+        remaining.append(tok)
+    return " ".join(remaining).strip(), force_enable
+
+
 async def handle_ask(bot: "KraabUserbot", message: Message) -> None:
     """
     !ask [вопрос] — задаёт вопрос AI о конкретном сообщении (reply).
 
     Использование:
-      !ask кратко         — суммаризировать сообщение
-      !ask переведи       — перевести
-      !ask                — объяснить сообщение (вопрос по умолчанию)
+      !ask кратко                     — суммаризировать сообщение
+      !ask переведи                   — перевести
+      !ask                            — объяснить сообщение (вопрос по умолчанию)
+      !ask --with-memory <вопрос>     — augment context из memory recall
+      !ask --no-memory <вопрос>       — чистый LLM без recall (override env)
     """
-    question = bot._get_command_args(message).strip()
+    raw_question = bot._get_command_args(message).strip()
+    question, force_memory = _parse_ask_memory_flags(raw_question)
 
     # Получаем исходное сообщение — только из reply
     replied = message.reply_to_message
@@ -8251,6 +9388,17 @@ async def handle_ask(bot: "KraabUserbot", message: Message) -> None:
 
     # Формируем промпт: текст + вопрос
     prompt = f'Текст:\n"""\n{source_text}\n"""\n\nВопрос: {question}'
+
+    # Semantic recall auto-context: prepend top-k memory chunks если включено
+    from ..core.memory_context_augmenter import augment_query_with_memory
+
+    augmented = await augment_query_with_memory(
+        question,
+        force_enable=force_memory,
+    )
+    if augmented.enabled and augmented.chunks_used:
+        # Добавляем recall-префикс перед исходным prompt
+        prompt = f'{augmented.augmented_prompt}\n\nТекст:\n"""\n{source_text}\n"""'
 
     # Отправляем статус и запускаем стриминг
     msg = await message.reply("🤔 Думаю...")
@@ -8673,7 +9821,7 @@ async def handle_dice(bot: "KraabUserbot", message: Message) -> None:
       !dice slot       → 🎰 слот-машина
     """
     # Карта alias → эмодзи
-    _DICE_ALIASES: dict[str, str] = {
+    _DICE_ALIASES: dict[str, str] = {  # noqa: N806 — легаси emoji map
         "": "🎲",
         "dice": "🎲",
         "dart": "🎯",
@@ -10164,6 +11312,9 @@ _BUILTIN_QUOTES: list[str] = [
 
 # Путь к файлу с пользовательскими цитатами
 _SAVED_QUOTES_PATH = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "saved_quotes.json"
+
+# Путь к archive.db для команды !memory clear (тот же что в reset_helpers)
+_ARCHIVE_DB_PATH_FOR_CLEAR = pathlib.Path.home() / ".openclaw" / "krab_memory" / "archive.db"
 
 
 def _load_saved_quotes() -> list[dict]:
@@ -16204,8 +17355,9 @@ async def handle_id(bot: "KraabUserbot", message: Message) -> None:
 
 async def _handle_listen_list(bot: "KraabUserbot", message: Message) -> None:
     """Показать все чаты с явными правилами."""
-    from ..core.chat_filter_config import chat_filter_config
     import datetime
+
+    from ..core.chat_filter_config import chat_filter_config
 
     rules = chat_filter_config.list_rules()
     if not rules:
@@ -16249,11 +17401,15 @@ async def handle_listen(bot: "KraabUserbot", message: Message) -> None:
       !listen stats          — статистика по режимам
     """
     from ..core.chat_filter_config import chat_filter_config
+    from ..core.command_registry import bump_command
+
+    bump_command("listen")
 
     args = (bot._get_command_args(message) or "").strip().lower()
     chat_id = message.chat.id
     is_group = message.chat.type in ("group", "supergroup")
 
+    # Специальные команды
     if args == "list":
         return await _handle_listen_list(bot, message)
     if args == "stats":
@@ -16269,6 +17425,7 @@ async def handle_listen(bot: "KraabUserbot", message: Message) -> None:
         )
         return
 
+    # Управление режимом текущего чата
     if args in ("active", "mention-only", "muted"):
         chat_filter_config.set_mode(chat_id, args)
         mode_name = {
@@ -16284,12 +17441,14 @@ async def handle_listen(bot: "KraabUserbot", message: Message) -> None:
         await bot._safe_reply(message, f"🔄 Чат `{chat_id}`: вернулся к дефолту")
         return
 
+    # Показать текущий режим
     if not args:
         mode = chat_filter_config.get_mode(chat_id, is_group=is_group)
         mode_emoji = {"active": "🟢", "mention-only": "🟡", "muted": "🔴"}[mode]
         await bot._safe_reply(message, f"{mode_emoji} Текущий режим: `{mode}`")
         return
 
+    # Неизвестная команда
     await bot._safe_reply(
         message,
         "❌ Неизвестный режим. Используйте: active, mention-only, muted, reset, reload, list, stats",
