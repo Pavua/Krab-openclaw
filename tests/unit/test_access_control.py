@@ -139,6 +139,8 @@ def test_full_profile_cannot_execute_owner_only_commands(
         "welcome",
         "afk",
         "back",
+        "profile",
+        "reset",
     }
     assert profile.can_execute_command("status", set(USERBOT_KNOWN_COMMANDS)) is True
     assert profile.can_execute_command("acl", set(USERBOT_KNOWN_COMMANDS)) is False
