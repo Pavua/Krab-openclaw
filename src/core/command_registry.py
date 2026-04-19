@@ -436,8 +436,8 @@ _COMMANDS: list[CommandInfo] = [
     CommandInfo(
         name="memory",
         category="notes",
-        description="Память: recent записи workspace / stats по Memory Layer",
-        usage="!memory recent [source_filter] | !memory stats",
+        description="Память: recent / stats / clear / rebuild в Memory Layer",
+        usage="!memory recent [source_filter] | !memory stats | !memory clear | !memory rebuild",
     ),
     # ── management ───────────────────────────────────────────────────────────
     CommandInfo(
@@ -1186,6 +1186,28 @@ _COMMANDS: list[CommandInfo] = [
         category="modes",
         description="Антиспам: блокировать/разблокировать пользователя за спам",
         usage="!spam block <@user|id> | !spam unblock <id> | !spam list",
+        owner_only=True,
+    ),
+    # ── Wave 29+ новые команды ───────────────────────────────────────────────
+    CommandInfo(
+        name="bench",
+        category="dev",
+        description="Бенчмарк перфоманса Memory Layer (fast/full/fts/semantic)",
+        usage="!bench [fast|full|fts|semantic]",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="fix",
+        category="dev",
+        description="AI-предложения по исправлению кода (reply на сообщение с кодом)",
+        usage="!fix [язык] | !fix [--lang=py|js|go]",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="rewrite",
+        category="dev",
+        description="Переписать текст/код в другом стиле (reply или аргумент)",
+        usage="!rewrite <стиль> | !rewrite [style=concise|verbose|formal|casual]",
         owner_only=True,
     ),
 ]

@@ -2075,6 +2075,12 @@ class KraabUserbot(
         self._ensure_memory_indexer_started()
         self._command_usage_save_task = asyncio.create_task(self._command_usage_save_loop())
 
+        # Wave 29-YY: chat_ban_cache periodic cleanup (follow-up 29-TT)
+        # Фоновый sweep_expired каждые 5 минут, удаляет записи с истёкшим expires_at.
+        if os.getenv("CHAT_BAN_PERIODIC_CLEANUP_ENABLED", "1") == "1":
+            asyncio.create_task(chat_ban_cache.periodic_cleanup(interval_seconds=300))
+            logger.info("chat_ban_periodic_cleanup_started", interval_sec=300)
+
         # Reserve bot (Phase 2.1) — запускаем после userbot, не блокируем старт при ошибке
         try:
             await reserve_bot.start()

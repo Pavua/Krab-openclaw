@@ -208,6 +208,7 @@ def test_mark_run_increments_count():
 
 def test_load_empty_on_missing_file():
     """list_jobs() возвращает [] если файл отсутствует (нет краша)."""
+    # tmp_store fixture создаёт путь но не файл
     result = store.list_jobs()
     assert result == []
 

@@ -9,10 +9,13 @@ from __future__ import annotations
 import asyncio
 import time
 import traceback
-from typing import Awaitable, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from . import cron_native_store
 from .logger import get_logger
+
+if TYPE_CHECKING:
+    pass
 
 logger = get_logger(__name__)
 
@@ -32,7 +35,10 @@ class CronNativeScheduler:
     def bind_sender(
         self, sender: Callable[[str, str], Awaitable[None]]
     ) -> None:
-        """Привязывает callback для отправки промпта в AI pipeline."""
+        """Привязывает callback для отправки промпта в AI pipeline.
+
+        callback(chat_id, prompt) → должен выполнить AI-запрос и вернуть ответ.
+        """
         self._sender = sender
 
     def start(self) -> None:
@@ -80,7 +86,8 @@ class CronNativeScheduler:
             due_ts = cron_native_store.next_due(job)
             if due_ts is None:
                 continue
-            # Запускаем если next_due ≤ now + poll_interval и не было недавнего запуска
+            # Проверяем: next_due ≤ now + poll_interval (чтобы не пропустить)
+            # и job не был запущен в течение последних 50 секунд
             last = self._last_fired.get(job_id, 0.0)
             if due_ts <= now + _POLL_INTERVAL and (now - last) > 50:
                 self._last_fired[job_id] = now
