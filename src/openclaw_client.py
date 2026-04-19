@@ -60,6 +60,42 @@ EMBEDDED_SESSION_LANE_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Провайдеры CLI — не умеют обрабатывать binary/multimodal содержимое.
+_CLI_PROVIDER_PREFIXES: tuple[str, ...] = (
+    "codex-cli/",
+    "gemini-cli/",
+    "claude-cli/",
+    "opencode/",
+)
+
+# Подстроки, однозначно указывающие на мультимодальную поддержку модели.
+_VISION_CAPABLE_PATTERNS: list[str] = [
+    "gemini-2.5",
+    "gemini-3",
+    "gpt-4-vision",
+    "gpt-4o",
+    "claude-3",
+    "claude-sonnet-4",
+    "claude-opus-4",
+    "qwen3.5-vl",
+    "qwen2.5-vl",
+    "-vl",
+    "vision",
+]
+
+
+def _is_cli_provider(model: str) -> bool:
+    """True если модель идёт через CLI-провайдер (text-only, multimodal не поддерживается)."""
+    return bool(model) and model.startswith(_CLI_PROVIDER_PREFIXES)
+
+
+def _supports_vision(model: str) -> bool:
+    """True если модель поддерживает vision/multimodal запросы."""
+    if not model or _is_cli_provider(model):
+        return False
+    model_lower = model.lower()
+    return any(p in model_lower for p in _VISION_CAPABLE_PATTERNS)
+
 
 class OpenClawClient:
     """Клиент OpenClaw Gateway API."""
@@ -2194,6 +2230,30 @@ class OpenClawClient:
             return ""
         return candidate
 
+    async def _pick_vision_cloud_model(
+        self,
+        *,
+        model_manager: Any,
+        current_model: str,
+    ) -> str:
+        """Ищет первый vision-capable cloud-кандидат в runtime chain.
+
+        Используется при photo-запросе к CLI-провайдеру, который не умеет multimodal.
+        Возвращает пустую строку, если подходящего кандидата нет.
+        """
+        runtime_chain: list[str] = []
+        runtime_primary = str(get_runtime_primary_model() or "").strip()
+        if runtime_primary:
+            runtime_chain.append(runtime_primary)
+        runtime_chain.extend(get_runtime_fallback_models())
+        for candidate in runtime_chain:
+            normalized = str(candidate or "").strip()
+            if not normalized or normalized == str(current_model or "").strip():
+                continue
+            if _supports_vision(normalized) and self._is_cloud_candidate_usable(normalized, model_manager):
+                return normalized
+        return ""
+
     @staticmethod
     def _allow_alt_local_vision_recovery() -> bool:
         """
@@ -2629,6 +2689,28 @@ class OpenClawClient:
                         "photo_auto_mode_no_cloud_candidate_available",
                         requested=selected_model,
                     )
+            elif has_photo and _is_cli_provider(selected_model):
+                # CLI-провайдер не умеет multimodal — принудительно переключаемся
+                # на первый vision-capable cloud-кандидат из runtime chain.
+                vision_candidate = await self._pick_vision_cloud_model(
+                    model_manager=model_manager,
+                    current_model=selected_model,
+                )
+                if vision_candidate:
+                    logger.info(
+                        "photo_route_cli_provider_redirect",
+                        primary=selected_model,
+                        redirected_to=vision_candidate,
+                    )
+                    metrics.inc("photo_route_redirected")
+                    selected_model = vision_candidate
+                else:
+                    logger.warning(
+                        "photo_route_no_vision_fallback",
+                        primary=selected_model,
+                        fallback_chain=list(get_runtime_fallback_models()),
+                    )
+                    metrics.inc("photo_route_redirected_failed")
             if not effective_force_cloud and model_manager.is_local_model(selected_model):
                 local_ready = await model_manager.ensure_model_loaded(
                     selected_model,
