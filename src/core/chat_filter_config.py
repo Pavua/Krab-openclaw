@@ -119,12 +119,13 @@ class ChatFilterConfig:
         except Exception as e:  # noqa: BLE001
             logger.warning("chat_filter_save_failed", error=str(e))
 
-    def get_mode(self, chat_id: str | int, *, is_group: bool = True) -> str:
+    def get_mode(self, chat_id: str | int, *, is_group: bool = True, default_if_group: str | None = None) -> str:
         """Получить mode для чата.
 
         Args:
             chat_id: ID чата.
             is_group: True для group/supergroup, False для DM (личный чат).
+            default_if_group: Алиас дефолтного режима для group-чатов (compat).
 
         Returns:
             Текущий mode ("active", "mention-only" или "muted").
@@ -133,7 +134,10 @@ class ChatFilterConfig:
         rule = self._rules.get(str(chat_id))
         if rule:
             return rule.mode
-        return DEFAULT_GROUP_MODE if is_group else DEFAULT_DM_MODE
+        # Если явно передан default для группы — используем его
+        if is_group:
+            return default_if_group if default_if_group is not None else DEFAULT_GROUP_MODE
+        return DEFAULT_DM_MODE
 
     def set_mode(self, chat_id: str | int, mode: str, note: str = "") -> bool:
         """Установить mode для чата.
@@ -142,7 +146,7 @@ class ChatFilterConfig:
             ValueError: если mode не входит в VALID_MODES.
         """
         if mode not in VALID_MODES:
-            raise ValueError(f"invalid mode: {mode!r}. Valid: {sorted(VALID_MODES)}")
+            raise ValueError(f"Invalid mode: {mode!r}. Valid: {sorted(VALID_MODES)}")
         cid = str(chat_id)
         self._rules[cid] = ChatFilterRule(
             chat_id=cid, mode=mode, updated_at=time.time(), note=note
@@ -186,7 +190,9 @@ class ChatFilterConfig:
         *,
         is_group: bool = True,
         is_mention: bool = False,
+        has_mention: bool | None = None,
         is_reply: bool = False,
+        is_dm: bool = False,
     ) -> bool:
         """Проверить, должен ли Краб реагировать на сообщение в чате.
 
@@ -194,18 +200,26 @@ class ChatFilterConfig:
             chat_id: ID чата.
             is_group: True для group/supergroup.
             is_mention: True если сообщение содержит @mention или "Краб".
+            has_mention: Алиас is_mention для обратной совместимости.
             is_reply: True если сообщение является reply на сообщение Краба.
+            is_dm: True если это личный чат — форсирует ответ (compat).
 
         Returns:
             True если Краб должен ответить.
         """
+        # DM всегда форсирует ответ (если не стоит явный muted)
+        if is_dm:
+            mode = self.get_mode(chat_id, is_group=False)
+            return mode != "muted"
+        # has_mention — legacy alias; is_mention приоритетнее если оба переданы
+        effective_mention = is_mention or (has_mention is True)
         mode = self.get_mode(chat_id, is_group=is_group)
         if mode == "muted":
             return False
         if mode == "active":
             return True
         # mention-only
-        return is_mention or is_reply
+        return effective_mention or is_reply
 
 
 # Singleton

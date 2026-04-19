@@ -32,6 +32,8 @@ from .core.access_control import (
 )
 from .core.chat_ban_cache import chat_ban_cache
 from .core.chat_capability_cache import chat_capability_cache
+from .core.chat_filter_config import chat_filter_config
+from .core.chat_window_manager import chat_window_manager
 from .core.exceptions import KrabError, UserInputError
 from .core.inbox_service import inbox_service
 from .core.logger import bind_contextvars, clear_contextvars, get_logger
@@ -1862,11 +1864,11 @@ class KraabUserbot(
             # Singleton уже загрузил state при import; здесь перечитываем
             # в thread, чтобы event-loop не тормозил на 100+ items.
             try:
-                from .core.swarm_task_board import (  # noqa: PLC0415
-                    swarm_task_board as _tb_singleton,
-                )
                 from .core.swarm_memory import (  # noqa: PLC0415
                     swarm_memory as _sm_singleton,
+                )
+                from .core.swarm_task_board import (  # noqa: PLC0415
+                    swarm_task_board as _tb_singleton,
                 )
 
                 await _tb_singleton.configure_default_path_async(
@@ -3774,6 +3776,12 @@ class KraabUserbot(
                 )
             chat_id = str(message.chat.id)
 
+            # Обновляем sliding window активности чата при каждом сообщении
+            if message.text and chat_id:
+                chat_window_manager.get_or_create(chat_id).append_message(
+                    "user", (message.text or "")[:500]
+                )
+
             # B.8 chat ban cache: если этот чат уже помечен как persistently
             # забаненный (USER_BANNED_IN_CHANNEL / ChatWriteForbidden etc.),
             # то Краб вообще не должен гонять LLM и не должен пытаться писать
@@ -3897,6 +3905,34 @@ class KraabUserbot(
                 _auto_min = int(getattr(config, "OWNER_AUTO_SILENCE_MINUTES", 5))
                 if _auto_min > 0:
                     silence_manager.auto_silence_owner_typing(chat_id, _auto_min)
+
+            # Chat filter: проверяем should_respond перед LLM для не-командных
+            # сообщений в группах. Команды и DM всегда проходят.
+            _is_group_chat = message.chat.type in (
+                enums.ChatType.GROUP,
+                enums.ChatType.SUPERGROUP,
+            )
+            if _is_group_chat and not is_command and chat_id and not is_self:
+                from .core.krab_identity import is_krab_mentioned
+                _is_mention = is_krab_mentioned(raw_text)
+                _is_reply_to_self = bool(
+                    getattr(message, "reply_to_message", None)
+                    and self.me
+                    and getattr(message.reply_to_message, "from_user", None)
+                    and message.reply_to_message.from_user.id == self.me.id
+                )
+                if not chat_filter_config.should_respond(
+                    chat_id,
+                    is_group=True,
+                    is_mention=_is_mention,
+                    is_reply=_is_reply_to_self,
+                ):
+                    logger.debug(
+                        "chat_filter_skip",
+                        chat_id=chat_id,
+                        mode=chat_filter_config.get_mode(chat_id),
+                    )
+                    return
 
             async with self._get_chat_processing_lock(chat_id):
                 if self._consume_batched_followup_message_id(
