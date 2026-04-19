@@ -983,3 +983,30 @@ redact (4/4 пойманы) → chunking (7 chunks) → FTS5 index → Model2Vec
 - **Проверено:** `./venv/bin/python -m pytest tests/unit/test_userbot_capability_truth.py -q` → 11 passed, 5 skipped; после restart `ai.krab.core` `/api/health/lite` OK, userbot running/connected, scheduler enabled, memory indexer running, gateway `/health` OK.
 - **Осталось/сомнение:** `openclaw gateway status` и `openclaw status` продолжают зависать до timeout; owner-panel тяжёлые endpoints (`/api/model/catalog`, `/api/openclaw/control-compat/status`, `/api/openclaw/cron/status`, `/api/model/local/status`) могут заблокировать UI `Syncing...` и затем подвесить lite health до restart core. Нужен отдельный fix-pass: вынести тяжёлые сборщики endpoint-ов в bounded worker/thread или вернуть stale-cache/fallback без блокировки event loop.
 - **Артефакт:** `artifacts/ops/nightly_self_diag_20260419_030921.txt`.
+
+## Wave 29-KK–OO learnings + Session 14 recommendations (19-20.04.2026)
+
+### Root-causes discovered
+
+1. **Two sources of truth for owner identity** (Wave 29-KK): `config.OWNER_USER_IDS` (env variable) vs `krab_userbot_acl.json` `owner` array. Session 13 audit found swarm listeners were only checking env, ignoring ACL completely. Silent privilege bypass. **Prevention:** introduce unified `is_owner_user_id(user_id: int) -> bool` across codebase, always test `/api/acl allow owner <id>` path e2e before shipping.
+
+2. **Telegram Paid Messages feature** (Wave 29-LL): non-Premium / non-contact accounts require 1 star payment for first message. Affects ALL MTProto userbots, not Krab-specific. Session 14 hit this during team-account bootstrap. **Prevention:** add `scripts/add_team_accounts_to_contacts.py` as mandatory first-run for new userbot setup, document in CLAUDE.md.
+
+3. **Chado API drift** (Wave 29-MM): tests were passing `has_mention=`, `default_if_group=`, `set_krab_user_id` kwargs to API that renamed/removed them. 17 unit tests failed silently in CI due to exception swallowing. **Prevention:** add **contract tests** using `inspect.signature()` validation for all public API modules before deploy.
+
+4. **ruff --fix auto-sweeps stash backlog** (Wave 23-F → 29): ruff autofixes can accumulate 190+ files waiting 8 days in stash. Root cause: no pre-commit hook. **Prevention:** integrate `ruff check --exit-non-zero-on-fix` as hard CI gate to block code before commit.
+
+5. **sqlite-vec + FTS5 transaction desync** (Wave 29-NN): orphaned rowids accumulate when re-encoding without wrapping in EXCLUSIVE TRANSACTION. Orphaned chunks and FTS5 docsize rows pollute indexes. **Prevention:** encoding operations must always `BEGIN EXCLUSIVE TRANSACTION`, rollback on any error, follow with `VACUUM` + index rebuild.
+
+6. **Load avg 73+ from idle LM Studio model** (Wave 29-OO): LM Studio with idle model loaded = main CPU hog. Auto-restart policy was too aggressive as mitigation. **Prevention:** Wave 29-RR proposes auto-unload on idle (default 10 min, env-gated).
+
+7. **Wave numbering A–OO (28 waves per major)** scaled successfully via parallel Sonnet/Haiku agents. Session 13+14 = 56 commits in 5h. **Pattern:** adopt parallel-by-default for Session 15+.
+
+### Session 15 recommendations
+
+- [ ] **Add `is_owner_user_id()` unified check:** create `src/core/owner_identity.py`, deprecate direct `OWNER_USER_IDS` references, migrate all privilege checks.
+- [ ] **Add ruff pre-commit hook:** integrate `ruff check --exit-non-zero-on-fix` as hard gate in CI.
+- [ ] **Add mypy --strict on core modules:** `mypy --strict src/handlers/ src/core/` catches phantom API like `bot._safe_reply()` at check time, not runtime.
+- [ ] **Add e2e test:** fresh userbot setup → add_team_accounts_to_contacts → verify team replies work (catches Telegram paywall regression).
+- [ ] **Add contract validation tests:** `inspect.signature()` on public API (Chado, cache_manager, etc.) before deploy.
+
