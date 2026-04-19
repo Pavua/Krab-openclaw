@@ -7431,7 +7431,7 @@ async def handle_bench(bot: "KraabUserbot", message: Message) -> None:
     iterations = iterations_map.get(preset, 20)
 
     # Отправляем статус
-    status_msg = await message.reply(
+    await message.reply(
         f"⏱ Benchmark `{preset}` (iterations={iterations})..."
     )
 

@@ -1188,6 +1188,28 @@ _COMMANDS: list[CommandInfo] = [
         usage="!spam block <@user|id> | !spam unblock <id> | !spam list",
         owner_only=True,
     ),
+    # ── Wave 29+ новые команды ───────────────────────────────────────────────
+    CommandInfo(
+        name="bench",
+        category="dev",
+        description="Бенчмарк перфоманса Memory Layer (fast/full/fts/semantic)",
+        usage="!bench [fast|full|fts|semantic]",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="fix",
+        category="dev",
+        description="AI-предложения по исправлению кода (reply на сообщение с кодом)",
+        usage="!fix [язык] | !fix [--lang=py|js|go]",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="rewrite",
+        category="dev",
+        description="Переписать текст/код в другом стиле (reply или аргумент)",
+        usage="!rewrite <стиль> | !rewrite [style=concise|verbose|formal|casual]",
+        owner_only=True,
+    ),
 ]
 
 
