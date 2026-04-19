@@ -516,6 +516,32 @@ def update_acl_subject(
     }
 
 
+def is_owner_user_id(user_id: int | str, *, path: Path | None = None) -> bool:
+    """
+    Unified owner-check: env var ИЛИ ACL-файл (приоритет ACL).
+
+    Приоритет: ACL-файл (owner секция) → env OWNER_USER_IDS → False.
+    Результат НЕ кэшируется на уровне процесса — ACL-файл может измениться
+    через !acl и нужно всегда читать актуальную версию.
+    """
+    if not user_id:
+        return False
+    user_id_str = normalize_subject(user_id)
+    if not user_id_str or not user_id_str.isdigit():
+        return False
+
+    # Проверяем ACL-файл (приоритетный источник истины)
+    acl_path = _runtime_acl_path(path)
+    acl_payload = _load_acl_file(acl_path)
+    acl_owner_ids, _ = _extract_acl_subjects(acl_payload.get("owner"))
+    if user_id_str in acl_owner_ids:
+        return True
+
+    # Проверяем env var OWNER_USER_IDS
+    env_ids, _ = _split_subjects(list(getattr(config, "OWNER_USER_IDS", [])))
+    return user_id_str in env_ids
+
+
 def resolve_access_profile(
     *, user_id: object, username: object, self_user_id: object | None
 ) -> AccessProfile:

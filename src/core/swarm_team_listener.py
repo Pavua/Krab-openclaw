@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 import structlog
 from pyrogram import filters
 
-from ..config import config
+from .access_control import is_owner_user_id
 from .swarm_team_prompts import get_team_system_prompt
 
 if TYPE_CHECKING:
@@ -85,11 +85,8 @@ def _check_cooldown(team: str, chat_id: int | str) -> bool:
 
 
 def _is_owner(user_id: int) -> bool:
-    """Проверяет, является ли пользователь owner'ом."""
-    if not user_id:
-        return False
-    # OWNER_USER_IDS хранит строки
-    return str(user_id) in config.OWNER_USER_IDS
+    """Проверяет, является ли пользователь owner'ом через unified ACL-источник."""
+    return is_owner_user_id(user_id)
 
 
 def _build_header(team: str) -> str:
