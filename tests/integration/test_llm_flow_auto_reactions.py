@@ -10,14 +10,14 @@
 5. test_auto_reactions_missing_module_graceful — _safe_react не падает без модуля
 6. test_safe_react_ignores_exceptions     — _safe_react поглощает ошибки реакций
 """
+
 from __future__ import annotations
 
 import sys
 from types import ModuleType
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -116,12 +116,12 @@ def test_auto_reactions_missing_module_graceful():
 
     try:
         # Перезагружаем llm_flow — он должен поймать ImportError и установить флаг False
-        import importlib
         # Очищаем кэш
         sys.modules.pop("src.userbot.llm_flow", None)
         # Временно патчим import так, чтобы from ..core.auto_reactions import ... падало
         with patch.dict("sys.modules", {"src.core.auto_reactions": None}):
             import src.userbot.llm_flow as fresh_mod  # noqa: F401
+
             # При _HAS_AUTO_REACTIONS=False _safe_react должен быть доступен
             assert hasattr(fresh_mod, "_safe_react")
     finally:

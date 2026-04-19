@@ -51,9 +51,11 @@ def _make_message(chat_id: int = 12345) -> SimpleNamespace:
 
 def _make_stream(*chunks: str):
     """Создаёт async-генератор из строк чанков."""
+
     async def _gen():
         for chunk in chunks:
             yield chunk
+
     return _gen()
 
 
@@ -83,7 +85,23 @@ class TestRateAssetLabel:
 
     def test_все_крипто_тикеры_в_словаре(self):
         """Все зарегистрированные крипто-тикеры возвращают имена с тикером в скобках."""
-        crypto_tickers = ["btc", "eth", "sol", "bnb", "xrp", "ada", "doge", "ton", "usdt", "usdc", "avax", "link", "dot", "ltc", "shib"]
+        crypto_tickers = [
+            "btc",
+            "eth",
+            "sol",
+            "bnb",
+            "xrp",
+            "ada",
+            "doge",
+            "ton",
+            "usdt",
+            "usdc",
+            "avax",
+            "link",
+            "dot",
+            "ltc",
+            "shib",
+        ]
         for ticker in crypto_tickers:
             label = _rate_asset_label(ticker)
             assert "(" in label and ")" in label, f"{ticker} должен иметь читаемое имя"

@@ -19,7 +19,6 @@ import pytest
 
 from src.userbot_bridge import KraabUserbot
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные функции
 # ---------------------------------------------------------------------------
@@ -41,6 +40,7 @@ def _make_reaction(
     old_emojis: list[str] | None = None,
 ) -> MagicMock:
     """Создаёт stub MessageReactionUpdated."""
+
     def _make_reaction_obj(emoji: str) -> SimpleNamespace:
         return SimpleNamespace(emoji=emoji, emoticon=None)
 
@@ -66,8 +66,10 @@ async def test_reaction_updated_records_added_emoji() -> None:
     bot = _make_bot()
     mock_engine = ReactionEngine()
 
-    with patch("src.userbot_bridge.KraabUserbot._handle_message_reaction_updated",
-               wraps=bot._handle_message_reaction_updated):
+    with patch(
+        "src.userbot_bridge.KraabUserbot._handle_message_reaction_updated",
+        wraps=bot._handle_message_reaction_updated,
+    ):
         with patch("src.core.reaction_engine.reaction_engine", mock_engine):
             update = _make_reaction(new_emojis=["👍"], old_emojis=[])
             await bot._handle_message_reaction_updated(update)
@@ -178,7 +180,6 @@ async def test_reaction_updated_multiple_new_emojis() -> None:
 @pytest.mark.asyncio
 async def test_reaction_updated_engine_error_no_exception() -> None:
     """Если ReactionEngine.record_reaction падает — основной handler не падает."""
-    from src.core.reaction_engine import ReactionEngine
 
     bot = _make_bot()
     broken_engine = MagicMock()

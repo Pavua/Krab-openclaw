@@ -298,6 +298,7 @@ class TestHandleTimeCity:
         text: str = msg.reply.call_args[0][0]
         # Должен быть формат HH:MM (backtick)
         import re
+
         assert re.search(r"`\d{2}:\d{2}", text)
 
     @pytest.mark.asyncio
@@ -434,6 +435,7 @@ class TestHandleTimeConvert:
     async def test_convert_result_is_valid_time(self) -> None:
         """Результирующее время в ответе должно быть валидным HH:MM."""
         import re
+
         bot = _make_bot("convert 10:00 Madrid Tokyo")
         msg = _make_message()
         await handle_time(bot, msg)

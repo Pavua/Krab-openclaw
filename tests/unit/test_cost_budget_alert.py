@@ -31,10 +31,14 @@ def _make_service():
 
 def _patch_ca(budget: float, spent: float):
     """Патчит cost_analytics с заданными budget и spent."""
-    ca_mock = type("CA", (), {
-        "get_monthly_budget_usd": lambda self: budget,
-        "get_monthly_cost_usd": lambda self: spent,
-    })()
+    ca_mock = type(
+        "CA",
+        (),
+        {
+            "get_monthly_budget_usd": lambda self: budget,
+            "get_monthly_cost_usd": lambda self: spent,
+        },
+    )()
     return patch("src.core.cost_analytics.cost_analytics", ca_mock)
 
 

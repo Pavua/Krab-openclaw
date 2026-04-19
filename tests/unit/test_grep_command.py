@@ -26,7 +26,6 @@ import pytest
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_grep
 
-
 # ---------------------------------------------------------------------------
 # Хелперы
 # ---------------------------------------------------------------------------
@@ -125,7 +124,10 @@ class TestHandleGrepValidation:
         bot, msg = _make_bot_and_message("/[invalid/")
         with pytest.raises(UserInputError) as exc_info:
             await handle_grep(bot, msg)
-        assert "regex" in exc_info.value.user_message.lower() or "невалидный" in exc_info.value.user_message.lower()
+        assert (
+            "regex" in exc_info.value.user_message.lower()
+            or "невалидный" in exc_info.value.user_message.lower()
+        )
 
 
 # ===========================================================================
@@ -407,6 +409,7 @@ class TestHandleGrepErrors:
     @pytest.mark.asyncio
     async def test_ошибка_get_chat_history_graceful(self) -> None:
         """Ошибка при итерации → graceful ответ с ❌."""
+
         async def _error_history(target_chat, limit):  # noqa: ANN001
             raise RuntimeError("Telegram API недоступен")
             yield  # делает функцию генератором

@@ -13,6 +13,7 @@
 8. Callback-исключение — failover помечается как failed, не падает.
 9. `no_viable_fallback` когда все кандидаты равны current.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -64,9 +65,7 @@ async def test_failover_triggers_at_threshold(enabled_env):
 
     p.set_failover_callback(mock_cb)
 
-    result = await p.maybe_failover(
-        "codex-cli", ["codex-cli", "google/gemini-3-pro-preview"]
-    )
+    result = await p.maybe_failover("codex-cli", ["codex-cli", "google/gemini-3-pro-preview"])
     assert result.triggered is True
     assert result.from_provider == "codex-cli"
     assert result.to_provider == "google/gemini-3-pro-preview"

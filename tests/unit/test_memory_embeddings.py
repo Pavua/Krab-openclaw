@@ -42,9 +42,7 @@ def test_encode_batch() -> None:
     """encode_batch → list[bytes], всех одинаковой длины."""
     _reset_singleton()
     mock_model = MagicMock()
-    mock_model.encode.return_value = np.array(
-        [[0.1, 0.2], [0.3, 0.4]], dtype=np.float32
-    )
+    mock_model.encode.return_value = np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
 
     with patch("src.core.memory_embeddings._model_singleton", mock_model):
         from src.core.memory_embeddings import encode_batch

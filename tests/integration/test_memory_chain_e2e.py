@@ -42,13 +42,12 @@ import pytest  # noqa: E402
 # Mock helpers.
 # ---------------------------------------------------------------------------
 
+
 def _mk_bot() -> MagicMock:
     """Минимальный bot-mock для command handlers."""
     bot = MagicMock()
     bot._get_command_args = lambda m: (
-        m.text.split(maxsplit=1)[1].strip()
-        if m.text and " " in m.text
-        else ""
+        m.text.split(maxsplit=1)[1].strip() if m.text and " " in m.text else ""
     )
     bot._safe_reply = AsyncMock()
     bot.me = MagicMock(id=999)
@@ -70,6 +69,7 @@ def _mk_message(text: str, user_id: int = 999, chat_id: int = 999) -> MagicMock:
 # ---------------------------------------------------------------------------
 # handle_remember: сейф-путь (без injection-pattern).
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_safe_remember_goes_through(monkeypatch):
@@ -97,9 +97,7 @@ async def test_safe_remember_goes_through(monkeypatch):
 
     # Handler должен послать подтверждение записи.
     msg.reply.assert_called()
-    reply_body = " ".join(
-        str(arg) for call in msg.reply.call_args_list for arg in call.args
-    )
+    reply_body = " ".join(str(arg) for call in msg.reply.call_args_list for arg in call.args)
     # Допускаем два варианта: "Запомнил" (успех) или блок от validator'а.
     assert "Запомнил" in reply_body or "ожидает" in reply_body.lower()
 
@@ -107,6 +105,7 @@ async def test_safe_remember_goes_through(monkeypatch):
 # ---------------------------------------------------------------------------
 # Injection-pattern → validator stages and blocks.
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_injection_remember_is_staged_by_validator():
@@ -144,6 +143,7 @@ async def test_injection_remember_is_staged_by_validator():
 # ---------------------------------------------------------------------------
 # !confirm <hash>: owner confirms staged fact.
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_owner_confirm_persists_pending(monkeypatch):
@@ -207,6 +207,7 @@ async def test_owner_confirm_persists_pending(monkeypatch):
 # Non-owner не может confirm'ить.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_non_owner_cannot_confirm():
     """Guest вызывает `!confirm` → reply должен содержать отказ или no-op."""
@@ -236,9 +237,8 @@ async def test_non_owner_cannot_confirm():
 # /api/memory/search — endpoint smoke (лёгкий, без инфраструктуры).
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skip(
-    reason="requires live indexer + archive.db + /api/memory/search endpoint"
-)
+
+@pytest.mark.skip(reason="requires live indexer + archive.db + /api/memory/search endpoint")
 def test_memory_search_endpoint_smoke():
     """
     После persist'а факта — `/api/memory/search?q=…&mode=hybrid` должен

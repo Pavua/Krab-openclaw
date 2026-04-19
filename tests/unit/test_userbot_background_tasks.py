@@ -343,9 +343,7 @@ async def test_keep_typing_alive_sends_cancel_on_task_cancel() -> None:
     client = AsyncMock()
     stop_event = asyncio.Event()
 
-    task = asyncio.create_task(
-        KraabUserbot._keep_typing_alive(client, 456, "typing", stop_event)
-    )
+    task = asyncio.create_task(KraabUserbot._keep_typing_alive(client, 456, "typing", stop_event))
     # Даём loop стартовать и послать хотя бы один TYPING.
     await asyncio.sleep(0.05)
     task.cancel()

@@ -17,7 +17,6 @@ import pytest
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import _build_diff_output, handle_diff
 
-
 # ---------------------------------------------------------------------------
 # _build_diff_output — чистые функции
 # ---------------------------------------------------------------------------
@@ -226,7 +225,10 @@ class TestHandleDiffErrors:
         msg = _make_message()  # нет reply
         with pytest.raises(UserInputError) as exc_info:
             await handle_diff(bot, msg)
-        assert "reply" in exc_info.value.user_message.lower() or "diff" in exc_info.value.user_message.lower()
+        assert (
+            "reply" in exc_info.value.user_message.lower()
+            or "diff" in exc_info.value.user_message.lower()
+        )
 
     @pytest.mark.asyncio
     async def test_no_args_raises_user_input_error(self):

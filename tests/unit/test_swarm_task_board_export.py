@@ -58,6 +58,7 @@ async def test_export_json_format(sample_tasks):
         mock_board.list_tasks.return_value = sample_tasks
 
         from src.modules.web_app import WebApp
+
         app = WebApp()
         client = TestClient(app.app)
 
@@ -79,6 +80,7 @@ async def test_export_csv_format(sample_tasks):
         mock_board.list_tasks.return_value = sample_tasks
 
         from src.modules.web_app import WebApp
+
         app = WebApp()
         client = TestClient(app.app)
 
@@ -94,8 +96,15 @@ async def test_export_csv_format(sample_tasks):
         headers = next(reader)
 
         assert headers == [
-            "task_id", "team", "title", "status", "priority",
-            "created_by", "assigned_to", "created_at", "updated_at"
+            "task_id",
+            "team",
+            "title",
+            "status",
+            "priority",
+            "created_by",
+            "assigned_to",
+            "created_at",
+            "updated_at",
         ]
 
         rows = list(reader)
@@ -112,6 +121,7 @@ async def test_export_empty_board():
         mock_board.list_tasks.return_value = []
 
         from src.modules.web_app import WebApp
+
         app = WebApp()
         client = TestClient(app.app)
 
@@ -136,6 +146,7 @@ async def test_export_default_format_is_csv():
         mock_board.list_tasks.return_value = []
 
         from src.modules.web_app import WebApp
+
         app = WebApp()
         client = TestClient(app.app)
 

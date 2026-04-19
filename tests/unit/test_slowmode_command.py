@@ -29,10 +29,10 @@ import pytest
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_slowmode
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные утилиты
 # ---------------------------------------------------------------------------
+
 
 @asynccontextmanager
 async def raises_user_input(match_text: str) -> AsyncIterator[None]:
@@ -50,6 +50,7 @@ async def raises_user_input(match_text: str) -> AsyncIterator[None]:
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
+
 
 def _make_bot(
     *,
@@ -94,6 +95,7 @@ def _make_message(
 # ---------------------------------------------------------------------------
 # status / без аргументов
 # ---------------------------------------------------------------------------
+
 
 class TestSlowmodeStatus:
     @pytest.mark.asyncio
@@ -157,6 +159,7 @@ class TestSlowmodeStatus:
 # ---------------------------------------------------------------------------
 # Установка slowmode
 # ---------------------------------------------------------------------------
+
 
 class TestSlowmodeSet:
     @pytest.mark.asyncio
@@ -242,6 +245,7 @@ class TestSlowmodeSet:
 # !slowmode off / выкл
 # ---------------------------------------------------------------------------
 
+
 class TestSlowmodeOff:
     @pytest.mark.asyncio
     async def test_off_disables_slowmode(self) -> None:
@@ -269,6 +273,7 @@ class TestSlowmodeOff:
 # ---------------------------------------------------------------------------
 # Ошибки валидации
 # ---------------------------------------------------------------------------
+
 
 class TestSlowmodeValidation:
     @pytest.mark.asyncio
@@ -311,6 +316,7 @@ class TestSlowmodeValidation:
 # ---------------------------------------------------------------------------
 # Тип чата
 # ---------------------------------------------------------------------------
+
 
 class TestSlowmodeChatType:
     @pytest.mark.asyncio
@@ -357,13 +363,12 @@ class TestSlowmodeChatType:
 # Ошибки API Telegram
 # ---------------------------------------------------------------------------
 
+
 class TestSlowmodeApiErrors:
     @pytest.mark.asyncio
     async def test_admin_required_error(self) -> None:
         """CHAT_ADMIN_REQUIRED → UserInputError о правах."""
-        bot = _make_bot(
-            set_slow_mode_side_effect=Exception("CHAT_ADMIN_REQUIRED: not an admin")
-        )
+        bot = _make_bot(set_slow_mode_side_effect=Exception("CHAT_ADMIN_REQUIRED: not an admin"))
         msg = _make_message("!slowmode 60")
 
         async with raises_user_input("Нет прав администратора"):
@@ -372,9 +377,7 @@ class TestSlowmodeApiErrors:
     @pytest.mark.asyncio
     async def test_generic_api_error(self) -> None:
         """Произвольная ошибка Pyrogram → UserInputError."""
-        bot = _make_bot(
-            set_slow_mode_side_effect=Exception("FLOOD_WAIT_5")
-        )
+        bot = _make_bot(set_slow_mode_side_effect=Exception("FLOOD_WAIT_5"))
         msg = _make_message("!slowmode 60")
 
         async with raises_user_input("Ошибка установки slowmode"):
@@ -383,9 +386,7 @@ class TestSlowmodeApiErrors:
     @pytest.mark.asyncio
     async def test_admin_keyword_in_error_detected(self) -> None:
         """Сообщение с 'admin' в тексте → UserInputError о правах."""
-        bot = _make_bot(
-            set_slow_mode_side_effect=Exception("You must be an admin")
-        )
+        bot = _make_bot(set_slow_mode_side_effect=Exception("You must be an admin"))
         msg = _make_message("!slowmode 300")
 
         async with raises_user_input("Нет прав администратора"):
@@ -395,6 +396,7 @@ class TestSlowmodeApiErrors:
 # ---------------------------------------------------------------------------
 # Отображение имени чата в ответе
 # ---------------------------------------------------------------------------
+
 
 class TestSlowmodeChatDisplay:
     @pytest.mark.asyncio

@@ -5,14 +5,14 @@
 
 Используем AsyncMock для cq и проверяем корректное поведение роутера.
 """
+
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.userbot_bridge import KraabUserbot
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Фикстуры

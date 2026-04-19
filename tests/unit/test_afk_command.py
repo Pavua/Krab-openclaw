@@ -26,14 +26,11 @@
 from __future__ import annotations
 
 import time
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_afk
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
@@ -336,7 +333,9 @@ async def test_back_shows_elapsed_time():
 # ---------------------------------------------------------------------------
 
 
-def _make_userbot_mock(*, afk_mode: bool = True, afk_reason: str = "", afk_since: float | None = None):
+def _make_userbot_mock(
+    *, afk_mode: bool = True, afk_reason: str = "", afk_since: float | None = None
+):
     """Создаёт мок userbot для тестирования _process_message AFK логики."""
     bot = MagicMock()
     bot._afk_mode = afk_mode

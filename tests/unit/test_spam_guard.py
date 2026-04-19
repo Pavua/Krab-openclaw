@@ -9,9 +9,7 @@ from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 
@@ -41,6 +39,7 @@ except ImportError:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def _isolate_config(tmp_path, monkeypatch):
     """Перенаправляет _CONFIG_PATH во временный файл и сбрасывает flood tracker."""
@@ -52,8 +51,14 @@ def _isolate_config(tmp_path, monkeypatch):
     _flood_tracker.clear()
 
 
-def _make_msg(text="", forward_origin=None, forward_from=None,
-              forward_from_chat=None, forward_date=None, caption=None):
+def _make_msg(
+    text="",
+    forward_origin=None,
+    forward_from=None,
+    forward_from_chat=None,
+    forward_date=None,
+    caption=None,
+):
     """Создаёт mock-сообщение."""
     return SimpleNamespace(
         text=text,
@@ -68,6 +73,7 @@ def _make_msg(text="", forward_origin=None, forward_from=None,
 # ---------------------------------------------------------------------------
 # Константы
 # ---------------------------------------------------------------------------
+
 
 class TestConstants:
     def test_valid_actions(self):
@@ -88,6 +94,7 @@ class TestConstants:
 # ---------------------------------------------------------------------------
 # Конфиг: enable/disable
 # ---------------------------------------------------------------------------
+
 
 class TestSetEnabled:
     def test_enable_chat(self):
@@ -124,6 +131,7 @@ class TestSetEnabled:
 # Конфиг: action
 # ---------------------------------------------------------------------------
 
+
 class TestSetAction:
     def test_set_ban(self):
         set_action(100, "ban")
@@ -157,6 +165,7 @@ class TestSetAction:
 # Конфиг: get_status
 # ---------------------------------------------------------------------------
 
+
 class TestGetStatus:
     def test_status_fresh_chat(self):
         st = get_status(777)
@@ -182,6 +191,7 @@ class TestGetStatus:
 # ---------------------------------------------------------------------------
 # Детект ссылок
 # ---------------------------------------------------------------------------
+
 
 class TestCountLinks:
     def test_no_links(self):
@@ -226,6 +236,7 @@ class TestCountLinks:
 # Детект forwarded+links
 # ---------------------------------------------------------------------------
 
+
 class TestForwardedWithLinks:
     def test_not_forwarded(self):
         msg = _make_msg(text="https://example.com")
@@ -259,6 +270,7 @@ class TestForwardedWithLinks:
 # ---------------------------------------------------------------------------
 # Flood tracker
 # ---------------------------------------------------------------------------
+
 
 class TestCheckFlood:
     def test_no_flood_below_limit(self):
@@ -307,6 +319,7 @@ class TestCheckFlood:
             dq[i] = old_time  # нельзя напрямую индексировать deque через присвоение
         # Переинициализируем
         import collections
+
         _flood_tracker[key][6] = collections.deque([old_time] * (FLOOD_MSG_LIMIT + 1))
         # После истечения окна — флуда нет
         assert _check_flood(6001, 6) is False
@@ -315,6 +328,7 @@ class TestCheckFlood:
 # ---------------------------------------------------------------------------
 # classify_message
 # ---------------------------------------------------------------------------
+
 
 class TestClassifyMessage:
     def test_normal_message_returns_none(self):
@@ -377,6 +391,7 @@ class TestClassifyMessage:
 # ---------------------------------------------------------------------------
 # Конфиг: персистентность (JSON файл)
 # ---------------------------------------------------------------------------
+
 
 class TestConfigPersistence:
     def test_config_persisted_to_file(self, tmp_path, monkeypatch):

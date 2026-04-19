@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -24,10 +24,10 @@ from src.core.access_control import AccessLevel, AccessProfile
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_pin, handle_unpin
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
+
 
 def _make_bot(args: str = "", *, access_level: AccessLevel = AccessLevel.OWNER) -> SimpleNamespace:
     """Минимальный mock KraabUserbot."""
@@ -67,6 +67,7 @@ def _make_reply_msg(msg_id: int = 42) -> SimpleNamespace:
 # ---------------------------------------------------------------------------
 # handle_pin
 # ---------------------------------------------------------------------------
+
 
 class TestHandlePin:
     @pytest.mark.asyncio
@@ -172,6 +173,7 @@ class TestHandlePin:
 # ---------------------------------------------------------------------------
 # handle_unpin
 # ---------------------------------------------------------------------------
+
 
 class TestHandleUnpin:
     @pytest.mark.asyncio

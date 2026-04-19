@@ -38,90 +38,109 @@ def patch_state_path(tmp_path):
 def manager():
     """Свежий SilenceScheduleManager для каждого теста."""
     from src.core.silence_schedule import SilenceScheduleManager
+
     return SilenceScheduleManager()
 
 
 # ── Парсинг времени ────────────────────────────────────────────────────────
 
+
 class TestParseTime:
     def test_valid_hhmm(self):
         from src.core.silence_schedule import _parse_time
+
         t = _parse_time("23:00")
         assert t == time(23, 0)
 
     def test_valid_zero(self):
         from src.core.silence_schedule import _parse_time
+
         t = _parse_time("00:00")
         assert t == time(0, 0)
 
     def test_valid_with_spaces(self):
         from src.core.silence_schedule import _parse_time
+
         t = _parse_time(" 08:30 ")
         assert t == time(8, 30)
 
     def test_invalid_no_colon(self):
         from src.core.silence_schedule import _parse_time
+
         with pytest.raises(ValueError, match="Неверный формат"):
             _parse_time("2300")
 
     def test_invalid_empty(self):
         from src.core.silence_schedule import _parse_time
+
         with pytest.raises(ValueError):
             _parse_time("")
 
     def test_invalid_hour(self):
         from src.core.silence_schedule import _parse_time
+
         with pytest.raises(ValueError):
             _parse_time("25:00")
 
     def test_invalid_minute(self):
         from src.core.silence_schedule import _parse_time
+
         with pytest.raises(ValueError):
             _parse_time("10:70")
 
 
 # ── Логика диапазона ───────────────────────────────────────────────────────
 
+
 class TestInRange:
     def test_normal_range_inside(self):
         from src.core.silence_schedule import _in_range
+
         assert _in_range(time(10, 0), time(9, 0), time(17, 0)) is True
 
     def test_normal_range_outside(self):
         from src.core.silence_schedule import _in_range
+
         assert _in_range(time(18, 0), time(9, 0), time(17, 0)) is False
 
     def test_normal_range_on_start(self):
         from src.core.silence_schedule import _in_range
+
         assert _in_range(time(9, 0), time(9, 0), time(17, 0)) is True
 
     def test_normal_range_on_end_exclusive(self):
         from src.core.silence_schedule import _in_range
+
         # end не включается
         assert _in_range(time(17, 0), time(9, 0), time(17, 0)) is False
 
     def test_night_range_after_midnight(self):
         """23:00-08:00 — 02:00 попадает."""
         from src.core.silence_schedule import _in_range
+
         assert _in_range(time(2, 0), time(23, 0), time(8, 0)) is True
 
     def test_night_range_before_midnight(self):
         """23:00-08:00 — 23:30 попадает."""
         from src.core.silence_schedule import _in_range
+
         assert _in_range(time(23, 30), time(23, 0), time(8, 0)) is True
 
     def test_night_range_outside(self):
         """23:00-08:00 — 12:00 не попадает."""
         from src.core.silence_schedule import _in_range
+
         assert _in_range(time(12, 0), time(23, 0), time(8, 0)) is False
 
     def test_night_range_on_end_exclusive(self):
         """23:00-08:00 — 08:00 не попадает (exclusive)."""
         from src.core.silence_schedule import _in_range
+
         assert _in_range(time(8, 0), time(23, 0), time(8, 0)) is False
 
 
 # ── SilenceScheduleManager ────────────────────────────────────────────────
+
 
 class TestSilenceScheduleManager:
     def test_disabled_by_default(self, manager):
@@ -194,6 +213,7 @@ class TestSilenceScheduleManager:
 
 # ── Персистентность ────────────────────────────────────────────────────────
 
+
 class TestPersistence:
     def test_set_schedule_saves_to_file(self, manager, patch_state_path):
         manager.set_schedule("22:00", "07:00")
@@ -216,6 +236,7 @@ class TestPersistence:
             encoding="utf-8",
         )
         from src.core.silence_schedule import SilenceScheduleManager
+
         m2 = SilenceScheduleManager()
         assert m2._enabled is True
         assert m2._start_str == "23:00"
@@ -225,6 +246,7 @@ class TestPersistence:
         """Отсутствующий файл — defaults."""
         assert not patch_state_path.exists()
         from src.core.silence_schedule import SilenceScheduleManager
+
         m = SilenceScheduleManager()
         assert m._enabled is False
 
@@ -232,11 +254,13 @@ class TestPersistence:
         """Corrupt JSON — graceful fallback."""
         patch_state_path.write_text("not json", encoding="utf-8")
         from src.core.silence_schedule import SilenceScheduleManager
+
         m = SilenceScheduleManager()
         assert m._enabled is False
 
 
 # ── Фоновый loop ─────────────────────────────────────────────────────────
+
 
 class TestRunLoop:
     @pytest.mark.asyncio
@@ -312,6 +336,7 @@ class TestRunLoop:
     @pytest.mark.asyncio
     async def test_loop_handles_cancelled_error(self, manager):
         """Loop корректно завершается при CancelledError (не пробрасывает)."""
+
         async def instant_cancel(n):
             raise asyncio.CancelledError
 

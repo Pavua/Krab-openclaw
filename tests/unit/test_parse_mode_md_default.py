@@ -119,9 +119,7 @@ class TestSafeReplyDefaultsToMarkdown:
 
         with patch("src.userbot_bridge._telegram_send_queue") as mock_q:
             mock_q.run = AsyncMock(side_effect=_mock_run)
-            result = await KraabUserbot._safe_reply_or_send_new(
-                bot, msg, "**bold** and _italic_"
-            )
+            result = await KraabUserbot._safe_reply_or_send_new(bot, msg, "**bold** and _italic_")
 
         assert result is sent
         # Проверяем что msg.reply был вызван с parse_mode=MARKDOWN
@@ -166,9 +164,7 @@ class TestSafeReplyDefaultsToMarkdown:
 
         with patch("src.userbot_bridge._telegram_send_queue") as mock_q:
             mock_q.run = AsyncMock(side_effect=_mock_run)
-            result = await KraabUserbot._safe_reply_or_send_new(
-                bot, msg, "**broken markdown"
-            )
+            result = await KraabUserbot._safe_reply_or_send_new(bot, msg, "**broken markdown")
 
         assert result is sent
         # Два вызова: первый с MARKDOWN, второй с None

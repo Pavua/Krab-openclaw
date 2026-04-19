@@ -24,6 +24,7 @@ from src.core.memory_pii_redactor import (
 # Базовый fixture.
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def redactor() -> PIIRedactor:
     """Редактор без whitelist — для строгих тестов."""
@@ -40,18 +41,19 @@ def redactor_with_owner() -> PIIRedactor:
 # Luhn check.
 # ---------------------------------------------------------------------------
 
+
 class TestLuhn:
     @pytest.mark.parametrize(
         "digits, expected",
         [
-            ("4242424242424242", True),   # Stripe Visa test
-            ("5555555555554444", True),   # Stripe Mastercard test
-            ("378282246310005", True),    # Amex test
-            ("6011111111111117", True),   # Discover test
+            ("4242424242424242", True),  # Stripe Visa test
+            ("5555555555554444", True),  # Stripe Mastercard test
+            ("378282246310005", True),  # Amex test
+            ("6011111111111117", True),  # Discover test
             ("4242424242424241", False),  # одна цифра не та
             ("1234567890123456", False),  # random
-            ("1234567890", False),        # слишком короткое
-            ("", False),                  # пусто
+            ("1234567890", False),  # слишком короткое
+            ("", False),  # пусто
         ],
     )
     def test_luhn_validation(self, digits: str, expected: bool) -> None:
@@ -61,6 +63,7 @@ class TestLuhn:
 # ---------------------------------------------------------------------------
 # Email redaction.
 # ---------------------------------------------------------------------------
+
 
 class TestEmailRedaction:
     def test_simple_email(self, redactor: PIIRedactor) -> None:
@@ -74,9 +77,7 @@ class TestEmailRedaction:
         assert result.text.count("[REDACTED:EMAIL]") == 3
         assert result.stats.counts["email"] == 3
 
-    def test_owner_whitelist_preserves_email(
-        self, redactor_with_owner: PIIRedactor
-    ) -> None:
+    def test_owner_whitelist_preserves_email(self, redactor_with_owner: PIIRedactor) -> None:
         result = redactor_with_owner.redact("Reply to owner@me.com from bob@foo.com")
         assert "owner@me.com" in result.text
         assert "[REDACTED:EMAIL]" in result.text
@@ -92,6 +93,7 @@ class TestEmailRedaction:
 # Phone redaction.
 # ---------------------------------------------------------------------------
 
+
 class TestPhoneRedaction:
     @pytest.mark.parametrize(
         "raw",
@@ -99,8 +101,8 @@ class TestPhoneRedaction:
             "+7 (999) 123-45-67",
             "+79991234567",
             "8 999 123 45 67",
-            "+442079460958",       # UK
-            "+14155552671",        # US
+            "+442079460958",  # UK
+            "+14155552671",  # US
         ],
     )
     def test_various_formats(self, redactor: PIIRedactor, raw: str) -> None:
@@ -109,9 +111,7 @@ class TestPhoneRedaction:
         assert raw not in result.text or "[REDACTED:PHONE]" in result.text
 
     def test_owner_phone_whitelist(self, redactor_with_owner: PIIRedactor) -> None:
-        result = redactor_with_owner.redact(
-            "Owner: +79990000000, other: +79991112233"
-        )
+        result = redactor_with_owner.redact("Owner: +79990000000, other: +79991112233")
         assert "+79990000000" in result.text
         assert "[REDACTED:PHONE]" in result.text
 
@@ -119,6 +119,7 @@ class TestPhoneRedaction:
 # ---------------------------------------------------------------------------
 # Bank cards + Luhn.
 # ---------------------------------------------------------------------------
+
 
 class TestCardRedaction:
     @pytest.mark.parametrize(
@@ -128,7 +129,7 @@ class TestCardRedaction:
             "4242-4242-4242-4242",
             "4242424242424242",
             "5555 5555 5555 4444",
-            "378282246310005",      # Amex 15 digits
+            "378282246310005",  # Amex 15 digits
         ],
     )
     def test_valid_cards_redacted(self, redactor: PIIRedactor, card: str) -> None:
@@ -152,6 +153,7 @@ class TestCardRedaction:
 # ---------------------------------------------------------------------------
 # Crypto addresses.
 # ---------------------------------------------------------------------------
+
 
 class TestCryptoRedaction:
     def test_btc_bech32(self, redactor: PIIRedactor) -> None:
@@ -185,10 +187,7 @@ class TestCryptoRedaction:
         addr = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
         result = redactor.redact(f"SOL: {addr}")
         # Может совпасть как crypto_sol или crypto_btc_legacy, нам важно просто удалить.
-        assert any(
-            ph in result.text
-            for ph in ("[REDACTED:CRYPTO_SOL]", "[REDACTED:CRYPTO_BTC]")
-        )
+        assert any(ph in result.text for ph in ("[REDACTED:CRYPTO_SOL]", "[REDACTED:CRYPTO_BTC]"))
 
     def test_normal_hex_not_touched(self, redactor: PIIRedactor) -> None:
         """Короткий hex (commit sha) не должен редактиться."""
@@ -200,6 +199,7 @@ class TestCryptoRedaction:
 # API keys.
 # ---------------------------------------------------------------------------
 
+
 class TestApiKeyRedaction:
     def test_openai_key(self, redactor: PIIRedactor) -> None:
         key = "sk-proj-" + "A" * 40
@@ -208,9 +208,7 @@ class TestApiKeyRedaction:
         assert key not in result.text
         assert result.stats.counts.get("api_key_openai") == 1
 
-    def test_anthropic_key_not_classified_as_openai(
-        self, redactor: PIIRedactor
-    ) -> None:
+    def test_anthropic_key_not_classified_as_openai(self, redactor: PIIRedactor) -> None:
         """Регрессия: sk-ant-... не должен ловиться OpenAI-паттерном."""
         key = "sk-ant-api03-" + "B" * 40
         result = redactor.redact(f"CLAUDE={key}")
@@ -245,6 +243,7 @@ class TestApiKeyRedaction:
 # Passport RU.
 # ---------------------------------------------------------------------------
 
+
 class TestPassportRedaction:
     def test_passport_with_marker(self, redactor: PIIRedactor) -> None:
         result = redactor.redact("Паспорт 1234 567890, выдан давно")
@@ -259,6 +258,7 @@ class TestPassportRedaction:
 # ---------------------------------------------------------------------------
 # Регрессии / статистика / идемпотентность.
 # ---------------------------------------------------------------------------
+
 
 class TestRegressionsAndStats:
     def test_empty_string(self, redactor: PIIRedactor) -> None:

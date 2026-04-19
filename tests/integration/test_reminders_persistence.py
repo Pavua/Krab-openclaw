@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Integration tests для reminders_queue persistence + recovery."""
+
 from __future__ import annotations
 
 import asyncio
@@ -240,7 +241,9 @@ class TestEventReminders:
         assert any(r.id == rid for r in matched)
 
     @pytest.mark.asyncio
-    async def test_fire_event_reminder_updates_status(self, q: RemindersQueue, queue_path: Path) -> None:
+    async def test_fire_event_reminder_updates_status(
+        self, q: RemindersQueue, queue_path: Path
+    ) -> None:
         fired: list[str] = []
 
         async def cb(reminder):
@@ -309,7 +312,9 @@ class TestConcurrency:
             fired.append(reminder.id)
 
         q.set_fire_callback(cb)
-        rid = q.add_time_reminder("u1", fire_at=int(time.time()) - 1, action="cancelled-before-check")
+        rid = q.add_time_reminder(
+            "u1", fire_at=int(time.time()) - 1, action="cancelled-before-check"
+        )
         q.cancel(rid)
 
         await q.check_time_reminders()

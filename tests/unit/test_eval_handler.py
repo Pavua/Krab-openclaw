@@ -14,7 +14,6 @@ import pytest
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_eval, safe_eval
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------

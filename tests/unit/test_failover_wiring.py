@@ -9,6 +9,7 @@
 3. Notification-callback шлёт сообщение по owner-ID (или "me" если OWNER_USER_IDS пусто).
 4. Graceful-fallback если `provider_failover` не импортируется — не поднимает.
 """
+
 from __future__ import annotations
 
 import sys
@@ -26,8 +27,8 @@ def _make_bot() -> MagicMock:
     bot.client = MagicMock()
     bot.client.send_message = AsyncMock(return_value=MagicMock())
     # Биндим оригинальный метод — чтобы тестировать его тело, а не mock.
-    bot._activate_provider_failover = (
-        KraabUserbot._activate_provider_failover.__get__(bot, KraabUserbot)
+    bot._activate_provider_failover = KraabUserbot._activate_provider_failover.__get__(
+        bot, KraabUserbot
     )
     return bot
 

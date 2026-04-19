@@ -19,7 +19,6 @@ from src.handlers.command_handlers import (
     handle_context,
 )
 
-
 # ──────────────────────────────────────────────
 # Вспомогательные функции
 # ──────────────────────────────────────────────
@@ -133,7 +132,10 @@ class TestHandleContextShow:
 
         with (
             patch("src.handlers.command_handlers.openclaw_client", oc),
-            patch("src.handlers.command_handlers.get_runtime_primary_model", return_value="gemini-3-pro-preview"),
+            patch(
+                "src.handlers.command_handlers.get_runtime_primary_model",
+                return_value="gemini-3-pro-preview",
+            ),
         ):
             await handle_context(bot, msg)
 
@@ -157,7 +159,10 @@ class TestHandleContextShow:
 
         with (
             patch("src.handlers.command_handlers.openclaw_client", oc),
-            patch("src.handlers.command_handlers.get_runtime_primary_model", return_value="gemini-3-pro-preview"),
+            patch(
+                "src.handlers.command_handlers.get_runtime_primary_model",
+                return_value="gemini-3-pro-preview",
+            ),
         ):
             await handle_context(bot, msg)
 
@@ -175,7 +180,10 @@ class TestHandleContextShow:
 
         with (
             patch("src.handlers.command_handlers.openclaw_client", oc),
-            patch("src.handlers.command_handlers.get_runtime_primary_model", return_value="fallback-model"),
+            patch(
+                "src.handlers.command_handlers.get_runtime_primary_model",
+                return_value="fallback-model",
+            ),
         ):
             await handle_context(bot, msg)
 
@@ -191,7 +199,10 @@ class TestHandleContextShow:
 
         with (
             patch("src.handlers.command_handlers.openclaw_client", oc),
-            patch("src.handlers.command_handlers.get_runtime_primary_model", return_value="runtime-model"),
+            patch(
+                "src.handlers.command_handlers.get_runtime_primary_model",
+                return_value="runtime-model",
+            ),
         ):
             await handle_context(bot, msg)
 
@@ -256,6 +267,7 @@ class TestHandleContextShow:
     async def test_show_with_session_last_updated(self) -> None:
         """Если openclaw_client имеет _session_last_updated — показывает время."""
         import time
+
         bot = _make_bot()
         msg = _make_message("!context")
         oc = _make_openclaw()

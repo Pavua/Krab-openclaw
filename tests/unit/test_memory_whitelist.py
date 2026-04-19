@@ -26,10 +26,10 @@ from src.core.memory_whitelist import (
     WhitelistDecision,
 )
 
-
 # ---------------------------------------------------------------------------
 # Фикстуры.
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def tmp_config_path(tmp_path: Path) -> Path:
@@ -46,6 +46,7 @@ def _write_config(path: Path, data: dict) -> None:
 # ---------------------------------------------------------------------------
 # Privacy-by-default.
 # ---------------------------------------------------------------------------
+
 
 class TestPrivacyByDefault:
     def test_no_config_file_denies_all(self, tmp_config_path: Path) -> None:
@@ -64,6 +65,7 @@ class TestPrivacyByDefault:
 # ---------------------------------------------------------------------------
 # Allow / deny основная логика.
 # ---------------------------------------------------------------------------
+
 
 class TestAllowDenyLogic:
     def test_allow_by_exact_id(self, tmp_config_path: Path) -> None:
@@ -97,9 +99,7 @@ class TestAllowDenyLogic:
         assert decision.allowed is False
         assert "deny:id:" in decision.reason
 
-    def test_deny_title_regex_overrides_allow_all(
-        self, tmp_config_path: Path
-    ) -> None:
+    def test_deny_title_regex_overrides_allow_all(self, tmp_config_path: Path) -> None:
         _write_config(
             tmp_config_path,
             {
@@ -134,6 +134,7 @@ class TestAllowDenyLogic:
 # Hot-reload.
 # ---------------------------------------------------------------------------
 
+
 class TestHotReload:
     def test_reload_on_mtime_change(self, tmp_config_path: Path) -> None:
         _write_config(tmp_config_path, {"allow": {"ids": ["1"]}})
@@ -149,9 +150,7 @@ class TestHotReload:
 
         assert wl.is_allowed("2").allowed is True
 
-    def test_broken_json_keeps_previous_state(
-        self, tmp_config_path: Path
-    ) -> None:
+    def test_broken_json_keeps_previous_state(self, tmp_config_path: Path) -> None:
         _write_config(tmp_config_path, {"allow": {"ids": ["1"]}})
         wl = MemoryWhitelist(config_path=tmp_config_path)
         assert wl.is_allowed("1").allowed is True
@@ -164,9 +163,7 @@ class TestHotReload:
         # Предыдущее состояние должно сохраниться.
         assert wl.is_allowed("1").allowed is True
 
-    def test_config_deleted_reverts_to_deny_all(
-        self, tmp_config_path: Path
-    ) -> None:
+    def test_config_deleted_reverts_to_deny_all(self, tmp_config_path: Path) -> None:
         _write_config(tmp_config_path, {"allow_all": True})
         wl = MemoryWhitelist(config_path=tmp_config_path)
         assert wl.is_allowed("x").allowed is True
@@ -180,6 +177,7 @@ class TestHotReload:
 # ---------------------------------------------------------------------------
 # Round-trip save / load.
 # ---------------------------------------------------------------------------
+
 
 class TestSaveLoad:
     def test_roundtrip(self, tmp_config_path: Path) -> None:
@@ -208,6 +206,7 @@ class TestSaveLoad:
 # Filter batch.
 # ---------------------------------------------------------------------------
 
+
 class TestFilterChats:
     def test_filter_chats_returns_reasons(self, tmp_config_path: Path) -> None:
         _write_config(
@@ -220,11 +219,11 @@ class TestFilterChats:
         wl = MemoryWhitelist(config_path=tmp_config_path)
 
         chats = [
-            ("1", "My stuff"),            # allow by id
-            ("2", "Krab Swarm"),          # allow by regex
-            ("3", "Family"),              # deny by regex (перекрывает regex)
-            ("4", "Random"),              # no_match
-            ("5", None),                  # no title → только id, no_match
+            ("1", "My stuff"),  # allow by id
+            ("2", "Krab Swarm"),  # allow by regex
+            ("3", "Family"),  # deny by regex (перекрывает regex)
+            ("4", "Random"),  # no_match
+            ("5", None),  # no title → только id, no_match
         ]
         results = wl.filter_chats(chats)
 
@@ -241,6 +240,7 @@ class TestFilterChats:
 # Permissions (chmod 600/700).
 # ---------------------------------------------------------------------------
 
+
 class TestPermissions:
     def test_enforce_permissions(self, tmp_config_path: Path) -> None:
         _write_config(tmp_config_path, {"allow_all": True})
@@ -256,6 +256,7 @@ class TestPermissions:
 # ---------------------------------------------------------------------------
 # WhitelistConfig как датакласс.
 # ---------------------------------------------------------------------------
+
 
 class TestWhitelistConfig:
     def test_from_dict_normalizes_types(self) -> None:

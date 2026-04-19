@@ -315,4 +315,6 @@ async def test_pipeline_skips_structured_when_explicit_false(
         structured=False,
     )
 
-    assert called["structured"] is False, "structured_reflect НЕ должен быть вызван при structured=False"
+    assert called["structured"] is False, (
+        "structured_reflect НЕ должен быть вызван при structured=False"
+    )

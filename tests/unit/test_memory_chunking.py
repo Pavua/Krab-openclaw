@@ -15,15 +15,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-import pytest
-
 from src.core.memory_chunking import (
     Chunk,
     ChunkBuilder,
     Message,
     chunk_messages,
 )
-
 
 # ---------------------------------------------------------------------------
 # Хелперы.
@@ -54,12 +51,13 @@ def _msg(
 # Time-gap fallback.
 # ---------------------------------------------------------------------------
 
+
 class TestTimeGap:
     def test_messages_close_in_time_same_chunk(self) -> None:
         msgs = [
             _msg("1", offset_sec=0),
-            _msg("2", offset_sec=60),    # +1 минута
-            _msg("3", offset_sec=180),   # +3 минуты
+            _msg("2", offset_sec=60),  # +1 минута
+            _msg("3", offset_sec=180),  # +3 минуты
         ]
         chunks = list(chunk_messages(msgs))
         assert len(chunks) == 1
@@ -90,14 +88,13 @@ class TestTimeGap:
 # Reply-to chains.
 # ---------------------------------------------------------------------------
 
+
 class TestReplyToChains:
     def test_reply_keeps_in_same_chunk_across_gap(self) -> None:
         # Сообщения с 10-минутным разрывом, но reply_to держит вместе.
         msgs = [
             _msg("1", offset_sec=0, text="исходный вопрос"),
-            _msg(
-                "2", offset_sec=600, text="ответ через 10 мин", reply="1"
-            ),
+            _msg("2", offset_sec=600, text="ответ через 10 мин", reply="1"),
         ]
         chunks = list(chunk_messages(msgs))
         assert len(chunks) == 1
@@ -129,6 +126,7 @@ class TestReplyToChains:
 # Size limits.
 # ---------------------------------------------------------------------------
 
+
 class TestSizeLimits:
     def test_max_messages_limit(self) -> None:
         msgs = [_msg(str(i), offset_sec=i) for i in range(5)]
@@ -151,6 +149,7 @@ class TestSizeLimits:
 # Multi-chat поведение.
 # ---------------------------------------------------------------------------
 
+
 class TestMultiChat:
     def test_chat_id_change_closes_current_chunk(self) -> None:
         msgs = [
@@ -170,14 +169,12 @@ class TestMultiChat:
 # Lookback eviction.
 # ---------------------------------------------------------------------------
 
+
 class TestLookbackEviction:
     def test_lookback_closes_old_chunks(self) -> None:
         # Создаём 6 chunks с gap > 5 мин (каждый по 1 сообщению).
         # lookback=2 → при открытии 3-го первый должен вытесниться в closed.
-        msgs = [
-            _msg(str(i), offset_sec=i * 600)
-            for i in range(6)
-        ]
+        msgs = [_msg(str(i), offset_sec=i * 600) for i in range(6)]
         chunks = list(chunk_messages(msgs, lookback=2))
         assert len(chunks) == 6  # все chunks должны дожить до flush
 
@@ -187,10 +184,10 @@ class TestLookbackEviction:
         в него — откроется новый chunk с fallback на time-gap.
         """
         msgs = [
-            _msg("1", offset_sec=0),               # chunk 1
-            _msg("2", offset_sec=600),             # chunk 2 (gap > 5 мин)
-            _msg("3", offset_sec=1200),            # chunk 3
-            _msg("4", offset_sec=1800),            # chunk 4
+            _msg("1", offset_sec=0),  # chunk 1
+            _msg("2", offset_sec=600),  # chunk 2 (gap > 5 мин)
+            _msg("3", offset_sec=1200),  # chunk 3
+            _msg("4", offset_sec=1800),  # chunk 4
             # Reply на 1, но chunk 1 уже вытеснен lookback'ом.
             _msg("late", offset_sec=2400, reply="1"),
         ]
@@ -204,6 +201,7 @@ class TestLookbackEviction:
 # ---------------------------------------------------------------------------
 # Chunk утилиты.
 # ---------------------------------------------------------------------------
+
 
 class TestChunkUtilities:
     def test_chunk_text_joins_with_newlines(self) -> None:
@@ -239,6 +237,7 @@ class TestChunkUtilities:
 # Builder lifecycle.
 # ---------------------------------------------------------------------------
 
+
 class TestBuilderLifecycle:
     def test_flush_empty_builder(self) -> None:
         builder = ChunkBuilder()
@@ -269,6 +268,7 @@ class TestBuilderLifecycle:
 # Real-world scenarios.
 # ---------------------------------------------------------------------------
 
+
 class TestRealWorldScenarios:
     def test_typical_dialog_with_replies(self) -> None:
         """
@@ -281,9 +281,7 @@ class TestRealWorldScenarios:
             _msg("2", offset_sec=30, text="Привет", reply="1"),
             _msg("3", offset_sec=60, text="Как дела?"),
             # Пауза 10 минут — time-gap сработал бы, но reply держит связь.
-            _msg(
-                "4", offset_sec=600, text="кстати вчера...", reply="1"
-            ),
+            _msg("4", offset_sec=600, text="кстати вчера...", reply="1"),
         ]
         chunks = list(chunk_messages(msgs))
         assert len(chunks) == 1
@@ -314,6 +312,7 @@ class TestRealWorldScenarios:
 # ---------------------------------------------------------------------------
 # harvest_closed (Phase 4 streaming).
 # ---------------------------------------------------------------------------
+
 
 class TestHarvestClosed:
     """Тесты метода ChunkBuilder.harvest_closed для real-time worker."""

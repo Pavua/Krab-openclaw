@@ -30,13 +30,9 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from src.core.memory_archive import ArchivePaths, create_schema, open_archive
 from src.core.memory_indexer_worker import (
-    DEFAULT_BATCH_SIZE,
-    IndexerStats,
     MemoryIndexerWorker,
-    QueuedMessage,
 )
 from src.core.memory_whitelist import MemoryWhitelist, WhitelistConfig
-
 
 BASE_TIME = datetime(2026, 4, 15, 12, 0, 0, tzinfo=timezone.utc)
 ALLOWED_CHAT_ID = "111"
@@ -174,7 +170,9 @@ class TestConsumerBatch:
         await worker.start()
         try:
             for i in range(5):
-                await worker.enqueue(_fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10))
+                await worker.enqueue(
+                    _fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10)
+                )
             await asyncio.sleep(1.0)  # batch_timeout=0.5 → should flush
             stats = worker.get_stats()
             assert stats.processed_total == 5
@@ -187,7 +185,9 @@ class TestConsumerBatch:
         await worker.start()
         try:
             for i in range(3):
-                await worker.enqueue(_fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10))
+                await worker.enqueue(
+                    _fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10)
+                )
             await asyncio.sleep(1.0)
             stats = worker.get_stats()
             assert stats.processed_total == 3
@@ -199,18 +199,24 @@ class TestConsumerWrites:
     """Tests #7-11: consumer writes to DB correctly."""
 
     @pytest.mark.asyncio
-    async def test_redacts_pii_before_insert(self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths) -> None:
+    async def test_redacts_pii_before_insert(
+        self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths
+    ) -> None:
         """Test #7: msg with email → text_redacted has no email."""
         await worker.start()
         try:
-            msg = _fake_pyrofork_message(message_id="1", text="my email is alice@example.com please", offset_sec=0)
+            msg = _fake_pyrofork_message(
+                message_id="1", text="my email is alice@example.com please", offset_sec=0
+            )
             await worker.enqueue(msg)
             await worker.stop(drain=True, timeout=3.0)
         finally:
             pass
         conn = open_archive(temp_archive)
         try:
-            row = conn.execute("SELECT text_redacted FROM messages WHERE message_id = ?;", ("1",)).fetchone()
+            row = conn.execute(
+                "SELECT text_redacted FROM messages WHERE message_id = ?;", ("1",)
+            ).fetchone()
             assert row is not None
             assert "alice@example.com" not in row[0]
             assert "[REDACTED:EMAIL]" in row[0]
@@ -218,14 +224,20 @@ class TestConsumerWrites:
             conn.close()
 
     @pytest.mark.asyncio
-    async def test_writes_chunks_and_fts(self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths) -> None:
+    async def test_writes_chunks_and_fts(
+        self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths
+    ) -> None:
         """Test #8: flush 5 messages → 1 chunk + 1 FTS row."""
         await worker.start()
         try:
             for i in range(5):
-                await worker.enqueue(_fake_pyrofork_message(
-                    message_id=str(i + 1), text=f"message number {i + 1}", offset_sec=i * 10,
-                ))
+                await worker.enqueue(
+                    _fake_pyrofork_message(
+                        message_id=str(i + 1),
+                        text=f"message number {i + 1}",
+                        offset_sec=i * 10,
+                    )
+                )
             await worker.stop(drain=True, timeout=3.0)
         finally:
             pass
@@ -235,22 +247,29 @@ class TestConsumerWrites:
             assert chunk_count >= 1
             fts_count = conn.execute("SELECT COUNT(*) FROM messages_fts;").fetchone()[0]
             assert fts_count >= 1
-            hits = conn.execute("SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'number';").fetchall()
+            hits = conn.execute(
+                "SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'number';"
+            ).fetchall()
             assert len(hits) >= 1
         finally:
             conn.close()
 
     @pytest.mark.asyncio
-    async def test_writes_embeddings_when_vec_available(self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths) -> None:
+    async def test_writes_embeddings_when_vec_available(
+        self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths
+    ) -> None:
         """Test #9: inject fake embedder → embed_specific called."""
         from unittest.mock import MagicMock
+
         fake_embedder = MagicMock()
         fake_embedder.embed_specific = MagicMock(return_value=None)
         worker._embedder = fake_embedder
         await worker.start()
         try:
             for i in range(3):
-                await worker.enqueue(_fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10))
+                await worker.enqueue(
+                    _fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10)
+                )
             await worker.stop(drain=True, timeout=3.0)
         finally:
             pass
@@ -288,18 +307,24 @@ class TestConsumerWrites:
         assert stats.embeddings_committed == 0 or stats.embed_disabled is True
 
     @pytest.mark.asyncio
-    async def test_updates_indexer_state_watermark(self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths) -> None:
+    async def test_updates_indexer_state_watermark(
+        self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths
+    ) -> None:
         """Test #11: after flush → indexer_state has last_message_id."""
         await worker.start()
         try:
             for i in range(3):
-                await worker.enqueue(_fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10))
+                await worker.enqueue(
+                    _fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10)
+                )
             await worker.stop(drain=True, timeout=3.0)
         finally:
             pass
         conn = open_archive(temp_archive)
         try:
-            row = conn.execute("SELECT last_message_id FROM indexer_state WHERE chat_id = ?;", (ALLOWED_CHAT_ID,)).fetchone()
+            row = conn.execute(
+                "SELECT last_message_id FROM indexer_state WHERE chat_id = ?;", (ALLOWED_CHAT_ID,)
+            ).fetchone()
             assert row is not None
             assert row[0] == "3"
         finally:
@@ -310,12 +335,16 @@ class TestConsumerChunking:
     """Tests #12-14: chunking behavior."""
 
     @pytest.mark.asyncio
-    async def test_chunking_respects_reply_to_chain(self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths) -> None:
+    async def test_chunking_respects_reply_to_chain(
+        self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths
+    ) -> None:
         """Test #12: msg2.reply_to=msg1 → one chunk even with time gap."""
         await worker.start()
         try:
             await worker.enqueue(_fake_pyrofork_message(message_id="1", offset_sec=0))
-            await worker.enqueue(_fake_pyrofork_message(message_id="2", offset_sec=600, reply_to="1"))
+            await worker.enqueue(
+                _fake_pyrofork_message(message_id="2", offset_sec=600, reply_to="1")
+            )
             await worker.stop(drain=True, timeout=3.0)
         finally:
             pass
@@ -327,7 +356,9 @@ class TestConsumerChunking:
             conn.close()
 
     @pytest.mark.asyncio
-    async def test_chunking_respects_time_gap(self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths) -> None:
+    async def test_chunking_respects_time_gap(
+        self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths
+    ) -> None:
         """Test #13: msg2 at +10min → two chunks."""
         await worker.start()
         try:
@@ -348,7 +379,9 @@ class TestIdempotency:
     """Tests #15-17: watermark idempotency + drain."""
 
     @pytest.mark.asyncio
-    async def test_replay_same_message_skipped(self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths) -> None:
+    async def test_replay_same_message_skipped(
+        self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths
+    ) -> None:
         """Test #15: enqueue same msg twice across restart → second skipped."""
         await worker.start()
         msg = _fake_pyrofork_message(message_id="42")
@@ -363,20 +396,18 @@ class TestIdempotency:
         assert stats.skipped.get("already_indexed", 0) >= 1
 
     @pytest.mark.asyncio
-    async def test_restart_resumes_from_watermark(self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths) -> None:
+    async def test_restart_resumes_from_watermark(
+        self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths
+    ) -> None:
         """Test #16: stop → start → новые msg обрабатываются, старые не повторяются."""
         await worker.start()
         for i in range(3):
-            await worker.enqueue(
-                _fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10)
-            )
+            await worker.enqueue(_fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10))
         await worker.stop(drain=True, timeout=3.0)
         # Рестарт + новые сообщения с бо́льшими ID.
         await worker.start()
         for i in range(3, 6):
-            await worker.enqueue(
-                _fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10)
-            )
+            await worker.enqueue(_fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10))
         await worker.stop(drain=True, timeout=3.0)
         conn = open_archive(temp_archive)
         try:
@@ -392,9 +423,7 @@ class TestIdempotency:
         """Test #17: stop(drain=True) ждёт пока всё обработано."""
         await worker.start()
         for i in range(5):
-            await worker.enqueue(
-                _fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10)
-            )
+            await worker.enqueue(_fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10))
         await worker.stop(drain=True, timeout=5.0)
         stats = worker.get_stats()
         assert stats.processed_total == 5
@@ -512,7 +541,12 @@ class TestStats:
 
     def test_module_helpers_singleton(self):
         """Module-level get_indexer returns singleton."""
-        from src.core.memory_indexer_worker import get_indexer, is_indexer_running, _reset_singleton_for_tests
+        from src.core.memory_indexer_worker import (
+            _reset_singleton_for_tests,
+            get_indexer,
+            is_indexer_running,
+        )
+
         _reset_singleton_for_tests()
         first = get_indexer()
         second = get_indexer()

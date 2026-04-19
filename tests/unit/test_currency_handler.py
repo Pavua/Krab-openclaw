@@ -379,9 +379,7 @@ class TestHandleCurrencyIntegration:
         msg = _make_message()
         with patch(
             "src.handlers.command_handlers.fetch_exchange_rate",
-            new=AsyncMock(
-                side_effect=UserInputError(user_message="❌ Неизвестная валюта: `XYZ`")
-            ),
+            new=AsyncMock(side_effect=UserInputError(user_message="❌ Неизвестная валюта: `XYZ`")),
         ):
             with pytest.raises(UserInputError) as exc_info:
                 await handle_currency(bot, msg)

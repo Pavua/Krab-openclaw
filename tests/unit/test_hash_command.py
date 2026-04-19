@@ -26,7 +26,6 @@ import pytest
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_hash
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фикстуры
 # ---------------------------------------------------------------------------
@@ -200,7 +199,9 @@ class TestHandleHash:
     async def test_контрольное_значение_пустой_строки(self) -> None:
         """Проверяем хэши пустой строки по известным значениям."""
         bot = _make_bot(command_args="")
-        msg = _make_message(reply_text=" ")  # пробел → не пустой текст после strip? нет, strip даст ""
+        msg = _make_message(
+            reply_text=" "
+        )  # пробел → не пустой текст после strip? нет, strip даст ""
 
         # reply_text=" " → после strip → "" → UserInputError
         with pytest.raises(UserInputError):

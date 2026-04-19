@@ -20,19 +20,20 @@ from __future__ import annotations
 import asyncio
 import os
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.handlers.command_handlers import UserInputError, handle_tts
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
 
 
-def _make_message(text: str, reply_text: str | None = None, reply_caption: str | None = None) -> SimpleNamespace:
+def _make_message(
+    text: str, reply_text: str | None = None, reply_caption: str | None = None
+) -> SimpleNamespace:
     """Stub Pyrogram Message с текстом и опциональным reply."""
     replied = None
     if reply_text is not None or reply_caption is not None:
@@ -87,6 +88,7 @@ class _FakeOgg:
 
     def __enter__(self):
         import tempfile
+
         self._tmpdir = tempfile.mkdtemp(prefix="test_tts_")
         self.ogg_path = os.path.join(self._tmpdir, "speech.ogg")
         # Пишем минимальный контент чтобы os.path.exists + getsize прошли
@@ -96,6 +98,7 @@ class _FakeOgg:
 
     def __exit__(self, *args):
         import shutil
+
         if self._tmpdir:
             shutil.rmtree(self._tmpdir, ignore_errors=True)
 
@@ -164,7 +167,15 @@ async def test_tts_default_russian(monkeypatch) -> None:
         return _calls.pop(0)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", ordered_exec)
-    monkeypatch.setattr(os.path, "exists", lambda p: p.endswith("speech.ogg") or os.path.exists.__wrapped__(p) if hasattr(os.path.exists, "__wrapped__") else True)
+    monkeypatch.setattr(
+        os.path,
+        "exists",
+        lambda p: (
+            p.endswith("speech.ogg") or os.path.exists.__wrapped__(p)
+            if hasattr(os.path.exists, "__wrapped__")
+            else True
+        ),
+    )
     monkeypatch.setattr(os.path, "getsize", lambda p: 128)
 
     await handle_tts(bot, msg)
@@ -285,7 +296,9 @@ async def test_tts_no_args_no_reply_raises() -> None:
     with pytest.raises(UserInputError) as exc_info:
         await handle_tts(bot, msg)
 
-    assert "tts" in exc_info.value.user_message.lower() or "say" in exc_info.value.user_message.lower()
+    assert (
+        "tts" in exc_info.value.user_message.lower() or "say" in exc_info.value.user_message.lower()
+    )
 
 
 @pytest.mark.asyncio
@@ -329,7 +342,10 @@ async def test_tts_say_failure_raises(monkeypatch) -> None:
     with pytest.raises(UserInputError) as exc_info:
         await handle_tts(bot, msg)
 
-    assert "say" in exc_info.value.user_message.lower() or "ошибкой" in exc_info.value.user_message.lower()
+    assert (
+        "say" in exc_info.value.user_message.lower()
+        or "ошибкой" in exc_info.value.user_message.lower()
+    )
     bot.client.send_voice.assert_not_awaited()
 
 
@@ -354,7 +370,10 @@ async def test_tts_ffmpeg_no_output_raises(monkeypatch) -> None:
     with pytest.raises(UserInputError) as exc_info:
         await handle_tts(bot, msg)
 
-    assert "ffmpeg" in exc_info.value.user_message.lower() or "аудио" in exc_info.value.user_message.lower()
+    assert (
+        "ffmpeg" in exc_info.value.user_message.lower()
+        or "аудио" in exc_info.value.user_message.lower()
+    )
     bot.client.send_voice.assert_not_awaited()
 
 
@@ -397,11 +416,14 @@ async def test_tts_unknown_lang_treated_as_text(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("lang_code,expected_voice", [
-    ("ru", "Milena"),
-    ("en", "Samantha"),
-    ("es", "Monica"),
-])
+@pytest.mark.parametrize(
+    "lang_code,expected_voice",
+    [
+        ("ru", "Milena"),
+        ("en", "Samantha"),
+        ("es", "Monica"),
+    ],
+)
 @pytest.mark.asyncio
 async def test_tts_lang_voices(lang_code: str, expected_voice: str, monkeypatch) -> None:
     """Проверяем маппинг lang → voice для всех поддерживаемых языков."""

@@ -25,8 +25,7 @@
 from __future__ import annotations
 
 import time
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -35,7 +34,6 @@ from src.handlers.command_handlers import (
     _MUTE_FOREVER_UNTIL,
     handle_chatmute,
 )
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
@@ -125,7 +123,6 @@ async def test_chatmute_mute_алиас():
 @pytest.mark.asyncio
 async def test_chatmute_выкл_алиас():
     """!chatmute выкл — русский алиас off."""
-    from pyrogram import raw
 
     bot = _bot_with_args("выкл")
     msg = _make_message("!chatmute выкл")
@@ -139,7 +136,6 @@ async def test_chatmute_выкл_алиас():
 @pytest.mark.asyncio
 async def test_chatmute_тихо_алиас():
     """!chatmute тихо — русский алиас off."""
-    from pyrogram import raw
 
     bot = _bot_with_args("тихо")
     msg = _make_message("!chatmute тихо")
@@ -188,7 +184,6 @@ async def test_chatmute_on_отвечает_про_включение():
 @pytest.mark.asyncio
 async def test_chatmute_unmute_алиас():
     """!chatmute unmute — алиас on."""
-    from pyrogram import raw
 
     bot = _bot_with_args("unmute")
     msg = _make_message("!chatmute unmute")
@@ -202,7 +197,6 @@ async def test_chatmute_unmute_алиас():
 @pytest.mark.asyncio
 async def test_chatmute_вкл_алиас():
     """!chatmute вкл — русский алиас on."""
-    from pyrogram import raw
 
     bot = _bot_with_args("вкл")
     msg = _make_message("!chatmute вкл")
@@ -216,7 +210,6 @@ async def test_chatmute_вкл_алиас():
 @pytest.mark.asyncio
 async def test_chatmute_громко_алиас():
     """!chatmute громко — русский алиас on."""
-    from pyrogram import raw
 
     bot = _bot_with_args("громко")
     msg = _make_message("!chatmute громко")
@@ -237,9 +230,7 @@ async def test_chatmute_status_заглушён_навсегда():
     """!chatmute status показывает 'заглушён навсегда' когда mute_until=MAX."""
     # GetNotifySettings возвращает mute_until = MAX
     bot = _bot_with_args("status")
-    bot.client.invoke = AsyncMock(
-        return_value=MagicMock(mute_until=_MUTE_FOREVER_UNTIL)
-    )
+    bot.client.invoke = AsyncMock(return_value=MagicMock(mute_until=_MUTE_FOREVER_UNTIL))
     msg = _make_message("!chatmute status")
 
     await handle_chatmute(bot, msg)

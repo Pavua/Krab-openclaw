@@ -23,23 +23,21 @@
 
 from __future__ import annotations
 
-import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import (
+    _URL_RE,
+    _expand_url,
     _fetch_link_meta,
     _format_link_preview,
-    _expand_url,
     _is_short_url,
-    _URL_RE,
     handle_link,
 )
-from src.core.exceptions import UserInputError
-
 
 # ---------------------------------------------------------------------------
 # _is_short_url
@@ -137,7 +135,7 @@ def test_format_link_preview_description_truncated():
     result = _format_link_preview(meta)
     # Описание обрезается до 200 символов
     desc_line = [l for l in result.splitlines() if l.startswith("Description:")][0]
-    desc_value = desc_line[len("Description: "):]
+    desc_value = desc_line[len("Description: ") :]
     assert len(desc_value) <= 203  # 197 + "..."
     assert desc_value.endswith("...")
 
@@ -188,10 +186,10 @@ async def test_fetch_link_meta_title_only():
 @pytest.mark.asyncio
 async def test_fetch_link_meta_og_title_overrides_title():
     html = (
-        '<html><head>'
-        '<title>Plain Title</title>'
+        "<html><head>"
+        "<title>Plain Title</title>"
         '<meta property="og:title" content="OG Title" />'
-        '</head></html>'
+        "</head></html>"
     )
     mock_resp = _make_mock_response(html)
     mock_client = AsyncMock()
@@ -207,11 +205,7 @@ async def test_fetch_link_meta_og_title_overrides_title():
 
 @pytest.mark.asyncio
 async def test_fetch_link_meta_og_description():
-    html = (
-        '<html><head>'
-        '<meta property="og:description" content="OG Description" />'
-        '</head></html>'
-    )
+    html = '<html><head><meta property="og:description" content="OG Description" /></head></html>'
     mock_resp = _make_mock_response(html)
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -226,11 +220,7 @@ async def test_fetch_link_meta_og_description():
 
 @pytest.mark.asyncio
 async def test_fetch_link_meta_meta_description_fallback():
-    html = (
-        '<html><head>'
-        '<meta name="description" content="Meta Description" />'
-        '</head></html>'
-    )
+    html = '<html><head><meta name="description" content="Meta Description" /></head></html>'
     mock_resp = _make_mock_response(html)
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -246,9 +236,9 @@ async def test_fetch_link_meta_meta_description_fallback():
 @pytest.mark.asyncio
 async def test_fetch_link_meta_og_image():
     html = (
-        '<html><head>'
+        "<html><head>"
         '<meta property="og:image" content="https://example.com/img.jpg" />'
-        '</head></html>'
+        "</head></html>"
     )
     mock_resp = _make_mock_response(html)
     mock_client = AsyncMock()
@@ -593,9 +583,7 @@ async def test_handle_link_reply_uses_caption_if_no_text():
 async def test_handle_link_reply_with_multiple_urls_uses_first():
     """В reply несколько URL — берём только первый."""
     bot = _make_bot("")
-    msg = _make_message(
-        reply_text="First https://first.com then https://second.com"
-    )
+    msg = _make_message(reply_text="First https://first.com then https://second.com")
 
     meta = {
         "title": "First",
@@ -623,4 +611,5 @@ def test_handle_link_exported_from_handlers_package():
     """handle_link доступна через src.handlers."""
     from src.handlers import handle_link as exported  # noqa: PLC0415
     from src.handlers.command_handlers import handle_link as original  # noqa: PLC0415
+
     assert exported is original

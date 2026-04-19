@@ -12,7 +12,6 @@ import pytest
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_contacts
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
@@ -159,7 +158,9 @@ class TestContactsSearch:
         bot = _make_bot("search Иван")
         msg = _make_message()
         contacts = [
-            _make_user(user_id=1, first_name="Иван", last_name="Петров", phone_number="+79001234567"),
+            _make_user(
+                user_id=1, first_name="Иван", last_name="Петров", phone_number="+79001234567"
+            ),
         ]
         bot.client.search_contacts = AsyncMock(return_value=contacts)
 

@@ -20,12 +20,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import (
     _parse_whois_output,
     handle_whois,
 )
-from src.core.exceptions import UserInputError
-
 
 # ---------------------------------------------------------------------------
 # Образцы реального вывода whois
@@ -65,6 +64,7 @@ _WHOIS_RUSSIAN_STYLE = (
 # ---------------------------------------------------------------------------
 # Тесты _parse_whois_output
 # ---------------------------------------------------------------------------
+
 
 class TestParseWhoisOutput:
     """Юнит-тесты парсера whois-вывода."""
@@ -135,6 +135,7 @@ class TestParseWhoisOutput:
 # Фабрика фиктивных объектов bot/message
 # ---------------------------------------------------------------------------
 
+
 def _make_bot(args: str = "") -> SimpleNamespace:
     return SimpleNamespace(
         _get_command_args=lambda msg: args,
@@ -155,6 +156,7 @@ def _make_message() -> SimpleNamespace:
 # Вспомогательные заглушки subprocess
 # ---------------------------------------------------------------------------
 
+
 def _make_fake_proc(raw_output: str, returncode: int = 0):
     proc = MagicMock()
     proc.returncode = returncode
@@ -167,8 +169,8 @@ def _make_fake_proc(raw_output: str, returncode: int = 0):
 # Тесты handle_whois
 # ---------------------------------------------------------------------------
 
-class TestHandleWhois:
 
+class TestHandleWhois:
     @pytest.mark.asyncio
     async def test_empty_args_raises_user_input_error(self) -> None:
         """Пустой аргумент вызывает UserInputError."""
@@ -201,9 +203,7 @@ class TestHandleWhois:
         assert captured == ["example.com"]
 
     @pytest.mark.asyncio
-    async def test_successful_lookup_formats_output(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_successful_lookup_formats_output(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Успешный lookup: reply содержит все 4 ключевых поля."""
         bot = _make_bot("example.com")
         message = _make_message()
@@ -228,9 +228,7 @@ class TestHandleWhois:
         assert "example.com" in edit_text
 
     @pytest.mark.asyncio
-    async def test_dates_without_time_component(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_dates_without_time_component(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Даты в ответе без временной части (только YYYY-MM-DD)."""
         bot = _make_bot("example.com")
         message = _make_message()
@@ -272,9 +270,7 @@ class TestHandleWhois:
         assert "❌" in edit_text
 
     @pytest.mark.asyncio
-    async def test_timeout_returns_error_message(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_timeout_returns_error_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Timeout subprocess -> сообщение об ошибке."""
         bot = _make_bot("slow-domain.com")
         message = _make_message()
@@ -324,9 +320,7 @@ class TestHandleWhois:
         assert "whois" in edit_text.lower()
 
     @pytest.mark.asyncio
-    async def test_missing_fields_show_dash(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_missing_fields_show_dash(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Если поле отсутствует в whois-выводе, показывается «-»."""
         bot = _make_bot("minimal.com")
         message = _make_message()
@@ -350,9 +344,7 @@ class TestHandleWhois:
         assert "Nameservers: \u2014" in edit_text
 
     @pytest.mark.asyncio
-    async def test_sends_status_reply_first(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_sends_status_reply_first(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Сначала отправляется статусное сообщение, потом edit с результатом."""
         bot = _make_bot("example.com")
         message = _make_message()
@@ -373,9 +365,7 @@ class TestHandleWhois:
         assert message._status.edit.called
 
     @pytest.mark.asyncio
-    async def test_nameservers_in_output(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_nameservers_in_output(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Nameservers выводятся через запятую."""
         bot = _make_bot("example.com")
         message = _make_message()

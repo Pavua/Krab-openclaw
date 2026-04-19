@@ -1,4 +1,5 @@
 """Тесты per-chat message batcher (backpressure через batching)."""
+
 from __future__ import annotations
 
 import asyncio

@@ -27,10 +27,10 @@ from src.core.access_control import AccessLevel, AccessProfile
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_mark
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
+
 
 def _make_dialog(chat_id: int) -> SimpleNamespace:
     """Mock pyrogram.Dialog с chat.id."""
@@ -82,6 +82,7 @@ def _make_message(
 # ---------------------------------------------------------------------------
 # !mark read
 # ---------------------------------------------------------------------------
+
 
 class TestHandleMarkRead:
     @pytest.mark.asyncio
@@ -136,6 +137,7 @@ class TestHandleMarkRead:
 # !mark unread
 # ---------------------------------------------------------------------------
 
+
 class TestHandleMarkUnread:
     @pytest.mark.asyncio
     async def test_unread_calls_pyrogram_api(self) -> None:
@@ -189,6 +191,7 @@ class TestHandleMarkUnread:
 # !mark readall
 # ---------------------------------------------------------------------------
 
+
 class TestHandleMarkReadAll:
     @pytest.mark.asyncio
     async def test_readall_iterates_all_dialogs(self) -> None:
@@ -201,8 +204,7 @@ class TestHandleMarkReadAll:
 
         assert bot.client.read_chat_history.await_count == 3
         called_ids = [
-            call.kwargs["chat_id"]
-            for call in bot.client.read_chat_history.await_args_list
+            call.kwargs["chat_id"] for call in bot.client.read_chat_history.await_args_list
         ]
         assert set(called_ids) == {10, 20, 30}
 
@@ -291,6 +293,7 @@ class TestHandleMarkReadAll:
 # ---------------------------------------------------------------------------
 # Доступ и невалидные подкоманды
 # ---------------------------------------------------------------------------
+
 
 class TestHandleMarkAccess:
     @pytest.mark.asyncio

@@ -17,7 +17,6 @@ import pytest
 import src.handlers.command_handlers as command_handlers_module
 from src.handlers.command_handlers import handle_status
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Вспомогательные фикстуры
 # ─────────────────────────────────────────────────────────────────────────────

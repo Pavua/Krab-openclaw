@@ -27,9 +27,10 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar
+from typing import Callable, ClassVar
 
 import structlog
 
@@ -40,12 +41,19 @@ _log = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _command_usage: dict[str, int] = {}
+# Последний ts вызова каждой команды (unix seconds). Нужен для фильтрации
+# по временному окну в /api/commands/usage/top (Dashboard V4).
+_command_last_ts: dict[str, float] = {}
 _usage_file = Path("~/.openclaw/krab_runtime_state/command_usage.json").expanduser()
+
+# Инъекция часов для тестов
+_now_fn: Callable[[], float] = time.time
 
 
 def bump_command(name: str) -> None:
-    """Инкрементирует счётчик вызова команды."""
+    """Инкрементирует счётчик вызова команды и обновляет last_used_ts."""
     _command_usage[name] = _command_usage.get(name, 0) + 1
+    _command_last_ts[name] = _now_fn()
 
 
 def get_usage() -> dict[str, int]:
@@ -53,26 +61,93 @@ def get_usage() -> dict[str, int]:
     return dict(sorted(_command_usage.items(), key=lambda x: -x[1]))
 
 
+def get_top_usage(limit: int = 20, days: int | None = 7) -> dict:
+    """Top-N команд по количеству вызовов за окно `days`.
+
+    Store хранит только агрегированные счётчики + last_used_ts.
+    Фильтрация по окну: если `days is not None` — отбрасываем команды,
+    у которых last_used_ts старше окна (либо отсутствует). Счётчики остаются
+    агрегированными (не пересчитываются "только за окно") — это явно
+    задокументированная семантика: бар-чарт показывает активные команды
+    последнего периода с их накопленным весом.
+    """
+    limit = max(1, int(limit))
+    now = _now_fn()
+    if days is not None:
+        days = max(0, int(days))
+        cutoff = now - (days * 86400)
+    else:
+        cutoff = None
+
+    items: list[dict] = []
+    for name, count in _command_usage.items():
+        last_ts = _command_last_ts.get(name)
+        if cutoff is not None:
+            # Если ts отсутствует (старая запись без таймстампа) — исключаем из окна
+            if last_ts is None or last_ts < cutoff:
+                continue
+        items.append({"command": name, "count": int(count), "last_used_ts": last_ts})
+
+    items.sort(key=lambda x: (-x["count"], x["command"]))
+    top = items[:limit]
+
+    return {
+        "window_days": days,
+        "limit": limit,
+        "top": top,
+        "total_invocations": sum(x["count"] for x in items),
+        "unique_commands": len(items),
+    }
+
+
 def save_usage() -> None:
     """Сохраняет счётчики на диск (вызывается периодически и при остановке)."""
     try:
         _usage_file.parent.mkdir(parents=True, exist_ok=True)
-        _usage_file.write_text(json.dumps(_command_usage, indent=2, ensure_ascii=False))
+        payload = {
+            "counts": _command_usage,
+            "last_ts": _command_last_ts,
+        }
+        _usage_file.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
     except Exception as exc:  # noqa: BLE001
-        _log.warning("command_usage_save_failed", error=str(exc))
+        _log.warning("command_usage_save_failed", error_type=type(exc).__name__, error=str(exc))
 
 
 def load_usage() -> None:
-    """Загружает счётчики с диска при старте."""
-    global _command_usage  # noqa: PLW0603
+    """Загружает счётчики с диска при старте.
+
+    Поддерживает legacy формат {name: count} и новый {counts, last_ts}.
+    """
+    global _command_usage, _command_last_ts  # noqa: PLW0603
     try:
-        _command_usage = json.loads(_usage_file.read_text())
+        data = json.loads(_usage_file.read_text())
+        if isinstance(data, dict) and "counts" in data:
+            _command_usage = dict(data.get("counts") or {})
+            _command_last_ts = {k: float(v) for k, v in (data.get("last_ts") or {}).items()}
+        else:
+            # Legacy: плоский {name: count}, timestamps пусты
+            _command_usage = dict(data or {})
+            _command_last_ts = {}
         _log.info("command_usage_loaded", commands=len(_command_usage))
     except FileNotFoundError:
         _command_usage = {}
+        _command_last_ts = {}
     except json.JSONDecodeError as exc:
-        _log.warning("command_usage_corrupt", error=str(exc))
+        _log.warning("command_usage_corrupt", error_type=type(exc).__name__, error=str(exc))
         _command_usage = {}
+        _command_last_ts = {}
+
+
+def _reset_usage_for_tests(
+    counts: dict[str, int] | None = None,
+    last_ts: dict[str, float] | None = None,
+    now_fn: Callable[[], float] | None = None,
+) -> None:
+    """Хелпер для тестов: перезаписывает состояние счётчиков и часы."""
+    global _command_usage, _command_last_ts, _now_fn  # noqa: PLW0603
+    _command_usage = dict(counts or {})
+    _command_last_ts = dict(last_ts or {})
+    _now_fn = now_fn if now_fn is not None else time.time
 
 
 @dataclass(frozen=True)

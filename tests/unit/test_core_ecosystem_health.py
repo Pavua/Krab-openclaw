@@ -967,9 +967,7 @@ class TestSession12MessageBatcher:
 
         fake_batcher = MagicMock()
         fake_batcher.stats.return_value = {"pending": 3, "flushed_total": 100}
-        fake_mod = _make_fake_submodule(
-            "src.core.message_batcher", message_batcher=fake_batcher
-        )
+        fake_mod = _make_fake_submodule("src.core.message_batcher", message_batcher=fake_batcher)
 
         monkeypatch.setitem(sys.modules, "src.core.message_batcher", fake_mod)
         monkeypatch.setattr(_pkg, "message_batcher", fake_mod, raising=False)
@@ -1004,9 +1002,7 @@ class TestSession12ChatFilter:
 
         fake_cfg = MagicMock()
         fake_cfg.stats.return_value = {"chats_configured": 5, "default_policy": "allow"}
-        fake_mod = _make_fake_submodule(
-            "src.core.chat_filter_config", chat_filter_config=fake_cfg
-        )
+        fake_mod = _make_fake_submodule("src.core.chat_filter_config", chat_filter_config=fake_cfg)
 
         monkeypatch.setitem(sys.modules, "src.core.chat_filter_config", fake_mod)
         monkeypatch.setattr(_pkg, "chat_filter_config", fake_mod, raising=False)
@@ -1067,5 +1063,11 @@ class TestSession12Block:
 
         assert "session_10" in result
         s10 = result["session_10"]
-        for key in ("memory_validator", "memory_archive", "dedicated_chrome", "auto_restart", "gemini_nonce"):
+        for key in (
+            "memory_validator",
+            "memory_archive",
+            "dedicated_chrome",
+            "auto_restart",
+            "gemini_nonce",
+        ):
             assert key in s10, f"session_10 missing key after session_12 addition: {key}"

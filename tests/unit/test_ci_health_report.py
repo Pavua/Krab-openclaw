@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Tests for scripts/ci_health_report.py — aggregator корректно собирает отчёт."""
+
 from __future__ import annotations
 
 import importlib.util

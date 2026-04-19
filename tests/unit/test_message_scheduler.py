@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,17 +21,16 @@ import pytest
 from src.core.message_scheduler import (
     MessageSchedulerStore,
     ScheduledMsgRecord,
-    _MIN_SCHEDULE_SECONDS,
     _now_local,
     format_scheduled_list,
     parse_schedule_spec,
     split_schedule_input,
 )
 
-
 # ---------------------------------------------------------------------------
 # parse_schedule_spec
 # ---------------------------------------------------------------------------
+
 
 class TestParseScheduleSpec:
     """Тесты парсинга time_spec."""
@@ -133,6 +132,7 @@ class TestParseScheduleSpec:
 # split_schedule_input
 # ---------------------------------------------------------------------------
 
+
 class TestSplitScheduleInput:
     """Тесты разбивки аргумента !schedule."""
 
@@ -189,6 +189,7 @@ class TestSplitScheduleInput:
 # MessageSchedulerStore
 # ---------------------------------------------------------------------------
 
+
 class TestMessageSchedulerStore:
     """Тесты хранилища отложенных сообщений."""
 
@@ -240,7 +241,9 @@ class TestMessageSchedulerStore:
     def test_list_pending_sorted_by_time(self, store: MessageSchedulerStore) -> None:
         """Записи должны быть отсортированы по schedule_time_iso."""
         now = _now_local()
-        store.add(chat_id="1", text="поздно", schedule_time=now + timedelta(hours=3), tg_message_id=1)
+        store.add(
+            chat_id="1", text="поздно", schedule_time=now + timedelta(hours=3), tg_message_id=1
+        )
         store.add(chat_id="1", text="рано", schedule_time=now + timedelta(hours=1), tg_message_id=2)
         result = store.list_pending(chat_id="1")
         assert result[0].text == "рано"
@@ -282,7 +285,10 @@ class TestMessageSchedulerStore:
     def test_multiple_adds_unique_ids(self, store: MessageSchedulerStore) -> None:
         """Несколько add() — все ID уникальны."""
         t = _now_local() + timedelta(hours=1)
-        ids = [store.add(chat_id="1", text=f"msg{i}", schedule_time=t, tg_message_id=i) for i in range(10)]
+        ids = [
+            store.add(chat_id="1", text=f"msg{i}", schedule_time=t, tg_message_id=i)
+            for i in range(10)
+        ]
         assert len(set(ids)) == 10
 
     def test_storage_survives_reload(self, store: MessageSchedulerStore, tmp_path: Path) -> None:
@@ -317,6 +323,7 @@ class TestMessageSchedulerStore:
 # ScheduledMsgRecord
 # ---------------------------------------------------------------------------
 
+
 class TestScheduledMsgRecord:
     """Тесты dataclass записи."""
 
@@ -340,20 +347,23 @@ class TestScheduledMsgRecord:
 
     def test_from_dict_defaults(self) -> None:
         """from_dict() с минимальным набором полей — дефолтный статус pending."""
-        rec = ScheduledMsgRecord.from_dict({
-            "record_id": "test",
-            "chat_id": "1",
-            "text": "hello",
-            "schedule_time_iso": "2026-04-12T14:30:00",
-            "tg_message_id": 1,
-            "created_at_iso": "2026-04-12T10:00:00",
-        })
+        rec = ScheduledMsgRecord.from_dict(
+            {
+                "record_id": "test",
+                "chat_id": "1",
+                "text": "hello",
+                "schedule_time_iso": "2026-04-12T14:30:00",
+                "tg_message_id": 1,
+                "created_at_iso": "2026-04-12T10:00:00",
+            }
+        )
         assert rec.status == "pending"
 
 
 # ---------------------------------------------------------------------------
 # format_scheduled_list
 # ---------------------------------------------------------------------------
+
 
 class TestFormatScheduledList:
     """Тесты форматирования списка запланированных сообщений."""
@@ -412,7 +422,7 @@ class TestFormatScheduledList:
                 record_id=f"r{i}",
                 chat_id="1",
                 text=f"msg {i}",
-                schedule_time_iso=f"2026-04-12T{10+i}:00:00+03:00",
+                schedule_time_iso=f"2026-04-12T{10 + i}:00:00+03:00",
                 tg_message_id=i,
                 created_at_iso="2026-04-12T09:00:00+03:00",
             )

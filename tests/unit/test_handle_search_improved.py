@@ -57,15 +57,18 @@ def _make_message(chat_id: int = 12345) -> SimpleNamespace:
 
 def _make_async_gen(items: list[str]):
     """Создаёт async-генератор из списка строк."""
+
     async def _gen():
         for item in items:
             yield item
+
     return _gen()
 
 
 # ---------------------------------------------------------------------------
 # 1–2. Пустой запрос
 # ---------------------------------------------------------------------------
+
 
 class TestHandleSearchEmptyQuery:
     """Пустой / тривиальный запрос → UserInputError."""
@@ -104,6 +107,7 @@ class TestHandleSearchEmptyQuery:
 # ---------------------------------------------------------------------------
 # 3–9. AI-режим (по умолчанию)
 # ---------------------------------------------------------------------------
+
 
 class TestHandleSearchAIMode:
     """AI-режим: openclaw_client.send_message_stream."""
@@ -289,6 +293,7 @@ class TestHandleSearchAIMode:
 # 10–14. --raw режим
 # ---------------------------------------------------------------------------
 
+
 class TestHandleSearchRawMode:
     """--raw: прямой Brave-поиск без AI."""
 
@@ -298,7 +303,9 @@ class TestHandleSearchRawMode:
         bot = _make_bot("--raw python новости")
         msg, sent = _make_message()
 
-        monkeypatch.setattr(ch_module, "search_brave", AsyncMock(return_value="Новость 1\nНовость 2"))
+        monkeypatch.setattr(
+            ch_module, "search_brave", AsyncMock(return_value="Новость 1\nНовость 2")
+        )
         await handle_search(bot, msg)
 
         ch_module.search_brave.assert_called_once_with("python новости")
@@ -320,7 +327,9 @@ class TestHandleSearchRawMode:
         bot = _make_bot("--raw django rest")
         msg, sent = _make_message()
 
-        monkeypatch.setattr(ch_module, "search_brave", AsyncMock(return_value="Django REST Framework"))
+        monkeypatch.setattr(
+            ch_module, "search_brave", AsyncMock(return_value="Django REST Framework")
+        )
         await handle_search(bot, msg)
 
         edit_text = sent.edit.await_args.args[0]
@@ -345,8 +354,7 @@ class TestHandleSearchRawMode:
         msg, sent = _make_message()
 
         monkeypatch.setattr(
-            ch_module, "search_brave",
-            AsyncMock(side_effect=httpx.HTTPError("Connection timeout"))
+            ch_module, "search_brave", AsyncMock(side_effect=httpx.HTTPError("Connection timeout"))
         )
         await handle_search(bot, msg)
 
@@ -360,8 +368,7 @@ class TestHandleSearchRawMode:
         msg, sent = _make_message()
 
         monkeypatch.setattr(
-            ch_module, "search_brave",
-            AsyncMock(side_effect=OSError("Name resolution failed"))
+            ch_module, "search_brave", AsyncMock(side_effect=OSError("Name resolution failed"))
         )
         await handle_search(bot, msg)
 
@@ -411,7 +418,9 @@ class TestHandleSearchRawMode:
         bot = _make_bot("--raw fastapi docs")
         msg, sent = _make_message()
 
-        monkeypatch.setattr(ch_module, "search_brave", AsyncMock(return_value="FastAPI документация"))
+        monkeypatch.setattr(
+            ch_module, "search_brave", AsyncMock(return_value="FastAPI документация")
+        )
         await handle_search(bot, msg)
 
         edit_text = sent.edit.await_args.args[0]
@@ -421,6 +430,7 @@ class TestHandleSearchRawMode:
 # ---------------------------------------------------------------------------
 # Общие тесты: split_text_for_telegram интеграция
 # ---------------------------------------------------------------------------
+
 
 class TestSplitTextIntegration:
     """Проверяем, что handle_search использует _split_text_for_telegram правильно."""

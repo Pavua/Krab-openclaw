@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,7 +19,6 @@ from src.handlers.command_handlers import (
     handle_ip,
     handle_ping,
 )
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные утилиты
@@ -234,7 +232,10 @@ class TestHandleDns:
         with pytest.raises(UserInputError) as exc_info:
             await handle_dns(bot, msg)
 
-        assert "домен" in exc_info.value.user_message.lower() or "dns" in exc_info.value.user_message.lower()
+        assert (
+            "домен" in exc_info.value.user_message.lower()
+            or "dns" in exc_info.value.user_message.lower()
+        )
 
     @pytest.mark.asyncio
     async def test_возвращает_a_записи(self) -> None:
@@ -247,9 +248,7 @@ class TestHandleDns:
         with (
             patch(
                 "asyncio.get_event_loop",
-                return_value=MagicMock(
-                    run_in_executor=AsyncMock(return_value=fake_a)
-                ),
+                return_value=MagicMock(run_in_executor=AsyncMock(return_value=fake_a)),
             ),
             patch(
                 "asyncio.create_subprocess_exec",
@@ -278,9 +277,7 @@ class TestHandleDns:
         with (
             patch(
                 "asyncio.get_event_loop",
-                return_value=MagicMock(
-                    run_in_executor=AsyncMock(return_value=fake_a)
-                ),
+                return_value=MagicMock(run_in_executor=AsyncMock(return_value=fake_a)),
             ),
             patch(
                 "asyncio.create_subprocess_exec",
@@ -343,7 +340,10 @@ class TestHandlePing:
         with pytest.raises(UserInputError) as exc_info:
             await handle_ping(bot, msg)
 
-        assert "хост" in exc_info.value.user_message.lower() or "ping" in exc_info.value.user_message.lower()
+        assert (
+            "хост" in exc_info.value.user_message.lower()
+            or "ping" in exc_info.value.user_message.lower()
+        )
 
     @pytest.mark.asyncio
     async def test_успешный_ping_с_latency(self) -> None:

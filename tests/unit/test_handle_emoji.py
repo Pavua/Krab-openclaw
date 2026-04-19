@@ -256,5 +256,6 @@ async def test_handle_emoji_crab() -> None:
 def test_handle_emoji_exported_from_handlers() -> None:
     """handle_emoji реэкспортируется из src.handlers."""
     from src import handlers
+
     assert hasattr(handlers, "handle_emoji")
     assert handlers.handle_emoji is handle_emoji

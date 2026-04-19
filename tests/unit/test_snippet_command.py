@@ -243,7 +243,9 @@ async def test_snippet_save_reply_empty_text_raises(tmp_path) -> None:
 async def test_snippet_show_existing(tmp_path) -> None:
     """`!snippet hello` — показывает сниппет в code block."""
     path = tmp_path / "code_snippets.json"
-    path.write_text(json.dumps({"hello": {"code": "print('hello')", "created_at": "2025-01-15T10:00:00+00:00"}}))
+    path.write_text(
+        json.dumps({"hello": {"code": "print('hello')", "created_at": "2025-01-15T10:00:00+00:00"}})
+    )
 
     with patch.object(cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("hello")
@@ -305,10 +307,14 @@ async def test_snippet_show_case_insensitive(tmp_path) -> None:
 async def test_snippet_list_shows_names(tmp_path) -> None:
     """`!snippet list` — перечисляет имена."""
     path = tmp_path / "code_snippets.json"
-    path.write_text(json.dumps({
-        "alpha": {"code": "a=1", "created_at": ""},
-        "beta": {"code": "b=2", "created_at": ""},
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "alpha": {"code": "a=1", "created_at": ""},
+                "beta": {"code": "b=2", "created_at": ""},
+            }
+        )
+    )
 
     with patch.object(cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("list")
@@ -323,11 +329,15 @@ async def test_snippet_list_shows_names(tmp_path) -> None:
 async def test_snippet_list_sorted_alphabetically(tmp_path) -> None:
     """`!snippet list` — список в алфавитном порядке."""
     path = tmp_path / "code_snippets.json"
-    path.write_text(json.dumps({
-        "zzz": {"code": "z", "created_at": ""},
-        "aaa": {"code": "a", "created_at": ""},
-        "mmm": {"code": "m", "created_at": ""},
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "zzz": {"code": "z", "created_at": ""},
+                "aaa": {"code": "a", "created_at": ""},
+                "mmm": {"code": "m", "created_at": ""},
+            }
+        )
+    )
 
     with patch.object(cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("list")
@@ -377,10 +387,14 @@ async def test_snippet_no_args_is_list(tmp_path) -> None:
 async def test_snippet_del_removes_entry(tmp_path) -> None:
     """`!snippet del foo` → запись удаляется из файла."""
     path = tmp_path / "code_snippets.json"
-    path.write_text(json.dumps({
-        "foo": {"code": "foo_code", "created_at": ""},
-        "bar": {"code": "bar_code", "created_at": ""},
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "foo": {"code": "foo_code", "created_at": ""},
+                "bar": {"code": "bar_code", "created_at": ""},
+            }
+        )
+    )
 
     with patch.object(cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("del foo")
@@ -425,10 +439,14 @@ async def test_snippet_del_without_name_raises(tmp_path) -> None:
 async def test_snippet_search_by_name(tmp_path) -> None:
     """`!snippet search fetch` — находит сниппеты с 'fetch' в имени."""
     path = tmp_path / "code_snippets.json"
-    path.write_text(json.dumps({
-        "fetch_data": {"code": "requests.get(url)", "created_at": ""},
-        "parse_json": {"code": "json.loads(s)", "created_at": ""},
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "fetch_data": {"code": "requests.get(url)", "created_at": ""},
+                "parse_json": {"code": "json.loads(s)", "created_at": ""},
+            }
+        )
+    )
 
     with patch.object(cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("search fetch")
@@ -443,10 +461,14 @@ async def test_snippet_search_by_name(tmp_path) -> None:
 async def test_snippet_search_by_code_content(tmp_path) -> None:
     """`!snippet search requests` — находит сниппеты с 'requests' в коде."""
     path = tmp_path / "code_snippets.json"
-    path.write_text(json.dumps({
-        "http_get": {"code": "import requests\nrequests.get(url)", "created_at": ""},
-        "math_op": {"code": "result = 1 + 2", "created_at": ""},
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "http_get": {"code": "import requests\nrequests.get(url)", "created_at": ""},
+                "math_op": {"code": "result = 1 + 2", "created_at": ""},
+            }
+        )
+    )
 
     with patch.object(cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("search requests")
@@ -461,10 +483,14 @@ async def test_snippet_search_by_code_content(tmp_path) -> None:
 async def test_snippet_search_case_insensitive(tmp_path) -> None:
     """`!snippet search IMPORT` — поиск регистронезависимый."""
     path = tmp_path / "code_snippets.json"
-    path.write_text(json.dumps({
-        "imports": {"code": "import os\nimport sys", "created_at": ""},
-        "unrelated": {"code": "x = 1", "created_at": ""},
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "imports": {"code": "import os\nimport sys", "created_at": ""},
+                "unrelated": {"code": "x = 1", "created_at": ""},
+            }
+        )
+    )
 
     with patch.object(cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("search IMPORT")
@@ -503,11 +529,15 @@ async def test_snippet_search_no_query_raises(tmp_path) -> None:
 async def test_snippet_search_shows_count(tmp_path) -> None:
     """`!snippet search` — ответ содержит количество результатов."""
     path = tmp_path / "code_snippets.json"
-    path.write_text(json.dumps({
-        "aio_get": {"code": "aiohttp.get()", "created_at": ""},
-        "aio_post": {"code": "aiohttp.post()", "created_at": ""},
-        "sync_fn": {"code": "requests.get()", "created_at": ""},
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "aio_get": {"code": "aiohttp.get()", "created_at": ""},
+                "aio_post": {"code": "aiohttp.post()", "created_at": ""},
+                "sync_fn": {"code": "requests.get()", "created_at": ""},
+            }
+        )
+    )
 
     with patch.object(cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("search aio")

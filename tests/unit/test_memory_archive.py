@@ -34,6 +34,7 @@ from src.core.memory_archive import (
 # :memory: для unit-логики.
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def mem_conn() -> sqlite3.Connection:
     """Свежий in-memory SQLite со схемой."""
@@ -46,6 +47,7 @@ def mem_conn() -> sqlite3.Connection:
 # ---------------------------------------------------------------------------
 # Структура схемы.
 # ---------------------------------------------------------------------------
+
 
 class TestSchemaStructure:
     def test_all_expected_tables_created(self, mem_conn: sqlite3.Connection) -> None:
@@ -83,13 +85,9 @@ class TestSchemaStructure:
             "message_count",
         } <= cols
 
-    def test_messages_composite_primary_key(
-        self, mem_conn: sqlite3.Connection
-    ) -> None:
+    def test_messages_composite_primary_key(self, mem_conn: sqlite3.Connection) -> None:
         # Primary key = (chat_id, message_id). Попытка вставить дубликат падает.
-        mem_conn.execute(
-            "INSERT INTO chats(chat_id, title) VALUES (?, ?);", ("-100", "t")
-        )
+        mem_conn.execute("INSERT INTO chats(chat_id, title) VALUES (?, ?);", ("-100", "t"))
         mem_conn.execute(
             """
             INSERT INTO messages
@@ -113,6 +111,7 @@ class TestSchemaStructure:
 # Идемпотентность.
 # ---------------------------------------------------------------------------
 
+
 class TestIdempotency:
     def test_create_schema_is_idempotent(self) -> None:
         conn = sqlite3.connect(":memory:")
@@ -131,12 +130,11 @@ class TestIdempotency:
 # FTS5.
 # ---------------------------------------------------------------------------
 
+
 class TestFTS5:
     def test_fts_insert_and_search(self, mem_conn: sqlite3.Connection) -> None:
         """Смоук — FTS индекс принимает вставки и отвечает на MATCH."""
-        mem_conn.execute(
-            "INSERT INTO chats(chat_id, title) VALUES (?, ?);", ("-100", "dev")
-        )
+        mem_conn.execute("INSERT INTO chats(chat_id, title) VALUES (?, ?);", ("-100", "dev"))
         mem_conn.execute(
             """
             INSERT INTO chunks(chunk_id, chat_id, start_ts, end_ts,
@@ -168,13 +166,12 @@ class TestFTS5:
 # Foreign keys cascade.
 # ---------------------------------------------------------------------------
 
+
 class TestForeignKeyCascade:
     def test_delete_chat_cascades_to_messages_and_chunks(
         self, mem_conn: sqlite3.Connection
     ) -> None:
-        mem_conn.execute(
-            "INSERT INTO chats(chat_id, title) VALUES (?, ?);", ("-100", "dev")
-        )
+        mem_conn.execute("INSERT INTO chats(chat_id, title) VALUES (?, ?);", ("-100", "dev"))
         mem_conn.execute(
             """
             INSERT INTO messages(message_id, chat_id, timestamp, text_redacted)
@@ -196,15 +193,14 @@ class TestForeignKeyCascade:
         mem_conn.execute("DELETE FROM chats WHERE chat_id = '-100';")
         mem_conn.commit()
 
-        assert (
-            mem_conn.execute("SELECT COUNT(*) FROM messages;").fetchone()[0] == 0
-        )
+        assert mem_conn.execute("SELECT COUNT(*) FROM messages;").fetchone()[0] == 0
         assert mem_conn.execute("SELECT COUNT(*) FROM chunks;").fetchone()[0] == 0
 
 
 # ---------------------------------------------------------------------------
 # open_archive + ArchivePaths.
 # ---------------------------------------------------------------------------
+
 
 class TestOpenArchive:
     def test_open_creates_file(self, tmp_path: Path) -> None:
@@ -243,6 +239,7 @@ class TestOpenArchive:
 # Permissions.
 # ---------------------------------------------------------------------------
 
+
 class TestPermissions:
     def test_enforce_sets_600_and_700(self, tmp_path: Path) -> None:
         paths = ArchivePaths.under(tmp_path / "mem")
@@ -279,11 +276,11 @@ class TestPermissions:
 # Indexes.
 # ---------------------------------------------------------------------------
 
+
 class TestIndexes:
     def test_expected_indexes_exist(self, mem_conn: sqlite3.Connection) -> None:
         rows = mem_conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' "
-            "AND name LIKE 'idx_%';"
+            "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%';"
         ).fetchall()
         names = {r[0] for r in rows}
         assert "idx_messages_chat_ts" in names
@@ -295,11 +292,10 @@ class TestIndexes:
 # Meta round-trip.
 # ---------------------------------------------------------------------------
 
+
 class TestMeta:
     def test_created_at_populated(self, mem_conn: sqlite3.Connection) -> None:
-        row = mem_conn.execute(
-            "SELECT value FROM meta WHERE key='created_at';"
-        ).fetchone()
+        row = mem_conn.execute("SELECT value FROM meta WHERE key='created_at';").fetchone()
         assert row is not None
         # ISO-8601 UTC с суффиксом Z.
         assert row[0].endswith("Z")
@@ -381,9 +377,7 @@ class TestReadOnlyOpen:
         ro_conn = open_archive(paths, read_only=True, create_if_missing=False)
         try:
             with pytest.raises(sqlite3.OperationalError):
-                ro_conn.execute(
-                    "INSERT INTO meta(key, value) VALUES ('test', 'x');"
-                )
+                ro_conn.execute("INSERT INTO meta(key, value) VALUES ('test', 'x');")
         finally:
             ro_conn.close()
 
@@ -401,9 +395,7 @@ class TestSchemaVersionParsing:
 
     def test_none_when_value_not_int(self, mem_conn: sqlite3.Connection) -> None:
         # Перезапишем value на мусор — parse int должен упасть в ValueError.
-        mem_conn.execute(
-            "UPDATE meta SET value='not-a-number' WHERE key='schema_version';"
-        )
+        mem_conn.execute("UPDATE meta SET value='not-a-number' WHERE key='schema_version';")
         mem_conn.commit()
         assert get_schema_version(mem_conn) is None
 
@@ -424,9 +416,11 @@ class TestSchemaVersionParsing:
             def execute(self, sql: str, *args, **kwargs):
                 real_res = self._real.execute(sql, *args, **kwargs)
                 if "schema_version" in sql:
+
                     class FakeResult:
                         def fetchone(self):  # noqa: PLR6301
                             return ([],)  # список → TypeError в int()
+
                     return FakeResult()
                 return real_res
 

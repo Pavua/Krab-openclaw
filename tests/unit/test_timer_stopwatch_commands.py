@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,7 +19,6 @@ from src.handlers.command_handlers import (
     _fmt_duration,
     _parse_duration,
 )
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фикстуры
@@ -135,6 +133,7 @@ class TestHandleTimer:
             mock_create_task.return_value = mock_task
 
             from src.handlers.command_handlers import handle_timer
+
             await handle_timer(bot, msg)
 
         msg.reply.assert_called_once()
@@ -158,6 +157,7 @@ class TestHandleTimer:
         with patch("asyncio.create_task") as mock_create_task:
             mock_create_task.return_value = MagicMock()
             from src.handlers.command_handlers import handle_timer
+
             await handle_timer(bot, msg)
 
         assert hm._active_timers[1]["label"] == "Обед"
@@ -175,6 +175,7 @@ class TestHandleTimer:
         hm._active_timers.clear()
 
         from src.handlers.command_handlers import handle_timer
+
         await handle_timer(bot, msg)
 
         reply_text = msg.reply.call_args[0][0]
@@ -184,6 +185,7 @@ class TestHandleTimer:
     async def test_list_с_таймером(self) -> None:
         """!timer list показывает активные таймеры."""
         import time
+
         import src.handlers.command_handlers as hm
 
         bot = _make_bot("list")
@@ -199,6 +201,7 @@ class TestHandleTimer:
         }
 
         from src.handlers.command_handlers import handle_timer
+
         await handle_timer(bot, msg)
 
         reply_text = msg.reply.call_args[0][0]
@@ -224,6 +227,7 @@ class TestHandleTimer:
         }
 
         from src.handlers.command_handlers import handle_timer
+
         await handle_timer(bot, msg)
 
         mock_task.cancel.assert_called_once()
@@ -241,6 +245,7 @@ class TestHandleTimer:
         hm._active_timers.clear()
 
         from src.handlers.command_handlers import handle_timer
+
         await handle_timer(bot, msg)
 
         reply_text = msg.reply.call_args[0][0]
@@ -264,6 +269,7 @@ class TestHandleTimer:
             }
 
         from src.handlers.command_handlers import handle_timer
+
         await handle_timer(bot, msg)
 
         assert len(hm._active_timers) == 0
@@ -280,6 +286,7 @@ class TestHandleTimer:
         hm._active_timers.clear()
 
         from src.handlers.command_handlers import handle_timer
+
         await handle_timer(bot, msg)
 
         reply_text = msg.reply.call_args[0][0]
@@ -288,12 +295,12 @@ class TestHandleTimer:
     @pytest.mark.asyncio
     async def test_пустые_аргументы_показывает_помощь(self) -> None:
         """!timer без аргументов — показать справку."""
-        import src.handlers.command_handlers as hm
 
         bot = _make_bot("")
         msg = _make_message("!timer")
 
         from src.handlers.command_handlers import handle_timer
+
         await handle_timer(bot, msg)
 
         reply_text = msg.reply.call_args[0][0]
@@ -310,18 +317,21 @@ class TestHandleStopwatch:
 
     def _clear(self) -> None:
         import src.handlers.command_handlers as hm
+
         hm._stopwatches.clear()
 
     @pytest.mark.asyncio
     async def test_start(self) -> None:
         """!stopwatch start — запускает секундомер."""
         import src.handlers.command_handlers as hm
+
         self._clear()
 
         bot = _make_bot("start")
         msg = _make_message("!stopwatch start", chat_id=10)
 
         from src.handlers.command_handlers import handle_stopwatch
+
         await handle_stopwatch(bot, msg)
 
         assert 10 in hm._stopwatches
@@ -333,7 +343,9 @@ class TestHandleStopwatch:
     async def test_start_дважды(self) -> None:
         """!stopwatch start когда уже запущен — предупреждение."""
         import time
+
         import src.handlers.command_handlers as hm
+
         self._clear()
 
         hm._stopwatches[10] = {"started_at": time.monotonic() - 5, "laps": []}
@@ -341,6 +353,7 @@ class TestHandleStopwatch:
         msg = _make_message("!stopwatch start", chat_id=10)
 
         from src.handlers.command_handlers import handle_stopwatch
+
         await handle_stopwatch(bot, msg)
 
         reply_text = msg.reply.call_args[0][0]
@@ -350,13 +363,13 @@ class TestHandleStopwatch:
     @pytest.mark.asyncio
     async def test_stop_без_старта(self) -> None:
         """!stopwatch stop без активного секундомера — ошибка."""
-        import src.handlers.command_handlers as hm
         self._clear()
 
         bot = _make_bot("stop")
         msg = _make_message("!stopwatch stop", chat_id=10)
 
         from src.handlers.command_handlers import handle_stopwatch
+
         await handle_stopwatch(bot, msg)
 
         reply_text = msg.reply.call_args[0][0]
@@ -366,7 +379,9 @@ class TestHandleStopwatch:
     async def test_stop_после_старта(self) -> None:
         """!stopwatch stop — показывает итоговое время."""
         import time
+
         import src.handlers.command_handlers as hm
+
         self._clear()
 
         hm._stopwatches[10] = {"started_at": time.monotonic() - 10, "laps": []}
@@ -374,6 +389,7 @@ class TestHandleStopwatch:
         msg = _make_message("!stopwatch stop", chat_id=10)
 
         from src.handlers.command_handlers import handle_stopwatch
+
         await handle_stopwatch(bot, msg)
 
         assert 10 not in hm._stopwatches
@@ -384,7 +400,9 @@ class TestHandleStopwatch:
     async def test_stop_с_кругами(self) -> None:
         """!stopwatch stop показывает круги."""
         import time
+
         import src.handlers.command_handlers as hm
+
         self._clear()
 
         start = time.monotonic() - 20
@@ -396,6 +414,7 @@ class TestHandleStopwatch:
         msg = _make_message("!stopwatch stop", chat_id=10)
 
         from src.handlers.command_handlers import handle_stopwatch
+
         await handle_stopwatch(bot, msg)
 
         reply_text = msg.reply.call_args[0][0]
@@ -406,7 +425,9 @@ class TestHandleStopwatch:
     async def test_lap_первый(self) -> None:
         """!stopwatch lap — первый круг без delta."""
         import time
+
         import src.handlers.command_handlers as hm
+
         self._clear()
 
         hm._stopwatches[10] = {"started_at": time.monotonic() - 8, "laps": []}
@@ -414,6 +435,7 @@ class TestHandleStopwatch:
         msg = _make_message("!stopwatch lap", chat_id=10)
 
         from src.handlers.command_handlers import handle_stopwatch
+
         await handle_stopwatch(bot, msg)
 
         assert len(hm._stopwatches[10]["laps"]) == 1
@@ -425,7 +447,9 @@ class TestHandleStopwatch:
     async def test_lap_второй(self) -> None:
         """!stopwatch lap второй раз — показывает split с прошлого круга."""
         import time
+
         import src.handlers.command_handlers as hm
+
         self._clear()
 
         start = time.monotonic() - 15
@@ -434,6 +458,7 @@ class TestHandleStopwatch:
         msg = _make_message("!stopwatch lap", chat_id=10)
 
         from src.handlers.command_handlers import handle_stopwatch
+
         await handle_stopwatch(bot, msg)
 
         reply_text = msg.reply.call_args[0][0]
@@ -444,13 +469,13 @@ class TestHandleStopwatch:
     @pytest.mark.asyncio
     async def test_status_не_запущен(self) -> None:
         """!stopwatch без аргументов когда не запущен — ошибка."""
-        import src.handlers.command_handlers as hm
         self._clear()
 
         bot = _make_bot("")
         msg = _make_message("!stopwatch", chat_id=10)
 
         from src.handlers.command_handlers import handle_stopwatch
+
         await handle_stopwatch(bot, msg)
 
         reply_text = msg.reply.call_args[0][0]
@@ -460,7 +485,9 @@ class TestHandleStopwatch:
     async def test_status_запущен(self) -> None:
         """!stopwatch без аргументов показывает текущее время."""
         import time
+
         import src.handlers.command_handlers as hm
+
         self._clear()
 
         hm._stopwatches[10] = {"started_at": time.monotonic() - 30, "laps": []}
@@ -468,6 +495,7 @@ class TestHandleStopwatch:
         msg = _make_message("!stopwatch", chat_id=10)
 
         from src.handlers.command_handlers import handle_stopwatch
+
         await handle_stopwatch(bot, msg)
 
         reply_text = msg.reply.call_args[0][0]
@@ -477,13 +505,13 @@ class TestHandleStopwatch:
     @pytest.mark.asyncio
     async def test_lap_без_старта(self) -> None:
         """!stopwatch lap без активного секундомера — ошибка."""
-        import src.handlers.command_handlers as hm
         self._clear()
 
         bot = _make_bot("lap")
         msg = _make_message("!stopwatch lap", chat_id=10)
 
         from src.handlers.command_handlers import handle_stopwatch
+
         await handle_stopwatch(bot, msg)
 
         reply_text = msg.reply.call_args[0][0]
@@ -492,13 +520,13 @@ class TestHandleStopwatch:
     @pytest.mark.asyncio
     async def test_неизвестный_аргумент_показывает_помощь(self) -> None:
         """!stopwatch reset — неизвестная команда, показать справку."""
-        import src.handlers.command_handlers as hm
         self._clear()
 
         bot = _make_bot("reset")
         msg = _make_message("!stopwatch reset", chat_id=10)
 
         from src.handlers.command_handlers import handle_stopwatch
+
         await handle_stopwatch(bot, msg)
 
         reply_text = msg.reply.call_args[0][0]

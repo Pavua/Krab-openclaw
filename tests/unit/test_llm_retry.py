@@ -19,15 +19,14 @@ import asyncio
 import pytest
 
 from src.userbot.llm_retry import (
-    LLMRetryableError,
     NON_RETRYABLE_ERROR_CODES,
     RETRYABLE_ERROR_CODES,
+    LLMRetryableError,
     build_final_error_notice,
     build_retry_notice,
     is_retryable_error_text,
     is_retryable_exception,
 )
-
 
 # ---------------------------------------------------------------------------
 # LLMRetryableError
@@ -214,8 +213,9 @@ class TestIsRetryableException:
 
     def test_httpx_500_retryable(self) -> None:
         try:
-            import httpx
             from unittest.mock import MagicMock
+
+            import httpx
 
             response = MagicMock()
             response.status_code = 500
@@ -226,8 +226,9 @@ class TestIsRetryableException:
 
     def test_httpx_429_retryable(self) -> None:
         try:
-            import httpx
             from unittest.mock import MagicMock
+
+            import httpx
 
             response = MagicMock()
             response.status_code = 429
@@ -238,8 +239,9 @@ class TestIsRetryableException:
 
     def test_httpx_400_not_retryable(self) -> None:
         try:
-            import httpx
             from unittest.mock import MagicMock
+
+            import httpx
 
             response = MagicMock()
             response.status_code = 400
@@ -250,8 +252,9 @@ class TestIsRetryableException:
 
     def test_httpx_401_not_retryable(self) -> None:
         try:
-            import httpx
             from unittest.mock import MagicMock
+
+            import httpx
 
             response = MagicMock()
             response.status_code = 401
@@ -315,17 +318,13 @@ class TestBuildFinalErrorNotice:
         assert "2/2" in notice
 
     def test_no_retry_info_when_no_attempts(self) -> None:
-        notice = build_final_error_notice(
-            original_error="❌ Error", attempts_made=0, max_retries=1
-        )
+        notice = build_final_error_notice(original_error="❌ Error", attempts_made=0, max_retries=1)
         # При 0 попытках — просто оригинальный текст
         assert "❌ Error" in notice
         assert "0/1" not in notice
 
     def test_is_string(self) -> None:
-        notice = build_final_error_notice(
-            original_error="error", attempts_made=1, max_retries=1
-        )
+        notice = build_final_error_notice(original_error="error", attempts_made=1, max_retries=1)
         assert isinstance(notice, str)
 
     def test_strips_original_error(self) -> None:
@@ -336,9 +335,7 @@ class TestBuildFinalErrorNotice:
         assert "❌ Error" in notice
 
     def test_one_attempt_one_max(self) -> None:
-        notice = build_final_error_notice(
-            original_error="timeout", attempts_made=1, max_retries=1
-        )
+        notice = build_final_error_notice(original_error="timeout", attempts_made=1, max_retries=1)
         assert "1/1" in notice
         assert "timeout" in notice
 

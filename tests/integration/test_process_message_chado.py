@@ -9,7 +9,7 @@ Tests verify:
 - active mode listens to all
 - ChatWindow.touch() called per message
 """
-import asyncio
+
 import os
 import sys
 
@@ -22,10 +22,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pyrogram import enums
 from pyrogram.types import Message
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_message(
     *,
@@ -61,6 +61,7 @@ def _make_bot() -> MagicMock:
     """Build minimal KraabUserbot mock."""
     with patch("src.userbot_bridge.Client"):
         from src.userbot_bridge import KraabUserbot
+
         bot = KraabUserbot()
     bot.client = AsyncMock()
     bot.me = MagicMock()
@@ -78,6 +79,7 @@ def _make_bot() -> MagicMock:
     bot._log_background_task_exception_cb = MagicMock()
     # set krab identity
     from src.core.krab_identity import set_krab_user_id
+
     set_krab_user_id(42)
     return bot
 
@@ -85,6 +87,7 @@ def _make_bot() -> MagicMock:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_group_mention_only_skips_without_mention():
@@ -136,7 +139,6 @@ async def test_group_muted_skips_all():
 @pytest.mark.asyncio
 async def test_dm_processed_normally():
     """DM → always processed regardless of filter mode."""
-    from src.core.chat_filter_config import chat_filter_config
 
     chat_id = "9999"
     # Even if someone mistakenly sets muted on a DM chat_id,

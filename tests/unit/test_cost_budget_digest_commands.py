@@ -52,7 +52,9 @@ class TestHandleCosts:
         msg = _make_message("!costs")
 
         analytics = CostAnalytics()
-        analytics.record_usage({"prompt_tokens": 100, "completion_tokens": 50}, model_id="gemini", channel="telegram")
+        analytics.record_usage(
+            {"prompt_tokens": 100, "completion_tokens": 50}, model_id="gemini", channel="telegram"
+        )
 
         with patch("src.handlers.command_handlers.cost_analytics", analytics):
             await handle_costs(bot, msg)
@@ -93,8 +95,12 @@ class TestHandleCosts:
         msg = _make_message("!costs")
 
         analytics = CostAnalytics()
-        analytics.record_usage({"prompt_tokens": 500, "completion_tokens": 200}, model_id="gpt-4o", channel="telegram")
-        analytics.record_usage({"prompt_tokens": 100, "completion_tokens": 50}, model_id="gemini", channel="web")
+        analytics.record_usage(
+            {"prompt_tokens": 500, "completion_tokens": 200}, model_id="gpt-4o", channel="telegram"
+        )
+        analytics.record_usage(
+            {"prompt_tokens": 100, "completion_tokens": 50}, model_id="gemini", channel="web"
+        )
 
         with patch("src.handlers.command_handlers.cost_analytics", analytics):
             await handle_costs(bot, msg)
@@ -110,7 +116,9 @@ class TestHandleCosts:
         msg = _make_message("!costs")
 
         analytics = CostAnalytics()
-        analytics.record_usage({"prompt_tokens": 100, "completion_tokens": 50}, model_id="gemini", channel="telegram")
+        analytics.record_usage(
+            {"prompt_tokens": 100, "completion_tokens": 50}, model_id="gemini", channel="telegram"
+        )
 
         with patch("src.handlers.command_handlers.cost_analytics", analytics):
             await handle_costs(bot, msg)
@@ -126,7 +134,9 @@ class TestHandleCosts:
         msg = _make_message("!costs")
 
         analytics = CostAnalytics(monthly_budget_usd=10.0)
-        analytics.record_usage({"prompt_tokens": 100, "completion_tokens": 50}, model_id="gemini", channel="telegram")
+        analytics.record_usage(
+            {"prompt_tokens": 100, "completion_tokens": 50}, model_id="gemini", channel="telegram"
+        )
 
         with patch("src.handlers.command_handlers.cost_analytics", analytics):
             await handle_costs(bot, msg)
@@ -291,7 +301,12 @@ class TestHandleDigest:
         mock_digest = MagicMock()
         mock_digest._telegram_callback = None
         mock_digest.generate_digest = AsyncMock(
-            return_value={"ok": True, "total_rounds": 5, "cost_week_usd": 0.25, "attention_count": 2}
+            return_value={
+                "ok": True,
+                "total_rounds": 5,
+                "cost_week_usd": 0.25,
+                "attention_count": 2,
+            }
         )
 
         with patch("src.handlers.command_handlers.weekly_digest", mock_digest):
@@ -312,7 +327,12 @@ class TestHandleDigest:
         mock_digest = MagicMock()
         mock_digest._telegram_callback = AsyncMock()  # callback установлен
         mock_digest.generate_digest = AsyncMock(
-            return_value={"ok": True, "total_rounds": 3, "cost_week_usd": 0.10, "attention_count": 0}
+            return_value={
+                "ok": True,
+                "total_rounds": 3,
+                "cost_week_usd": 0.10,
+                "attention_count": 0,
+            }
         )
 
         with patch("src.handlers.command_handlers.weekly_digest", mock_digest):

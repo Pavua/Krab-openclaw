@@ -364,10 +364,14 @@ async def test_tag_del_no_arg_raises(tmp_path) -> None:
 async def test_tags_isolated_per_chat(tmp_path) -> None:
     """Теги в разных чатах не пересекаются при поиске."""
     path = tmp_path / "message_tags.json"
-    path.write_text(json.dumps({
-        "111": {"1": ["срочно"]},
-        "222": {"2": ["другое"]},
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "111": {"1": ["срочно"]},
+                "222": {"2": ["другое"]},
+            }
+        )
+    )
     bot, msg = _make_message("find срочно", chat_id=222)
 
     with patch.object(cmd_module, "_TAGS_FILE", path):
@@ -384,6 +388,7 @@ async def test_load_tags_missing_file(tmp_path) -> None:
     path = tmp_path / "no_file.json"
     with patch.object(cmd_module, "_TAGS_FILE", path):
         from src.handlers.command_handlers import _load_tags
+
         result = _load_tags()
     assert result == {}
 
@@ -395,6 +400,7 @@ async def test_load_tags_corrupted_file(tmp_path) -> None:
     path.write_text("{not valid json!!!}")
     with patch.object(cmd_module, "_TAGS_FILE", path):
         from src.handlers.command_handlers import _load_tags
+
         result = _load_tags()
     assert result == {}
 
@@ -405,6 +411,7 @@ async def test_save_tags_creates_parent_dir(tmp_path) -> None:
     nested = tmp_path / "new_dir" / "message_tags.json"
     with patch.object(cmd_module, "_TAGS_FILE", nested):
         from src.handlers.command_handlers import _save_tags
+
         _save_tags({"100": {"1": ["тест"]}})
     assert nested.exists()
     data = json.loads(nested.read_text())

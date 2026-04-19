@@ -26,7 +26,6 @@ from src.handlers.command_handlers import (
     handle_report,
 )
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
@@ -71,7 +70,6 @@ class TestCollectDailyReportData:
     def test_returns_all_required_keys(self) -> None:
         """Функция возвращает все ожидаемые ключи."""
         from src.core.cost_analytics import CostAnalytics
-        from src.core.inbox_service import InboxService
 
         fake_ca = CostAnalytics()
         fake_inbox = MagicMock()
@@ -88,9 +86,16 @@ class TestCollectDailyReportData:
             data = _collect_daily_report_data()
 
         required_keys = {
-            "cost_today_usd", "cost_month_usd", "calls_today", "tokens_today",
-            "swarm_rounds_today", "swarm_teams_today", "swarm_duration_today",
-            "inbox_open", "inbox_errors", "inbox_warnings",
+            "cost_today_usd",
+            "cost_month_usd",
+            "calls_today",
+            "tokens_today",
+            "swarm_rounds_today",
+            "swarm_teams_today",
+            "swarm_duration_today",
+            "inbox_open",
+            "inbox_errors",
+            "inbox_warnings",
         }
         assert required_keys.issubset(data.keys())
 
@@ -107,8 +112,16 @@ class TestCollectDailyReportData:
         yesterday_ts = today_ts - 86400
 
         fake_ca._calls = [
-            CallRecord(model_id="m", input_tokens=100, output_tokens=50, cost_usd=0.01, timestamp=today_ts),
-            CallRecord(model_id="m", input_tokens=100, output_tokens=50, cost_usd=0.05, timestamp=yesterday_ts),
+            CallRecord(
+                model_id="m", input_tokens=100, output_tokens=50, cost_usd=0.01, timestamp=today_ts
+            ),
+            CallRecord(
+                model_id="m",
+                input_tokens=100,
+                output_tokens=50,
+                cost_usd=0.05,
+                timestamp=yesterday_ts,
+            ),
         ]
 
         fake_inbox = MagicMock()
@@ -148,7 +161,10 @@ class TestCollectDailyReportData:
         with (
             patch("src.handlers.command_handlers.cost_analytics", fake_ca),
             patch("src.handlers.command_handlers.inbox_service", fake_inbox),
-            patch("src.core.swarm_artifact_store.SwarmArtifactStore.list_artifacts", return_value=fake_sas.list_artifacts.return_value),
+            patch(
+                "src.core.swarm_artifact_store.SwarmArtifactStore.list_artifacts",
+                return_value=fake_sas.list_artifacts.return_value,
+            ),
         ):
             data = _collect_daily_report_data()
 
@@ -178,6 +194,7 @@ class TestCollectDailyReportData:
     def test_graceful_on_inbox_error(self) -> None:
         """При ошибке inbox_service возвращает нули для inbox-полей."""
         from src.core.cost_analytics import CostAnalytics
+
         fake_ca = CostAnalytics()
 
         fake_inbox = MagicMock()
@@ -323,7 +340,9 @@ class TestHandleReportDaily:
             "inbox_warnings": 0,
         }
 
-        with patch("src.handlers.command_handlers._collect_daily_report_data", return_value=fake_data):
+        with patch(
+            "src.handlers.command_handlers._collect_daily_report_data", return_value=fake_data
+        ):
             await handle_report(bot, msg)
 
         status_msg.edit.assert_called_once()
@@ -352,7 +371,9 @@ class TestHandleReportDaily:
                 "inbox_warnings": 0,
             }
 
-            with patch("src.handlers.command_handlers._collect_daily_report_data", return_value=fake_data):
+            with patch(
+                "src.handlers.command_handlers._collect_daily_report_data", return_value=fake_data
+            ):
                 await handle_report(bot, msg)
 
             status_msg.edit.assert_called_once()
@@ -500,7 +521,9 @@ class TestHandleReportCustom:
             yield "завершён."
 
         with (
-            patch("src.handlers.command_handlers._collect_daily_report_data", return_value=fake_data),
+            patch(
+                "src.handlers.command_handlers._collect_daily_report_data", return_value=fake_data
+            ),
             patch("src.handlers.command_handlers.openclaw_client") as mock_oc,
         ):
             mock_oc.send_message_stream = _fake_stream
@@ -538,17 +561,16 @@ class TestHandleReportCustom:
             yield  # делает функцию async generator
 
         with (
-            patch("src.handlers.command_handlers._collect_daily_report_data", return_value=fake_data),
+            patch(
+                "src.handlers.command_handlers._collect_daily_report_data", return_value=fake_data
+            ),
             patch("src.handlers.command_handlers.openclaw_client") as mock_oc,
         ):
             mock_oc.send_message_stream = _failing_stream
             await handle_report(bot, msg)
 
         # Должен показать ошибку
-        error_calls = [
-            c for c in status_msg.edit.call_args_list
-            if "❌" in str(c)
-        ]
+        error_calls = [c for c in status_msg.edit.call_args_list if "❌" in str(c)]
         assert len(error_calls) >= 1
 
     @pytest.mark.asyncio
@@ -577,7 +599,9 @@ class TestHandleReportCustom:
             yield "Краткий отчёт готов."
 
         with (
-            patch("src.handlers.command_handlers._collect_daily_report_data", return_value=fake_data),
+            patch(
+                "src.handlers.command_handlers._collect_daily_report_data", return_value=fake_data
+            ),
             patch("src.handlers.command_handlers.openclaw_client") as mock_oc,
         ):
             mock_oc.send_message_stream = _simple_stream

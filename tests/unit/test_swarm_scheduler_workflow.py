@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,11 +21,10 @@ from src.core.swarm_scheduler import (
     RecurringJob,
     SwarmScheduler,
     WorkflowType,
-    parse_interval,
 )
 
-
 # ── WorkflowType enum ────────────────────────────────────────────────────────
+
 
 class TestWorkflowType:
     def test_values(self):
@@ -50,6 +48,7 @@ class TestWorkflowType:
 
 # ── RecurringJob с workflow_type ─────────────────────────────────────────────
 
+
 class TestRecurringJobWorkflow:
     def test_default_workflow_type(self):
         job = RecurringJob(
@@ -61,48 +60,57 @@ class TestRecurringJobWorkflow:
         assert job.workflow_type == WorkflowType.STANDARD
 
     def test_from_dict_with_workflow_type(self):
-        job = RecurringJob.from_dict({
-            "job_id": "abc",
-            "team": "analysts",
-            "topic": "research topic",
-            "interval_sec": 7200,
-            "workflow_type": "research",
-        })
+        job = RecurringJob.from_dict(
+            {
+                "job_id": "abc",
+                "team": "analysts",
+                "topic": "research topic",
+                "interval_sec": 7200,
+                "workflow_type": "research",
+            }
+        )
         assert job.workflow_type == WorkflowType.RESEARCH
 
     def test_from_dict_report(self):
-        job = RecurringJob.from_dict({
-            "job_id": "xyz",
-            "team": "coders",
-            "topic": "weekly report",
-            "interval_sec": 86400,
-            "workflow_type": "report",
-        })
+        job = RecurringJob.from_dict(
+            {
+                "job_id": "xyz",
+                "team": "coders",
+                "topic": "weekly report",
+                "interval_sec": 86400,
+                "workflow_type": "report",
+            }
+        )
         assert job.workflow_type == WorkflowType.REPORT
 
     def test_from_dict_backward_compat_no_field(self):
         """Старые записи без workflow_type → стандарт."""
-        job = RecurringJob.from_dict({
-            "job_id": "old",
-            "team": "traders",
-            "topic": "legacy",
-            "interval_sec": 3600,
-        })
+        job = RecurringJob.from_dict(
+            {
+                "job_id": "old",
+                "team": "traders",
+                "topic": "legacy",
+                "interval_sec": 3600,
+            }
+        )
         assert job.workflow_type == WorkflowType.STANDARD
 
     def test_from_dict_invalid_workflow_falls_back(self):
         """Невалидный workflow_type → дефолт standard, не падаем."""
-        job = RecurringJob.from_dict({
-            "job_id": "bad",
-            "team": "traders",
-            "topic": "test",
-            "interval_sec": 3600,
-            "workflow_type": "garbage",
-        })
+        job = RecurringJob.from_dict(
+            {
+                "job_id": "bad",
+                "team": "traders",
+                "topic": "test",
+                "interval_sec": 3600,
+                "workflow_type": "garbage",
+            }
+        )
         assert job.workflow_type == WorkflowType.STANDARD
 
 
 # ── SwarmScheduler.add_job с workflow_type ───────────────────────────────────
+
 
 class TestSwarmSchedulerAddJobWorkflow:
     @pytest.fixture()
@@ -188,6 +196,7 @@ class TestSwarmSchedulerAddJobWorkflow:
 
 # ── format_jobs показывает workflow_type ─────────────────────────────────────
 
+
 class TestFormatJobsWorkflow:
     @pytest.fixture()
     def scheduler(self, tmp_path: Path) -> SwarmScheduler:
@@ -221,6 +230,7 @@ class TestFormatJobsWorkflow:
 
 
 # ── get_status включает workflow_type ────────────────────────────────────────
+
 
 class TestGetStatusWorkflow:
     def test_status_includes_workflow_type(self, tmp_path: Path):
@@ -262,6 +272,7 @@ def _make_swarm_mocks(team_registry: dict, result: str = "result"):
 
 
 # ── _execute_standard_job ────────────────────────────────────────────────────
+
 
 class TestExecuteStandardJob:
     @pytest.fixture()
@@ -307,6 +318,7 @@ class TestExecuteStandardJob:
 
 
 # ── _execute_research_job ────────────────────────────────────────────────────
+
 
 class TestExecuteResearchJob:
     @pytest.fixture()
@@ -365,11 +377,14 @@ class TestExecuteResearchJob:
 
         scheduler_with_mocks._router_factory = MagicMock()
 
-        with patch.dict("sys.modules", {
-            "src.core.swarm": mock_swarm_mod,
-            "src.core.swarm_bus": mock_bus_mod,
-            "src.core.swarm_artifact_store": mock_artifact_mod,
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "src.core.swarm": mock_swarm_mod,
+                "src.core.swarm_bus": mock_bus_mod,
+                "src.core.swarm_artifact_store": mock_artifact_mod,
+            },
+        ):
             await scheduler_with_mocks._execute_research_job(job)
 
         assert captured_topic, "run_round не был вызван"
@@ -394,6 +409,7 @@ class TestExecuteResearchJob:
 
 
 # ── _execute_report_job ──────────────────────────────────────────────────────
+
 
 class TestExecuteReportJob:
     @pytest.fixture()
@@ -433,11 +449,14 @@ class TestExecuteReportJob:
 
         scheduler_with_mocks._router_factory = MagicMock()
 
-        with patch.dict("sys.modules", {
-            "src.core.swarm": mock_swarm_mod,
-            "src.core.swarm_bus": mock_bus_mod,
-            "src.core.swarm_artifact_store": mock_artifact_mod,
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "src.core.swarm": mock_swarm_mod,
+                "src.core.swarm_bus": mock_bus_mod,
+                "src.core.swarm_artifact_store": mock_artifact_mod,
+            },
+        ):
             result = await scheduler_with_mocks._execute_report_job(job)
 
         assert result == "report result"
@@ -483,6 +502,7 @@ class TestExecuteReportJob:
 
 # ── _execute_job dispatch ────────────────────────────────────────────────────
 
+
 class TestExecuteJobDispatch:
     """Проверяем что _execute_job вызывает нужный метод по workflow_type."""
 
@@ -497,7 +517,10 @@ class TestExecuteJobDispatch:
     @pytest.mark.asyncio
     async def test_dispatch_standard(self, scheduler_with_mocks):
         job = RecurringJob(
-            job_id="d1", team="traders", topic="BTC", interval_sec=3600,
+            job_id="d1",
+            team="traders",
+            topic="BTC",
+            interval_sec=3600,
             workflow_type=WorkflowType.STANDARD,
         )
         scheduler_with_mocks._execute_standard_job = AsyncMock(return_value="std")
@@ -513,7 +536,10 @@ class TestExecuteJobDispatch:
     @pytest.mark.asyncio
     async def test_dispatch_research(self, scheduler_with_mocks):
         job = RecurringJob(
-            job_id="d2", team="analysts", topic="AI", interval_sec=3600,
+            job_id="d2",
+            team="analysts",
+            topic="AI",
+            interval_sec=3600,
             workflow_type=WorkflowType.RESEARCH,
         )
         scheduler_with_mocks._execute_standard_job = AsyncMock(return_value="std")
@@ -529,7 +555,10 @@ class TestExecuteJobDispatch:
     @pytest.mark.asyncio
     async def test_dispatch_report(self, scheduler_with_mocks):
         job = RecurringJob(
-            job_id="d3", team="coders", topic="sprint", interval_sec=86400,
+            job_id="d3",
+            team="coders",
+            topic="sprint",
+            interval_sec=86400,
             workflow_type=WorkflowType.REPORT,
         )
         scheduler_with_mocks._execute_standard_job = AsyncMock(return_value="std")
@@ -546,7 +575,10 @@ class TestExecuteJobDispatch:
     async def test_dispatch_updates_total_runs(self, scheduler_with_mocks):
         """После успешного dispatch total_runs инкрементируется."""
         job = RecurringJob(
-            job_id="d4", team="traders", topic="test", interval_sec=3600,
+            job_id="d4",
+            team="traders",
+            topic="test",
+            interval_sec=3600,
             workflow_type=WorkflowType.STANDARD,
         )
         scheduler_with_mocks._jobs[job.job_id] = job
@@ -561,7 +593,10 @@ class TestExecuteJobDispatch:
     async def test_dispatch_sends_message_with_workflow_label(self, scheduler_with_mocks):
         """Заголовок сообщения owner-у содержит label по workflow_type."""
         job = RecurringJob(
-            job_id="d5", team="analysts", topic="research_topic", interval_sec=3600,
+            job_id="d5",
+            team="analysts",
+            topic="research_topic",
+            interval_sec=3600,
             workflow_type=WorkflowType.RESEARCH,
         )
         scheduler_with_mocks._jobs[job.job_id] = job
@@ -578,7 +613,10 @@ class TestExecuteJobDispatch:
         """Без router_factory — job пишет last_error."""
         scheduler_with_mocks._router_factory = None
         job = RecurringJob(
-            job_id="d6", team="traders", topic="test", interval_sec=3600,
+            job_id="d6",
+            team="traders",
+            topic="test",
+            interval_sec=3600,
         )
         scheduler_with_mocks._jobs[job.job_id] = job
 

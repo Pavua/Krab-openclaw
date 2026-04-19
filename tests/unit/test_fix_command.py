@@ -27,7 +27,6 @@ import pytest
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_fix
 
-
 # ---------------------------------------------------------------------------
 # Хелперы
 # ---------------------------------------------------------------------------
@@ -64,9 +63,11 @@ def _make_message(
 
 def _async_gen(*values: str):
     """Создаёт AsyncGenerator из списка строк."""
+
     async def _gen():
         for v in values:
             yield v
+
     return _gen()
 
 
@@ -448,14 +449,17 @@ class TestHandleFixExported:
     def test_handle_fix_importable_from_command_handlers(self) -> None:
         """handle_fix импортируется из src.handlers.command_handlers."""
         from src.handlers.command_handlers import handle_fix as hf  # noqa: F401
+
         assert callable(hf)
 
     def test_handle_fix_importable_from_handlers_package(self) -> None:
         """handle_fix импортируется из src.handlers."""
         from src.handlers import handle_fix as hf  # noqa: F401
+
         assert callable(hf)
 
     def test_handle_fix_in_all(self) -> None:
         """handle_fix присутствует в __all__ пакета handlers."""
         import src.handlers as handlers_pkg
+
         assert "handle_fix" in handlers_pkg.__all__

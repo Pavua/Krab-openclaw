@@ -29,7 +29,6 @@ import pytest
 
 from src.core.chat_monitor import ChatMonitorService, MonitorEntry
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Fixtures
 # ──────────────────────────────────────────────────────────────────────────────

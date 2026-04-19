@@ -171,9 +171,7 @@ class TestCreateVecTable:
         conn = sqlite3.connect(":memory:")
         create_vec_table(conn, dim=4)
         # Таблица должна появиться в sqlite_master.
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE name='vec_chunks';"
-        ).fetchone()
+        row = conn.execute("SELECT name FROM sqlite_master WHERE name='vec_chunks';").fetchone()
         assert row is not None
         assert row[0] == "vec_chunks"
 
@@ -184,9 +182,7 @@ class TestCreateVecTable:
         create_vec_table(conn, dim=4)
         create_vec_table(conn, dim=4)
         # Таблица всё ещё существует.
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE name='vec_chunks';"
-        ).fetchone()
+        row = conn.execute("SELECT name FROM sqlite_master WHERE name='vec_chunks';").fetchone()
         assert row is not None
 
     def test_insert_vector(self) -> None:
@@ -309,9 +305,7 @@ class TestEmbedAllUnindexed:
         _seed_chunks(conn, count=5)
         conn.close()
 
-        emb = MemoryEmbedder(
-            archive_paths=paths, batch_size=2, _model=FakeEmbedModel()
-        )
+        emb = MemoryEmbedder(archive_paths=paths, batch_size=2, _model=FakeEmbedModel())
         try:
             stats = emb.embed_all_unindexed()
             assert stats.chunks_processed == 5

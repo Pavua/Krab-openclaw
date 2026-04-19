@@ -17,7 +17,7 @@ macOS automation используется только как probe внутри
 from __future__ import annotations
 
 from contextlib import contextmanager
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
 

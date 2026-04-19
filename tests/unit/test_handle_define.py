@@ -6,14 +6,14 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
 
 from src.handlers.command_handlers import (
     _build_define_prompt,
     _parse_define_args,
 )
-
 
 # ---------------------------------------------------------------------------
 # _parse_define_args
@@ -210,9 +210,7 @@ class TestHandleDefine:
         async def fake_stream(*args, **kwargs):
             yield "Python — высокоуровневый язык программирования."
 
-        monkeypatch.setattr(
-            command_handlers.openclaw_client, "send_message_stream", fake_stream
-        )
+        monkeypatch.setattr(command_handlers.openclaw_client, "send_message_stream", fake_stream)
 
         msg, reply_mock = self._make_message("!define Python", chat_id=42)
         bot = self._make_bot("Python")
@@ -235,9 +233,7 @@ class TestHandleDefine:
         async def fake_stream(*args, **kwargs):
             yield "Python is a high-level programming language."
 
-        monkeypatch.setattr(
-            command_handlers.openclaw_client, "send_message_stream", fake_stream
-        )
+        monkeypatch.setattr(command_handlers.openclaw_client, "send_message_stream", fake_stream)
 
         msg, reply_mock = self._make_message("!define Python en", chat_id=42)
         bot = self._make_bot("Python en")
@@ -257,9 +253,7 @@ class TestHandleDefine:
         async def fake_stream(*args, **kwargs):
             yield "Развёрнутое определение Python..."
 
-        monkeypatch.setattr(
-            command_handlers.openclaw_client, "send_message_stream", fake_stream
-        )
+        monkeypatch.setattr(command_handlers.openclaw_client, "send_message_stream", fake_stream)
 
         msg, reply_mock = self._make_message("!define Python подробно", chat_id=42)
         bot = self._make_bot("Python подробно")
@@ -282,9 +276,7 @@ class TestHandleDefine:
             captured_chat_id.append(kwargs.get("chat_id", ""))
             yield "Определение."
 
-        monkeypatch.setattr(
-            command_handlers.openclaw_client, "send_message_stream", fake_stream
-        )
+        monkeypatch.setattr(command_handlers.openclaw_client, "send_message_stream", fake_stream)
 
         msg, _ = self._make_message("!define тест", chat_id=999)
         bot = self._make_bot("тест")
@@ -307,9 +299,7 @@ class TestHandleDefine:
             captured_kwargs.append(kwargs)
             yield "Определение."
 
-        monkeypatch.setattr(
-            command_handlers.openclaw_client, "send_message_stream", fake_stream
-        )
+        monkeypatch.setattr(command_handlers.openclaw_client, "send_message_stream", fake_stream)
 
         msg, _ = self._make_message("!define тест", chat_id=5)
         bot = self._make_bot("тест")
@@ -362,9 +352,7 @@ class TestHandleDefine:
             return
             yield  # noqa: unreachable
 
-        monkeypatch.setattr(
-            command_handlers.openclaw_client, "send_message_stream", fake_stream
-        )
+        monkeypatch.setattr(command_handlers.openclaw_client, "send_message_stream", fake_stream)
 
         msg, reply_mock = self._make_message("!define тест", chat_id=3)
         bot = self._make_bot("тест")
@@ -384,9 +372,7 @@ class TestHandleDefine:
         async def fake_stream(*args, **kwargs):
             yield "A" * 5000
 
-        monkeypatch.setattr(
-            command_handlers.openclaw_client, "send_message_stream", fake_stream
-        )
+        monkeypatch.setattr(command_handlers.openclaw_client, "send_message_stream", fake_stream)
 
         msg, reply_mock = self._make_message("!define тест", chat_id=4)
         bot = self._make_bot("тест")
@@ -436,9 +422,7 @@ class TestHandleDefine:
         async def fake_stream(*args, **kwargs):
             yield "Определение из reply."
 
-        monkeypatch.setattr(
-            command_handlers.openclaw_client, "send_message_stream", fake_stream
-        )
+        monkeypatch.setattr(command_handlers.openclaw_client, "send_message_stream", fake_stream)
 
         reply_msg = types.SimpleNamespace(text="энтропия")
         msg, reply_mock = self._make_message("!define", chat_id=10)
@@ -461,9 +445,7 @@ class TestHandleDefine:
             raise RuntimeError("connection timeout")
             yield  # noqa: unreachable
 
-        monkeypatch.setattr(
-            command_handlers.openclaw_client, "send_message_stream", fake_stream
-        )
+        monkeypatch.setattr(command_handlers.openclaw_client, "send_message_stream", fake_stream)
 
         msg, reply_mock = self._make_message("!define тест", chat_id=6)
         bot = self._make_bot("тест")

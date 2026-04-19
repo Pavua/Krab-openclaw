@@ -111,6 +111,7 @@ class TestMaybeReloadPicksUpExternalEdit:
         # Гарантируем, что mtime новее на > 0.1 сек
         new_mtime = cfg._last_mtime + 0.2
         import os
+
         os.utime(tmp_json, (new_mtime, new_mtime))
 
         assert cfg.get() == {"v": 2}
@@ -122,6 +123,7 @@ class TestMaybeReloadPicksUpExternalEdit:
         old_mtime = tmp_json.stat().st_mtime
         tmp_json.write_text(json.dumps({"v": 99}), encoding="utf-8")
         import os
+
         os.utime(tmp_json, (old_mtime, old_mtime))
 
         # Краб должен вернуть старые данные (mtime не изменился)
@@ -134,6 +136,7 @@ class TestMaybeReloadPicksUpExternalEdit:
         new_mtime = cfg._last_mtime + 0.2
         tmp_json.write_text(json.dumps({"v": 2}), encoding="utf-8")
         import os
+
         os.utime(tmp_json, (new_mtime, new_mtime))
 
         reloaded = cfg._maybe_reload()

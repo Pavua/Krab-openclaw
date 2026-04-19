@@ -24,7 +24,6 @@ from src.core.access_control import AccessLevel
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_debug
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фикстуры
 # ---------------------------------------------------------------------------
@@ -104,6 +103,7 @@ async def test_debug_default_содержит_ключевые_секции(monk
         "total_waited": 5,
     }
     import src.handlers.command_handlers as ch_mod
+
     monkeypatch.setattr(ch_mod, "_active_timers", {1: {}, 2: {}})
 
     # Патчим openclaw_client._sessions
@@ -121,6 +121,7 @@ async def test_debug_default_содержит_ключевые_секции(monk
     with patch("src.core.telegram_rate_limiter.telegram_rate_limiter", rl_mock):
         # Импортируем модуль rate_limiter чтобы патч применился внутри handle_debug
         import src.core.telegram_rate_limiter as rl_module
+
         monkeypatch.setattr(rl_module, "telegram_rate_limiter", rl_mock)
         await handle_debug(bot, msg)
 
@@ -134,18 +135,22 @@ async def test_debug_default_содержит_ключевые_секции(monk
 
 
 @pytest.mark.asyncio
-async def test_debug_default_показывает_количество_таймеров(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_debug_default_показывает_количество_таймеров(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Количество pending timers правильно отображается в сводке."""
     bot = _make_bot()
     msg = _make_message()
 
-    import src.handlers.command_handlers as ch_mod
     import src.core.telegram_rate_limiter as rl_module
+    import src.handlers.command_handlers as ch_mod
 
     rl_mock = MagicMock()
     rl_mock.stats.return_value = {
-        "max_per_sec": 30, "current_in_window": 0,
-        "total_acquired": 0, "total_waited": 0,
+        "max_per_sec": 30,
+        "current_in_window": 0,
+        "total_acquired": 0,
+        "total_waited": 0,
     }
     monkeypatch.setattr(rl_module, "telegram_rate_limiter", rl_mock)
     monkeypatch.setattr(ch_mod, "_active_timers", {10: {}, 20: {}, 30: {}})
@@ -163,13 +168,15 @@ async def test_debug_default_без_сессий(monkeypatch: pytest.MonkeyPatch
     bot = _make_bot()
     msg = _make_message()
 
-    import src.handlers.command_handlers as ch_mod
     import src.core.telegram_rate_limiter as rl_module
+    import src.handlers.command_handlers as ch_mod
 
     rl_mock = MagicMock()
     rl_mock.stats.return_value = {
-        "max_per_sec": 30, "current_in_window": 0,
-        "total_acquired": 0, "total_waited": 0,
+        "max_per_sec": 30,
+        "current_in_window": 0,
+        "total_acquired": 0,
+        "total_waited": 0,
     }
     monkeypatch.setattr(rl_module, "telegram_rate_limiter", rl_mock)
     monkeypatch.setattr(ch_mod, "_active_timers", {})
@@ -187,13 +194,15 @@ async def test_debug_default_нет_атрибута_sessions(monkeypatch: pytes
     bot = _make_bot()
     msg = _make_message()
 
-    import src.handlers.command_handlers as ch_mod
     import src.core.telegram_rate_limiter as rl_module
+    import src.handlers.command_handlers as ch_mod
 
     rl_mock = MagicMock()
     rl_mock.stats.return_value = {
-        "max_per_sec": 30, "current_in_window": 0,
-        "total_acquired": 0, "total_waited": 0,
+        "max_per_sec": 30,
+        "current_in_window": 0,
+        "total_acquired": 0,
+        "total_waited": 0,
     }
     monkeypatch.setattr(rl_module, "telegram_rate_limiter", rl_mock)
     monkeypatch.setattr(ch_mod, "_active_timers", {})
@@ -213,13 +222,15 @@ async def test_debug_default_last_error_из_proactive_watch(monkeypatch: pytest
     bot = _make_bot()
     msg = _make_message()
 
-    import src.handlers.command_handlers as ch_mod
     import src.core.telegram_rate_limiter as rl_module
+    import src.handlers.command_handlers as ch_mod
 
     rl_mock = MagicMock()
     rl_mock.stats.return_value = {
-        "max_per_sec": 30, "current_in_window": 0,
-        "total_acquired": 0, "total_waited": 0,
+        "max_per_sec": 30,
+        "current_in_window": 0,
+        "total_acquired": 0,
+        "total_waited": 0,
     }
     monkeypatch.setattr(rl_module, "telegram_rate_limiter", rl_mock)
     monkeypatch.setattr(ch_mod, "_active_timers", {})
@@ -245,13 +256,15 @@ async def test_debug_default_last_error_проactive_watch_недоступен(
     bot = _make_bot()
     msg = _make_message()
 
-    import src.handlers.command_handlers as ch_mod
     import src.core.telegram_rate_limiter as rl_module
+    import src.handlers.command_handlers as ch_mod
 
     rl_mock = MagicMock()
     rl_mock.stats.return_value = {
-        "max_per_sec": 30, "current_in_window": 0,
-        "total_acquired": 0, "total_waited": 0,
+        "max_per_sec": 30,
+        "current_in_window": 0,
+        "total_acquired": 0,
+        "total_waited": 0,
     }
     monkeypatch.setattr(rl_module, "telegram_rate_limiter", rl_mock)
     monkeypatch.setattr(ch_mod, "_active_timers", {})
@@ -319,7 +332,6 @@ async def test_debug_tasks_не_падает_при_многих_задачах(
     await asyncio.gather(*fake_tasks, return_exceptions=True)
 
     # Патчим asyncio.all_tasks
-    import src.handlers.command_handlers as ch_mod
     monkeypatch.setattr(asyncio, "all_tasks", lambda: fake_tasks[:35])
 
     await handle_debug(bot, msg)
@@ -339,6 +351,7 @@ async def test_debug_sessions_пустой_список(monkeypatch: pytest.Monk
     msg = _make_message(args="sessions")
 
     import src.handlers.command_handlers as ch_mod
+
     monkeypatch.setattr(ch_mod.openclaw_client, "_sessions", {}, raising=False)
 
     await handle_debug(bot, msg)
@@ -356,13 +369,17 @@ async def test_debug_sessions_показывает_сессии(monkeypatch: pyt
     import src.handlers.command_handlers as ch_mod
 
     fake_sessions = {
-        "telegram_111": deque([
-            {"role": "user", "content": "Привет, как дела?"},
-            {"role": "assistant", "content": "Отлично! Чем могу помочь?"},
-        ]),
-        "telegram_222": deque([
-            {"role": "user", "content": "test"},
-        ]),
+        "telegram_111": deque(
+            [
+                {"role": "user", "content": "Привет, как дела?"},
+                {"role": "assistant", "content": "Отлично! Чем могу помочь?"},
+            ]
+        ),
+        "telegram_222": deque(
+            [
+                {"role": "user", "content": "test"},
+            ]
+        ),
     }
     monkeypatch.setattr(ch_mod.openclaw_client, "_sessions", fake_sessions, raising=False)
 
@@ -401,6 +418,7 @@ async def test_debug_sessions_нет_атрибута_sessions(monkeypatch: pyte
     msg = _make_message(args="sessions")
 
     import src.handlers.command_handlers as ch_mod
+
     monkeypatch.delattr(ch_mod.openclaw_client, "_sessions", raising=False)
 
     await handle_debug(bot, msg)
@@ -421,6 +439,7 @@ async def test_debug_gc_вызывает_collect() -> None:
     msg = _make_message(args="gc")
 
     import gc
+
     collected_calls = []
     original_collect = gc.collect
 
@@ -474,10 +493,12 @@ async def test_debug_gc_unreachable_count() -> None:
 def test_handle_debug_экспортируется_из_handlers() -> None:
     """handle_debug доступен через src.handlers."""
     from src.handlers import handle_debug as hd
+
     assert callable(hd)
 
 
 def test_handle_debug_в_all_handlers() -> None:
     """handle_debug присутствует в __all__ пакета handlers."""
     import src.handlers as h
+
     assert "handle_debug" in h.__all__

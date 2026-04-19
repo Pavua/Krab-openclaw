@@ -10,6 +10,7 @@
   - пустой query / все score ниже порога → original query;
   - `_short_preview` обрезает длинный текст.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

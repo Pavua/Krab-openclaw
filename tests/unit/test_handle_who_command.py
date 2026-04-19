@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -76,6 +76,7 @@ def _make_chat_info(bio: str | None = "Founder of Telegram") -> MagicMock:
 # 1. !who @username — инфо по имени
 # ─────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_who_by_username_shows_user_info() -> None:
     """!who @durov — должен показать имя, username, ID."""
@@ -141,6 +142,7 @@ async def test_who_by_numeric_id() -> None:
 # ─────────────────────────────────────────────
 # 2. !who — reply на сообщение
 # ─────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_who_reply_shows_author_info() -> None:
@@ -208,6 +210,7 @@ async def test_who_reply_no_sender() -> None:
 # 3. !who без аргументов и без reply — текущий чат
 # ─────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_who_no_args_shows_current_chat() -> None:
     """!who без аргументов — показывает инфо о текущем чате."""
@@ -259,6 +262,7 @@ async def test_who_chat_no_username() -> None:
 # ─────────────────────────────────────────────
 # 4. Специальные флаги пользователя
 # ─────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_who_bot_user_no_common_chats() -> None:
@@ -334,6 +338,7 @@ async def test_who_restricted_user_shows_flag() -> None:
 # 5. Обработка ошибок API
 # ─────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_who_user_not_found_shows_error() -> None:
     """Ошибка get_users — показываем сообщение об ошибке."""
@@ -402,6 +407,7 @@ async def test_who_bio_error_shows_dash() -> None:
 # ─────────────────────────────────────────────
 # 6. Форматирование имени
 # ─────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_who_no_last_name() -> None:

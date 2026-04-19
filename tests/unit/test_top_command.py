@@ -29,10 +29,10 @@ import pytest
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import _plural_messages, handle_top
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
+
 
 def _make_user(
     user_id: int = 1,
@@ -90,6 +90,7 @@ def _make_message(chat_id: int = -100100) -> SimpleNamespace:
 # _plural_messages — юнит-тесты склонения
 # ---------------------------------------------------------------------------
 
+
 class TestPluralMessages:
     """Тесты функции склонения _plural_messages."""
 
@@ -129,6 +130,7 @@ class TestPluralMessages:
 # ---------------------------------------------------------------------------
 # handle_top — интеграционные тесты с mock-историей
 # ---------------------------------------------------------------------------
+
 
 class TestHandleTopBasic:
     """Базовые сценарии !top."""
@@ -291,8 +293,8 @@ class TestHandleTopFiltering:
         bot = _make_bot("all")
         alice = _make_user(1, username="alice")
         history = [
-            _make_msg(None),   # канал — пропустить
-            _make_msg(None),   # сервисное — пропустить
+            _make_msg(None),  # канал — пропустить
+            _make_msg(None),  # сервисное — пропустить
             _make_msg(alice),  # живой пользователь
         ]
         bot.client.get_chat_history = MagicMock(return_value=_async_gen(history))

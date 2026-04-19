@@ -1,6 +1,6 @@
 # Krab Telegram Commands Cheatsheet
 
-Generated: 2026-04-17 23:47 · Total: 145 commands
+Generated: 2026-04-18 21:33 · Total: 147 commands
 
 ## Categories
 
@@ -13,11 +13,11 @@ Generated: 2026-04-17 23:47 · Total: 145 commands
 | files | 1 |
 | management | 22 |
 | models | 3 |
-| modes | 8 |
+| modes | 9 |
 | notes | 13 |
 | scheduler | 9 |
 | swarm | 1 |
-| system | 20 |
+| system | 21 |
 | translator | 1 |
 | users | 11 |
 
@@ -146,6 +146,7 @@ Generated: 2026-04-17 23:47 · Total: 145 commands
 | `!afk` | `!afk [сообщение] | !afk off` | Режим Away From Keyboard: авто-ответ при упоминании | ✓ |
 | `!cap` | `!cap [name on|off|reset]` | Матрица capabilities чатов | ✓ |
 | `!chatban` | `!chatban [chat_id]` | Заблокировать обработку чата | ✓ |
+| `!listen` | `!listen [active|mention-only|muted|reset|list|stats]` | Режим ответов Краба в текущем чате | ✓ |
 | `!notify` | `!notify on|off` | Tool narrations (🔍 Ищу... 📸 Скриншот...) | ✓ |
 | `!spam` | `!spam block <@user|id> | !spam unblock <id> | !spam list` | Антиспам: блокировать/разблокировать пользователя за спам | ✓ |
 | `!typing` | `!typing [сек]` | Имитировать typing action в чате | ✓ |
@@ -191,7 +192,7 @@ Generated: 2026-04-17 23:47 · Total: 145 commands
 
 | Command | Usage | Description | Owner |
 |---------|-------|-------------|-------|
-| `!swarm` | `!swarm <team> <задача>|research <тема>|summary|teams|schedule|memory|jobs|task|artifacts|listen|channels|setup` | Мультиагентный рой: research, summary, schedule, teams, memory | ✓ |
+| `!swarm` | `!swarm <team> <задача>|research <тема>|summary|teams|schedule|memory|jobs|task|artifacts|listen|channels|setup` | Мультиагентный рой: research (+ self-reflection → follow-up tasks), summary, sch | ✓ |
 
 ## System
 
@@ -206,6 +207,7 @@ Generated: 2026-04-17 23:47 · Total: 145 commands
 | `!history` | `!history` | Статистика чата (последние 1000 сообщений) | — |
 | `!hs` | `!hs <команда>` | Hammerspoon bridge | ✓ |
 | `!log` | `!log [N] [error|warn|info]` | Последние N строк лог-файла Краба | ✓ |
+| `!loglevel` | `!loglevel [TRACE|DEBUG|INFO|WARNING|ERROR|CRITICAL]` | Runtime лог-уровень: показать или сменить (owner-only) | ✓ |
 | `!ls` | `!ls [path]` | Список файлов | ✓ |
 | `!mac` | `!mac clipboard|notify|apps|finder|notes|reminders|calendar` | macOS автоматизация (clipboard/notify/apps/finder/notes/reminders/calendar) | ✓ |
 | `!read` | `!read <path>` | Чтение файла | ✓ |
@@ -279,7 +281,9 @@ Generated: 2026-04-17 23:47 · Total: 145 commands
 | `!inbox` | `!inbox [list|ack|done|approve|reject|task]` |
 | `!invite` | `!invite <@user|id> [chat_id]` |
 | `!link` | `!link [сообщение]  (reply на сообщение для permalink)` |
+| `!listen` | `!listen [active|mention-only|muted|reset|list|stats]` |
 | `!log` | `!log [N] [error|warn|info]` |
+| `!loglevel` | `!loglevel [TRACE|DEBUG|INFO|WARNING|ERROR|CRITICAL]` |
 | `!ls` | `!ls [path]` |
 | `!mac` | `!mac clipboard|notify|apps|finder|notes|reminders|calendar` |
 | `!mark` | `!mark [tag]  (reply на сообщение)` |

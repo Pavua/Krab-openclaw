@@ -52,6 +52,7 @@ FIXTURE_CHAT_ID = "-1003703978531"
 # extract_text — три формата.
 # ---------------------------------------------------------------------------
 
+
 class TestExtractText:
     def test_plain_string(self) -> None:
         msg = {"text": "привет мир"}
@@ -101,6 +102,7 @@ class TestExtractText:
 # detect_export_format / iter_chats.
 # ---------------------------------------------------------------------------
 
+
 class TestFormatDetection:
     def test_single_chat_format(self) -> None:
         data = {"name": "X", "type": "personal_chat", "id": 1, "messages": []}
@@ -137,6 +139,7 @@ class TestFormatDetection:
 # Вспомогательные.
 # ---------------------------------------------------------------------------
 
+
 class TestChunkHash:
     def test_deterministic(self) -> None:
         assert _chunk_hash("c1", "10") == _chunk_hash("c1", "10")
@@ -161,6 +164,7 @@ class TestChatTypeMap:
 # ---------------------------------------------------------------------------
 # Whitelist fixture — allow fixture chat.
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def allowed_whitelist(tmp_path: Path) -> Path:
@@ -192,10 +196,9 @@ def deny_whitelist(tmp_path: Path) -> Path:
 # Dry-run.
 # ---------------------------------------------------------------------------
 
+
 class TestDryRun:
-    def test_dry_run_does_not_touch_db(
-        self, tmp_path: Path, allowed_whitelist: Path
-    ) -> None:
+    def test_dry_run_does_not_touch_db(self, tmp_path: Path, allowed_whitelist: Path) -> None:
         # Dry-run: даже если db_path передан, файл не создаётся.
         fake_db = tmp_path / "must_not_exist.db"
         stats = run_bootstrap(
@@ -267,6 +270,7 @@ class TestDryRun:
 # Полный прогон на :memory:.
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def memory_conn() -> sqlite3.Connection:
     """In-memory SQLite — скрипт поднимет схему сам."""
@@ -302,22 +306,16 @@ class TestFullRun:
         assert mcount == stats.messages_processed
 
         # Messages.
-        msg_count = memory_conn.execute(
-            "SELECT COUNT(*) FROM messages;"
-        ).fetchone()[0]
+        msg_count = memory_conn.execute("SELECT COUNT(*) FROM messages;").fetchone()[0]
         assert msg_count == stats.messages_processed
 
         # Chunks.
-        chunk_count = memory_conn.execute(
-            "SELECT COUNT(*) FROM chunks;"
-        ).fetchone()[0]
+        chunk_count = memory_conn.execute("SELECT COUNT(*) FROM chunks;").fetchone()[0]
         assert chunk_count == stats.chunks_created
         assert chunk_count >= 1
 
         # chunk_messages M2M >= chunks (каждый chunk хотя бы одно сообщение).
-        m2m_count = memory_conn.execute(
-            "SELECT COUNT(*) FROM chunk_messages;"
-        ).fetchone()[0]
+        m2m_count = memory_conn.execute("SELECT COUNT(*) FROM chunk_messages;").fetchone()[0]
         assert m2m_count >= chunk_count
 
     def test_fts_search_returns_matches(
@@ -391,17 +389,13 @@ class TestFullRun:
             in_memory_conn=memory_conn,
         )
         # После первого прогона перезапускаем на том же conn.
-        before_chunks = memory_conn.execute(
-            "SELECT COUNT(*) FROM chunks;"
-        ).fetchone()[0]
+        before_chunks = memory_conn.execute("SELECT COUNT(*) FROM chunks;").fetchone()[0]
         stats_2 = run_bootstrap(
             export_path=FIXTURE_PATH,
             whitelist_path=allowed_whitelist,
             in_memory_conn=memory_conn,
         )
-        after_chunks = memory_conn.execute(
-            "SELECT COUNT(*) FROM chunks;"
-        ).fetchone()[0]
+        after_chunks = memory_conn.execute("SELECT COUNT(*) FROM chunks;").fetchone()[0]
         # Idempotent: количество chunks одно и то же.
         assert before_chunks == after_chunks
         assert stats_1.chunks_created == stats_2.chunks_created
@@ -424,6 +418,7 @@ class TestFullRun:
 # Validation / errors.
 # ---------------------------------------------------------------------------
 
+
 class TestErrors:
     def test_missing_file_raises(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
@@ -445,6 +440,7 @@ class TestErrors:
 # ---------------------------------------------------------------------------
 # BootstrapStats sanity.
 # ---------------------------------------------------------------------------
+
 
 class TestStatsSerialization:
     def test_as_dict_contains_core_keys(self) -> None:

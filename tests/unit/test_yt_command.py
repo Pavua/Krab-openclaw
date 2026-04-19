@@ -27,7 +27,6 @@ import pytest
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import _extract_yt_url, handle_yt
 
-
 # ---------------------------------------------------------------------------
 # Хелперы
 # ---------------------------------------------------------------------------
@@ -62,9 +61,11 @@ def _make_msg(
 
 def _async_gen(*values: str):
     """AsyncGenerator из списка строк."""
+
     async def _gen():
         for v in values:
             yield v
+
     return _gen()
 
 
@@ -124,7 +125,11 @@ class TestHandleYtValidation:
         msg = _make_msg("", reply_text=None)
         with pytest.raises(UserInputError) as exc_info:
             await handle_yt(bot, msg)
-        assert "yt" in exc_info.value.user_message.lower() or "youtube" in exc_info.value.user_message.lower() or "url" in exc_info.value.user_message.lower()
+        assert (
+            "yt" in exc_info.value.user_message.lower()
+            or "youtube" in exc_info.value.user_message.lower()
+            or "url" in exc_info.value.user_message.lower()
+        )
 
     @pytest.mark.asyncio
     async def test_аргументы_без_youtube_url_UserInputError(self) -> None:
@@ -495,7 +500,9 @@ class TestHandleYtPrompt:
         # Хотя бы часть полей должна быть упомянута
         fields = ["назван", "автор", "дат", "описан"]
         found = sum(1 for f in fields if f.lower() in prompt.lower())
-        assert found >= 2, f"Ожидалось упоминание полей в промпте, нашли только {found}: {prompt[:200]}"
+        assert found >= 2, (
+            f"Ожидалось упоминание полей в промпте, нашли только {found}: {prompt[:200]}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -509,9 +516,11 @@ class TestHandleYtExported:
     def test_handle_yt_importable(self) -> None:
         """handle_yt импортируется из src.handlers.command_handlers."""
         from src.handlers.command_handlers import handle_yt  # noqa: F401
+
         assert callable(handle_yt)
 
     def test_extract_yt_url_importable(self) -> None:
         """_extract_yt_url импортируется из src.handlers.command_handlers."""
         from src.handlers.command_handlers import _extract_yt_url  # noqa: F401
+
         assert callable(_extract_yt_url)

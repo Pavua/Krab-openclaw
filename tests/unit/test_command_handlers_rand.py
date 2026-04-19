@@ -323,6 +323,7 @@ class TestRandPass:
     @pytest.mark.asyncio
     async def test_пароль_содержит_только_допустимые_символы(self):
         import string
+
         allowed = set(string.ascii_letters + string.digits + "!@#$%^&*-_=+")
         bot = _make_bot("pass 64")
         msg = _make_message()
@@ -370,7 +371,9 @@ class TestRandUUID:
             msg = _make_message()
             await handle_rand(bot, msg)
             text = msg.reply.await_args.args[0]
-            m = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", text, re.IGNORECASE)
+            m = re.search(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", text, re.IGNORECASE
+            )
             results.add(m.group())
         assert len(results) == 3
 

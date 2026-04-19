@@ -70,8 +70,8 @@ async def test_generate_summary_with_archive():
     # Мокируем Path.exists() и sqlite3 внутри _append_archive_stats
     mock_conn = MagicMock()
     mock_conn.execute.side_effect = [
-        MagicMock(fetchone=lambda: (1234,)),   # total
-        MagicMock(fetchone=lambda: (42,)),     # today
+        MagicMock(fetchone=lambda: (1234,)),  # total
+        MagicMock(fetchone=lambda: (42,)),  # today
     ]
     mock_conn.__enter__ = lambda s: s
     mock_conn.__exit__ = MagicMock(return_value=False)
@@ -112,9 +112,7 @@ async def test_send_summary_uses_first_owner_id():
         result = await send_nightly_summary(mock_bot, owner_chat_id="123456789")
 
     assert result is True
-    mock_bot.send_message.assert_called_once_with(
-        123456789, "test digest", parse_mode="markdown"
-    )
+    mock_bot.send_message.assert_called_once_with(123456789, "test digest", parse_mode="markdown")
 
 
 # ---------------------------------------------------------------------------
@@ -148,9 +146,7 @@ async def test_send_summary_returns_false_on_send_error():
     mock_bot = AsyncMock()
     mock_bot.send_message = AsyncMock(side_effect=Exception("network error"))
 
-    with patch(
-        "src.core.nightly_summary.generate_summary", return_value="test"
-    ):
+    with patch("src.core.nightly_summary.generate_summary", return_value="test"):
         result = await send_nightly_summary(mock_bot, owner_chat_id="99")
 
     assert result is False

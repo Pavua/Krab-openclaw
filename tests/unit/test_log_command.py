@@ -18,15 +18,13 @@
 
 from __future__ import annotations
 
-import pathlib
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_log
-
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -54,9 +52,7 @@ def _make_message(reply_mock: AsyncMock | None = None) -> SimpleNamespace:
 def log_file(tmp_path, monkeypatch):
     """Создаёт лог-файл с sample содержимым и привязывает его через env."""
     path = tmp_path / "krab_main.log"
-    content = "\n".join(
-        f"2026-04-15 22:00:{i:02d} [INFO] Some normal line #{i}" for i in range(50)
-    )
+    content = "\n".join(f"2026-04-15 22:00:{i:02d} [INFO] Some normal line #{i}" for i in range(50))
     # Добавляем строки с ошибками
     content += "\n2026-04-15 22:01:00 [ERROR] Something broke"
     content += "\n2026-04-15 22:01:05 [WARNING] Low disk space"
@@ -235,7 +231,10 @@ async def test_log_search_empty_query(log_file):
     with pytest.raises(UserInputError) as exc_info:
         await handle_log(bot, msg)
 
-    assert "search" in exc_info.value.user_message.lower() or "запрос" in exc_info.value.user_message.lower()
+    assert (
+        "search" in exc_info.value.user_message.lower()
+        or "запрос" in exc_info.value.user_message.lower()
+    )
 
 
 # ---------------------------------------------------------------------------

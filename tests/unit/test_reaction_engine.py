@@ -12,8 +12,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from src.core.reaction_engine import (
     NEGATIVE_REACTIONS,
     NEUTRAL_REACTIONS,
@@ -22,7 +20,6 @@ from src.core.reaction_engine import (
     ReactionEngine,
     ReactionEvent,
 )
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные функции
@@ -78,8 +75,12 @@ def test_reactions_sets_are_disjoint() -> None:
 
 def test_reaction_event_positive() -> None:
     event = ReactionEvent(
-        chat_id=1, message_id=1, user_id=1, emoji="👍",
-        is_positive=True, is_negative=False,
+        chat_id=1,
+        message_id=1,
+        user_id=1,
+        emoji="👍",
+        is_positive=True,
+        is_negative=False,
     )
     assert event.is_positive
     assert not event.is_negative
@@ -87,8 +88,12 @@ def test_reaction_event_positive() -> None:
 
 def test_reaction_event_negative() -> None:
     event = ReactionEvent(
-        chat_id=1, message_id=1, user_id=1, emoji="👎",
-        is_positive=False, is_negative=True,
+        chat_id=1,
+        message_id=1,
+        user_id=1,
+        emoji="👎",
+        is_positive=False,
+        is_negative=True,
     )
     assert event.is_negative
     assert not event.is_positive
@@ -96,10 +101,15 @@ def test_reaction_event_negative() -> None:
 
 def test_reaction_event_has_timestamp() -> None:
     import time
+
     before = time.time()
     event = ReactionEvent(
-        chat_id=1, message_id=1, user_id=1, emoji="👍",
-        is_positive=True, is_negative=False,
+        chat_id=1,
+        message_id=1,
+        user_id=1,
+        emoji="👍",
+        is_positive=True,
+        is_negative=False,
     )
     after = time.time()
     assert before <= event.timestamp <= after
@@ -121,8 +131,12 @@ def test_chat_reaction_stats_empty() -> None:
 def test_chat_reaction_stats_add_positive() -> None:
     stats = ChatReactionStats()
     event = ReactionEvent(
-        chat_id=1, message_id=1, user_id=1, emoji="👍",
-        is_positive=True, is_negative=False,
+        chat_id=1,
+        message_id=1,
+        user_id=1,
+        emoji="👍",
+        is_positive=True,
+        is_negative=False,
     )
     stats.add(event)
     assert stats.total_count == 1
@@ -134,8 +148,12 @@ def test_chat_reaction_stats_add_positive() -> None:
 def test_chat_reaction_stats_add_negative() -> None:
     stats = ChatReactionStats()
     event = ReactionEvent(
-        chat_id=1, message_id=1, user_id=1, emoji="👎",
-        is_positive=False, is_negative=True,
+        chat_id=1,
+        message_id=1,
+        user_id=1,
+        emoji="👎",
+        is_positive=False,
+        is_negative=True,
     )
     stats.add(event)
     assert stats.negative_count == 1
@@ -146,46 +164,82 @@ def test_chat_reaction_stats_mood_positive() -> None:
     stats = ChatReactionStats()
     # 3 положительных, 1 отрицательный → positive mood
     for emoji in ["👍", "👍", "👍"]:
-        stats.add(ReactionEvent(
-            chat_id=1, message_id=1, user_id=1, emoji=emoji,
-            is_positive=True, is_negative=False,
-        ))
-    stats.add(ReactionEvent(
-        chat_id=1, message_id=1, user_id=1, emoji="👎",
-        is_positive=False, is_negative=True,
-    ))
+        stats.add(
+            ReactionEvent(
+                chat_id=1,
+                message_id=1,
+                user_id=1,
+                emoji=emoji,
+                is_positive=True,
+                is_negative=False,
+            )
+        )
+    stats.add(
+        ReactionEvent(
+            chat_id=1,
+            message_id=1,
+            user_id=1,
+            emoji="👎",
+            is_positive=False,
+            is_negative=True,
+        )
+    )
     assert stats.get_mood() == "positive"
 
 
 def test_chat_reaction_stats_mood_negative() -> None:
     stats = ChatReactionStats()
     for _ in range(3):
-        stats.add(ReactionEvent(
-            chat_id=1, message_id=1, user_id=1, emoji="👎",
-            is_positive=False, is_negative=True,
-        ))
+        stats.add(
+            ReactionEvent(
+                chat_id=1,
+                message_id=1,
+                user_id=1,
+                emoji="👎",
+                is_positive=False,
+                is_negative=True,
+            )
+        )
     assert stats.get_mood() == "negative"
 
 
 def test_chat_reaction_stats_mood_neutral() -> None:
     stats = ChatReactionStats()
-    stats.add(ReactionEvent(
-        chat_id=1, message_id=1, user_id=1, emoji="👍",
-        is_positive=True, is_negative=False,
-    ))
-    stats.add(ReactionEvent(
-        chat_id=1, message_id=1, user_id=1, emoji="👎",
-        is_positive=False, is_negative=True,
-    ))
+    stats.add(
+        ReactionEvent(
+            chat_id=1,
+            message_id=1,
+            user_id=1,
+            emoji="👍",
+            is_positive=True,
+            is_negative=False,
+        )
+    )
+    stats.add(
+        ReactionEvent(
+            chat_id=1,
+            message_id=1,
+            user_id=1,
+            emoji="👎",
+            is_positive=False,
+            is_negative=True,
+        )
+    )
     assert stats.get_mood() == "neutral"
 
 
 def test_chat_reaction_stats_to_dict_structure() -> None:
     stats = ChatReactionStats()
-    stats.add(ReactionEvent(
-        chat_id=1, message_id=10, user_id=5, emoji="❤️",
-        is_positive=True, is_negative=False,
-    ))
+    stats.add(
+        ReactionEvent(
+            chat_id=1,
+            message_id=10,
+            user_id=5,
+            emoji="❤️",
+            is_positive=True,
+            is_negative=False,
+        )
+    )
     d = stats.to_dict()
     assert "total" in d
     assert "positive" in d
@@ -201,10 +255,16 @@ def test_chat_reaction_stats_maxlen() -> None:
     """rolling window не превышает MAX_EVENTS."""
     stats = ChatReactionStats()
     for i in range(ChatReactionStats.MAX_EVENTS + 10):
-        stats.add(ReactionEvent(
-            chat_id=1, message_id=i, user_id=1, emoji="👍",
-            is_positive=True, is_negative=False,
-        ))
+        stats.add(
+            ReactionEvent(
+                chat_id=1,
+                message_id=i,
+                user_id=1,
+                emoji="👍",
+                is_positive=True,
+                is_negative=False,
+            )
+        )
     assert len(stats.events) == ChatReactionStats.MAX_EVENTS
 
 
@@ -216,8 +276,11 @@ def test_chat_reaction_stats_maxlen() -> None:
 def test_engine_record_positive_reaction() -> None:
     engine = _make_engine()
     engine.record_reaction(
-        chat_id=1, message_id=100, user_id=42,
-        new_emojis=["👍"], old_emojis=[],
+        chat_id=1,
+        message_id=100,
+        user_id=42,
+        new_emojis=["👍"],
+        old_emojis=[],
     )
     stats = engine.get_reaction_stats(chat_id=1)
     assert stats["total"] == 1
@@ -228,8 +291,11 @@ def test_engine_record_positive_reaction() -> None:
 def test_engine_record_negative_reaction() -> None:
     engine = _make_engine()
     engine.record_reaction(
-        chat_id=1, message_id=100, user_id=42,
-        new_emojis=["👎"], old_emojis=[],
+        chat_id=1,
+        message_id=100,
+        user_id=42,
+        new_emojis=["👎"],
+        old_emojis=[],
     )
     stats = engine.get_reaction_stats(chat_id=1)
     assert stats["negative"] == 1
@@ -240,7 +306,9 @@ def test_engine_record_only_added_reactions() -> None:
     engine = _make_engine()
     # "👍" уже было в old → не добавляется
     engine.record_reaction(
-        chat_id=1, message_id=100, user_id=42,
+        chat_id=1,
+        message_id=100,
+        user_id=42,
         new_emojis=["👍", "❤️"],
         old_emojis=["👍"],  # 👍 было, ❤️ новое
     )
@@ -254,7 +322,9 @@ def test_engine_record_reaction_no_change() -> None:
     """Если new_emojis == old_emojis → ничего не записывается."""
     engine = _make_engine()
     engine.record_reaction(
-        chat_id=1, message_id=100, user_id=42,
+        chat_id=1,
+        message_id=100,
+        user_id=42,
         new_emojis=["👍"],
         old_emojis=["👍"],
     )
@@ -357,4 +427,5 @@ def test_engine_emoji_counts_accumulated() -> None:
 def test_global_reaction_engine_singleton() -> None:
     """Глобальный синглтон импортируется без ошибок."""
     from src.core.reaction_engine import reaction_engine as global_engine
+
     assert isinstance(global_engine, ReactionEngine)

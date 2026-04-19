@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import (
     _AUTODEL_STATE_KEY,
     _SET_ALIASES,
@@ -26,8 +27,6 @@ from src.handlers.command_handlers import (
     _render_all_settings,
     handle_set,
 )
-from src.core.exceptions import UserInputError
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
@@ -96,6 +95,7 @@ class TestGetSetValue:
 
     def test_stream_interval_returns_config_value(self):
         from src.config import Config
+
         original = Config.TELEGRAM_STREAM_UPDATE_INTERVAL_SEC
         Config.TELEGRAM_STREAM_UPDATE_INTERVAL_SEC = 3.5
         try:
@@ -107,6 +107,7 @@ class TestGetSetValue:
 
     def test_reactions_returns_config_value(self):
         from src.config import Config
+
         original = Config.TELEGRAM_REACTIONS_ENABLED
         Config.TELEGRAM_REACTIONS_ENABLED = False
         try:
@@ -118,6 +119,7 @@ class TestGetSetValue:
 
     def test_weather_city_returns_config_value(self):
         from src.config import Config
+
         original = Config.DEFAULT_WEATHER_CITY
         Config.DEFAULT_WEATHER_CITY = "Moscow"
         try:
@@ -200,6 +202,7 @@ class TestHandleSetOneArg:
     @pytest.mark.asyncio
     async def test_show_alias_stream_interval(self):
         from src.config import Config
+
         Config.TELEGRAM_STREAM_UPDATE_INTERVAL_SEC = 2.0
         bot = _make_bot()
         bot._get_command_args = MagicMock(return_value="stream_interval")
@@ -213,6 +216,7 @@ class TestHandleSetOneArg:
     @pytest.mark.asyncio
     async def test_show_alias_reactions(self):
         from src.config import Config
+
         Config.TELEGRAM_REACTIONS_ENABLED = True
         bot = _make_bot()
         bot._get_command_args = MagicMock(return_value="reactions")
@@ -226,6 +230,7 @@ class TestHandleSetOneArg:
     @pytest.mark.asyncio
     async def test_show_alias_weather_city(self):
         from src.config import Config
+
         Config.DEFAULT_WEATHER_CITY = "Barcelona"
         bot = _make_bot()
         bot._get_command_args = MagicMock(return_value="weather_city")
@@ -260,7 +265,6 @@ class TestHandleSetOneArg:
 
     @pytest.mark.asyncio
     async def test_show_raw_config_key(self):
-        from src.config import Config
         bot = _make_bot()
         bot._get_command_args = MagicMock(return_value="DEFAULT_WEATHER_CITY")
         msg = _make_message("!set DEFAULT_WEATHER_CITY")
@@ -286,6 +290,7 @@ class TestHandleSetTwoArgs:
     @pytest.mark.asyncio
     async def test_set_stream_interval(self):
         from src.config import Config
+
         original = Config.TELEGRAM_STREAM_UPDATE_INTERVAL_SEC
         bot = _make_bot()
         bot._get_command_args = MagicMock(return_value="stream_interval 3.0")
@@ -301,6 +306,7 @@ class TestHandleSetTwoArgs:
     @pytest.mark.asyncio
     async def test_set_reactions_on(self):
         from src.config import Config
+
         bot = _make_bot()
         bot._get_command_args = MagicMock(return_value="reactions on")
         msg = _make_message("!set reactions on")
@@ -314,6 +320,7 @@ class TestHandleSetTwoArgs:
     @pytest.mark.asyncio
     async def test_set_reactions_off(self):
         from src.config import Config
+
         bot = _make_bot()
         bot._get_command_args = MagicMock(return_value="reactions off")
         msg = _make_message("!set reactions off")
@@ -325,6 +332,7 @@ class TestHandleSetTwoArgs:
     @pytest.mark.asyncio
     async def test_set_weather_city(self):
         from src.config import Config
+
         bot = _make_bot()
         bot._get_command_args = MagicMock(return_value="weather_city Madrid")
         msg = _make_message("!set weather_city Madrid")
@@ -415,6 +423,7 @@ class TestHandleSetTwoArgs:
     @pytest.mark.asyncio
     async def test_set_raw_key(self):
         from src.config import Config
+
         bot = _make_bot()
         bot._get_command_args = MagicMock(return_value="DEFAULT_WEATHER_CITY Tokyo")
         msg = _make_message("!set DEFAULT_WEATHER_CITY Tokyo")
@@ -428,6 +437,7 @@ class TestHandleSetTwoArgs:
     @pytest.mark.asyncio
     async def test_set_update_fails_returns_error(self):
         from src.config import Config
+
         bot = _make_bot()
         bot._get_command_args = MagicMock(return_value="weather_city Tokyo")
         msg = _make_message("!set weather_city Tokyo")
@@ -440,6 +450,7 @@ class TestHandleSetTwoArgs:
     @pytest.mark.asyncio
     async def test_set_scheduler_enabled_syncs_runtime(self):
         from src.config import Config
+
         bot = _make_bot()
         bot._sync_scheduler_runtime = MagicMock()
         bot._get_command_args = MagicMock(return_value="SCHEDULER_ENABLED 1")
@@ -464,6 +475,7 @@ class TestConfigUpdateSetting:
 
     def setup_method(self):
         from src.config import Config
+
         # Сохраняем оригинальные значения
         self._orig_interval = Config.TELEGRAM_STREAM_UPDATE_INTERVAL_SEC
         self._orig_reactions = Config.TELEGRAM_REACTIONS_ENABLED
@@ -471,12 +483,14 @@ class TestConfigUpdateSetting:
 
     def teardown_method(self):
         from src.config import Config
+
         Config.TELEGRAM_STREAM_UPDATE_INTERVAL_SEC = self._orig_interval
         Config.TELEGRAM_REACTIONS_ENABLED = self._orig_reactions
         Config.DEFAULT_WEATHER_CITY = self._orig_city
 
     def test_update_stream_interval(self, tmp_path):
         from src.config import Config
+
         env_file = tmp_path / ".env"
         env_file.write_text("")
         with patch.object(Config, "BASE_DIR", tmp_path):
@@ -486,6 +500,7 @@ class TestConfigUpdateSetting:
 
     def test_update_stream_interval_minimum_clamped(self, tmp_path):
         from src.config import Config
+
         env_file = tmp_path / ".env"
         env_file.write_text("")
         with patch.object(Config, "BASE_DIR", tmp_path):
@@ -495,6 +510,7 @@ class TestConfigUpdateSetting:
 
     def test_update_reactions_on(self, tmp_path):
         from src.config import Config
+
         env_file = tmp_path / ".env"
         env_file.write_text("")
         with patch.object(Config, "BASE_DIR", tmp_path):
@@ -503,6 +519,7 @@ class TestConfigUpdateSetting:
 
     def test_update_reactions_off(self, tmp_path):
         from src.config import Config
+
         env_file = tmp_path / ".env"
         env_file.write_text("")
         with patch.object(Config, "BASE_DIR", tmp_path):
@@ -511,6 +528,7 @@ class TestConfigUpdateSetting:
 
     def test_update_reactions_1_true(self, tmp_path):
         from src.config import Config
+
         env_file = tmp_path / ".env"
         env_file.write_text("")
         with patch.object(Config, "BASE_DIR", tmp_path):
@@ -519,6 +537,7 @@ class TestConfigUpdateSetting:
 
     def test_update_reactions_0_false(self, tmp_path):
         from src.config import Config
+
         env_file = tmp_path / ".env"
         env_file.write_text("")
         with patch.object(Config, "BASE_DIR", tmp_path):
@@ -527,6 +546,7 @@ class TestConfigUpdateSetting:
 
     def test_update_weather_city(self, tmp_path):
         from src.config import Config
+
         env_file = tmp_path / ".env"
         env_file.write_text("")
         with patch.object(Config, "BASE_DIR", tmp_path):
@@ -535,6 +555,7 @@ class TestConfigUpdateSetting:
 
     def test_update_weather_city_strips_whitespace(self, tmp_path):
         from src.config import Config
+
         env_file = tmp_path / ".env"
         env_file.write_text("")
         with patch.object(Config, "BASE_DIR", tmp_path):
@@ -543,6 +564,7 @@ class TestConfigUpdateSetting:
 
     def test_update_setting_persists_to_env(self, tmp_path):
         from src.config import Config
+
         env_file = tmp_path / ".env"
         env_file.write_text("DEFAULT_WEATHER_CITY=Barcelona\n")
         with patch.object(Config, "BASE_DIR", tmp_path):
@@ -552,6 +574,7 @@ class TestConfigUpdateSetting:
 
     def test_update_setting_appends_new_key(self, tmp_path):
         from src.config import Config
+
         env_file = tmp_path / ".env"
         env_file.write_text("OTHER=value\n")
         with patch.object(Config, "BASE_DIR", tmp_path):

@@ -100,9 +100,7 @@ async def test_structured_reflect_valid_json() -> None:
             '"follow_ups": [{"text": "check later", "when": "in 2 hours", "priority": "high"}]}'
         )
 
-    result = await structured_reflect(
-        "t1", "title", "desc", "result", llm_caller=mock_llm
-    )
+    result = await structured_reflect("t1", "title", "desc", "result", llm_caller=mock_llm)
     assert len(result.insights) == 1
     assert result.insights[0] == "I1"
     assert len(result.follow_ups) == 1
@@ -190,10 +188,7 @@ async def test_structured_reflect_partial_schema_uses_defaults() -> None:
     """follow_up без поля when → использует default 'manual'."""
 
     async def mock_llm(prompt: str) -> str:
-        return (
-            '{"insights": [], "unresolved": [], '
-            '"follow_ups": [{"text": "run checks"}]}'
-        )
+        return '{"insights": [], "unresolved": [], "follow_ups": [{"text": "run checks"}]}'
 
     result = await structured_reflect("t1", "t", "d", "r", llm_caller=mock_llm)
     assert len(result.follow_ups) == 1
@@ -252,9 +247,7 @@ def test_flush_tomorrow_format() -> None:
     """'tomorrow HH:MM' → fire_at в следующих сутках."""
     mock_queue = MagicMock()
     refl = ReflectionOutput(
-        follow_ups=[
-            FollowUpItem(text="morning review", when="tomorrow 09:00", priority="high")
-        ]
+        follow_ups=[FollowUpItem(text="morning review", when="tomorrow 09:00", priority="high")]
     )
     with patch("src.core.reminders_queue.reminders_queue", mock_queue):
         count = flush_followups_to_reminders(refl)
@@ -303,9 +296,7 @@ def test_flush_mixed_manual_and_timed() -> None:
 def test_flush_custom_owner_id() -> None:
     """owner_id передаётся в reminders_queue."""
     mock_queue = MagicMock()
-    refl = ReflectionOutput(
-        follow_ups=[FollowUpItem(text="owner check", when="in 1 hours")]
-    )
+    refl = ReflectionOutput(follow_ups=[FollowUpItem(text="owner check", when="in 1 hours")])
     with patch("src.core.reminders_queue.reminders_queue", mock_queue):
         flush_followups_to_reminders(refl, owner_id="user_42")
 

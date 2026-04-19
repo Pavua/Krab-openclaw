@@ -16,7 +16,6 @@ from src.core.access_control import AccessLevel
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_run
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
@@ -83,7 +82,10 @@ class TestRunAccessControl:
         msg = _make_message(text="!run print('hi')")
         with pytest.raises(UserInputError) as exc_info:
             await handle_run(bot, msg)
-        assert "владельцу" in exc_info.value.user_message.lower() or "owner" in exc_info.value.user_message.lower()
+        assert (
+            "владельцу" in exc_info.value.user_message.lower()
+            or "owner" in exc_info.value.user_message.lower()
+        )
 
     @pytest.mark.asyncio
     async def test_full_user_raises(self) -> None:
@@ -101,7 +103,10 @@ class TestRunAccessControl:
         with pytest.raises(UserInputError) as exc_info:
             await handle_run(bot, msg)
         # Ошибка должна быть о пустом коде, а не о доступе
-        assert "владельцу" not in exc_info.value.user_message.lower() or "run" in exc_info.value.user_message.lower()
+        assert (
+            "владельцу" not in exc_info.value.user_message.lower()
+            or "run" in exc_info.value.user_message.lower()
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +279,9 @@ class TestRunEmptyOutput:
 
         reply_text: str = msg.reply.call_args[0][0]
         # Должно содержать сообщение об успешном выполнении
-        assert "exit" in reply_text.lower() or "выполнен" in reply_text.lower() or "✅" in reply_text
+        assert (
+            "exit" in reply_text.lower() or "выполнен" in reply_text.lower() or "✅" in reply_text
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +307,9 @@ class TestRunTimeout:
 
         proc.kill.assert_called_once()
         reply_text: str = msg.reply.call_args[0][0]
-        assert "timeout" in reply_text.lower() or "5" in reply_text or "прерван" in reply_text.lower()
+        assert (
+            "timeout" in reply_text.lower() or "5" in reply_text or "прерван" in reply_text.lower()
+        )
 
     @pytest.mark.asyncio
     async def test_timeout_replies_to_message(self) -> None:

@@ -13,7 +13,6 @@ import pytest
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_history
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
@@ -314,9 +313,17 @@ class TestHistoryMessageCounting:
         bot = _make_bot()
         msg = _make_message()
         # Ничего не задаём — все None/falsy
-        msgs = [_make_msg_obj(text=None, photo=None, video=None,
-                              video_note=None, voice=None, audio=None,
-                              document=None)]
+        msgs = [
+            _make_msg_obj(
+                text=None,
+                photo=None,
+                video=None,
+                video_note=None,
+                voice=None,
+                audio=None,
+                document=None,
+            )
+        ]
         bot.client.get_chat_history = MagicMock(return_value=_aiter(msgs))
 
         await handle_history(bot, msg)
@@ -409,10 +416,7 @@ class TestHistoryDates:
         wed = datetime.datetime(2024, 1, 17, 10, 0, tzinfo=datetime.timezone.utc)
         # 2024-01-15 — понедельник
         mon = datetime.datetime(2024, 1, 15, 10, 0, tzinfo=datetime.timezone.utc)
-        msgs = (
-            [_make_msg_obj(date=wed)] * 3
-            + [_make_msg_obj(date=mon)]
-        )
+        msgs = [_make_msg_obj(date=wed)] * 3 + [_make_msg_obj(date=mon)]
         bot.client.get_chat_history = MagicMock(return_value=_aiter(msgs))
 
         await handle_history(bot, msg)
@@ -441,10 +445,7 @@ class TestHistoryDates:
         msg = _make_message()
         dt1 = datetime.datetime(2024, 6, 5, 12, 0, tzinfo=datetime.timezone.utc)
         dt2 = datetime.datetime(2024, 6, 6, 12, 0, tzinfo=datetime.timezone.utc)
-        msgs = (
-            [_make_msg_obj(date=dt1)] * 3
-            + [_make_msg_obj(date=dt2)] * 3
-        )
+        msgs = [_make_msg_obj(date=dt1)] * 3 + [_make_msg_obj(date=dt2)] * 3
         bot.client.get_chat_history = MagicMock(return_value=_aiter(msgs))
 
         await handle_history(bot, msg)
@@ -604,14 +605,17 @@ class TestHistoryExport:
     def test_handle_history_импортируется_из_command_handlers(self) -> None:
         """handle_history доступна в command_handlers."""
         from src.handlers.command_handlers import handle_history as _h
+
         assert callable(_h)
 
     def test_handle_history_импортируется_из_handlers_init(self) -> None:
         """handle_history доступна через src.handlers."""
         from src.handlers import handle_history as _h
+
         assert callable(_h)
 
     def test_handle_history_в_all(self) -> None:
         """handle_history присутствует в __all__ пакета handlers."""
         import src.handlers as _pkg
+
         assert "handle_history" in _pkg.__all__

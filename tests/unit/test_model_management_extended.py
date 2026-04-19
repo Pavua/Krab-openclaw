@@ -8,13 +8,11 @@
 
 from __future__ import annotations
 
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.model_manager import ModelInfo, ModelManager, ModelType
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Фикстуры
@@ -237,7 +235,7 @@ def test_provider_manager_set_thinking_depth_updates_state(tmp_path) -> None:
 
 def test_provider_manager_vision_model_fallback_to_first_with_vision_flag(tmp_path) -> None:
     """active_vision_model_id возвращает первую vision-модель провайдера, если не задано явно."""
-    from src.core.provider_manager import PROVIDER_MODELS, ProviderManager, ProviderType
+    from src.core.provider_manager import ProviderManager, ProviderType
 
     state_file = tmp_path / "krab_provider_state.json"
     with patch("src.core.provider_manager.ProviderManager._STATE_FILE", str(state_file)):

@@ -12,9 +12,9 @@
 - _stream_reply (streaming, edit_text, error handling)
 - register_team_message_handler
 """
+
 from __future__ import annotations
 
-import asyncio
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,7 +22,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import src.core.swarm_team_listener as stl
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -347,9 +346,7 @@ async def test_stream_reply_success():
     msg.reply = AsyncMock(return_value=sent_mock)
 
     openclaw = MagicMock()
-    openclaw.send_message_stream = MagicMock(
-        return_value=_chunk_stream("Привет!", " Всё хорошо.")
-    )
+    openclaw.send_message_stream = MagicMock(return_value=_chunk_stream("Привет!", " Всё хорошо."))
 
     await stl._stream_reply("traders", client, msg, openclaw, "как дела?")
 

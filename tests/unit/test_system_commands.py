@@ -24,7 +24,6 @@
 
 from __future__ import annotations
 
-import sys
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -34,7 +33,6 @@ import pytest
 import src.handlers.command_handlers as cmd_module
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_chatban, handle_macos, handle_restart, handle_stats
-
 
 # ─────────────────────────── helpers ────────────────────────────────────────
 

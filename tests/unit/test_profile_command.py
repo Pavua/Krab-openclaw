@@ -29,15 +29,13 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.core.access_control import AccessLevel
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_profile
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
@@ -116,14 +114,18 @@ def _make_bot(
 
     # get_chat_photos — асинхронный генератор
     if photos_exc:
+
         async def _photos_fail(*a, **kw):
             raise photos_exc
             yield  # делаем async generator
+
         bot.client.get_chat_photos = _photos_fail
     else:
+
         async def _photos_ok(*a, **kw):
             for _ in range(photo_count):
                 yield MagicMock()
+
         bot.client.get_chat_photos = _photos_ok
 
     return bot
@@ -236,7 +238,9 @@ async def test_profile_show_get_me_fails():
     with pytest.raises(UserInputError) as exc_info:
         await handle_profile(bot, msg)
 
-    assert "профиль" in exc_info.value.user_message.lower() or "MTProto" in exc_info.value.user_message
+    assert (
+        "профиль" in exc_info.value.user_message.lower() or "MTProto" in exc_info.value.user_message
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +326,10 @@ async def test_profile_name_empty():
     with pytest.raises(UserInputError) as exc_info:
         await handle_profile(bot, msg)
 
-    assert "имя" in exc_info.value.user_message.lower() or "name" in exc_info.value.user_message.lower()
+    assert (
+        "имя" in exc_info.value.user_message.lower()
+        or "name" in exc_info.value.user_message.lower()
+    )
 
 
 @pytest.mark.asyncio

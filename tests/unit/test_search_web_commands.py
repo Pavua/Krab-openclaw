@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -18,7 +18,6 @@ import pytest
 import src.handlers.command_handlers as cmd_module
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_search, handle_web
-
 
 # ---------------------------------------------------------------------------
 # Хелперы
