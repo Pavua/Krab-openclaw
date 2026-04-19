@@ -156,6 +156,7 @@ class ChatBanCache:
                 return False
             if self._now() >= expires:
                 del self._entries[target]
+                logger.info("chat_ban_cache_auto_purged", chat_id=target)
                 return False
             return True
 
@@ -209,6 +210,47 @@ class ChatBanCache:
             error_code=normalized_code,
             cooldown_hours=cooldown_hours,
         )
+
+    def sweep_expired(self) -> int:
+        """Синхронный sweep: удаляет все истёкшие записи из памяти и диска.
+
+        Возвращает количество удалённых записей.
+        Используется периодическим фоновым задачей (каждые 5 мин).
+        """
+        now = self._now()
+        purged: list[str] = []
+        with self._lock:
+            for chat_id in list(self._entries.keys()):
+                entry = self._entries[chat_id]
+                expires_at = entry.get("expires_at")
+                if expires_at is None:
+                    continue  # permanent ban — не трогаем
+                try:
+                    if now >= datetime.fromisoformat(expires_at):
+                        del self._entries[chat_id]
+                        purged.append(chat_id)
+                except (TypeError, ValueError):
+                    del self._entries[chat_id]
+                    purged.append(chat_id)
+            if purged:
+                self._persist_to_disk()
+        if purged:
+            logger.info(
+                "chat_ban_cache_sweep_done",
+                purged_count=len(purged),
+                chat_ids=purged,
+            )
+        return len(purged)
+
+    async def periodic_cleanup(self, interval_seconds: float = 300.0) -> None:
+        """Фоновый async loop: sweep_expired каждые `interval_seconds` секунд.
+
+        Запускается через asyncio.create_task() из bootstrap userbot.
+        Завершается при CancelledError.
+        """
+        while True:
+            await asyncio.sleep(interval_seconds)
+            await asyncio.to_thread(self.sweep_expired)
 
     def clear(self, chat_id: Any) -> bool:
         """Удаляет запись для чата. Возвращает True если была запись."""
