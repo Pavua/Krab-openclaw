@@ -11,15 +11,11 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-from src.core.exceptions import UserInputError
-
 
 # ---------------------------------------------------------------------------
 # Тесты: auto_detect_direction
@@ -113,7 +109,9 @@ def _make_bot(language_pair: str = "") -> SimpleNamespace:
     )
 
 
-def _make_message(text: str, reply_text: str | None = None, chat_id: int = 12345) -> SimpleNamespace:
+def _make_message(
+    text: str, reply_text: str | None = None, chat_id: int = 12345
+) -> SimpleNamespace:
     reply_msg = None
     if reply_text is not None:
         reply_msg = SimpleNamespace(text=reply_text)
@@ -125,7 +123,9 @@ def _make_message(text: str, reply_text: str | None = None, chat_id: int = 12345
     )
 
 
-def _make_result(original="hello", translated="привет", src_lang="en", tgt_lang="ru", latency_ms=100):
+def _make_result(
+    original="hello", translated="привет", src_lang="en", tgt_lang="ru", latency_ms=100
+):
     return SimpleNamespace(
         original=original,
         translated=translated,
@@ -280,7 +280,7 @@ async def test_translate_auto_detect_fallback_on_failed_detect():
     assert mock_translate.called
     call_args = mock_translate.call_args
     assert call_args[0][1] == "auto"  # src_lang
-    assert call_args[0][2] == "ru"    # tgt_lang
+    assert call_args[0][2] == "ru"  # tgt_lang
     assert msg.reply.called
 
 

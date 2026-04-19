@@ -162,10 +162,7 @@ class TestCostsAsciiTrend:
     def test_trend_ascii_format(self) -> None:
         """Тренд содержит блок-символы и корректные метки."""
         now = time.time()
-        calls = [
-            CallRecord("m", 100, 50, 0.10, timestamp=now - i * 86400)
-            for i in range(30)
-        ]
+        calls = [CallRecord("m", 100, 50, 0.10, timestamp=now - i * 86400) for i in range(30)]
         result = _costs_ascii_trend(calls, days=30)
         assert "Тренд за 30 дней" in result
         assert "total=" in result
@@ -180,10 +177,7 @@ class TestCostsAsciiTrend:
     def test_trend_bar_length(self) -> None:
         """Строка баров содержит ровно days символов."""
         now = time.time()
-        calls = [
-            CallRecord("m", 100, 50, 0.01, timestamp=now - i * 86400)
-            for i in range(10)
-        ]
+        calls = [CallRecord("m", 100, 50, 0.01, timestamp=now - i * 86400) for i in range(10)]
         result = _costs_ascii_trend(calls, days=10)
         # Найти строку с баром (вторая строка после заголовка)
         lines = result.split("\n")
@@ -250,9 +244,7 @@ class TestHandleCostsSubcommands:
         msg = _make_message("!costs budget")
         ca = CostAnalytics(monthly_budget_usd=10.0)
         now = time.time()
-        ca._calls.append(
-            CallRecord("google/gemini", 100, 50, 2.50, timestamp=now - 1 * 86400)
-        )
+        ca._calls.append(CallRecord("google/gemini", 100, 50, 2.50, timestamp=now - 1 * 86400))
         with patch("src.handlers.command_handlers.cost_analytics", ca):
             await handle_costs(bot, msg)
         msg.reply.assert_called_once()
@@ -281,7 +273,9 @@ class TestHandleCostsSubcommands:
         ca.record_usage({"prompt_tokens": 100, "completion_tokens": 50}, model_id="gemini")
 
         with patch("src.handlers.command_handlers.cost_analytics", ca):
-            with patch("src.handlers.command_handlers.build_costs_detail_buttons", return_value=None):
+            with patch(
+                "src.handlers.command_handlers.build_costs_detail_buttons", return_value=None
+            ):
                 await handle_costs(bot, msg)
         msg.reply.assert_called_once()
         reply_text = msg.reply.call_args[0][0]
@@ -302,6 +296,8 @@ class TestHandleCostsSubcommands:
         msg = _make_message("!costs")
         ca = CostAnalytics()
         with patch("src.handlers.command_handlers.cost_analytics", ca):
-            with patch("src.handlers.command_handlers.build_costs_detail_buttons", return_value=None):
+            with patch(
+                "src.handlers.command_handlers.build_costs_detail_buttons", return_value=None
+            ):
                 await handle_costs(bot, msg)
         msg.reply.assert_called_once()

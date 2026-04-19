@@ -112,9 +112,7 @@ def _make_bot(
     if members_list is None:
         members_list = [_make_member(_make_user())]
 
-    get_count_mock = AsyncMock(
-        return_value=members_count, side_effect=count_side_effect
-    )
+    get_count_mock = AsyncMock(return_value=members_count, side_effect=count_side_effect)
     ban_mock = AsyncMock(side_effect=ban_side_effect)
     unban_mock = AsyncMock(side_effect=unban_side_effect)
 
@@ -327,10 +325,12 @@ class TestMembersList:
         """Удалённые пользователи пропускаются."""
         deleted_user = _make_user(is_deleted=True, first_name="Deleted")
         normal_user = _make_user(user_id=222, first_name="Нормальный", username="normal")
-        bot = _make_bot(members_list=[
-            _make_member(deleted_user),
-            _make_member(normal_user),
-        ])
+        bot = _make_bot(
+            members_list=[
+                _make_member(deleted_user),
+                _make_member(normal_user),
+            ]
+        )
         msg = _make_message("!members list")
 
         await handle_members(bot, msg)
@@ -376,12 +376,14 @@ class TestMembersList:
         """Длинный список обрезается до 4096 символов."""
         # Создаём 100 участников с длинными именами
         members = [
-            _make_member(_make_user(
-                user_id=i,
-                first_name="А" * 50,
-                last_name="Б" * 50,
-                username=f"user{i}",
-            ))
+            _make_member(
+                _make_user(
+                    user_id=i,
+                    first_name="А" * 50,
+                    last_name="Б" * 50,
+                    username=f"user{i}",
+                )
+            )
             for i in range(100)
         ]
         bot = _make_bot(members_list=members)

@@ -9,7 +9,7 @@ Edge cases для критических модулей Краба.
 from __future__ import annotations
 
 import sys
-import os
+
 import pytest
 
 # ────────────────────────────────────────────
@@ -44,6 +44,7 @@ class TestConfigEdgeCases:
     def test_nested_path_base_dir(self):
         """BASE_DIR корректно указывает на корень проекта и является Path."""
         from pathlib import Path
+
         from src.config import Config
 
         assert isinstance(Config.BASE_DIR, Path)
@@ -265,14 +266,14 @@ class TestSwarmEdgeCases:
 
     def test_agent_room_empty_roles_uses_defaults(self):
         """AgentRoom с roles=None инициализируется с DEFAULT_AGENT_ROLES."""
-        from src.core.swarm import AgentRoom, DEFAULT_AGENT_ROLES
+        from src.core.swarm import DEFAULT_AGENT_ROLES, AgentRoom
 
         room = AgentRoom(roles=None)
         assert room.roles == DEFAULT_AGENT_ROLES
 
     def test_agent_room_empty_list_roles_falls_back_to_defaults(self):
         """AgentRoom с пустым списком ролей откатывается на DEFAULT_AGENT_ROLES (falsy guard)."""
-        from src.core.swarm import AgentRoom, DEFAULT_AGENT_ROLES
+        from src.core.swarm import DEFAULT_AGENT_ROLES, AgentRoom
 
         room = AgentRoom(roles=[])
         # [] — falsy, поэтому конструктор подставляет DEFAULT_AGENT_ROLES
@@ -302,6 +303,7 @@ class TestSwarmEdgeCases:
     async def test_agent_room_run_round_empty_roles_returns_string(self):
         """run_round с пустыми ролями возвращает строку без исключений."""
         import unittest.mock as mock
+
         from src.core.swarm import AgentRoom
 
         room = AgentRoom(roles=[])

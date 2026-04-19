@@ -5,10 +5,10 @@
 Проверяем структуру InlineKeyboardMarkup и callback_data для всех
 вспомогательных функций построения кнопок.
 """
+
 from __future__ import annotations
 
-import pytest
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.types import InlineKeyboardMarkup
 
 from src.core.telegram_buttons import (
     build_action_buttons,
@@ -18,7 +18,6 @@ from src.core.telegram_buttons import (
     build_pagination_buttons,
     build_swarm_team_buttons,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # build_confirm_buttons

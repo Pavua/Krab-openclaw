@@ -18,10 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from src.core.memo_service import MemoService, MemoResult
-
+from src.core.memo_service import MemoResult, MemoService
 
 # ─── фикстуры ────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def tmp_inbox(tmp_path: Path) -> Path:
@@ -38,6 +38,7 @@ def svc(tmp_inbox: Path) -> MemoService:
 
 
 # ─── save ─────────────────────────────────────────────────────────────────────
+
 
 class TestSave:
     def test_save_creates_file(self, svc: MemoService, tmp_inbox: Path) -> None:
@@ -126,11 +127,13 @@ class TestSave:
         result = svc.save("время")
         content = result.file_path.read_text(encoding="utf-8")
         import re
+
         match = re.search(r"created: (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})", content)
         assert match is not None, f"created не найден в: {content}"
 
 
 # ─── list_recent ──────────────────────────────────────────────────────────────
+
 
 class TestListRecent:
     def test_list_empty_inbox(self, svc: MemoService) -> None:
@@ -162,7 +165,9 @@ class TestListRecent:
     def test_list_most_recent_first(self, svc: MemoService) -> None:
         """Список отсортирован от новых к старым."""
         svc.save("ранняя")
-        import time; time.sleep(0.01)  # небольшая пауза для различия имён файлов
+        import time
+
+        time.sleep(0.01)  # небольшая пауза для различия имён файлов
         svc.save("поздняя")
         items = svc.list_recent()
         # Первый элемент должен быть более поздним по имени
@@ -203,6 +208,7 @@ class TestListRecent:
 
 
 # ─── search ───────────────────────────────────────────────────────────────────
+
 
 class TestSearch:
     def test_search_finds_match(self, svc: MemoService) -> None:
@@ -268,6 +274,7 @@ class TestSearch:
 
 # ─── save_async ───────────────────────────────────────────────────────────────
 
+
 class TestSaveAsync:
     def test_save_async_success(self, svc: MemoService) -> None:
         """Асинхронное сохранение работает корректно."""
@@ -280,20 +287,17 @@ class TestSaveAsync:
 
     def test_save_async_empty_fails(self, svc: MemoService) -> None:
         """Асинхронное сохранение пустого текста возвращает ошибку."""
-        result = asyncio.get_event_loop().run_until_complete(
-            svc.save_async("", chat_title="тест")
-        )
+        result = asyncio.get_event_loop().run_until_complete(svc.save_async("", chat_title="тест"))
         assert not result.success
 
     def test_save_async_returns_memo_result(self, svc: MemoService) -> None:
         """Возвращаемый тип — MemoResult."""
-        result = asyncio.get_event_loop().run_until_complete(
-            svc.save_async("заметка")
-        )
+        result = asyncio.get_event_loop().run_until_complete(svc.save_async("заметка"))
         assert isinstance(result, MemoResult)
 
 
 # ─── MemoResult ───────────────────────────────────────────────────────────────
+
 
 class TestMemoResult:
     def test_memo_result_success_fields(self) -> None:

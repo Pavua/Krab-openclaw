@@ -636,9 +636,7 @@ class TestReviewFixes:
     async def test_dry_run_no_archive_warning_when_layer_archive(self) -> None:
         """HIGH-2: при --layer=archive warning не нужен."""
         bot = _make_bot(owner_id=999)
-        msg = _make_message(
-            "!reset --dry-run --layer=archive", chat_id=42, from_user_id=100
-        )
+        msg = _make_message("!reset --dry-run --layer=archive", chat_id=42, from_user_id=100)
         oc = _make_openclaw(sessions={"42": []})
         h_cache = _make_cache()
 
@@ -698,9 +696,7 @@ class TestGeminiNonceAppliesToExistingSession:
         if _nonce and system_prompt and client._sessions[chat_id]:
             first_msg = client._sessions[chat_id][0]
             if isinstance(first_msg, dict) and first_msg.get("role") == "system":
-                first_msg["content"] = (
-                    f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
-                )
+                first_msg["content"] = f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
             clear_gemini_nonce(chat_id)
 
         # Verify: system message обновился с nonce
@@ -833,9 +829,7 @@ class TestAuditLogAllForce:
         assert kwargs.get("layer") == "all"
 
     @pytest.mark.asyncio
-    async def test_audit_log_not_emitted_for_dry_run(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_audit_log_not_emitted_for_dry_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Для dry-run audit-лог НЕ пишется (ничего не разрушается)."""
         import src.handlers.command_handlers as ch
 
@@ -857,9 +851,9 @@ class TestAuditLogAllForce:
         ):
             await handle_reset(bot, msg)
 
-        assert not any(
-            c[0] == "reset_all_force_executed" for c in calls
-        ), "dry-run не должен триггерить audit-лог"
+        assert not any(c[0] == "reset_all_force_executed" for c in calls), (
+            "dry-run не должен триггерить audit-лог"
+        )
 
 
 class TestDryRunArchiveHint:

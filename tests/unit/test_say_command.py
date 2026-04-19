@@ -20,17 +20,17 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_say
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
+
 
 def _make_bot(args: str = "") -> SimpleNamespace:
     """Минимальный mock KraabUserbot."""
@@ -56,6 +56,7 @@ def _make_message(*, chat_id: int = 100) -> SimpleNamespace:
 # Тесты
 # ---------------------------------------------------------------------------
 
+
 class TestHandleSay:
     @pytest.mark.asyncio
     async def test_say_текущий_чат(self) -> None:
@@ -75,7 +76,9 @@ class TestHandleSay:
 
         await handle_say(bot, msg)
 
-        bot.client.send_message.assert_awaited_once_with(chat_id=200, text="Сообщение для другого чата")
+        bot.client.send_message.assert_awaited_once_with(
+            chat_id=200, text="Сообщение для другого чата"
+        )
 
     @pytest.mark.asyncio
     async def test_say_отрицательный_chat_id(self) -> None:
@@ -145,10 +148,12 @@ class TestHandleSay:
         """Если send_message упал — отправляет уведомление в текущий чат."""
         bot = _make_bot("500 Сообщение")
         # Первый вызов (в чат 500) — падает, второй (notify в текущий) — успех
-        bot.client.send_message = AsyncMock(side_effect=[
-            Exception("Chat not found"),
-            SimpleNamespace(id=1),
-        ])
+        bot.client.send_message = AsyncMock(
+            side_effect=[
+                Exception("Chat not found"),
+                SimpleNamespace(id=1),
+            ]
+        )
         msg = _make_message(chat_id=100)
 
         await handle_say(bot, msg)  # не пробрасывает

@@ -15,11 +15,8 @@ from __future__ import annotations
 import asyncio
 from typing import AsyncIterator, List
 
-import pytest
-
 from src.voice_channel.voice_channel_handler import VoiceChannelHandler
 from src.voice_channel.voice_state import VoiceSession
-
 
 # ─── Stubs ────────────────────────────────────────────────────────────────────
 
@@ -94,7 +91,9 @@ class TestVoiceChannelHandlerStreaming:
         openclaw = _StubOpenClaw(tokens=expected)
         handler = VoiceChannelHandler(openclaw=openclaw, memory=_StubMemory())
 
-        result = run(_collect(handler, chat_id="test_session", message_text="Как дела?", language="ru"))
+        result = run(
+            _collect(handler, chat_id="test_session", message_text="Как дела?", language="ru")
+        )
         assert result == expected
 
     def test_passes_preferred_model(self):

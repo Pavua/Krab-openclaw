@@ -21,7 +21,6 @@ from src.handlers.command_handlers import (
     handle_b64,
 )
 
-
 # ---------------------------------------------------------------------------
 # Чистые функции
 # ---------------------------------------------------------------------------
@@ -38,6 +37,7 @@ class TestB64Encode:
         """Русский текст кодируется в UTF-8 Base64."""
         result = _b64_encode("Привет")
         import base64
+
         expected = base64.b64encode("Привет".encode("utf-8")).decode("ascii")
         assert result == expected
 
@@ -187,6 +187,7 @@ class TestHandleB64Encode:
         # Base64 должен декодироваться обратно в исходный текст
         # Извлекаем закодированную часть (в backtick)
         import re
+
         match = re.search(r"`([A-Za-z0-9+/=]+)`", reply_text)
         assert match
         assert _b64_decode(match.group(1)) == "Привет"
@@ -319,6 +320,7 @@ class TestHandleB64AutoReply:
     async def test_reply_encoded_is_valid_b64(self):
         """Автокодирование → результат является валидным Base64."""
         import re
+
         bot = _make_bot("")
         msg = _make_message(reply_text="Encode me!")
         await handle_b64(bot, msg)
@@ -349,6 +351,7 @@ class TestHandleB64BareText:
     async def test_bare_text_roundtrip(self):
         """!b64 <текст> → декодируется обратно."""
         import re
+
         text = "roundtrip test"
         bot = _make_bot(text)
         msg = _make_message()

@@ -42,6 +42,7 @@ def _make_message(*, user_id: int = 42) -> SimpleNamespace:
 def _default_patches(monkeypatch: pytest.MonkeyPatch) -> None:
     """Применяет стандартный набор monkeypatch для нейтральных условий."""
     import src.handlers.command_handlers as mod
+
     monkeypatch.setattr(mod.openclaw_client, "health_check", AsyncMock(return_value=True))
     monkeypatch.setattr(
         mod.openclaw_client, "get_last_runtime_route", lambda: {"model": "gemini-test"}
@@ -91,6 +92,7 @@ async def test_handle_health_all_ok(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_handle_health_openclaw_offline(monkeypatch: pytest.MonkeyPatch) -> None:
     """!health: OpenClaw offline → строка содержит ❌ OpenClaw."""
     import src.handlers.command_handlers as mod
+
     _default_patches(monkeypatch)
     monkeypatch.setattr(mod.openclaw_client, "health_check", AsyncMock(return_value=False))
     monkeypatch.setattr(mod.openclaw_client, "get_last_runtime_route", lambda: {})
@@ -122,6 +124,7 @@ async def test_handle_health_openclaw_offline(monkeypatch: pytest.MonkeyPatch) -
 async def test_handle_health_inbox_attention(monkeypatch: pytest.MonkeyPatch) -> None:
     """!health: inbox с attention items → строка ⚠️ Inbox."""
     import src.handlers.command_handlers as mod
+
     _default_patches(monkeypatch)
     monkeypatch.setattr(
         mod.inbox_service, "get_summary", lambda: {"attention_items": 3, "open_items": 5}

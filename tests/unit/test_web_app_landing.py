@@ -1,8 +1,6 @@
 """Тесты для web_app_landing_page.py — HTML генерация, шаблонные переменные, CSS."""
 
-import pytest
 from src.modules.web_app_landing_page import LANDING_PAGE_HTML
-
 
 # --- Базовая структура HTML ---
 

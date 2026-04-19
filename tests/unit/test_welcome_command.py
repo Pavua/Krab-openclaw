@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import (
     _load_welcome_config,
     _render_welcome_text,
@@ -24,8 +25,6 @@ from src.handlers.command_handlers import (
     handle_new_chat_members,
     handle_welcome,
 )
-from src.core.exceptions import UserInputError
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
@@ -80,11 +79,15 @@ class TestRenderWelcomeText:
         assert result == "Привет всем!"
 
     def test_только_name(self):
-        result = _render_welcome_text("Привет, {name}!", name="Оля", username="@olya", chat="X", count=1)
+        result = _render_welcome_text(
+            "Привет, {name}!", name="Оля", username="@olya", chat="X", count=1
+        )
         assert result == "Привет, Оля!"
 
     def test_только_count(self):
-        result = _render_welcome_text("Участников: {count}", name="A", username="B", chat="C", count=42)
+        result = _render_welcome_text(
+            "Участников: {count}", name="A", username="B", chat="C", count=42
+        )
         assert result == "Участников: 42"
 
     def test_дубликаты_переменных(self):
@@ -211,7 +214,9 @@ class TestHandleWelcomeStatus:
     @pytest.mark.asyncio
     async def test_status_когда_включено(self, tmp_path):
         f = tmp_path / "welcome_messages.json"
-        f.write_text(json.dumps({"100": {"enabled": True, "template": "Привет!"}}), encoding="utf-8")
+        f.write_text(
+            json.dumps({"100": {"enabled": True, "template": "Привет!"}}), encoding="utf-8"
+        )
         msg = _make_message("!welcome status")
         bot = _make_bot()
         with patch("src.handlers.command_handlers._WELCOME_FILE", f):
@@ -272,10 +277,14 @@ class TestHandleWelcomeTest:
     async def test_test_preview_с_данными_юзера(self, tmp_path):
         f = tmp_path / "welcome_messages.json"
         f.write_text(
-            json.dumps({"100": {"enabled": True, "template": "Привет, {name} ({username}) в {chat}!"}}),
+            json.dumps(
+                {"100": {"enabled": True, "template": "Привет, {name} ({username}) в {chat}!"}}
+            ),
             encoding="utf-8",
         )
-        msg = _make_message("!welcome test", first_name="Вася", username="vasya", chat_title="Беседка")
+        msg = _make_message(
+            "!welcome test", first_name="Вася", username="vasya", chat_title="Беседка"
+        )
         bot = _make_bot()
         with patch("src.handlers.command_handlers._WELCOME_FILE", f):
             await handle_welcome(bot, msg)

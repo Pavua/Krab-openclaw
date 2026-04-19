@@ -13,13 +13,9 @@
 
 from __future__ import annotations
 
-import os
-from unittest.mock import MagicMock, patch
-
 from fastapi.testclient import TestClient
 
 from src.modules.web_app import WebApp
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные заглушки

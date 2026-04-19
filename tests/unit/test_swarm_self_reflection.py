@@ -284,9 +284,7 @@ class TestEnqueueFollowups:
         reflection = ReflectionResult(
             task_id="t",
             completed_at=0,
-            followups=[
-                {"title": "T", "description": "D", "trigger": "через 2 часа"}
-            ],
+            followups=[{"title": "T", "description": "D", "trigger": "через 2 часа"}],
         )
         stats = enqueue_followups(reflection, task_board=None, reminders_queue=None)
         assert stats["skipped"] == 1

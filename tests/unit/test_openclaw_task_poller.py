@@ -158,9 +158,7 @@ def test_poll_active_tasks_null_fields(mock_runs_db: Path) -> None:
 # --- poll_gateway_liveness ---
 
 
-def test_poll_gateway_liveness_missing_db(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_poll_gateway_liveness_missing_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Нет файла БД → (False, 'runs.sqlite not found')."""
     monkeypatch.setattr("src.core.openclaw_task_poller.RUNS_DB_PATH", tmp_path / "nope.sqlite")
     from src.core.openclaw_task_poller import poll_gateway_liveness

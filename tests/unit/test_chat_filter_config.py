@@ -20,13 +20,11 @@ from pathlib import Path
 import pytest
 
 from src.core.chat_filter_config import (
-    ChatFilterConfig,
-    ChatFilterRule,
     DEFAULT_DM_MODE,
     DEFAULT_GROUP_MODE,
     VALID_MODES,
+    ChatFilterConfig,
 )
-
 
 # ─── фикстуры ────────────────────────────────────────────────────────────────
 
@@ -162,6 +160,7 @@ class TestListRules:
 
     def test_sorted_by_updated_at_desc(self, cfg: ChatFilterConfig) -> None:
         import time
+
         cfg.set_mode("-100", "active")
         time.sleep(0.01)
         cfg.set_mode("-200", "muted")

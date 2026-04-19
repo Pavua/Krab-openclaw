@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 # ChatWindow + ChatWindowManager
 # ---------------------------------------------------------------------------
 
+
 class TestChatWindowIntegration:
     def test_touch_then_peek_returns_same(self):
         from src.core.chat_window_manager import ChatWindowManager
@@ -99,6 +100,7 @@ class TestChatWindowIntegration:
 # ChatFilterConfig
 # ---------------------------------------------------------------------------
 
+
 class TestFilterConfigIntegration:
     def test_default_group_mention_only(self, tmp_path):
         from src.core.chat_filter_config import ChatFilterConfig
@@ -161,6 +163,7 @@ class TestFilterConfigIntegration:
 # krab_identity
 # ---------------------------------------------------------------------------
 
+
 class TestIdentityIntegration:
     def test_mention_russian(self):
         from src.core.krab_identity import is_krab_mentioned
@@ -208,6 +211,7 @@ class TestIdentityIntegration:
 # ---------------------------------------------------------------------------
 # group_identity
 # ---------------------------------------------------------------------------
+
 
 class TestGroupIdentityIntegration:
     def test_group_prefix_applied(self):
@@ -264,13 +268,18 @@ class TestGroupIdentityIntegration:
 # message_priority_dispatcher
 # ---------------------------------------------------------------------------
 
+
 class TestPriorityIntegration:
     def test_dm_priority_instant(self):
         from src.core.message_priority_dispatcher import Priority, classify_priority
 
         p, reason = classify_priority(
-            "hello", "PRIVATE",
-            is_dm=True, is_reply_to_self=False, has_mention=False, chat_mode="active",
+            "hello",
+            "PRIVATE",
+            is_dm=True,
+            is_reply_to_self=False,
+            has_mention=False,
+            chat_mode="active",
         )
         assert p == Priority.P0_INSTANT
         assert reason == "dm"
@@ -279,8 +288,12 @@ class TestPriorityIntegration:
         from src.core.message_priority_dispatcher import Priority, classify_priority
 
         p, reason = classify_priority(
-            "Krab!", "GROUP",
-            is_dm=False, is_reply_to_self=False, has_mention=True, chat_mode="mention-only",
+            "Krab!",
+            "GROUP",
+            is_dm=False,
+            is_reply_to_self=False,
+            has_mention=True,
+            chat_mode="mention-only",
         )
         assert p == Priority.P0_INSTANT
         assert reason == "mention"
@@ -289,8 +302,12 @@ class TestPriorityIntegration:
         from src.core.message_priority_dispatcher import Priority, classify_priority
 
         p, reason = classify_priority(
-            "!help", "GROUP",
-            is_dm=False, is_reply_to_self=False, has_mention=False, chat_mode="mention-only",
+            "!help",
+            "GROUP",
+            is_dm=False,
+            is_reply_to_self=False,
+            has_mention=False,
+            chat_mode="mention-only",
         )
         assert p == Priority.P0_INSTANT
         assert reason == "command"
@@ -299,8 +316,12 @@ class TestPriorityIntegration:
         from src.core.message_priority_dispatcher import Priority, classify_priority
 
         p, reason = classify_priority(
-            "sure", "SUPERGROUP",
-            is_dm=False, is_reply_to_self=True, has_mention=False, chat_mode="mention-only",
+            "sure",
+            "SUPERGROUP",
+            is_dm=False,
+            is_reply_to_self=True,
+            has_mention=False,
+            chat_mode="mention-only",
         )
         assert p == Priority.P0_INSTANT
         assert reason == "reply_to_self"
@@ -309,8 +330,12 @@ class TestPriorityIntegration:
         from src.core.message_priority_dispatcher import Priority, classify_priority
 
         p, _ = classify_priority(
-            "hi", "GROUP",
-            is_dm=False, is_reply_to_self=False, has_mention=False, chat_mode="muted",
+            "hi",
+            "GROUP",
+            is_dm=False,
+            is_reply_to_self=False,
+            has_mention=False,
+            chat_mode="muted",
         )
         assert p == Priority.P2_LOW
 
@@ -318,8 +343,12 @@ class TestPriorityIntegration:
         from src.core.message_priority_dispatcher import Priority, classify_priority
 
         p, reason = classify_priority(
-            "just talking", "GROUP",
-            is_dm=False, is_reply_to_self=False, has_mention=False, chat_mode="active",
+            "just talking",
+            "GROUP",
+            is_dm=False,
+            is_reply_to_self=False,
+            has_mention=False,
+            chat_mode="active",
         )
         assert p == Priority.P1_NORMAL
         assert reason == "active"
@@ -328,8 +357,12 @@ class TestPriorityIntegration:
         from src.core.message_priority_dispatcher import Priority, classify_priority
 
         p, _ = classify_priority(
-            "random text", "GROUP",
-            is_dm=False, is_reply_to_self=False, has_mention=False, chat_mode="mention-only",
+            "random text",
+            "GROUP",
+            is_dm=False,
+            is_reply_to_self=False,
+            has_mention=False,
+            chat_mode="mention-only",
         )
         assert p == Priority.P2_LOW
 
@@ -342,6 +375,7 @@ class TestPriorityIntegration:
 # ---------------------------------------------------------------------------
 # TestCohesion — full-chain тесты объединяющие все модули
 # ---------------------------------------------------------------------------
+
 
 class TestCohesion:
     """Full chain tests combining multiple modules."""
@@ -372,8 +406,12 @@ class TestCohesion:
 
         # 3. Приоритет = P0
         p, _ = classify_priority(
-            text, "SUPERGROUP",
-            is_dm=False, is_reply_to_self=False, has_mention=True, chat_mode="mention-only",
+            text,
+            "SUPERGROUP",
+            is_dm=False,
+            is_reply_to_self=False,
+            has_mention=True,
+            chat_mode="mention-only",
         )
         assert p == Priority.P0_INSTANT
 
@@ -400,8 +438,12 @@ class TestCohesion:
 
         # Priority = P2_LOW даже при упоминании (muted доминирует в classify)
         p, _ = classify_priority(
-            "🦀 hey", "SUPERGROUP",
-            is_dm=False, is_reply_to_self=False, has_mention=True, chat_mode="muted",
+            "🦀 hey",
+            "SUPERGROUP",
+            is_dm=False,
+            is_reply_to_self=False,
+            has_mention=True,
+            chat_mode="muted",
         )
         # Muted проверяется после mention — mention даёт P0 по dispatcher.
         # Реальный guard — ChatFilterConfig.should_respond.
@@ -421,8 +463,12 @@ class TestCohesion:
         assert cfg.should_respond("12345", has_mention=False, is_dm=True) is True
 
         p, reason = classify_priority(
-            "вопрос", "PRIVATE",
-            is_dm=True, is_reply_to_self=False, has_mention=False, chat_mode="active",
+            "вопрос",
+            "PRIVATE",
+            is_dm=True,
+            is_reply_to_self=False,
+            has_mention=False,
+            chat_mode="active",
         )
         assert p == Priority.P0_INSTANT
 
@@ -436,8 +482,12 @@ class TestCohesion:
         from src.core.message_priority_dispatcher import Priority, classify_priority
 
         p, reason = classify_priority(
-            "!stats", "GROUP",
-            is_dm=False, is_reply_to_self=False, has_mention=False, chat_mode="mention-only",
+            "!stats",
+            "GROUP",
+            is_dm=False,
+            is_reply_to_self=False,
+            has_mention=False,
+            chat_mode="mention-only",
         )
         assert p == Priority.P0_INSTANT
         assert reason == "command"

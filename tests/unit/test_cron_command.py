@@ -77,6 +77,7 @@ _JOBS_JSON = {"version": 1, "jobs": [_JOB_EVERY, _JOB_CRON_WITH_TZ]}
 # _cron_format_schedule
 # ---------------------------------------------------------------------------
 
+
 class TestCronFormatSchedule:
     """Тесты форматирования расписания job."""
 
@@ -146,6 +147,7 @@ class TestCronFormatSchedule:
 # _cron_format_last_status
 # ---------------------------------------------------------------------------
 
+
 class TestCronFormatLastStatus:
     """Тесты форматирования последнего статуса job."""
 
@@ -185,6 +187,7 @@ class TestCronFormatLastStatus:
 # _cron_read_jobs
 # ---------------------------------------------------------------------------
 
+
 class TestCronReadJobs:
     """Тесты чтения jobs.json."""
 
@@ -199,7 +202,9 @@ class TestCronReadJobs:
         assert len(result) == 2
         assert result[0]["name"] == "Mercadona Restock"
 
-    def test_missing_file_returns_empty(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+    def test_missing_file_returns_empty(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ):
         """Файл не существует — возвращает пустой список."""
         monkeypatch.setattr(pathlib.Path, "home", staticmethod(lambda: tmp_path))
         result = _cron_read_jobs()
@@ -228,6 +233,7 @@ class TestCronReadJobs:
 # _cron_write_jobs
 # ---------------------------------------------------------------------------
 
+
 class TestCronWriteJobs:
     """Тесты записи jobs.json."""
 
@@ -249,7 +255,9 @@ class TestCronWriteJobs:
         """Существующий файл перезаписывается."""
         cron_dir = tmp_path / ".openclaw" / "cron"
         cron_dir.mkdir(parents=True)
-        (cron_dir / "jobs.json").write_text(json.dumps({"version": 1, "jobs": [_JOB_EVERY, _JOB_CRON_WITH_TZ]}), encoding="utf-8")
+        (cron_dir / "jobs.json").write_text(
+            json.dumps({"version": 1, "jobs": [_JOB_EVERY, _JOB_CRON_WITH_TZ]}), encoding="utf-8"
+        )
         monkeypatch.setattr(pathlib.Path, "home", staticmethod(lambda: tmp_path))
 
         _cron_write_jobs([_JOB_CRON_NO_TZ])
@@ -261,6 +269,7 @@ class TestCronWriteJobs:
 # ---------------------------------------------------------------------------
 # Вспомогательная фабрика mock-объектов
 # ---------------------------------------------------------------------------
+
 
 def _make_owner_bot(jobs: list | None = None):
     """Создаёт bot с OWNER-уровнем доступа."""
@@ -295,6 +304,7 @@ def _make_message(text: str = "!cron") -> SimpleNamespace:
 # handle_cron — non-owner
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_handle_cron_non_owner_raises():
     """Non-owner получает UserInputError."""
@@ -308,6 +318,7 @@ async def test_handle_cron_non_owner_raises():
 # ---------------------------------------------------------------------------
 # handle_cron list
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_handle_cron_list_empty(monkeypatch: pytest.MonkeyPatch):
@@ -341,7 +352,7 @@ async def test_handle_cron_list_shows_jobs(monkeypatch: pytest.MonkeyPatch):
     assert "Mercadona Restock" in rendered
     assert "Daily Report" in rendered
     assert "✅" in rendered  # enabled job
-    assert "⏸" in rendered   # disabled job
+    assert "⏸" in rendered  # disabled job
 
 
 @pytest.mark.asyncio
@@ -364,6 +375,7 @@ async def test_handle_cron_list_no_args(monkeypatch: pytest.MonkeyPatch):
 # handle_cron status
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_handle_cron_status_counts(monkeypatch: pytest.MonkeyPatch):
     """!cron status — корректный подсчёт total/enabled/errors."""
@@ -375,9 +387,9 @@ async def test_handle_cron_status_counts(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("src.handlers.command_handlers._cron_read_jobs", lambda: jobs)
     await handle_cron(bot, msg)
     rendered = msg.reply.await_args.args[0]
-    assert "4" in rendered   # total
-    assert "2" in rendered   # enabled (EVERY + NIGHTLY_DIAG)
-    assert "1" in rendered   # errors (DAILY_REPORT has consecutiveErrors=2)
+    assert "4" in rendered  # total
+    assert "2" in rendered  # enabled (EVERY + NIGHTLY_DIAG)
+    assert "1" in rendered  # errors (DAILY_REPORT has consecutiveErrors=2)
 
 
 @pytest.mark.asyncio
@@ -396,6 +408,7 @@ async def test_handle_cron_status_empty(monkeypatch: pytest.MonkeyPatch):
 # ---------------------------------------------------------------------------
 # handle_cron enable / disable
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_handle_cron_enable_no_arg_raises():
@@ -436,7 +449,9 @@ async def test_handle_cron_enable_by_name_success(monkeypatch: pytest.MonkeyPatc
     bot._get_command_args = MagicMock(return_value="enable Daily Report")
     msg = _make_message("!cron enable Daily Report")
 
-    monkeypatch.setattr("src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ])
+    monkeypatch.setattr(
+        "src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ]
+    )
     monkeypatch.setattr(
         "src.handlers.command_handlers._cron_run_openclaw",
         AsyncMock(return_value=(True, "enabled")),
@@ -502,6 +517,7 @@ async def test_handle_cron_enable_cli_fails_direct_patch(
 # handle_cron run
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_handle_cron_run_no_arg_raises():
     """!cron run без имени → UserInputError."""
@@ -551,7 +567,9 @@ async def test_handle_cron_run_failure(monkeypatch: pytest.MonkeyPatch):
     bot._get_command_args = MagicMock(return_value="run Daily Report")
     msg = _make_message("!cron run Daily Report")
 
-    monkeypatch.setattr("src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ])
+    monkeypatch.setattr(
+        "src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ]
+    )
     monkeypatch.setattr(
         "src.handlers.command_handlers._cron_run_openclaw",
         AsyncMock(return_value=(False, "gateway not responding")),
@@ -568,7 +586,9 @@ async def test_handle_cron_run_by_id(monkeypatch: pytest.MonkeyPatch):
     bot._get_command_args = MagicMock(return_value="run job-cron-2")
     msg = _make_message("!cron run job-cron-2")
 
-    monkeypatch.setattr("src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ])
+    monkeypatch.setattr(
+        "src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ]
+    )
     monkeypatch.setattr(
         "src.handlers.command_handlers._cron_run_openclaw",
         AsyncMock(return_value=(True, "")),
@@ -581,6 +601,7 @@ async def test_handle_cron_run_by_id(monkeypatch: pytest.MonkeyPatch):
 # ---------------------------------------------------------------------------
 # handle_cron: неизвестная субкоманда → справка
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_handle_cron_unknown_subcommand_shows_help(monkeypatch: pytest.MonkeyPatch):
@@ -602,6 +623,7 @@ async def test_handle_cron_unknown_subcommand_shows_help(monkeypatch: pytest.Mon
 # Русские алиасы субкоманд
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_handle_cron_status_alias_stat(monkeypatch: pytest.MonkeyPatch):
     """!cron stat — алиас для status."""
@@ -622,7 +644,9 @@ async def test_handle_cron_enable_ru_alias(monkeypatch: pytest.MonkeyPatch):
     bot._get_command_args = MagicMock(return_value="вкл Daily Report")
     msg = _make_message("!cron вкл Daily Report")
 
-    monkeypatch.setattr("src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ])
+    monkeypatch.setattr(
+        "src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ]
+    )
     monkeypatch.setattr(
         "src.handlers.command_handlers._cron_run_openclaw",
         AsyncMock(return_value=(True, "enabled")),

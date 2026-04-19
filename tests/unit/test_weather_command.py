@@ -22,7 +22,6 @@ import pytest
 
 from src.handlers.command_handlers import handle_weather
 
-
 # ---------------------------------------------------------------------------
 # Хелперы
 # ---------------------------------------------------------------------------
@@ -431,12 +430,15 @@ class TestHandleWeatherExported:
     def test_handle_weather_importable(self) -> None:
         """handle_weather импортируется из src.handlers.command_handlers."""
         from src.handlers.command_handlers import handle_weather  # noqa: F401
+
         assert callable(handle_weather)
 
     def test_handle_weather_async(self) -> None:
         """handle_weather — корутина."""
         import asyncio
+
         from src.handlers.command_handlers import handle_weather
+
         assert asyncio.iscoroutinefunction(handle_weather)
 
 
@@ -451,11 +453,13 @@ class TestDefaultWeatherCityConfig:
     def test_config_имеет_default_weather_city(self) -> None:
         """Config содержит атрибут DEFAULT_WEATHER_CITY."""
         from src.config import config
+
         assert hasattr(config, "DEFAULT_WEATHER_CITY")
 
     def test_default_weather_city_является_строкой(self) -> None:
         """DEFAULT_WEATHER_CITY — непустая строка."""
         from src.config import config
+
         assert isinstance(config.DEFAULT_WEATHER_CITY, str)
         assert len(config.DEFAULT_WEATHER_CITY) > 0
 
@@ -468,6 +472,7 @@ class TestDefaultWeatherCityConfig:
         original = os.environ.pop("DEFAULT_WEATHER_CITY", None)
         try:
             import src.config as config_module
+
             reload(config_module)
             assert config_module.Config.DEFAULT_WEATHER_CITY == "Barcelona"
         finally:
@@ -483,6 +488,7 @@ class TestDefaultWeatherCityConfig:
         os.environ["DEFAULT_WEATHER_CITY"] = "Timbuktu"
         try:
             import src.config as config_module
+
             reload(config_module)
             assert config_module.Config.DEFAULT_WEATHER_CITY == "Timbuktu"
         finally:
@@ -501,12 +507,14 @@ class TestWeatherCommandRegistry:
     def test_weather_в_реестре(self) -> None:
         """Команда 'weather' присутствует в реестре."""
         from src.core.command_registry import registry
+
         cmd = registry.get("weather")
         assert cmd is not None
 
     def test_weather_категория_ai(self) -> None:
         """Команда 'weather' в категории 'ai'."""
         from src.core.command_registry import registry
+
         cmd = registry.get("weather")
         assert cmd is not None
         assert cmd.category == "ai"
@@ -514,5 +522,6 @@ class TestWeatherCommandRegistry:
     def test_weather_в_списке_по_категории(self) -> None:
         """by_category('ai') содержит команду 'weather'."""
         from src.core.command_registry import registry
+
         ai_cmds = [c.name for c in registry.by_category("ai")]
         assert "weather" in ai_cmds

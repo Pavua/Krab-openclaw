@@ -74,12 +74,14 @@ def test_missing_module_gracefully_returns_available_false(health_svc, monkeypat
 
     # Удаляем кэшированные модули чтобы принудить повторный импорт
     wave16_keys = [
-        k for k in list(sys.modules)
+        k
+        for k in list(sys.modules)
         if any(
             k.endswith(m)
             for m in (".chat_window_manager", ".message_batcher", ".chat_filter_config")
         )
-        or k in (
+        or k
+        in (
             "src.core.chat_window_manager",
             "src.core.message_batcher",
             "src.core.chat_filter_config",

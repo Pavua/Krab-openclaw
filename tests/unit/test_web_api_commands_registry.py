@@ -7,13 +7,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
-
-import pytest
 from fastapi.testclient import TestClient
 
 from src.modules.web_app import WebApp
-
 
 # ---------------------------------------------------------------------------
 # Заглушки (минимальный набор для запуска WebApp)
@@ -22,7 +18,13 @@ from src.modules.web_app import WebApp
 
 class _FakeOpenClaw:
     def get_last_runtime_route(self) -> dict:
-        return {"channel": "cloud", "provider": "google", "model": "test", "status": "ok", "error_code": None}
+        return {
+            "channel": "cloud",
+            "provider": "google",
+            "model": "test",
+            "status": "ok",
+            "error_code": None,
+        }
 
     def get_tier_state_export(self) -> dict:
         return {"active_tier": "free", "last_error_code": None}
@@ -140,16 +142,12 @@ class TestApiCommandsList:
     def test_owner_only_is_bool(self) -> None:
         commands = _client().get("/api/commands").json()["commands"]
         for cmd in commands:
-            assert isinstance(cmd["owner_only"], bool), (
-                f"owner_only должен быть bool: {cmd}"
-            )
+            assert isinstance(cmd["owner_only"], bool), f"owner_only должен быть bool: {cmd}"
 
     def test_aliases_is_list(self) -> None:
         commands = _client().get("/api/commands").json()["commands"]
         for cmd in commands:
-            assert isinstance(cmd["aliases"], list), (
-                f"aliases должен быть list: {cmd}"
-            )
+            assert isinstance(cmd["aliases"], list), f"aliases должен быть list: {cmd}"
 
     def test_help_command_present(self) -> None:
         commands = _client().get("/api/commands").json()["commands"]

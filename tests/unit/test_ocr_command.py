@@ -24,15 +24,13 @@
 from __future__ import annotations
 
 import base64
-import io
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.handlers.command_handlers import handle_ocr
 from src.core.exceptions import UserInputError
-
+from src.handlers.command_handlers import handle_ocr
 
 # ---------------------------------------------------------------------------
 # Хелперы
@@ -189,6 +187,7 @@ class TestHandleOcrDownload:
     @pytest.mark.asyncio
     async def test_пустой_download_возвращает_ошибку(self) -> None:
         """Если download вернул 0 байт → edit с ошибкой."""
+
         async def empty_download(in_memory=None):
             # ничего не пишем
             return in_memory
@@ -883,12 +882,15 @@ class TestHandleOcrExport:
     def test_handle_ocr_importable(self) -> None:
         """handle_ocr импортируется из src.handlers.command_handlers."""
         from src.handlers.command_handlers import handle_ocr  # noqa: F401
+
         assert callable(handle_ocr)
 
     def test_handle_ocr_async(self) -> None:
         """handle_ocr — корутинная функция."""
         import asyncio
+
         from src.handlers.command_handlers import handle_ocr
+
         assert asyncio.iscoroutinefunction(handle_ocr)
 
 
@@ -898,12 +900,14 @@ class TestHandleOcrRegistry:
     def test_ocr_в_реестре(self) -> None:
         """Команда 'ocr' присутствует в реестре."""
         from src.core.command_registry import registry
+
         cmd = registry.get("ocr")
         assert cmd is not None
 
     def test_ocr_категория_ai(self) -> None:
         """Команда 'ocr' в категории 'ai'."""
         from src.core.command_registry import registry
+
         cmd = registry.get("ocr")
         assert cmd is not None
         assert cmd.category == "ai"
@@ -911,12 +915,14 @@ class TestHandleOcrRegistry:
     def test_ocr_в_списке_по_категории(self) -> None:
         """by_category('ai') содержит команду 'ocr'."""
         from src.core.command_registry import registry
+
         ai_cmds = [c.name for c in registry.by_category("ai")]
         assert "ocr" in ai_cmds
 
     def test_ocr_owner_only(self) -> None:
         """!ocr только для owner."""
         from src.core.command_registry import registry
+
         cmd = registry.get("ocr")
         assert cmd is not None
         assert cmd.owner_only is True
@@ -924,6 +930,7 @@ class TestHandleOcrRegistry:
     def test_ocr_usage_содержит_команду(self) -> None:
         """usage содержит !ocr."""
         from src.core.command_registry import registry
+
         cmd = registry.get("ocr")
         assert cmd is not None
         assert "ocr" in cmd.usage.lower()
@@ -931,6 +938,7 @@ class TestHandleOcrRegistry:
     def test_ocr_description_осмысленное(self) -> None:
         """description не пустое."""
         from src.core.command_registry import registry
+
         cmd = registry.get("ocr")
         assert cmd is not None
         assert len(cmd.description) > 5

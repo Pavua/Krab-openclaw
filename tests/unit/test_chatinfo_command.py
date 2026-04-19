@@ -5,15 +5,12 @@
 
 from __future__ import annotations
 
-import datetime
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_chatinfo
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
@@ -463,7 +460,10 @@ class TestChatInfoByArgument:
         with pytest.raises(UserInputError) as exc_info:
             await handle_chatinfo(bot, msg)
 
-        assert "nonexistent" in exc_info.value.user_message or "Не удалось" in exc_info.value.user_message
+        assert (
+            "nonexistent" in exc_info.value.user_message
+            or "Не удалось" in exc_info.value.user_message
+        )
 
 
 # ---------------------------------------------------------------------------

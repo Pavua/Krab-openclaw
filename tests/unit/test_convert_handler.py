@@ -9,22 +9,22 @@
 
 from __future__ import annotations
 
-import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from src.handlers.command_handlers import (
     _do_convert,
-    _normalize_unit,
     _format_convert_result,
+    _normalize_unit,
     handle_convert,
-    _CONVERT_HELP,
 )
-
 
 # ---------------------------------------------------------------------------
 # _normalize_unit — нормализация строки единицы
 # ---------------------------------------------------------------------------
+
 
 class TestNormalizeUnit:
     def test_lowercase_passthrough(self):
@@ -78,6 +78,7 @@ class TestNormalizeUnit:
 # _format_convert_result — форматирование чисел
 # ---------------------------------------------------------------------------
 
+
 class TestFormatConvertResult:
     def test_integer_result(self):
         assert _format_convert_result(100.0) == "100"
@@ -102,8 +103,8 @@ class TestFormatConvertResult:
 # _do_convert — основная логика конвертации
 # ---------------------------------------------------------------------------
 
-class TestDoConvert:
 
+class TestDoConvert:
     # Длина
     def test_km_to_mi(self):
         result = _do_convert(100, "km", "mi")
@@ -306,6 +307,7 @@ class TestDoConvert:
 # handle_convert — handler (через AsyncMock)
 # ---------------------------------------------------------------------------
 
+
 def _make_bot(args: str):
     """Вспомогательная фабрика: простой bot-объект."""
     bot = SimpleNamespace()
@@ -367,6 +369,7 @@ async def test_handle_convert_no_args_shows_help():
 async def test_handle_convert_wrong_arg_count():
     """!convert 100 km → ошибка формата."""
     from src.core.exceptions import UserInputError
+
     bot = _make_bot("100 km")
     msg = _make_message()
     with pytest.raises(UserInputError):
@@ -377,6 +380,7 @@ async def test_handle_convert_wrong_arg_count():
 async def test_handle_convert_bad_number():
     """!convert abc km mi → ошибка числа (UserInputError с user_message)."""
     from src.core.exceptions import UserInputError
+
     bot = _make_bot("abc km mi")
     msg = _make_message()
     with pytest.raises(UserInputError) as exc_info:
@@ -389,6 +393,7 @@ async def test_handle_convert_bad_number():
 async def test_handle_convert_incompatible_units():
     """!convert 5 km kg → ошибка несовместимых единиц."""
     from src.core.exceptions import UserInputError
+
     bot = _make_bot("5 km kg")
     msg = _make_message()
     with pytest.raises(UserInputError) as exc_info:
@@ -400,6 +405,7 @@ async def test_handle_convert_incompatible_units():
 async def test_handle_convert_unknown_unit():
     """!convert 5 furlongs km → ошибка неизвестной единицы."""
     from src.core.exceptions import UserInputError
+
     bot = _make_bot("5 furlongs km")
     msg = _make_message()
     with pytest.raises(UserInputError) as exc_info:

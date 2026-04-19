@@ -240,8 +240,12 @@ class TestHandleMediaValidation:
     async def test_reply_на_текст_без_медиа_поднимает_userinputerror(self) -> None:
         """!media в reply на текстовое сообщение → UserInputError."""
         replied = SimpleNamespace(
-            photo=None, video=None, document=None,
-            audio=None, voice=None, sticker=None,
+            photo=None,
+            video=None,
+            document=None,
+            audio=None,
+            voice=None,
+            sticker=None,
         )
         bot, msg = _make_message(replied=replied)
         with pytest.raises(UserInputError):
@@ -260,8 +264,12 @@ class TestHandleMediaValidation:
     async def test_userinputerror_без_медиа_содержит_hint(self) -> None:
         """Сообщение ошибки при reply на текст содержит подсказку."""
         replied = SimpleNamespace(
-            photo=None, video=None, document=None,
-            audio=None, voice=None, sticker=None,
+            photo=None,
+            video=None,
+            document=None,
+            audio=None,
+            voice=None,
+            sticker=None,
         )
         bot, msg = _make_message(replied=replied)
         with pytest.raises(UserInputError) as exc_info:

@@ -9,12 +9,10 @@
 from __future__ import annotations
 
 import asyncio
-import time
 
 import pytest
 
 from src.core.telegram_rate_limiter import GlobalTelegramRateLimiter
-
 
 # ── Вспомогательные фикстуры ──────────────────────────────────────────────────
 

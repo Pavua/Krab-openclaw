@@ -25,10 +25,10 @@ from src.core.access_control import AccessLevel, AccessProfile
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_archive, handle_unarchive
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
+
 
 def _make_dialog(chat_id: int, title: str) -> SimpleNamespace:
     """Минимальный mock pyrogram.Dialog."""
@@ -38,6 +38,7 @@ def _make_dialog(chat_id: int, title: str) -> SimpleNamespace:
 
 def _make_async_dialogs_iter(dialogs: list) -> MagicMock:
     """Создаёт async-итератор для get_dialogs."""
+
     async def _gen():
         for d in dialogs:
             yield d
@@ -93,6 +94,7 @@ def _make_message(
 # ---------------------------------------------------------------------------
 # handle_archive — базовый сценарий
 # ---------------------------------------------------------------------------
+
 
 class TestHandleArchive:
     @pytest.mark.asyncio
@@ -219,6 +221,7 @@ class TestHandleArchive:
     @pytest.mark.asyncio
     async def test_archive_list_uses_first_name_fallback(self) -> None:
         """Для личных чатов без title берётся first_name."""
+
         async def _gen():
             chat = SimpleNamespace(id=55, title=None, first_name="Иван")
             yield SimpleNamespace(chat=chat)
@@ -239,6 +242,7 @@ class TestHandleArchive:
 # ---------------------------------------------------------------------------
 # handle_unarchive
 # ---------------------------------------------------------------------------
+
 
 class TestHandleUnarchive:
     @pytest.mark.asyncio

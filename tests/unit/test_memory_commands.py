@@ -27,7 +27,6 @@ for _k, _v in {
     if not os.environ.get(_k):
         os.environ[_k] = _v
 
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -39,11 +38,11 @@ from src.core.memory_archive import (
     create_schema,
     open_archive,
 )
-from src.core.memory_retrieval import HybridRetriever, SearchResult
+from src.core.memory_retrieval import SearchResult
 from src.handlers.memory_commands import (
+    TELEGRAM_MESSAGE_LIMIT,
     MemoryCommandHandler,
     MemoryStats,
-    TELEGRAM_MESSAGE_LIMIT,
     _escape_md,
     _format_bytes,
     _format_stats,
@@ -51,10 +50,10 @@ from src.handlers.memory_commands import (
     _truncate,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fake retriever.
 # ---------------------------------------------------------------------------
+
 
 class _FakeRetriever:
     """Контролируемая заглушка HybridRetriever для command-тестов."""
@@ -99,6 +98,7 @@ def _sr(
 # ---------------------------------------------------------------------------
 # Архивная поисковая команда.
 # ---------------------------------------------------------------------------
+
 
 class TestHandleArchive:
     def test_empty_query_returns_usage(self) -> None:
@@ -146,9 +146,7 @@ class TestHandleArchive:
         assert "⤵" in out  # маркер after
 
     def test_search_exception_caught(self) -> None:
-        handler = MemoryCommandHandler(
-            retriever=_FakeRetriever(raise_on_search=True)
-        )
+        handler = MemoryCommandHandler(retriever=_FakeRetriever(raise_on_search=True))
         # Не должен пробросить — userbot не должен падать.
         out = handler.handle_archive("anything")
         assert "ошибка" in out.lower()
@@ -167,12 +165,11 @@ class TestHandleArchive:
 # Защита от переполнения Telegram-лимита.
 # ---------------------------------------------------------------------------
 
+
 class TestMessageLimit:
     def test_long_results_are_truncated_with_notice(self) -> None:
         # 40 длинных результатов гарантированно вылезут за 4000 символов.
-        canned = [
-            _sr(mid=str(i), text=("xyz " * 200)) for i in range(40)
-        ]
+        canned = [_sr(mid=str(i), text=("xyz " * 200)) for i in range(40)]
         handler = MemoryCommandHandler(retriever=_FakeRetriever(canned=canned))
         out = handler.handle_archive("q")
         assert len(out) <= TELEGRAM_MESSAGE_LIMIT + 500  # header + truncation notice
@@ -191,6 +188,7 @@ class TestMessageLimit:
 # ---------------------------------------------------------------------------
 # Stats.
 # ---------------------------------------------------------------------------
+
 
 class TestCollectStats:
     def test_missing_db(self, tmp_path: Path) -> None:
@@ -212,9 +210,7 @@ class TestCollectStats:
         create_schema(conn)
         conn.close()
 
-        handler = MemoryCommandHandler(
-            archive_paths=paths, retriever=_FakeRetriever()
-        )
+        handler = MemoryCommandHandler(archive_paths=paths, retriever=_FakeRetriever())
         stats = handler.collect_stats()
         assert stats.chats == 0
         assert stats.messages == 0
@@ -249,9 +245,7 @@ class TestCollectStats:
         conn.commit()
         conn.close()
 
-        handler = MemoryCommandHandler(
-            archive_paths=paths, retriever=_FakeRetriever()
-        )
+        handler = MemoryCommandHandler(archive_paths=paths, retriever=_FakeRetriever())
         stats = handler.collect_stats()
         assert stats.chats == 1
         assert stats.messages == 1
@@ -282,9 +276,7 @@ class TestStatsWithRealVec:
         create_schema(conn)
 
         # Вставляем chunk.
-        conn.execute(
-            "INSERT INTO chats(chat_id, title) VALUES (?, ?);", ("-100", "dev")
-        )
+        conn.execute("INSERT INTO chats(chat_id, title) VALUES (?, ?);", ("-100", "dev"))
         cur = conn.execute(
             """
             INSERT INTO chunks(chunk_id, chat_id, start_ts, end_ts,
@@ -299,8 +291,7 @@ class TestStatsWithRealVec:
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.execute(
-            "CREATE VIRTUAL TABLE vec_chunks USING vec0("
-            "vector float[4] distance_metric=cosine);"
+            "CREATE VIRTUAL TABLE vec_chunks USING vec0(vector float[4] distance_metric=cosine);"
         )
         conn.execute(
             "INSERT INTO vec_chunks(rowid, vector) VALUES (?, ?);",
@@ -309,9 +300,7 @@ class TestStatsWithRealVec:
         conn.commit()
         conn.close()
 
-        handler = MemoryCommandHandler(
-            archive_paths=paths, retriever=_FakeRetriever()
-        )
+        handler = MemoryCommandHandler(archive_paths=paths, retriever=_FakeRetriever())
         stats = handler.collect_stats()
 
         # КЛЮЧЕВАЯ проверка: vectors должно быть 1, не -1.
@@ -322,9 +311,7 @@ class TestStatsWithRealVec:
         assert stats.chats == 1
         assert stats.chunks == 1
 
-    def test_stats_format_shows_vectors_when_present(
-        self, tmp_path: Path
-    ) -> None:
+    def test_stats_format_shows_vectors_when_present(self, tmp_path: Path) -> None:
         """handle_stats() рендерит число, а не '(sqlite-vec не подключён)'."""
         import struct
 
@@ -336,8 +323,7 @@ class TestStatsWithRealVec:
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.execute(
-            "CREATE VIRTUAL TABLE vec_chunks USING vec0("
-            "vector float[4] distance_metric=cosine);"
+            "CREATE VIRTUAL TABLE vec_chunks USING vec0(vector float[4] distance_metric=cosine);"
         )
         conn.execute(
             "INSERT INTO vec_chunks(rowid, vector) VALUES (?, ?);",
@@ -346,9 +332,7 @@ class TestStatsWithRealVec:
         conn.commit()
         conn.close()
 
-        handler = MemoryCommandHandler(
-            archive_paths=paths, retriever=_FakeRetriever()
-        )
+        handler = MemoryCommandHandler(archive_paths=paths, retriever=_FakeRetriever())
         out = handler.handle_stats()
         # "Vectors:       1" должно присутствовать (экранированное MarkdownV2
         # может добавить слэши, но сама цифра не скрыта).
@@ -365,9 +349,7 @@ class TestHandleStats:
         create_schema(conn)
         conn.close()
 
-        handler = MemoryCommandHandler(
-            archive_paths=paths, retriever=_FakeRetriever()
-        )
+        handler = MemoryCommandHandler(archive_paths=paths, retriever=_FakeRetriever())
         out = handler.handle_stats()
         assert "Memory Layer" in out
         assert "statistics".lower() in out.lower() or "статистика" in out
@@ -379,9 +361,7 @@ class TestHandleStats:
         create_schema(conn)
         conn.close()
 
-        handler = MemoryCommandHandler(
-            archive_paths=paths, retriever=_FakeRetriever()
-        )
+        handler = MemoryCommandHandler(archive_paths=paths, retriever=_FakeRetriever())
         out = handler.handle_stats()
         # vectors=-1 → показываем что не подключён.
         assert "sqlite-vec" in out or "не подключ" in out.lower()
@@ -390,6 +370,7 @@ class TestHandleStats:
 # ---------------------------------------------------------------------------
 # Утилиты форматирования.
 # ---------------------------------------------------------------------------
+
 
 class TestEscapeMd:
     @pytest.mark.parametrize(
@@ -471,7 +452,5 @@ class TestFormatStatsRender:
         assert "не подключ" not in out.lower()
 
     def test_vectors_missing(self) -> None:
-        out = _format_stats(
-            MemoryStats(chats=0, messages=0, chunks=0, vectors=-1, db_size_bytes=0)
-        )
+        out = _format_stats(MemoryStats(chats=0, messages=0, chunks=0, vectors=-1, db_size_bytes=0))
         assert "не подключ" in out.lower() or "sqlite-vec" in out

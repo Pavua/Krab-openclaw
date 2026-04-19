@@ -29,7 +29,6 @@ import pytest
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_poll, handle_quiz
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные функции
 # ---------------------------------------------------------------------------

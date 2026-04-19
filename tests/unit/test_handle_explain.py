@@ -26,13 +26,13 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import src.handlers.command_handlers as ch_module
 from src.core.exceptions import UserInputError
-from src.handlers.command_handlers import handle_explain, _EXPLAIN_PROMPT
+from src.handlers.command_handlers import _EXPLAIN_PROMPT, handle_explain
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
@@ -90,15 +90,18 @@ def _make_message_no_reply_attr(chat_id: int = 42000) -> tuple:
 
 def _make_async_gen(items: list[str]):
     """Создаёт async-генератор из списка строк."""
+
     async def _gen():
         for item in items:
             yield item
+
     return _gen()
 
 
 # ---------------------------------------------------------------------------
 # 1. Пустой запрос без reply → UserInputError
 # ---------------------------------------------------------------------------
+
 
 class TestHandleExplainEmptyQuery:
     """Пустые входные данные → UserInputError."""
@@ -117,12 +120,16 @@ class TestHandleExplainEmptyQuery:
         msg, _ = _make_message(reply_text=None)
         with pytest.raises(UserInputError) as exc_info:
             await handle_explain(bot, msg)
-        assert "reply" in exc_info.value.user_message.lower() or "ответь" in exc_info.value.user_message.lower()
+        assert (
+            "reply" in exc_info.value.user_message.lower()
+            or "ответь" in exc_info.value.user_message.lower()
+        )
 
 
 # ---------------------------------------------------------------------------
 # 2. Пустые аргументы + reply с кодом → берёт текст из reply
 # ---------------------------------------------------------------------------
+
 
 class TestHandleExplainFromReply:
     """Код берётся из reply-сообщения."""
@@ -169,8 +176,8 @@ class TestHandleExplainFromReply:
 # 3. Пустой reply (нет текста и caption) + нет аргументов → UserInputError
 # ---------------------------------------------------------------------------
 
-class TestHandleExplainEmptyReply:
 
+class TestHandleExplainEmptyReply:
     @pytest.mark.asyncio
     async def test_reply_с_пустым_текстом_бросает_userinputerror(self):
         bot = _make_bot("")
@@ -183,8 +190,8 @@ class TestHandleExplainEmptyReply:
 # 4. Нет атрибута reply_to_message + нет аргументов → UserInputError
 # ---------------------------------------------------------------------------
 
-class TestHandleExplainNoReplyAttr:
 
+class TestHandleExplainNoReplyAttr:
     @pytest.mark.asyncio
     async def test_без_атрибута_reply_бросает_userinputerror(self):
         bot = _make_bot("")
@@ -197,8 +204,8 @@ class TestHandleExplainNoReplyAttr:
 # 5. Прямой код в аргументах → вызывает openclaw, редактирует msg
 # ---------------------------------------------------------------------------
 
-class TestHandleExplainDirectCode:
 
+class TestHandleExplainDirectCode:
     @pytest.mark.asyncio
     async def test_прямой_код_вызывает_openclaw(self):
         code = "x = 1 + 1"
@@ -237,8 +244,8 @@ class TestHandleExplainDirectCode:
 # 6. Пустой ответ AI → сообщение об ошибке
 # ---------------------------------------------------------------------------
 
-class TestHandleExplainEmptyAIResponse:
 
+class TestHandleExplainEmptyAIResponse:
     @pytest.mark.asyncio
     async def test_пустой_ответ_ai_редактирует_ошибку(self):
         bot = _make_bot("some code")
@@ -276,8 +283,8 @@ class TestHandleExplainEmptyAIResponse:
 # 7. Исключение от openclaw → редактирует msg с ошибкой
 # ---------------------------------------------------------------------------
 
-class TestHandleExplainException:
 
+class TestHandleExplainException:
     @pytest.mark.asyncio
     async def test_исключение_openclaw_отображается_в_chat(self):
         bot = _make_bot("x = 1")
@@ -317,8 +324,8 @@ class TestHandleExplainException:
 # 8. Сессия изолирована: session_id содержит chat_id
 # ---------------------------------------------------------------------------
 
-class TestHandleExplainSession:
 
+class TestHandleExplainSession:
     @pytest.mark.asyncio
     async def test_session_id_содержит_chat_id(self):
         chat_id = 99999
@@ -365,8 +372,8 @@ class TestHandleExplainSession:
 # 9. disable_tools=True передаётся
 # ---------------------------------------------------------------------------
 
-class TestHandleExplainDisableTools:
 
+class TestHandleExplainDisableTools:
     @pytest.mark.asyncio
     async def test_disable_tools_true(self):
         bot = _make_bot("x = 1")
@@ -392,8 +399,8 @@ class TestHandleExplainDisableTools:
 # 10. max_output_tokens=1024 передаётся
 # ---------------------------------------------------------------------------
 
-class TestHandleExplainMaxTokens:
 
+class TestHandleExplainMaxTokens:
     @pytest.mark.asyncio
     async def test_max_output_tokens_1024(self):
         bot = _make_bot("code")
@@ -419,8 +426,8 @@ class TestHandleExplainMaxTokens:
 # 11–12. Промпт содержит код и ключевые слова _EXPLAIN_PROMPT
 # ---------------------------------------------------------------------------
 
-class TestHandleExplainPrompt:
 
+class TestHandleExplainPrompt:
     @pytest.mark.asyncio
     async def test_промпт_содержит_код(self):
         code = "lambda x: x * 2"
@@ -468,8 +475,8 @@ class TestHandleExplainPrompt:
 # 13. Пагинация при длинном ответе
 # ---------------------------------------------------------------------------
 
-class TestHandleExplainPagination:
 
+class TestHandleExplainPagination:
     @pytest.mark.asyncio
     async def test_длинный_ответ_разбивается_на_части(self):
         bot = _make_bot("some code")
@@ -488,7 +495,9 @@ class TestHandleExplainPagination:
 
         # Первое сообщение — edit, последующие — reply
         assert sent.edit.call_count == 1
-        assert msg.reply.call_count >= 2  # первый reply для "Анализирую..." + второй для продолжения
+        assert (
+            msg.reply.call_count >= 2
+        )  # первый reply для "Анализирую..." + второй для продолжения
 
     @pytest.mark.asyncio
     async def test_первая_часть_содержит_индикатор_1_из_N(self):
@@ -513,8 +522,8 @@ class TestHandleExplainPagination:
 # 14. Reply с caption (нет text) используется
 # ---------------------------------------------------------------------------
 
-class TestHandleExplainCaptionFallback:
 
+class TestHandleExplainCaptionFallback:
     @pytest.mark.asyncio
     async def test_caption_используется_когда_нет_text(self):
         caption_code = "print('caption code')"
@@ -541,8 +550,8 @@ class TestHandleExplainCaptionFallback:
 # 15. Заголовок содержит «Объяснение кода»
 # ---------------------------------------------------------------------------
 
-class TestHandleExplainHeader:
 
+class TestHandleExplainHeader:
     @pytest.mark.asyncio
     async def test_заголовок_ответа_содержит_объяснение_кода(self):
         bot = _make_bot("x = 42")
@@ -564,8 +573,8 @@ class TestHandleExplainHeader:
 # 16–17. Индикаторы пагинации
 # ---------------------------------------------------------------------------
 
-class TestHandleExplainPaginationIndicators:
 
+class TestHandleExplainPaginationIndicators:
     @pytest.mark.asyncio
     async def test_три_части_имеют_суффикс_в_третьей(self):
         bot = _make_bot("code")
@@ -636,8 +645,8 @@ class TestHandleExplainPaginationIndicators:
 # 18. Код из reply приоритетнее пустых аргументов
 # ---------------------------------------------------------------------------
 
-class TestHandleExplainReplyPriority:
 
+class TestHandleExplainReplyPriority:
     @pytest.mark.asyncio
     async def test_reply_используется_когда_аргументы_пусты(self):
         reply_code = "return True"

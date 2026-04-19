@@ -160,7 +160,16 @@ class TestHandleHelp:
         await handle_help(bot, msg)
         all_text = " ".join(str(call.args[0]) for call in msg.reply.call_args_list)
         # Команды добавленные в session 7
-        for cmd in ["!catchup", "!monitor", "!alias", "!autodel", "!collect", "!fwd", "!react", "!export"]:
+        for cmd in [
+            "!catchup",
+            "!monitor",
+            "!alias",
+            "!autodel",
+            "!collect",
+            "!fwd",
+            "!react",
+            "!export",
+        ]:
             assert cmd in all_text, f"Команда {cmd!r} отсутствует в !help"
 
     @pytest.mark.asyncio
@@ -177,9 +186,7 @@ class TestHandleHelp:
         """Суммарный текст справки должен быть содержательным (>1000 символов)."""
         bot, msg = _make_message()
         await handle_help(bot, msg)
-        total_len = sum(
-            len(str(call.args[0])) for call in msg.reply.call_args_list
-        )
+        total_len = sum(len(str(call.args[0])) for call in msg.reply.call_args_list)
         assert total_len > 1000, "Суммарный текст справки слишком короткий"
 
     @pytest.mark.asyncio

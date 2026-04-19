@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import (
     _CONFIG_GROUPS,
     _CONFIG_KEY_DESC,
@@ -25,8 +26,6 @@ from src.handlers.command_handlers import (
     _render_config_value,
     handle_config,
 )
-from src.core.exceptions import UserInputError
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
@@ -59,7 +58,6 @@ class TestRenderConfigValue:
     """_render_config_value форматирует значения корректно."""
 
     def test_string_value(self):
-        from src.config import config
         # MODEL — строка
         result = _render_config_value("MODEL")
         assert isinstance(result, str)
@@ -79,6 +77,7 @@ class TestRenderConfigValue:
 
     def test_list_value_nonempty(self):
         from src.config import config
+
         # Временно подставляем список
         with patch.object(config, "TRIGGER_PREFIXES", ["!краб", "@краб"], create=False):
             result = _render_config_value("TRIGGER_PREFIXES")
@@ -86,12 +85,14 @@ class TestRenderConfigValue:
 
     def test_list_value_empty(self):
         from src.config import config
+
         with patch.object(config, "TRIGGER_PREFIXES", [], create=False):
             result = _render_config_value("TRIGGER_PREFIXES")
         assert result == "(пусто)"
 
     def test_frozenset_value(self):
         from src.config import config
+
         with patch.object(config, "MANUAL_BLOCKLIST", frozenset(["userA", "userB"]), create=False):
             result = _render_config_value("MANUAL_BLOCKLIST")
         assert "userA" in result or "userB" in result
@@ -102,6 +103,7 @@ class TestRenderConfigValue:
 
     def test_none_value_returns_dash(self):
         from src.config import config
+
         with patch.object(config, "GEMINI_API_KEY_FREE", None, create=False):
             result = _render_config_value("GEMINI_API_KEY_FREE")
         assert result == "—"
@@ -333,6 +335,7 @@ class TestHandleConfigSetKey:
             mock_cfg.update_setting = MagicMock(return_value=True)
             # Упростим: патчим только update_setting и getattr
             from src.config import Config
+
             with patch.object(Config, "update_setting", return_value=True):
                 await handle_config(bot, msg)
         msg.reply.assert_called_once()
@@ -345,6 +348,7 @@ class TestHandleConfigSetKey:
         bot = _make_bot(args="DEFAULT_WEATHER_CITY Madrid")
         msg = _make_message("!config DEFAULT_WEATHER_CITY Madrid")
         from src.config import Config
+
         with patch.object(Config, "update_setting", return_value=False):
             await handle_config(bot, msg)
         text = msg.reply.call_args[0][0]
@@ -362,6 +366,7 @@ class TestHandleConfigSetKey:
         bot = _make_bot(args="MODEL google/gemini-2.5-pro")
         msg = _make_message("!config MODEL google/gemini-2.5-pro")
         from src.config import Config
+
         with patch.object(Config, "update_setting", return_value=True):
             await handle_config(bot, msg)
         text = msg.reply.call_args[0][0]
@@ -373,6 +378,7 @@ class TestHandleConfigSetKey:
         bot = _make_bot(args="FORCE_CLOUD 1")
         msg = _make_message("!config FORCE_CLOUD 1")
         from src.config import Config
+
         with patch.object(Config, "update_setting", return_value=True):
             await handle_config(bot, msg)
         text = msg.reply.call_args[0][0]
@@ -383,6 +389,7 @@ class TestHandleConfigSetKey:
         bot = _make_bot(args="SCHEDULER_ENABLED 0")
         msg = _make_message("!config SCHEDULER_ENABLED 0")
         from src.config import Config
+
         with patch.object(Config, "update_setting", return_value=True):
             await handle_config(bot, msg)
         text = msg.reply.call_args[0][0]
@@ -394,6 +401,7 @@ class TestHandleConfigSetKey:
         bot = _make_bot(args="log_level DEBUG")
         msg = _make_message("!config log_level DEBUG")
         from src.config import Config
+
         with patch.object(Config, "update_setting", return_value=True):
             await handle_config(bot, msg)
         # Должен ответить успехом или ошибкой (LOG_LEVEL есть в Config)
@@ -404,6 +412,7 @@ class TestHandleConfigSetKey:
         bot = _make_bot(args="VOICE_REPLY_SPEED 1.8")
         msg = _make_message("!config VOICE_REPLY_SPEED 1.8")
         from src.config import Config
+
         with patch.object(Config, "update_setting", return_value=True):
             await handle_config(bot, msg)
         text = msg.reply.call_args[0][0]
@@ -414,6 +423,7 @@ class TestHandleConfigSetKey:
         bot = _make_bot(args="MAX_RAM_GB 32")
         msg = _make_message("!config MAX_RAM_GB 32")
         from src.config import Config
+
         with patch.object(Config, "update_setting", return_value=True):
             await handle_config(bot, msg)
         text = msg.reply.call_args[0][0]
@@ -448,6 +458,7 @@ class TestConfigCompleteness:
 
     def test_all_group_keys_exist_in_config(self):
         from src.config import Config
+
         missing = []
         for _, keys in _CONFIG_GROUPS:
             for key, _ in keys:

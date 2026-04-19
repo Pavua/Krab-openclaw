@@ -24,7 +24,6 @@ import pytest
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_rewrite
 
-
 # ---------------------------------------------------------------------------
 # Хелперы
 # ---------------------------------------------------------------------------
@@ -62,9 +61,11 @@ def _make_message(
 
 def _async_stream(*values: str):
     """Создаёт AsyncGenerator из строк."""
+
     async def _gen():
         for v in values:
             yield v
+
     return _gen()
 
 
@@ -82,7 +83,10 @@ class TestHandleRewriteValidation:
         bot, msg = _make_message(command_args="", reply_text=None)
         with pytest.raises(UserInputError) as exc_info:
             await handle_rewrite(bot, msg)
-        assert "rewrite" in exc_info.value.user_message.lower() or "использование" in exc_info.value.user_message.lower()
+        assert (
+            "rewrite" in exc_info.value.user_message.lower()
+            or "использование" in exc_info.value.user_message.lower()
+        )
 
     @pytest.mark.asyncio
     async def test_только_режим_без_текста_и_без_reply_бросает_UserInputError(self) -> None:
@@ -160,7 +164,9 @@ class TestHandleRewriteModeDetection:
     @pytest.mark.asyncio
     async def test_режим_short_передаётся_в_промпт(self) -> None:
         """!rewrite short <длинный текст> → промпт содержит инструкцию short."""
-        bot, msg = _make_message(command_args="short Очень длинное предложение, которое нужно сократить")
+        bot, msg = _make_message(
+            command_args="short Очень длинное предложение, которое нужно сократить"
+        )
 
         captured: list[str] = []
 
@@ -516,7 +522,9 @@ class TestHandleRewriteScenarios:
     @pytest.mark.asyncio
     async def test_short_с_reply(self) -> None:
         """!short (в reply на длинный текст) → передаёт текст и инструкцию сократить."""
-        bot, msg = _make_message(command_args="short", reply_text="Очень длинный и подробный текст с водой")
+        bot, msg = _make_message(
+            command_args="short", reply_text="Очень длинный и подробный текст с водой"
+        )
 
         captured: list[str] = []
 
@@ -588,21 +596,25 @@ class TestHandleRewriteExport:
     def test_handle_rewrite_importable_from_command_handlers(self) -> None:
         """handle_rewrite импортируется из src.handlers.command_handlers."""
         from src.handlers.command_handlers import handle_rewrite as hr  # noqa: F401
+
         assert callable(hr)
 
     def test_handle_rewrite_importable_from_handlers_package(self) -> None:
         """handle_rewrite экспортируется из src.handlers."""
         from src.handlers import handle_rewrite as hr  # noqa: F401
+
         assert callable(hr)
 
     def test_handle_rewrite_in_all(self) -> None:
         """handle_rewrite присутствует в __all__ пакета handlers."""
         import src.handlers as handlers_pkg
+
         assert "handle_rewrite" in handlers_pkg.__all__
 
     def test_rewrite_modes_dict_complete(self) -> None:
         """_REWRITE_MODES содержит все ожидаемые режимы включая дефолтный."""
         from src.handlers.command_handlers import _REWRITE_MODES
+
         assert "formal" in _REWRITE_MODES
         assert "casual" in _REWRITE_MODES
         assert "short" in _REWRITE_MODES

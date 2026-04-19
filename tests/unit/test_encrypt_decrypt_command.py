@@ -24,7 +24,6 @@ from src.handlers.command_handlers import (
     handle_encrypt,
 )
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
@@ -117,6 +116,7 @@ class TestEncryptText:
     def test_result_is_valid_base64(self):
         """Результат — валидный Base64."""
         import base64
+
         result = encrypt_text("pass", "hello")
         # Должен декодироваться без ошибок
         decoded = base64.b64decode(result)
@@ -202,6 +202,7 @@ class TestHandleEncrypt:
         assert "🔒" in reply_text
         # Результат должен дешифроваться обратно
         import re
+
         match = re.search(r"`([A-Za-z0-9+/=]+)`", reply_text)
         assert match
         assert decrypt_text("mypass", match.group(1)) == "hello"
@@ -210,6 +211,7 @@ class TestHandleEncrypt:
     async def test_encrypt_russian_text(self):
         """!encrypt pass Привет мир → дешифруется обратно."""
         import re
+
         bot = _make_bot("pass Привет мир")
         msg = _make_message()
         await handle_encrypt(bot, msg)
@@ -240,6 +242,7 @@ class TestHandleEncrypt:
     async def test_encrypt_password_with_spaces_in_text(self):
         """Текст может содержать пробелы — они сохраняются."""
         import re
+
         bot = _make_bot("p text with spaces here")
         msg = _make_message()
         await handle_encrypt(bot, msg)
@@ -312,7 +315,10 @@ class TestHandleDecrypt:
         msg = _make_message()
         with pytest.raises(UserInputError) as exc_info:
             await handle_decrypt(bot, msg)
-        assert "расшифровать" in exc_info.value.user_message.lower() or "decrypt" in exc_info.value.user_message.lower()
+        assert (
+            "расшифровать" in exc_info.value.user_message.lower()
+            or "decrypt" in exc_info.value.user_message.lower()
+        )
 
     @pytest.mark.asyncio
     async def test_decrypt_shows_decrypted_label(self):

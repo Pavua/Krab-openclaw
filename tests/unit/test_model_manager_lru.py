@@ -67,7 +67,10 @@ async def test_maybe_evict_idle_no_action_when_fresh(manager_with_lru: ModelMana
         status_code=200,
         json=lambda: {
             "models": [
-                {"key": "qwen3-30b-a3b-instruct-2507", "loaded_instances": [{"id": "qwen3-30b-a3b-instruct-2507"}]},
+                {
+                    "key": "qwen3-30b-a3b-instruct-2507",
+                    "loaded_instances": [{"id": "qwen3-30b-a3b-instruct-2507"}],
+                },
                 {"key": "qwen3-4b-instruct", "loaded_instances": [{"id": "qwen3-4b-instruct"}]},
             ]
         },
@@ -102,7 +105,10 @@ async def test_maybe_evict_idle_removes_stale_model(manager_with_lru: ModelManag
         status_code=200,
         json=lambda: {
             "models": [
-                {"key": "qwen3-30b-a3b-instruct-2507", "loaded_instances": [{"id": "qwen3-30b-a3b-instruct-2507"}]},
+                {
+                    "key": "qwen3-30b-a3b-instruct-2507",
+                    "loaded_instances": [{"id": "qwen3-30b-a3b-instruct-2507"}],
+                },
                 {"key": "qwen3-4b-instruct", "loaded_instances": [{"id": "qwen3-4b-instruct"}]},
             ]
         },
@@ -141,7 +147,10 @@ async def test_maybe_evict_idle_preserves_keep_model(manager_with_lru: ModelMana
         status_code=200,
         json=lambda: {
             "models": [
-                {"key": "qwen3-30b-a3b-instruct-2507", "loaded_instances": [{"id": "qwen3-30b-a3b-instruct-2507"}]},
+                {
+                    "key": "qwen3-30b-a3b-instruct-2507",
+                    "loaded_instances": [{"id": "qwen3-30b-a3b-instruct-2507"}],
+                },
             ]
         },
     )
@@ -178,7 +187,10 @@ async def test_maybe_evict_idle_clears_current_model_if_evicted(
         status_code=200,
         json=lambda: {
             "models": [
-                {"key": "qwen3-30b-a3b-instruct-2507", "loaded_instances": [{"id": "qwen3-30b-a3b-instruct-2507"}]},
+                {
+                    "key": "qwen3-30b-a3b-instruct-2507",
+                    "loaded_instances": [{"id": "qwen3-30b-a3b-instruct-2507"}],
+                },
                 {"key": "qwen3-4b-instruct", "loaded_instances": [{"id": "qwen3-4b-instruct"}]},
             ]
         },

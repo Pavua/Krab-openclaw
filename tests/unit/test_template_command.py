@@ -35,8 +35,7 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -224,9 +223,7 @@ async def test_send_no_vars(tmp_path, monkeypatch):
 async def test_send_with_vars(tmp_path, monkeypatch):
     """!template greet Павел — подставляет переменную {name}."""
     templates_file = tmp_path / "message_templates.json"
-    templates_file.write_text(
-        json.dumps({"greet": "Привет, {name}! Как дела?"}), encoding="utf-8"
-    )
+    templates_file.write_text(json.dumps({"greet": "Привет, {name}! Как дела?"}), encoding="utf-8")
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("greet Павел")
@@ -259,9 +256,7 @@ async def test_send_unknown_name(tmp_path, monkeypatch):
 async def test_list_shows_templates(tmp_path, monkeypatch):
     """!template list — выводит имена шаблонов."""
     templates_file = tmp_path / "message_templates.json"
-    templates_file.write_text(
-        json.dumps({"greet": "Привет!", "bye": "Пока!"}), encoding="utf-8"
-    )
+    templates_file.write_text(json.dumps({"greet": "Привет!", "bye": "Пока!"}), encoding="utf-8")
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("list")

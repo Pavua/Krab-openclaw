@@ -28,7 +28,6 @@ for _k, _v in {
     if not os.environ.get(_k):
         os.environ[_k] = _v
 
-import sqlite3
 from pathlib import Path
 
 import numpy as np
@@ -51,15 +50,13 @@ except ImportError:
 
 from scripts.bootstrap_memory import run_bootstrap
 
-
-FIXTURE_PATH = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "telegram_export_sample.json"
-)
+FIXTURE_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "telegram_export_sample.json"
 
 
 # ---------------------------------------------------------------------------
 # Fake Model2Vec — детерминированная заглушка.
 # ---------------------------------------------------------------------------
+
 
 class _FakeModel:
     """
@@ -85,6 +82,7 @@ class _FakeModel:
 # Фикстура — полный bootstrap на fixture.
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def bootstrapped_archive(tmp_path: Path) -> ArchivePaths:
     """Прогоняет bootstrap на synthetic fixture в tmp-БД, возвращает paths."""
@@ -106,12 +104,11 @@ def bootstrapped_archive(tmp_path: Path) -> ArchivePaths:
 # Test cases.
 # ---------------------------------------------------------------------------
 
+
 class TestBootstrapOnly:
     """Убеждаемся что bootstrap работает без embedder'а (FTS5-only путь)."""
 
-    def test_bootstrap_creates_searchable_index(
-        self, bootstrapped_archive: ArchivePaths
-    ) -> None:
+    def test_bootstrap_creates_searchable_index(self, bootstrapped_archive: ArchivePaths) -> None:
         r = HybridRetriever(archive_paths=bootstrapped_archive, model_name=None)
         # fixture содержит "dashboard"-подобные слова и имена проектов —
         # ищем устойчивый общий корень "Session".
@@ -120,9 +117,7 @@ class TestBootstrapOnly:
         assert len(results) > 0
         r.close()
 
-    def test_pii_stripped_in_fts(
-        self, bootstrapped_archive: ArchivePaths
-    ) -> None:
+    def test_pii_stripped_in_fts(self, bootstrapped_archive: ArchivePaths) -> None:
         """Карта "4242 4242..." из fixture не должна найтись (редактируется)."""
         r = HybridRetriever(archive_paths=bootstrapped_archive, model_name=None)
         results = r.search("4242")
@@ -136,14 +131,13 @@ class TestBootstrapOnly:
 # Embedder path — активируется когда memory_embedder.py готов.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(
     not _EMBEDDER_AVAILABLE,
     reason="memory_embedder.py пока не смёржен — e2e embedder-путь отложен",
 )
 class TestFullPipelineWithEmbedder:
-    def test_embed_after_bootstrap(
-        self, bootstrapped_archive: ArchivePaths
-    ) -> None:
+    def test_embed_after_bootstrap(self, bootstrapped_archive: ArchivePaths) -> None:
         """Bootstrap → Embedder → проверка что vec_chunks заполнен."""
         embedder = MemoryEmbedder(
             archive_paths=bootstrapped_archive,
@@ -167,9 +161,7 @@ class TestFullPipelineWithEmbedder:
 
         assert n_vecs == stats.chunks_processed
 
-    def test_embed_idempotent(
-        self, bootstrapped_archive: ArchivePaths
-    ) -> None:
+    def test_embed_idempotent(self, bootstrapped_archive: ArchivePaths) -> None:
         """Повторный embed_all_unindexed: 0 new, все skipped."""
         embedder = MemoryEmbedder(
             archive_paths=bootstrapped_archive,
@@ -183,9 +175,7 @@ class TestFullPipelineWithEmbedder:
         assert second.chunks_processed == 0
         assert second.chunks_skipped == first.chunks_processed
 
-    def test_retrieval_with_vec_path(
-        self, bootstrapped_archive: ArchivePaths
-    ) -> None:
+    def test_retrieval_with_vec_path(self, bootstrapped_archive: ArchivePaths) -> None:
         """
         После embedding'а HybridRetriever должен уметь использовать векторный
         путь (через sqlite-vec) параллельно с FTS5. RRF объединяет результаты.

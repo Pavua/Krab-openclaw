@@ -6,9 +6,8 @@
 from __future__ import annotations
 
 import json
-import pathlib
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -18,7 +17,6 @@ from src.handlers.command_handlers import (
     _save_quotes,
     handle_quote,
 )
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
@@ -38,7 +36,9 @@ def _make_message(reply_to: object = None) -> SimpleNamespace:
     )
 
 
-def _make_sender(first_name: str = "Иван", last_name: str = "", username: str = "") -> SimpleNamespace:
+def _make_sender(
+    first_name: str = "Иван", last_name: str = "", username: str = ""
+) -> SimpleNamespace:
     return SimpleNamespace(first_name=first_name, last_name=last_name, username=username)
 
 
@@ -540,7 +540,9 @@ class TestLoadSaveQuotes:
     def test_save_unicode_сохраняется_корректно(self, tmp_path):
         quotes_file = tmp_path / "q.json"
         with patch("src.handlers.command_handlers._SAVED_QUOTES_PATH", quotes_file):
-            _save_quotes([{"text": "Привет мир 世界", "author": "Тест", "saved_at": "2026-01-01T00:00:00"}])
+            _save_quotes(
+                [{"text": "Привет мир 世界", "author": "Тест", "saved_at": "2026-01-01T00:00:00"}]
+            )
         raw = quotes_file.read_text(encoding="utf-8")
         assert "Привет мир" in raw
 

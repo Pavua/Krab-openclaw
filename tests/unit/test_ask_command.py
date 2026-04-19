@@ -23,7 +23,6 @@ import pytest
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_ask
 
-
 # ---------------------------------------------------------------------------
 # Хелперы
 # ---------------------------------------------------------------------------
@@ -61,9 +60,11 @@ def _make_message(
 
 def _async_gen(*values: str):
     """Создаёт AsyncGenerator из списка строк."""
+
     async def _gen():
         for v in values:
             yield v
+
     return _gen()
 
 
@@ -81,7 +82,10 @@ class TestHandleAskValidation:
         bot, msg = _make_message(reply_text=None)
         with pytest.raises(UserInputError) as exc_info:
             await handle_ask(bot, msg)
-        assert "reply" in exc_info.value.user_message.lower() or "ответ" in exc_info.value.user_message.lower()
+        assert (
+            "reply" in exc_info.value.user_message.lower()
+            or "ответ" in exc_info.value.user_message.lower()
+        )
 
     @pytest.mark.asyncio
     async def test_пустой_текст_в_reply_бросает_UserInputError(self) -> None:
@@ -359,4 +363,5 @@ class TestHandleAskExported:
     def test_handle_ask_importable(self) -> None:
         """handle_ask импортируется из src.handlers.command_handlers."""
         from src.handlers.command_handlers import handle_ask  # noqa: F401
+
         assert callable(handle_ask)

@@ -45,6 +45,7 @@ from src.core.memory_retrieval import (
 # Хелперы.
 # ---------------------------------------------------------------------------
 
+
 def _seed_chunks(
     conn: sqlite3.Connection,
     chat_id: str,
@@ -83,8 +84,7 @@ def _seed_chunks(
         rowid = cur.lastrowid
 
         conn.execute(
-            "INSERT INTO chunk_messages(chunk_id, message_id, chat_id) "
-            "VALUES (?, ?, ?);",
+            "INSERT INTO chunk_messages(chunk_id, message_id, chat_id) VALUES (?, ?, ?);",
             (chunk_id, msg_id, chat_id),
         )
         conn.execute(
@@ -127,6 +127,7 @@ def archive_with_data(tmp_path: Path) -> tuple[ArchivePaths, sqlite3.Connection]
 # RRF fusion.
 # ---------------------------------------------------------------------------
 
+
 class TestReciprocalRankFusion:
     def test_single_list(self) -> None:
         result = reciprocal_rank_fusion(["a", "b", "c"], k=60)
@@ -161,6 +162,7 @@ class TestReciprocalRankFusion:
 # ---------------------------------------------------------------------------
 # Decay.
 # ---------------------------------------------------------------------------
+
 
 class TestDecayFunctions:
     def test_none_always_one(self) -> None:
@@ -216,6 +218,7 @@ class TestDetectDecayMode:
 # FTS5 escape.
 # ---------------------------------------------------------------------------
 
+
 class TestFtsEscape:
     def test_simple_words(self) -> None:
         # OR между словами — поисковая семантика "хотя бы одно".
@@ -243,6 +246,7 @@ class TestFtsEscape:
 # ISO parsing.
 # ---------------------------------------------------------------------------
 
+
 class TestParseIso:
     def test_with_z_suffix(self) -> None:
         ts = _parse_iso("2026-04-01T10:00:00Z")
@@ -264,6 +268,7 @@ class TestParseIso:
 # Normalization.
 # ---------------------------------------------------------------------------
 
+
 class TestNormalize:
     def test_min_max_basic(self) -> None:
         result = normalize_scores_0_1({"a": 0.1, "b": 0.5, "c": 0.9})
@@ -283,6 +288,7 @@ class TestNormalize:
 # HybridRetriever — graceful fallback.
 # ---------------------------------------------------------------------------
 
+
 class TestGracefulFallback:
     def test_missing_db_returns_empty(self, tmp_path: Path) -> None:
         paths = ArchivePaths.under(tmp_path / "absent")
@@ -295,9 +301,7 @@ class TestGracefulFallback:
         assert r.search("") == []
         assert r.search("   ") == []
 
-    def test_no_model_name_still_works(
-        self, archive_with_data: ArchivePaths
-    ) -> None:
+    def test_no_model_name_still_works(self, archive_with_data: ArchivePaths) -> None:
         """FTS5-only режим (без Model2Vec) должен продолжать работать."""
         r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
         results = r.search("dashboard")
@@ -309,10 +313,9 @@ class TestGracefulFallback:
 # HybridRetriever — end-to-end FTS5.
 # ---------------------------------------------------------------------------
 
+
 class TestFtsSearch:
-    def test_finds_by_keyword(
-        self, archive_with_data: ArchivePaths
-    ) -> None:
+    def test_finds_by_keyword(self, archive_with_data: ArchivePaths) -> None:
         r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
         results = r.search("dashboard")
         assert len(results) >= 2
@@ -330,16 +333,12 @@ class TestFtsSearch:
         assert len(scoped_to_other) == 0
         r.close()
 
-    def test_no_results_for_unknown_word(
-        self, archive_with_data: ArchivePaths
-    ) -> None:
+    def test_no_results_for_unknown_word(self, archive_with_data: ArchivePaths) -> None:
         r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
         assert r.search("nonexistentword42") == []
         r.close()
 
-    def test_results_have_redacted_text(
-        self, archive_with_data: ArchivePaths
-    ) -> None:
+    def test_results_have_redacted_text(self, archive_with_data: ArchivePaths) -> None:
         r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
         results = r.search("dashboard")
         for res in results:
@@ -365,10 +364,9 @@ class TestFtsSearch:
 # HybridRetriever — with_context.
 # ---------------------------------------------------------------------------
 
+
 class TestWithContext:
-    def test_context_pulls_neighbor_chunks(
-        self, archive_with_data: ArchivePaths
-    ) -> None:
+    def test_context_pulls_neighbor_chunks(self, archive_with_data: ArchivePaths) -> None:
         r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
         # Ищем "metrics" — должно совпасть с c2; с with_context=1 нужно получить
         # один соседний chunk до (c1) и один после (c3) того же чата.
@@ -376,12 +374,10 @@ class TestWithContext:
         assert len(results) >= 1
         hit = results[0]
         # Хотя бы один соседний контекст либо до, либо после.
-        assert (hit.context_before or hit.context_after)
+        assert hit.context_before or hit.context_after
         r.close()
 
-    def test_context_zero_means_empty(
-        self, archive_with_data: ArchivePaths
-    ) -> None:
+    def test_context_zero_means_empty(self, archive_with_data: ArchivePaths) -> None:
         r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
         results = r.search("metrics", with_context=0)
         assert len(results) >= 1
@@ -394,10 +390,9 @@ class TestWithContext:
 # HybridRetriever — decay применяется.
 # ---------------------------------------------------------------------------
 
+
 class TestDecayApplied:
-    def test_aggressive_demotes_old(
-        self, archive_with_data: ArchivePaths
-    ) -> None:
+    def test_aggressive_demotes_old(self, archive_with_data: ArchivePaths) -> None:
         """
         Старое сообщение должно получить меньший score при aggressive decay.
         Подаём now = 2026-05-01, данные в fixture от 2026-04-01 (≈30 дней).
@@ -423,9 +418,7 @@ class TestDecayApplied:
         assert aggressive
         r.close()
 
-    def test_auto_mode_selects_none_on_historical(
-        self, archive_with_data: ArchivePaths
-    ) -> None:
+    def test_auto_mode_selects_none_on_historical(self, archive_with_data: ArchivePaths) -> None:
         r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
         results = r.search("что раньше обсуждали про dashboard", decay_mode="auto")
         assert results  # должны быть результаты даже на старых данных
@@ -435,6 +428,7 @@ class TestDecayApplied:
 # ---------------------------------------------------------------------------
 # SearchResult — type contract.
 # ---------------------------------------------------------------------------
+
 
 class TestSearchResultContract:
     def test_frozen_dataclass(self) -> None:
@@ -585,9 +579,7 @@ class TestErrorPaths:
         assert r.search("***") == []
         r.close()
 
-    def test_close_swallows_sqlite_error(
-        self, archive_with_data: ArchivePaths
-    ) -> None:
+    def test_close_swallows_sqlite_error(self, archive_with_data: ArchivePaths) -> None:
         """
         close() должен проглотить sqlite3.Error при conn.close() и всё равно
         занулить self._conn — защита от "сломанной" connection.
@@ -604,9 +596,7 @@ class TestErrorPaths:
         r.close()
         assert r._conn is None
 
-    def test_vector_search_no_model_returns_empty(
-        self, archive_with_data: ArchivePaths
-    ) -> None:
+    def test_vector_search_no_model_returns_empty(self, archive_with_data: ArchivePaths) -> None:
         """
         _vector_search возвращает [] если _ensure_model вернул None
         (model_name=None или импорт упал). Покрывает строки 405-407.
@@ -618,9 +608,7 @@ class TestErrorPaths:
         assert r._vector_search(conn, "dashboard", None, limit=10) == []
         r.close()
 
-    def test_target_none_in_fetch_context(
-        self, archive_with_data: ArchivePaths
-    ) -> None:
+    def test_target_none_in_fetch_context(self, archive_with_data: ArchivePaths) -> None:
         """
         _fetch_context на несуществующем chunk_id возвращает (None, [], []).
         Покрывает ветку target is None (line 523).
@@ -632,9 +620,7 @@ class TestErrorPaths:
         assert result == (None, [], [])
         r.close()
 
-    def test_fetch_chunks_empty_iter(
-        self, archive_with_data: ArchivePaths
-    ) -> None:
+    def test_fetch_chunks_empty_iter(self, archive_with_data: ArchivePaths) -> None:
         """_fetch_chunks на пустом iterable → {}. Покрывает line 494."""
         r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
         conn = r._ensure_connection()

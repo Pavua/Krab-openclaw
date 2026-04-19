@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import time
 import os
 from unittest.mock import patch
 
@@ -204,7 +203,6 @@ class TestRateLimiting:
 
     def test_rate_limit_is_per_client_key(self):
         """Лимит изолирован на client key — разные клиенты не влияют друг на друга."""
-        from fastapi import HTTPException
 
         app = _make_web_app()
         with patch.dict(os.environ, {"WEB_ASSISTANT_RATE_LIMIT_PER_MIN": "2"}):

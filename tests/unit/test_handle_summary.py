@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,7 +20,6 @@ from src.handlers.command_handlers import (
     handle_catchup,
     handle_summary,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Хелперы
@@ -44,7 +42,9 @@ def _make_pyrogram_msg(
 ) -> MagicMock:
     """Создаёт mock pyrogram Message."""
     msg = MagicMock()
-    msg.text = text if not (has_photo or has_video or has_voice or has_sticker or has_document) else None
+    msg.text = (
+        text if not (has_photo or has_video or has_voice or has_sticker or has_document) else None
+    )
     msg.caption = None
     msg.photo = MagicMock() if has_photo else None
     msg.video = MagicMock() if has_video else None
@@ -85,9 +85,11 @@ def _make_message(text: str = "!summary", chat_id: int = 12345) -> MagicMock:
 
 def _make_async_gen(items: list):
     """Создаёт async generator из списка."""
+
     async def _gen():
         for item in items:
             yield item
+
     return _gen()
 
 
@@ -117,7 +119,9 @@ class TestFormatChatHistoryForLlm:
 
     def test_user_id_fallback(self) -> None:
         """При отсутствии имени и username используется id."""
-        msg = _make_pyrogram_msg(text="Тест", first_name=None, last_name=None, username=None, user_id=42)
+        msg = _make_pyrogram_msg(
+            text="Тест", first_name=None, last_name=None, username=None, user_id=42
+        )
         result = _format_chat_history_for_llm([msg])
         assert "42: Тест" in result
 
@@ -213,6 +217,7 @@ class TestHandleSummaryArgParsing:
     def _mock_stream(self, text: str = "Краткая сводка"):
         async def _gen():
             yield text
+
         return _gen()
 
     def _setup(self, args: str = "", chat_id: int = 12345):
@@ -270,7 +275,9 @@ class TestHandleSummaryArgParsing:
         with patch("src.handlers.command_handlers.openclaw_client") as mock_oc:
             mock_oc.send_message_stream = MagicMock(return_value=self._mock_stream())
             await handle_summary(bot, msg)
-        bot.client.get_chat_history.assert_called_once_with(-1001234567890, limit=_SUMMARY_DEFAULT_N)
+        bot.client.get_chat_history.assert_called_once_with(
+            -1001234567890, limit=_SUMMARY_DEFAULT_N
+        )
 
     @pytest.mark.asyncio
     async def test_chat_id_and_n(self) -> None:
@@ -316,9 +323,11 @@ class TestHandleSummaryMain:
     def _mock_stream(self, chunks: list[str] | None = None):
         if chunks is None:
             chunks = ["Краткая сводка чата."]
+
         async def _gen():
             for c in chunks:
                 yield c
+
         return _gen()
 
     @pytest.mark.asyncio

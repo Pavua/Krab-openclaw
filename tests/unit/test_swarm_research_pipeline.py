@@ -21,7 +21,6 @@ from src.core.swarm_research_pipeline import (
     get_research_pipeline,
 )
 
-
 # ---------------------------------------------------------------------------
 # ResearchConfig
 # ---------------------------------------------------------------------------
@@ -301,6 +300,7 @@ class TestGetResearchPipeline:
     def setup_method(self) -> None:
         """Сбрасываем синглтон перед каждым тестом."""
         import src.core.swarm_research_pipeline as mod
+
         mod._default_pipeline = None
 
     def test_returns_pipeline_instance(self) -> None:

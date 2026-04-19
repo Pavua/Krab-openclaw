@@ -29,18 +29,19 @@
 
 from __future__ import annotations
 
-import pytest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
+
+import pytest
 
 from src.core.access_control import AccessLevel, AccessProfile
 from src.core.exceptions import UserInputError
-from src.handlers.command_handlers import handle_fwd, handle_collect
-
+from src.handlers.command_handlers import handle_collect, handle_fwd
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
+
 
 def _make_bot(args: str = "", *, access_level: AccessLevel = AccessLevel.OWNER) -> SimpleNamespace:
     """Минимальный mock KraabUserbot."""
@@ -85,6 +86,7 @@ def _make_reply_msg(msg_id: int = 42) -> SimpleNamespace:
 # ---------------------------------------------------------------------------
 # handle_fwd — режим reply
 # ---------------------------------------------------------------------------
+
 
 class TestHandleFwdReply:
     @pytest.mark.asyncio
@@ -148,6 +150,7 @@ class TestHandleFwdReply:
 # ---------------------------------------------------------------------------
 # handle_fwd — режим last N
 # ---------------------------------------------------------------------------
+
 
 class TestHandleFwdLastN:
     @pytest.mark.asyncio
@@ -248,6 +251,7 @@ class TestHandleFwdLastN:
 # handle_fwd — валидация аргументов
 # ---------------------------------------------------------------------------
 
+
 class TestHandleFwdValidation:
     @pytest.mark.asyncio
     async def test_fwd_no_args_raises(self) -> None:
@@ -282,6 +286,7 @@ class TestHandleFwdValidation:
 # ---------------------------------------------------------------------------
 # handle_collect
 # ---------------------------------------------------------------------------
+
 
 class TestHandleCollect:
     @pytest.mark.asyncio
@@ -387,6 +392,7 @@ class TestHandleCollect:
     @pytest.mark.asyncio
     async def test_collect_empty_chat_shows_empty_reply(self) -> None:
         """Если в чате нет сообщений — ответ содержит 📭."""
+
         async def _empty_history(chat_id, limit=10):
             return
             yield  # делает функцию генератором
@@ -425,6 +431,7 @@ class TestHandleCollect:
     @pytest.mark.asyncio
     async def test_collect_history_exception_returns_error(self) -> None:
         """Если get_chat_history падает — ответ содержит ❌."""
+
         async def _fail_history(chat_id, limit=10):
             raise RuntimeError("Access denied")
             yield

@@ -10,10 +10,8 @@ Coverage:
 
 from __future__ import annotations
 
-import asyncio
-import json
-from typing import AsyncIterator, List
-from unittest.mock import AsyncMock, MagicMock
+from typing import List
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -28,7 +26,6 @@ except ImportError:
 
 import src.voice_channel.voice_routes as voice_routes_module
 from src.voice_channel.voice_routes import router
-
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 

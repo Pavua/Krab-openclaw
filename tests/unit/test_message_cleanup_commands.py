@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -43,10 +43,10 @@ from src.handlers.command_handlers import (
     schedule_autodel,
 )
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
+
 
 def _make_bot(
     args: str = "",
@@ -98,6 +98,7 @@ async def _async_gen(items):
 # !del
 # ---------------------------------------------------------------------------
 
+
 class TestHandleDel:
     @pytest.mark.asyncio
     async def test_del_default_удаляет_одно_сообщение(self) -> None:
@@ -105,9 +106,7 @@ class TestHandleDel:
         bot = _make_bot("")
         bot_msg = _make_history_msg(10, bot.me.id)
         other_msg = _make_history_msg(11, 777)
-        bot.client.get_chat_history = MagicMock(
-            return_value=_async_gen([bot_msg, other_msg])
-        )
+        bot.client.get_chat_history = MagicMock(return_value=_async_gen([bot_msg, other_msg]))
         msg = _make_message(chat_id=100)
 
         await handle_del(bot, msg)
@@ -200,6 +199,7 @@ class TestHandleDel:
 # !purge
 # ---------------------------------------------------------------------------
 
+
 class TestHandlePurge:
     @pytest.mark.asyncio
     async def test_purge_удаляет_сообщения_за_час(self) -> None:
@@ -284,6 +284,7 @@ class TestHandlePurge:
 # ---------------------------------------------------------------------------
 # !autodel
 # ---------------------------------------------------------------------------
+
 
 class TestHandleAutodel:
     @pytest.mark.asyncio
@@ -403,6 +404,7 @@ class TestHandleAutodel:
 # get_autodel_delay — чистая функция
 # ---------------------------------------------------------------------------
 
+
 class TestGetAutodelDelay:
     def test_нет_runtime_state(self) -> None:
         """Нет _runtime_state — возвращает None."""
@@ -434,6 +436,7 @@ class TestGetAutodelDelay:
 # _set_autodel_delay — чистая функция
 # ---------------------------------------------------------------------------
 
+
 class TestSetAutodelDelay:
     def test_сохраняет_задержку(self) -> None:
         """Устанавливает задержку для чата."""
@@ -457,6 +460,7 @@ class TestSetAutodelDelay:
 # ---------------------------------------------------------------------------
 # schedule_autodel — интеграционный тест
 # ---------------------------------------------------------------------------
+
 
 class TestScheduleAutodel:
     @pytest.mark.asyncio

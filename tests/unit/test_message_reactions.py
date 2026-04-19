@@ -11,14 +11,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.userbot_bridge import KraabUserbot
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные функции
@@ -134,9 +132,7 @@ async def test_send_message_reaction_different_emojis(monkeypatch: pytest.Monkey
     for emoji in ("👀", "✅", "❌"):
         bot.client.send_reaction.reset_mock()
         await bot._send_message_reaction(msg, emoji)
-        bot.client.send_reaction.assert_awaited_once_with(
-            chat_id=1, message_id=1, emoji=emoji
-        )
+        bot.client.send_reaction.assert_awaited_once_with(chat_id=1, message_id=1, emoji=emoji)
 
 
 # ---------------------------------------------------------------------------
@@ -146,8 +142,8 @@ async def test_send_message_reaction_different_emojis(monkeypatch: pytest.Monkey
 
 def test_config_reactions_enabled_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """TELEGRAM_REACTIONS_ENABLED по умолчанию True (из env '1')."""
-    import os
     import importlib
+
     import src.config as config_module
 
     monkeypatch.setenv("TELEGRAM_REACTIONS_ENABLED", "1")
@@ -157,12 +153,14 @@ def test_config_reactions_enabled_default(monkeypatch: pytest.MonkeyPatch) -> No
 
     # Восстанавливаем canonical config (иначе conftest ломается)
     import src.userbot_bridge as _ub
+
     monkeypatch.setattr(config_module, "config", _ub.config)
 
 
 def test_config_reactions_disabled_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """TELEGRAM_REACTIONS_ENABLED=0 → False."""
     import importlib
+
     import src.config as config_module
 
     monkeypatch.setenv("TELEGRAM_REACTIONS_ENABLED", "0")
@@ -171,12 +169,14 @@ def test_config_reactions_disabled_via_env(monkeypatch: pytest.MonkeyPatch) -> N
     assert config_module.config.TELEGRAM_REACTIONS_ENABLED is False
 
     import src.userbot_bridge as _ub
+
     monkeypatch.setattr(config_module, "config", _ub.config)
 
 
 def test_config_reactions_enabled_true_string(monkeypatch: pytest.MonkeyPatch) -> None:
     """TELEGRAM_REACTIONS_ENABLED=true → True."""
     import importlib
+
     import src.config as config_module
 
     monkeypatch.setenv("TELEGRAM_REACTIONS_ENABLED", "true")
@@ -185,6 +185,7 @@ def test_config_reactions_enabled_true_string(monkeypatch: pytest.MonkeyPatch) -
     assert config_module.config.TELEGRAM_REACTIONS_ENABLED is True
 
     import src.userbot_bridge as _ub
+
     monkeypatch.setattr(config_module, "config", _ub.config)
 
 

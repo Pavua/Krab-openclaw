@@ -82,6 +82,7 @@ def _make_bot_stub() -> KraabUserbot:
     bot.perceptor = None
     # Атрибуты для расширенной секции !stats (uptime, счётчик сообщений).
     import time as _t
+
     bot._session_start_time = _t.time()
     bot._session_messages_processed = 0
     return bot

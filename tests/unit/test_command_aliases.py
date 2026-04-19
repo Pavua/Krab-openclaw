@@ -19,10 +19,10 @@ from pathlib import Path
 
 import pytest
 
-from src.core.command_aliases import AliasService, MAX_ALIASES
-
+from src.core.command_aliases import MAX_ALIASES, AliasService
 
 # ─── фикстуры ────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def svc(tmp_path: Path) -> AliasService:
@@ -41,6 +41,7 @@ def svc_with_aliases(svc: AliasService) -> AliasService:
 
 
 # ─── add ─────────────────────────────────────────────────────────────────────
+
 
 class TestAdd:
     def test_add_new_alias(self, svc: AliasService) -> None:
@@ -114,6 +115,7 @@ class TestAdd:
 
 # ─── remove ───────────────────────────────────────────────────────────────────
 
+
 class TestRemove:
     def test_remove_existing(self, svc_with_aliases: AliasService) -> None:
         ok, msg = svc_with_aliases.remove("t")
@@ -140,6 +142,7 @@ class TestRemove:
 
 
 # ─── resolve ──────────────────────────────────────────────────────────────────
+
 
 class TestResolve:
     def test_resolve_simple_alias(self, svc: AliasService) -> None:
@@ -204,6 +207,7 @@ class TestResolve:
 
 # ─── list / format ────────────────────────────────────────────────────────────
 
+
 class TestListAndFormat:
     def test_list_all_empty(self, svc: AliasService) -> None:
         assert svc.list_all() == {}
@@ -230,6 +234,7 @@ class TestListAndFormat:
 
 
 # ─── persistent storage ───────────────────────────────────────────────────────
+
 
 class TestPersistence:
     def test_save_and_reload(self, tmp_path: Path) -> None:
@@ -284,6 +289,7 @@ class TestPersistence:
 
 # ─── limit ────────────────────────────────────────────────────────────────────
 
+
 class TestLimit:
     def test_limit_enforced(self, tmp_path: Path) -> None:
         storage = tmp_path / "aliases.json"
@@ -311,6 +317,7 @@ class TestLimit:
 
 
 # ─── thread safety ────────────────────────────────────────────────────────────
+
 
 class TestThreadSafety:
     def test_concurrent_adds(self, svc: AliasService) -> None:

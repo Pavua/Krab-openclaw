@@ -42,9 +42,7 @@ def test_find_chrome_binary_env_override_missing(monkeypatch, tmp_path: Path) ->
     assert dc.find_chrome_binary() is None
 
 
-def test_find_chrome_binary_candidates_first_exists(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_find_chrome_binary_candidates_first_exists(monkeypatch, tmp_path: Path) -> None:
     """Возвращает первый существующий путь из CHROME_CANDIDATES."""
     monkeypatch.delenv("DEDICATED_CHROME_APP", raising=False)
     exists_path = tmp_path / "exists-chrome"
@@ -159,9 +157,7 @@ def test_launch_success(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(dc, "find_chrome_binary", lambda: "/bin/chrome")
 
     running_states = iter([False, True])  # до запуска False, потом True
-    monkeypatch.setattr(
-        dc, "is_dedicated_chrome_running", lambda port=9222: next(running_states)
-    )
+    monkeypatch.setattr(dc, "is_dedicated_chrome_running", lambda port=9222: next(running_states))
 
     proc = MagicMock()
     proc.pid = 12345

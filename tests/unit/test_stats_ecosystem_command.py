@@ -180,7 +180,9 @@ async def test_stats_ecosystem_success(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_client_cm.__aenter__ = AsyncMock(return_value=mock_client_cm)
     mock_client_cm.__aexit__ = AsyncMock(return_value=None)
     mock_client_cm.get = AsyncMock(return_value=mock_response)
-    monkeypatch.setattr("src.handlers.command_handlers.httpx.AsyncClient", lambda **kw: mock_client_cm)
+    monkeypatch.setattr(
+        "src.handlers.command_handlers.httpx.AsyncClient", lambda **kw: mock_client_cm
+    )
 
     bot = _make_bot_stub()
     msg = _FakeMessage()
@@ -204,9 +206,7 @@ async def test_stats_ecosystem_http_error(monkeypatch: pytest.MonkeyPatch) -> No
         async def __aexit__(self, *a):
             return None
 
-    monkeypatch.setattr(
-        "src.handlers.command_handlers.httpx.AsyncClient", lambda **kw: _BrokenCM()
-    )
+    monkeypatch.setattr("src.handlers.command_handlers.httpx.AsyncClient", lambda **kw: _BrokenCM())
 
     bot = _make_bot_stub()
     msg = _FakeMessage()
@@ -256,12 +256,8 @@ async def test_stats_dispatch_routes_ecosystem(monkeypatch: pytest.MonkeyPatch) 
         called["panel"] = True
         return "panel"
 
-    monkeypatch.setattr(
-        "src.handlers.command_handlers._handle_stats_ecosystem", _fake_eco
-    )
-    monkeypatch.setattr(
-        "src.handlers.command_handlers._render_stats_panel", _fake_panel
-    )
+    monkeypatch.setattr("src.handlers.command_handlers._handle_stats_ecosystem", _fake_eco)
+    monkeypatch.setattr("src.handlers.command_handlers._render_stats_panel", _fake_panel)
 
     bot = _make_bot_stub(args_value="ecosystem")
     msg = _FakeMessage()
@@ -278,9 +274,7 @@ async def test_stats_dispatch_alias_eco(monkeypatch: pytest.MonkeyPatch) -> None
     async def _fake_eco(bot, message):  # noqa: ANN001
         called["eco"] = True
 
-    monkeypatch.setattr(
-        "src.handlers.command_handlers._handle_stats_ecosystem", _fake_eco
-    )
+    monkeypatch.setattr("src.handlers.command_handlers._handle_stats_ecosystem", _fake_eco)
 
     bot = _make_bot_stub(args_value="ECO")  # регистр не важен
     msg = _FakeMessage()
@@ -302,12 +296,8 @@ async def test_stats_dispatch_default_renders_panel(
         called["panel"] = True
         return "Krab Stats\n─────────────\nstub"
 
-    monkeypatch.setattr(
-        "src.handlers.command_handlers._handle_stats_ecosystem", _fake_eco
-    )
-    monkeypatch.setattr(
-        "src.handlers.command_handlers._render_stats_panel", _fake_panel
-    )
+    monkeypatch.setattr("src.handlers.command_handlers._handle_stats_ecosystem", _fake_eco)
+    monkeypatch.setattr("src.handlers.command_handlers._render_stats_panel", _fake_panel)
 
     bot = _make_bot_stub(args_value="")
     msg = _FakeMessage()

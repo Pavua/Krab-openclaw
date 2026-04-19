@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import re
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import _parse_sed_expr, handle_sed
-
 
 # ---------------------------------------------------------------------------
 # _parse_sed_expr — unit-тесты парсера

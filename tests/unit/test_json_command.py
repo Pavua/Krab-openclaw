@@ -20,7 +20,6 @@ from src.handlers.command_handlers import (
     handle_json,
 )
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные fixtures
 # ---------------------------------------------------------------------------
@@ -237,7 +236,7 @@ class TestHandleJsonValidate:
     @pytest.mark.asyncio
     async def test_validate_invalid_json(self):
         """!json validate <невалидный> → ❌ с описанием ошибки."""
-        bot = _make_bot('validate {bad json}')
+        bot = _make_bot("validate {bad json}")
         msg = _make_message()
         await handle_json(bot, msg)
         reply_text = msg.reply.call_args[0][0]

@@ -156,9 +156,7 @@ def test_exactly_at_threshold_not_stagnant() -> None:
         (300.0, 400.0, 1),
     ],
 )
-def test_parametrized_threshold(
-    threshold_sec: float, age_sec: float, expected_count: int
-) -> None:
+def test_parametrized_threshold(threshold_sec: float, age_sec: float, expected_count: int) -> None:
     """Параметризованные границы threshold."""
     tasks = [_make_task(task_id="t", age_sec=age_sec)]
     result = detect_stagnation(tasks, threshold_sec=threshold_sec)

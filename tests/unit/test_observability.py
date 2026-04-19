@@ -13,11 +13,8 @@ from src.core.observability import (
     build_ops_response,
     get_observability_snapshot,
     mask_secrets,
-    metrics,
-    timeline,
     track_event,
 )
-
 
 # ---------------------------------------------------------------------------
 # LatencyTracker

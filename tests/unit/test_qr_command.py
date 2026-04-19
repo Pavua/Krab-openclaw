@@ -15,13 +15,12 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_qr
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фикстуры
@@ -73,12 +72,13 @@ class TestHandleQr:
         bot = _make_bot(command_args="https://example.com")
         msg = _make_message()
 
-        with patch("tempfile.mkstemp") as mock_mkstemp, \
-             patch("os.close") as mock_close, \
-             patch("os.path.exists", return_value=False), \
-             patch("os.unlink") as mock_unlink, \
-             patch("segno.make") as mock_segno_make:
-
+        with (
+            patch("tempfile.mkstemp") as mock_mkstemp,
+            patch("os.close") as mock_close,
+            patch("os.path.exists", return_value=False),
+            patch("os.unlink") as mock_unlink,
+            patch("segno.make") as mock_segno_make,
+        ):
             tmp_file = str(tmp_path / "krab_qr_test.png")
             # Создаём пустой файл чтобы segno.save не падал
             with open(tmp_file, "w") as f:
@@ -103,12 +103,13 @@ class TestHandleQr:
         bot = _make_bot(command_args="")
         msg = _make_message(reply_text="Привет мир")
 
-        with patch("tempfile.mkstemp") as mock_mkstemp, \
-             patch("os.close"), \
-             patch("os.path.exists", return_value=False), \
-             patch("os.unlink"), \
-             patch("segno.make") as mock_segno_make:
-
+        with (
+            patch("tempfile.mkstemp") as mock_mkstemp,
+            patch("os.close"),
+            patch("os.path.exists", return_value=False),
+            patch("os.unlink"),
+            patch("segno.make") as mock_segno_make,
+        ):
             tmp_file = str(tmp_path / "krab_qr_reply.png")
             mock_mkstemp.return_value = (998, tmp_file)
             mock_qr = MagicMock()
@@ -126,12 +127,13 @@ class TestHandleQr:
         # text пустой, caption есть
         msg = _make_message(reply_text="", reply_caption="Ссылка на фото")
 
-        with patch("tempfile.mkstemp") as mock_mkstemp, \
-             patch("os.close"), \
-             patch("os.path.exists", return_value=False), \
-             patch("os.unlink"), \
-             patch("segno.make") as mock_segno_make:
-
+        with (
+            patch("tempfile.mkstemp") as mock_mkstemp,
+            patch("os.close"),
+            patch("os.path.exists", return_value=False),
+            patch("os.unlink"),
+            patch("segno.make") as mock_segno_make,
+        ):
             tmp_file = str(tmp_path / "krab_qr_cap.png")
             mock_mkstemp.return_value = (997, tmp_file)
             mock_qr = MagicMock()
@@ -166,12 +168,13 @@ class TestHandleQr:
         bot = _make_bot(command_args=long_text)
         msg = _make_message()
 
-        with patch("tempfile.mkstemp") as mock_mkstemp, \
-             patch("os.close"), \
-             patch("os.path.exists", return_value=False), \
-             patch("os.unlink"), \
-             patch("segno.make") as mock_segno_make:
-
+        with (
+            patch("tempfile.mkstemp") as mock_mkstemp,
+            patch("os.close"),
+            patch("os.path.exists", return_value=False),
+            patch("os.unlink"),
+            patch("segno.make") as mock_segno_make,
+        ):
             tmp_file = str(tmp_path / "krab_qr_long.png")
             mock_mkstemp.return_value = (996, tmp_file)
             mock_qr = MagicMock()
@@ -194,10 +197,11 @@ class TestHandleQr:
         with open(tmp_file, "w") as f:
             f.write("x")
 
-        with patch("tempfile.mkstemp") as mock_mkstemp, \
-             patch("os.close"), \
-             patch("segno.make") as mock_segno_make:
-
+        with (
+            patch("tempfile.mkstemp") as mock_mkstemp,
+            patch("os.close"),
+            patch("segno.make") as mock_segno_make,
+        ):
             mock_mkstemp.return_value = (995, tmp_file)
             mock_qr = MagicMock()
             mock_segno_make.return_value = mock_qr
@@ -218,10 +222,11 @@ class TestHandleQr:
         with open(tmp_file, "w") as f:
             f.write("x")
 
-        with patch("tempfile.mkstemp") as mock_mkstemp, \
-             patch("os.close"), \
-             patch("segno.make") as mock_segno_make:
-
+        with (
+            patch("tempfile.mkstemp") as mock_mkstemp,
+            patch("os.close"),
+            patch("segno.make") as mock_segno_make,
+        ):
             mock_mkstemp.return_value = (994, tmp_file)
             mock_qr = MagicMock()
             mock_segno_make.return_value = mock_qr
@@ -238,12 +243,13 @@ class TestHandleQr:
         bot = _make_bot(command_args="args_text")
         msg = _make_message(reply_text="reply_text")
 
-        with patch("tempfile.mkstemp") as mock_mkstemp, \
-             patch("os.close"), \
-             patch("os.path.exists", return_value=False), \
-             patch("os.unlink"), \
-             patch("segno.make") as mock_segno_make:
-
+        with (
+            patch("tempfile.mkstemp") as mock_mkstemp,
+            patch("os.close"),
+            patch("os.path.exists", return_value=False),
+            patch("os.unlink"),
+            patch("segno.make") as mock_segno_make,
+        ):
             tmp_file = str(tmp_path / "krab_qr_prio.png")
             mock_mkstemp.return_value = (993, tmp_file)
             mock_qr = MagicMock()

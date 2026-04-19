@@ -14,17 +14,16 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.memo_service import MemoService, MemoResult
 from src.core.exceptions import UserInputError
-
+from src.core.memo_service import MemoResult, MemoService
 
 # ─── вспомогательные mock-функции ─────────────────────────────────────────────
+
 
 def _make_message(
     text: str = "!note",
@@ -67,6 +66,7 @@ def _make_bot(transcribe_result: tuple[str, str] = ("распознанный т
 
 # ─── тесты UserInputError ─────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_note_no_reply_raises_user_input_error():
     """!note без reply → UserInputError с инструкцией."""
@@ -98,6 +98,7 @@ async def test_note_reply_not_audio_raises_user_input_error():
 
 # ─── тесты успешного сохранения ───────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_note_voice_reply_saves_to_obsidian(tmp_path: Path):
     """!note с reply на голосовое → транскрибирует и сохраняет заметку."""
@@ -112,11 +113,13 @@ async def test_note_voice_reply_saves_to_obsidian(tmp_path: Path):
 
     with patch("src.core.memo_service.memo_service") as mock_memo:
         saved_path = inbox / "2026-01-01_12-00_memo.md"
-        mock_memo.save_async = AsyncMock(return_value=MemoResult(
-            success=True,
-            message="Заметка сохранена: `2026-01-01_12-00_memo.md`",
-            file_path=saved_path,
-        ))
+        mock_memo.save_async = AsyncMock(
+            return_value=MemoResult(
+                success=True,
+                message="Заметка сохранена: `2026-01-01_12-00_memo.md`",
+                file_path=saved_path,
+            )
+        )
         await handle_note(bot, msg)
 
     # Проверяем что save_async вызван с правильными аргументами
@@ -151,11 +154,13 @@ async def test_note_with_tag(tmp_path: Path):
 
     with patch("src.core.memo_service.memo_service") as mock_memo:
         saved_path = inbox / "2026-01-01_12-00_memo.md"
-        mock_memo.save_async = AsyncMock(return_value=MemoResult(
-            success=True,
-            message="Заметка сохранена",
-            file_path=saved_path,
-        ))
+        mock_memo.save_async = AsyncMock(
+            return_value=MemoResult(
+                success=True,
+                message="Заметка сохранена",
+                file_path=saved_path,
+            )
+        )
         await handle_note(bot, msg)
 
     call_kwargs = mock_memo.save_async.call_args
@@ -174,11 +179,13 @@ async def test_note_audio_reply_also_works():
     msg = _make_message(has_reply=True, reply_audio=True)
 
     with patch("src.core.memo_service.memo_service") as mock_memo:
-        mock_memo.save_async = AsyncMock(return_value=MemoResult(
-            success=True,
-            message="Заметка сохранена",
-            file_path=Path("/tmp/test.md"),
-        ))
+        mock_memo.save_async = AsyncMock(
+            return_value=MemoResult(
+                success=True,
+                message="Заметка сохранена",
+                file_path=Path("/tmp/test.md"),
+            )
+        )
         await handle_note(bot, msg)
 
     mock_memo.save_async.assert_awaited_once()
@@ -194,17 +201,20 @@ async def test_note_video_note_reply_also_works():
     msg = _make_message(has_reply=True, reply_video_note=True)
 
     with patch("src.core.memo_service.memo_service") as mock_memo:
-        mock_memo.save_async = AsyncMock(return_value=MemoResult(
-            success=True,
-            message="Заметка сохранена",
-            file_path=Path("/tmp/test.md"),
-        ))
+        mock_memo.save_async = AsyncMock(
+            return_value=MemoResult(
+                success=True,
+                message="Заметка сохранена",
+                file_path=Path("/tmp/test.md"),
+            )
+        )
         await handle_note(bot, msg)
 
     mock_memo.save_async.assert_awaited_once()
 
 
 # ─── тест ошибки транскрибации ────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_note_transcription_error_shows_error():
@@ -231,6 +241,7 @@ async def test_note_transcription_error_shows_error():
 
 # ─── тесты memo_service с новыми параметрами ──────────────────────────────────
 
+
 def test_memo_save_with_tags_in_frontmatter(tmp_path: Path):
     """save() с tags → теги попадают в YAML frontmatter."""
     inbox = tmp_path / "00_Inbox"
@@ -248,7 +259,7 @@ def test_memo_save_with_tags_in_frontmatter(tmp_path: Path):
     content = result.file_path.read_text(encoding="utf-8")
 
     # Проверяем frontmatter
-    assert 'source: krab-voice' in content
+    assert "source: krab-voice" in content
     assert '"voice"' in content
     assert '"идея"' in content
     assert "tags:" in content
@@ -318,4 +329,4 @@ def test_memo_save_tag_with_special_chars_sanitized(tmp_path: Path):
     assert result.success
     content = result.file_path.read_text(encoding="utf-8")
     # Кавычки внутри тега должны быть убраны
-    assert 'тегзлой' in content or '"тег' not in content.replace('"тегзлой"', "")
+    assert "тегзлой" in content or '"тег' not in content.replace('"тегзлой"', "")

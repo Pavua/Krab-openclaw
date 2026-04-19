@@ -57,10 +57,10 @@ def _make_run_result(stdout: str = "", returncode: int = 0) -> MagicMock:
 async def test_version_happy_path() -> None:
     """Основной сценарий: все subprocess отвечают корректно."""
     git_responses = [
-        _make_run_result("abc1234\n"),        # rev-parse --short HEAD
-        _make_run_result("main\n"),            # branch --show-current
+        _make_run_result("abc1234\n"),  # rev-parse --short HEAD
+        _make_run_result("main\n"),  # branch --show-current
         _make_run_result("2026-04-12 10:30:00 +0200\n"),  # log -1 --format=%ci
-        _make_run_result("OpenClaw 2026.4.11 (abc)\n"),   # openclaw --version
+        _make_run_result("OpenClaw 2026.4.11 (abc)\n"),  # openclaw --version
     ]
 
     with (
@@ -133,9 +133,9 @@ async def test_version_openclaw_unavailable() -> None:
 async def test_version_empty_git_output() -> None:
     """git возвращает пустую строку → все git-поля 'unknown'."""
     git_responses = [
-        _make_run_result(""),   # rev-parse
-        _make_run_result(""),   # branch
-        _make_run_result(""),   # log
+        _make_run_result(""),  # rev-parse
+        _make_run_result(""),  # branch
+        _make_run_result(""),  # log
         _make_run_result("OpenClaw 2026.4.11\n"),
     ]
 

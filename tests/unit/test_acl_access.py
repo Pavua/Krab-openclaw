@@ -15,16 +15,13 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from src.core.access_control import (
     OWNER_ONLY_COMMANDS,
-    PARTIAL_ACCESS_COMMANDS,
     AccessLevel,
     AccessProfile,
     _extract_acl_subjects,
@@ -36,7 +33,6 @@ from src.core.access_control import (
     save_acl_runtime_state,
     update_acl_subject,
 )
-
 
 # ---------------------------------------------------------------------------
 # normalize_subject

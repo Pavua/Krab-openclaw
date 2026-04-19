@@ -17,17 +17,14 @@ tests/unit/test_swarm_engine_extended.py
 
 from __future__ import annotations
 
-import re
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.core.swarm import (
-    DEFAULT_AGENT_ROLES,
+    _DELEGATE_PATTERN,
     AgentRoom,
     SwarmOrchestrator,
-    SwarmTask,
-    _DELEGATE_PATTERN,
 )
 
 # ---------------------------------------------------------------------------

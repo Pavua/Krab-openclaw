@@ -15,14 +15,12 @@
 
 from __future__ import annotations
 
-import pytest
-
-from src.core.command_registry import CommandInfo, CommandRegistry, registry, _COMMANDS
-
+from src.core.command_registry import _COMMANDS, CommandInfo, CommandRegistry, registry
 
 # ---------------------------------------------------------------------------
 # CommandInfo
 # ---------------------------------------------------------------------------
+
 
 class TestCommandInfo:
     def test_to_dict_contains_required_keys(self) -> None:
@@ -74,6 +72,7 @@ class TestCommandInfo:
 # ---------------------------------------------------------------------------
 # CommandRegistry
 # ---------------------------------------------------------------------------
+
 
 class TestCommandRegistry:
     def test_all_returns_all_commands(self) -> None:
@@ -158,6 +157,7 @@ class TestCommandRegistry:
 # ---------------------------------------------------------------------------
 # Глобальный синглтон
 # ---------------------------------------------------------------------------
+
 
 class TestGlobalRegistry:
     def test_registry_is_command_registry_instance(self) -> None:

@@ -23,15 +23,13 @@
 from __future__ import annotations
 
 import base64
-import io
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.handlers.command_handlers import handle_img
 from src.core.exceptions import UserInputError
-
+from src.handlers.command_handlers import handle_img
 
 # ---------------------------------------------------------------------------
 # Хелперы
@@ -172,6 +170,7 @@ class TestHandleImgDownload:
     @pytest.mark.asyncio
     async def test_пустой_download_возвращает_ошибку(self) -> None:
         """Если download вернул 0 байт → edit с ошибкой."""
+
         async def empty_download(in_memory=None):
             # ничего не пишем
             return in_memory
@@ -759,12 +758,15 @@ class TestHandleImgExport:
     def test_handle_img_importable(self) -> None:
         """handle_img импортируется из src.handlers.command_handlers."""
         from src.handlers.command_handlers import handle_img  # noqa: F401
+
         assert callable(handle_img)
 
     def test_handle_img_async(self) -> None:
         """handle_img — корутинная функция."""
         import asyncio
+
         from src.handlers.command_handlers import handle_img
+
         assert asyncio.iscoroutinefunction(handle_img)
 
 
@@ -774,12 +776,14 @@ class TestHandleImgRegistry:
     def test_img_в_реестре(self) -> None:
         """Команда 'img' присутствует в реестре."""
         from src.core.command_registry import registry
+
         cmd = registry.get("img")
         assert cmd is not None
 
     def test_img_категория_ai(self) -> None:
         """Команда 'img' в категории 'ai'."""
         from src.core.command_registry import registry
+
         cmd = registry.get("img")
         assert cmd is not None
         assert cmd.category == "ai"
@@ -787,12 +791,14 @@ class TestHandleImgRegistry:
     def test_img_в_списке_по_категории(self) -> None:
         """by_category('ai') содержит команду 'img'."""
         from src.core.command_registry import registry
+
         ai_cmds = [c.name for c in registry.by_category("ai")]
         assert "img" in ai_cmds
 
     def test_img_owner_only(self) -> None:
         """!img только для owner."""
         from src.core.command_registry import registry
+
         cmd = registry.get("img")
         assert cmd is not None
         assert cmd.owner_only is True

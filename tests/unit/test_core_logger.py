@@ -99,9 +99,7 @@ def test_resolve_log_file_default_home_fallback(monkeypatch: pytest.MonkeyPatch)
 # --- setup_logger body coverage (lines 47-87) ---
 
 
-def test_setup_logger_creates_file_handler(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_setup_logger_creates_file_handler(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """setup_logger() должен создать файл лога и добавить FileHandler в root."""
     log_file = tmp_path / "krab_main.log"
     monkeypatch.setenv("KRAB_LOG_FILE", str(log_file))
@@ -120,9 +118,7 @@ def test_setup_logger_with_disabled_file(monkeypatch: pytest.MonkeyPatch) -> Non
     root = logging.getLogger()
     assert any(isinstance(h, logging.StreamHandler) for h in root.handlers)
     # FileHandler не должен быть добавлен (т.к. log_file=None)
-    file_handlers = [
-        h for h in root.handlers if type(h).__name__ == "FileHandler"
-    ]
+    file_handlers = [h for h in root.handlers if type(h).__name__ == "FileHandler"]
     assert file_handlers == []
 
 

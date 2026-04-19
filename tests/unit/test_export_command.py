@@ -14,15 +14,12 @@
 from __future__ import annotations
 
 import datetime
-import pathlib
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.handlers.command_handlers import (
-    EXPORT_DEFAULT_LIMIT,
-    EXPORT_MAX_LIMIT,
     _format_sender,
     _msg_text,
     _render_export_markdown,
@@ -94,7 +91,9 @@ def _make_bot(history_items=None, send_document_raises=False):
 
     client = SimpleNamespace(
         get_chat_history=_get_history,
-        send_document=AsyncMock(side_effect=Exception("send error") if send_document_raises else None),
+        send_document=AsyncMock(
+            side_effect=Exception("send error") if send_document_raises else None
+        ),
     )
     return SimpleNamespace(client=client)
 
@@ -287,76 +286,56 @@ class TestRenderExportMarkdown:
                 date=datetime.datetime(2026, 4, 12, 9, 0, 0),
             ),
         ]
-        result = _render_export_markdown(
-            "Chat", 1, msgs, datetime.datetime(2026, 4, 12, 12, 0, 0)
-        )
+        result = _render_export_markdown("Chat", 1, msgs, datetime.datetime(2026, 4, 12, 12, 0, 0))
         assert "## 2026-04-11" in result
         assert "## 2026-04-12" in result
 
     def test_photo_placeholder(self):
         msg = _make_msg_obj(photo=True, from_user=_make_user("X"))
-        result = _render_export_markdown(
-            "C", 1, [msg], datetime.datetime(2026, 4, 12)
-        )
+        result = _render_export_markdown("C", 1, [msg], datetime.datetime(2026, 4, 12))
         assert "_[фото]_" in result
 
     def test_video_placeholder(self):
         msg = _make_msg_obj(video=True, from_user=_make_user("X"))
-        result = _render_export_markdown(
-            "C", 1, [msg], datetime.datetime(2026, 4, 12)
-        )
+        result = _render_export_markdown("C", 1, [msg], datetime.datetime(2026, 4, 12))
         assert "_[видео]_" in result
 
     def test_audio_placeholder(self):
         msg = _make_msg_obj(audio=True, from_user=_make_user("X"))
-        result = _render_export_markdown(
-            "C", 1, [msg], datetime.datetime(2026, 4, 12)
-        )
+        result = _render_export_markdown("C", 1, [msg], datetime.datetime(2026, 4, 12))
         assert "_[аудио]_" in result
 
     def test_voice_placeholder(self):
         msg = _make_msg_obj(voice=True, from_user=_make_user("X"))
-        result = _render_export_markdown(
-            "C", 1, [msg], datetime.datetime(2026, 4, 12)
-        )
+        result = _render_export_markdown("C", 1, [msg], datetime.datetime(2026, 4, 12))
         assert "_[аудио]_" in result
 
     def test_document_placeholder(self):
         msg = _make_msg_obj(document=True, from_user=_make_user("X"))
-        result = _render_export_markdown(
-            "C", 1, [msg], datetime.datetime(2026, 4, 12)
-        )
+        result = _render_export_markdown("C", 1, [msg], datetime.datetime(2026, 4, 12))
         assert "_[документ]_" in result
 
     def test_sticker_placeholder(self):
         sticker = SimpleNamespace(emoji="😎")
         msg = _make_msg_obj(sticker=sticker, from_user=_make_user("X"))
-        result = _render_export_markdown(
-            "C", 1, [msg], datetime.datetime(2026, 4, 12)
-        )
+        result = _render_export_markdown("C", 1, [msg], datetime.datetime(2026, 4, 12))
         assert "_[стикер:" in result
 
     def test_unknown_media_placeholder(self):
         # Нет ни текста, ни известных медиа-типов
         msg = _make_msg_obj(from_user=_make_user("X"))
-        result = _render_export_markdown(
-            "C", 1, [msg], datetime.datetime(2026, 4, 12)
-        )
+        result = _render_export_markdown("C", 1, [msg], datetime.datetime(2026, 4, 12))
         assert "_[медиа]_" in result
 
     def test_msg_without_date_skipped(self):
         msg = _make_msg_obj(text="Без даты", from_user=_make_user("X"))
         msg.date = None
-        result = _render_export_markdown(
-            "C", 1, [msg], datetime.datetime(2026, 4, 12)
-        )
+        result = _render_export_markdown("C", 1, [msg], datetime.datetime(2026, 4, 12))
         # Нет дня — нет сообщения
         assert "Без даты" not in result
 
     def test_empty_messages_only_frontmatter(self):
-        result = _render_export_markdown(
-            "C", 1, [], datetime.datetime(2026, 4, 12)
-        )
+        result = _render_export_markdown("C", 1, [], datetime.datetime(2026, 4, 12))
         assert result.startswith("---\n")
         assert "messages: 0" in result
 
@@ -393,9 +372,7 @@ class TestHandleExport:
         status_msg.delete = AsyncMock()
         message.reply = AsyncMock(return_value=status_msg)
 
-        with patch(
-            "src.handlers.command_handlers.EXPORT_VAULT_DIR", tmp_path
-        ):
+        with patch("src.handlers.command_handlers.EXPORT_VAULT_DIR", tmp_path):
             await handle_export(bot, message)
 
         # Файл должен быть создан
@@ -524,6 +501,7 @@ class TestHandleExport:
         assert "TestChat" in filename
         # Имя начинается с даты в формате YYYY-MM-DD
         import re
+
         assert re.match(r"\d{4}-\d{2}-\d{2}_", filename)
 
     @pytest.mark.asyncio

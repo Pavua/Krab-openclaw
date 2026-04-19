@@ -22,8 +22,8 @@ import pytest
 
 from src.core.personal_todo import PersonalTodoService
 
-
 # ─── фикстуры ────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def todo_file(tmp_path: Path) -> Path:
@@ -38,6 +38,7 @@ def svc(todo_file: Path) -> PersonalTodoService:
 
 
 # ─── add ─────────────────────────────────────────────────────────────────────
+
 
 class TestAdd:
     def test_add_returns_item(self, svc: PersonalTodoService) -> None:
@@ -87,6 +88,7 @@ class TestAdd:
 
 # ─── list_all ─────────────────────────────────────────────────────────────────
 
+
 class TestListAll:
     def test_list_empty(self, svc: PersonalTodoService) -> None:
         """Пустой список — пустой результат."""
@@ -113,6 +115,7 @@ class TestListAll:
 
 
 # ─── mark_done ───────────────────────────────────────────────────────────────
+
 
 class TestMarkDone:
     def test_mark_done_existing(self, svc: PersonalTodoService) -> None:
@@ -150,6 +153,7 @@ class TestMarkDone:
 
 # ─── delete ──────────────────────────────────────────────────────────────────
 
+
 class TestDelete:
     def test_delete_existing(self, svc: PersonalTodoService, todo_file: Path) -> None:
         """Задача удаляется из списка."""
@@ -180,6 +184,7 @@ class TestDelete:
 
 
 # ─── clear_done ──────────────────────────────────────────────────────────────
+
 
 class TestClearDone:
     def test_clear_done_removes_completed(self, svc: PersonalTodoService) -> None:
@@ -219,6 +224,7 @@ class TestClearDone:
 
 
 # ─── render ──────────────────────────────────────────────────────────────────
+
 
 class TestRender:
     def test_render_empty(self, svc: PersonalTodoService) -> None:
@@ -279,6 +285,7 @@ class TestRender:
 
 # ─── персистентность ─────────────────────────────────────────────────────────
 
+
 class TestPersistence:
     def test_data_survives_reinstantiation(self, todo_file: Path) -> None:
         """Данные доступны при создании нового инстанса сервиса."""
@@ -306,6 +313,7 @@ class TestPersistence:
 
 
 # ─── граничные случаи ────────────────────────────────────────────────────────
+
 
 class TestEdgeCases:
     def test_load_nonexistent_file(self, todo_file: Path) -> None:

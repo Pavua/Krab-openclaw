@@ -69,9 +69,7 @@ async def test_krab_ear_status_unavailable(monkeypatch):
 async def test_krab_ear_status_exception_handling(monkeypatch):
     """Обработка исключений в health_report."""
     mock_client = MagicMock()
-    mock_client.health_report = AsyncMock(
-        side_effect=RuntimeError("Connection failed")
-    )
+    mock_client.health_report = AsyncMock(side_effect=RuntimeError("Connection failed"))
 
     try:
         await mock_client.health_report()

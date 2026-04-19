@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import time
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,7 +15,6 @@ from src.handlers.command_handlers import (
     handle_sysinfo,
     handle_uptime,
 )
-
 
 # ---------------------------------------------------------------------------
 # _format_uptime_str — unit-тесты форматирования

@@ -11,12 +11,10 @@
 from __future__ import annotations
 
 import io
-from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
 from src.modules.web_app import WebApp
-
 
 # ---------------------------------------------------------------------------
 # Заглушки

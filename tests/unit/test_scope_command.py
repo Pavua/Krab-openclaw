@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -29,7 +29,6 @@ import src.handlers.command_handlers as cmd_module
 from src.core.access_control import AccessLevel, AccessProfile
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_scope
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
@@ -396,7 +395,9 @@ async def test_scope_revoke_partial_only_removed(monkeypatch: pytest.MonkeyPatch
 
     text = message.reply.await_args.args[0]
     assert "partial" in text
-    assert "full" not in text or "full" not in text.split("уровней")[1] if "уровней" in text else True
+    assert (
+        "full" not in text or "full" not in text.split("уровней")[1] if "уровней" in text else True
+    )
 
 
 # ---------------------------------------------------------------------------

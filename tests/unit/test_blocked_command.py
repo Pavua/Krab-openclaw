@@ -33,14 +33,12 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_blocked
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
@@ -174,6 +172,7 @@ async def test_blocked_list_пользователь_с_username():
 @pytest.mark.asyncio
 async def test_blocked_list_ошибка_get_blocked():
     """!blocked list — ошибка get_blocked поднимает UserInputError."""
+
     async def _bad_gen():
         raise Exception("NETWORK_ERROR")
         yield  # noqa: unreachable

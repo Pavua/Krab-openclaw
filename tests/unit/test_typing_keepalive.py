@@ -127,9 +127,7 @@ async def test_typing_keepalive_periodic_resends():
         # Держимся чуть дольше одного цикла — keep-alive обязан повторить action.
         await asyncio.sleep(1.2)
     typing_count = sum(
-        1
-        for call in bot.send_chat_action.call_args_list
-        if "TYPING" in _action_of_call(call)
+        1 for call in bot.send_chat_action.call_args_list if "TYPING" in _action_of_call(call)
     )
     assert typing_count >= 2  # initial + как минимум 1 re-send
     # Финальный вызов — всё равно CANCEL.

@@ -19,17 +19,16 @@ for _k, _v in {
 
 import pytest  # noqa: E402
 
-from src.handlers import command_handlers as ch  # noqa: E402
 from src.core.reset_helpers import (  # noqa: E402
-    clear_archive_db_for_chat,
     delete_archive_messages_before,
     list_archive_chats,
 )
-
+from src.handlers import command_handlers as ch  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_archive(tmp_path: Path) -> Path:
     """Создаёт минимальную archive.db с тестовыми данными."""
@@ -97,6 +96,7 @@ def _make_message(text: str, sender_id: int = 42) -> MagicMock:
 # reset_helpers: list_archive_chats
 # ---------------------------------------------------------------------------
 
+
 def test_list_archive_chats_returns_sorted(tmp_path: Path) -> None:
     """list_archive_chats возвращает чаты отсортированные по убыванию count."""
     db = _make_archive(tmp_path)
@@ -118,6 +118,7 @@ def test_list_archive_chats_missing_db(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # reset_helpers: delete_archive_messages_before
 # ---------------------------------------------------------------------------
+
 
 def test_delete_archive_messages_before_removes_old(tmp_path: Path) -> None:
     """delete_archive_messages_before удаляет только старые messages."""
@@ -149,6 +150,7 @@ def test_delete_archive_messages_before_missing_db(tmp_path: Path) -> None:
 # _handle_memory_clear: preview (no args)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_preview_no_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """!memory clear без аргументов — preview с топом чатов."""
@@ -172,6 +174,7 @@ async def test_preview_no_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 # _handle_memory_clear: --chat without --confirm
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_clear_chat_without_confirm_warns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -192,6 +195,7 @@ async def test_clear_chat_without_confirm_warns(
 # ---------------------------------------------------------------------------
 # _handle_memory_clear: --chat --confirm deletes
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_clear_chat_with_confirm_deletes(
@@ -220,6 +224,7 @@ async def test_clear_chat_with_confirm_deletes(
 # ---------------------------------------------------------------------------
 # _handle_memory_clear: --before with confirm
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_clear_before_date_with_confirm(
@@ -262,10 +267,9 @@ async def test_clear_before_date_without_confirm_warns(
 # _handle_memory_clear: missing archive.db
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
-async def test_missing_archive_db_graceful(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_missing_archive_db_graceful(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Если archive.db нет — вежливый ответ, не бросает исключение."""
     monkeypatch.setattr(ch, "_ARCHIVE_DB_PATH_FOR_CLEAR", tmp_path / "nonexistent.db")
 
@@ -281,10 +285,9 @@ async def test_missing_archive_db_graceful(
 # ACL: non-owner cannot use !memory clear
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
-async def test_clear_blocked_for_non_owner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_clear_blocked_for_non_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Не-владелец получает отказ на !memory clear."""
     db = _make_archive(tmp_path)
     monkeypatch.setattr(ch, "_ARCHIVE_DB_PATH_FOR_CLEAR", db)
@@ -301,6 +304,7 @@ async def test_clear_blocked_for_non_owner(
 # ---------------------------------------------------------------------------
 # Backward compatibility: stats и recent не поломаны
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_stats_subcommand_still_works(monkeypatch: pytest.MonkeyPatch) -> None:

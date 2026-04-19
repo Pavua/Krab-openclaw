@@ -18,14 +18,13 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from src.config import config
 from src.modules.web_app import WebApp
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные заглушки
@@ -272,7 +271,6 @@ def test_swarm_listeners_has_listeners_enabled_bool() -> None:
 
 def test_swarm_listeners_toggle_requires_auth(monkeypatch) -> None:
     """POST /api/swarm/listeners/toggle без ключа возвращает 403 если WEB_API_KEY задан."""
-    import os
     monkeypatch.setenv("WEB_API_KEY", "secret-test-key")
     client = _make_client()
     resp = client.post("/api/swarm/listeners/toggle", json={"enabled": True})
@@ -394,7 +392,7 @@ def test_costs_history_items_have_required_fields() -> None:
     """Каждая запись в history содержит все ожидаемые поля."""
     client = _make_client()
     # Чтобы проверить поля, добавим одну запись через cost_analytics
-    from src.core.cost_analytics import CallRecord, cost_analytics
+    from src.core.cost_analytics import cost_analytics
 
     cost_analytics.record_usage(
         {"input_tokens": 100, "output_tokens": 50},
@@ -517,7 +515,6 @@ def test_depth_status_consistent_with_thinking_status() -> None:
 
 def test_thinking_set_requires_auth(monkeypatch) -> None:
     """POST /api/thinking/set без ключа возвращает 403 если WEB_API_KEY задан."""
-    import os
     monkeypatch.setenv("WEB_API_KEY", "secret-test-key")
     client = _make_client()
     resp = client.post("/api/thinking/set", json={"mode": "off"})
@@ -547,14 +544,22 @@ def test_thinking_set_valid_mode_with_key(monkeypatch) -> None:
     client = _make_client()
 
     # Мокаем _apply_openclaw_runtime_controls чтобы не трогать реальные файлы
-    with patch.object(
-        WebApp,
-        "_apply_openclaw_runtime_controls",
-        return_value={"thinking_default": "medium", "changed": {"thinking_default": "medium"}},
-    ), patch.object(
-        WebApp,
-        "_build_openclaw_runtime_controls",
-        return_value={"thinking_default": "off", "primary": "", "fallbacks": [], "chain_items": []},
+    with (
+        patch.object(
+            WebApp,
+            "_apply_openclaw_runtime_controls",
+            return_value={"thinking_default": "medium", "changed": {"thinking_default": "medium"}},
+        ),
+        patch.object(
+            WebApp,
+            "_build_openclaw_runtime_controls",
+            return_value={
+                "thinking_default": "off",
+                "primary": "",
+                "fallbacks": [],
+                "chain_items": [],
+            },
+        ),
     ):
         resp = client.post(
             "/api/thinking/set",

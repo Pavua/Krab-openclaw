@@ -7,10 +7,10 @@ tests/unit/test_swarm_task_board_extended.py
 """
 
 import json
-import pytest
-from pathlib import Path
 
-from src.core.swarm_task_board import SwarmTaskBoard, SwarmTask, VALID_STATUSES, VALID_PRIORITIES
+import pytest
+
+from src.core.swarm_task_board import SwarmTask, SwarmTaskBoard
 
 
 @pytest.fixture

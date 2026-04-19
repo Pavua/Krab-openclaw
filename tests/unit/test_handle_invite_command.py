@@ -193,9 +193,7 @@ async def test_invite_link_revoke_success() -> None:
 
     await handle_invite(bot, message)
 
-    bot.client.revoke_chat_invite_link.assert_awaited_once_with(
-        -100777, "https://t.me/+ABCDEF"
-    )
+    bot.client.revoke_chat_invite_link.assert_awaited_once_with(-100777, "https://t.me/+ABCDEF")
     reply_text = message.reply.await_args.args[0]
     assert "отозвана" in reply_text
     assert "https://t.me/+ABCDEF" in reply_text
@@ -218,9 +216,7 @@ async def test_invite_link_revoke_no_url() -> None:
 async def test_invite_link_revoke_pyrogram_error() -> None:
     """!invite link revoke — ошибка Pyrogram оборачивается в UserInputError."""
     bot = _make_bot(access_level=AccessLevel.OWNER)
-    bot.client.revoke_chat_invite_link = AsyncMock(
-        side_effect=Exception("INVITE_HASH_INVALID")
-    )
+    bot.client.revoke_chat_invite_link = AsyncMock(side_effect=Exception("INVITE_HASH_INVALID"))
     message = _make_message(
         chat_id=-100777, command_args=["link", "revoke", "https://t.me/+BADLINK"]
     )

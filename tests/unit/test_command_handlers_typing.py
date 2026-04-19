@@ -6,11 +6,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import src.handlers.command_handlers as ch_module
+from src.core.access_control import AccessLevel
+from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import (
     _TYPING_ACTION_MAP,
     _TYPING_DEFAULT_SECONDS,
@@ -18,13 +19,11 @@ from src.handlers.command_handlers import (
     _TYPING_MAX_SECONDS,
     handle_typing,
 )
-from src.core.access_control import AccessLevel
-from src.core.exceptions import UserInputError
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
+
 
 def _make_bot(owner: bool = True):
     """Создаёт минимальный mock-бот."""
@@ -56,6 +55,7 @@ def _make_message(args: str = "", chat_id: int = 42):
 # Константы
 # ---------------------------------------------------------------------------
 
+
 class TestTypingConstants:
     def test_default_seconds(self):
         assert _TYPING_DEFAULT_SECONDS == 5
@@ -70,6 +70,7 @@ class TestTypingConstants:
 
     def test_action_map_values_are_pyrogram_attrs(self):
         from pyrogram import enums
+
         for key, attr in _TYPING_ACTION_MAP.items():
             assert hasattr(enums.ChatAction, attr), f"enums.ChatAction.{attr} не существует"
 
@@ -80,6 +81,7 @@ class TestTypingConstants:
 # ---------------------------------------------------------------------------
 # Проверка доступа
 # ---------------------------------------------------------------------------
+
 
 class TestTypingAccess:
     @pytest.mark.asyncio
@@ -99,6 +101,7 @@ class TestTypingAccess:
 
         # Заменяем asyncio.sleep на мгновенный stub
         import asyncio
+
         monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
         await handle_typing(bot, msg)  # не должно упасть с UserInputError
@@ -108,11 +111,13 @@ class TestTypingAccess:
 # Парсинг аргументов
 # ---------------------------------------------------------------------------
 
+
 class TestTypingArgParsing:
     @pytest.mark.asyncio
     async def test_no_args_uses_defaults(self, monkeypatch):
         """Без аргументов — TYPING, 5 секунд."""
         import asyncio
+
         monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
         bot = _make_bot()
@@ -120,7 +125,6 @@ class TestTypingArgParsing:
         await handle_typing(bot, msg)
 
         # send_chat_action должен быть вызван хотя бы раз с TYPING
-        from pyrogram import enums
         calls = [str(call) for call in bot.client.send_chat_action.await_args_list]
         # Проверяем что вызов был (cancel или typing)
         assert bot.client.send_chat_action.await_count >= 1
@@ -129,6 +133,7 @@ class TestTypingArgParsing:
     async def test_custom_seconds(self, monkeypatch):
         """!typing 10 → 10 секунд."""
         import asyncio
+
         sleep_mock = AsyncMock()
         monkeypatch.setattr(asyncio, "sleep", sleep_mock)
 
@@ -144,9 +149,11 @@ class TestTypingArgParsing:
     async def test_record_mode(self, monkeypatch):
         """!typing record → RECORD_AUDIO action."""
         import asyncio
+
         monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
         from pyrogram import enums
+
         bot = _make_bot()
         msg = _make_message(args="record 1")
         await handle_typing(bot, msg)
@@ -159,9 +166,11 @@ class TestTypingArgParsing:
     async def test_upload_mode(self, monkeypatch):
         """!typing upload → UPLOAD_DOCUMENT action."""
         import asyncio
+
         monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
         from pyrogram import enums
+
         bot = _make_bot()
         msg = _make_message(args="upload 1")
         await handle_typing(bot, msg)
@@ -173,6 +182,7 @@ class TestTypingArgParsing:
     async def test_record_with_custom_seconds(self, monkeypatch):
         """!typing record 3 → 3 секунды."""
         import asyncio
+
         sleep_mock = AsyncMock()
         monkeypatch.setattr(asyncio, "sleep", sleep_mock)
 
@@ -187,6 +197,7 @@ class TestTypingArgParsing:
     async def test_invalid_subcommand_shows_usage(self, monkeypatch):
         """!typing blah → UserInputError с текстом подсказки."""
         import asyncio
+
         monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
         bot = _make_bot()
@@ -198,6 +209,7 @@ class TestTypingArgParsing:
     async def test_invalid_seconds_for_record_raises(self, monkeypatch):
         """!typing record abc → UserInputError с текстом про длительность."""
         import asyncio
+
         monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
         bot = _make_bot()
@@ -211,11 +223,13 @@ class TestTypingArgParsing:
 # Ограничение длительности
 # ---------------------------------------------------------------------------
 
+
 class TestTypingDurationClamp:
     @pytest.mark.asyncio
     async def test_zero_clamped_to_one(self, monkeypatch):
         """Длительность 0 кламп-ится до 1."""
         import asyncio
+
         sleep_mock = AsyncMock()
         monkeypatch.setattr(asyncio, "sleep", sleep_mock)
 
@@ -230,6 +244,7 @@ class TestTypingDurationClamp:
     async def test_max_seconds_clamped(self, monkeypatch):
         """Длительность > 30 кламп-ится до 30."""
         import asyncio
+
         sleep_mock = AsyncMock()
         monkeypatch.setattr(asyncio, "sleep", sleep_mock)
 
@@ -244,6 +259,7 @@ class TestTypingDurationClamp:
     async def test_exact_max_seconds(self, monkeypatch):
         """!typing 30 → ровно 30 секунд (без превышения)."""
         import asyncio
+
         sleep_mock = AsyncMock()
         monkeypatch.setattr(asyncio, "sleep", sleep_mock)
 
@@ -259,11 +275,13 @@ class TestTypingDurationClamp:
 # Поведение cancel и delete
 # ---------------------------------------------------------------------------
 
+
 class TestTypingBehavior:
     @pytest.mark.asyncio
     async def test_message_deleted(self, monkeypatch):
         """Команда !typing удаляет своё сообщение."""
         import asyncio
+
         monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
         bot = _make_bot()
@@ -276,9 +294,11 @@ class TestTypingBehavior:
     async def test_cancel_sent_at_end(self, monkeypatch):
         """После завершения отправляется CANCEL."""
         import asyncio
+
         monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
         from pyrogram import enums
+
         bot = _make_bot()
         msg = _make_message(args="1")
         await handle_typing(bot, msg)
@@ -290,6 +310,7 @@ class TestTypingBehavior:
     async def test_correct_chat_id_used(self, monkeypatch):
         """Действие отправляется в правильный chat_id."""
         import asyncio
+
         monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
         bot = _make_bot()
@@ -303,6 +324,7 @@ class TestTypingBehavior:
     async def test_send_action_error_does_not_crash(self, monkeypatch):
         """Ошибка send_chat_action не роняет хендлер."""
         import asyncio
+
         monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
         bot = _make_bot()
@@ -315,6 +337,7 @@ class TestTypingBehavior:
     async def test_delete_error_does_not_crash(self, monkeypatch):
         """Ошибка delete (например, нет прав) не роняет хендлер."""
         import asyncio
+
         monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
         bot = _make_bot()
@@ -328,11 +351,14 @@ class TestTypingBehavior:
 # Проверка экспорта
 # ---------------------------------------------------------------------------
 
+
 class TestTypingExport:
     def test_handle_typing_in_handlers_init(self):
         from src.handlers import handle_typing as imported
+
         assert imported is handle_typing
 
     def test_handle_typing_in_all(self):
         from src.handlers import __all__
+
         assert "handle_typing" in __all__

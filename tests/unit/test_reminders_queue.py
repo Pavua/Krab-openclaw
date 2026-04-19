@@ -49,7 +49,9 @@ def queue(state_path: Path) -> RemindersQueue:
 
 class TestAddTimeReminder:
     def test_add_time_reminder_returns_id(self, queue: RemindersQueue) -> None:
-        rid = queue.add_time_reminder(owner_id="42", fire_at=int(time.time()) + 60, action="check X")
+        rid = queue.add_time_reminder(
+            owner_id="42", fire_at=int(time.time()) + 60, action="check X"
+        )
         assert isinstance(rid, str)
         assert len(rid) == 12  # uuid hex[:12]
 
@@ -228,9 +230,7 @@ class TestCheckEventMatch:
             captured.append(r)
 
         queue.set_fire_callback(cb)
-        rid = queue.add_event_reminder(
-            owner_id="42", chat_id="-100", pattern=r"foo", action="n"
-        )
+        rid = queue.add_event_reminder(owner_id="42", chat_id="-100", pattern=r"foo", action="n")
         matched = queue.check_event_match("-100", "foo bar")
         assert len(matched) == 1
         asyncio.run(queue.fire_event_reminder(matched[0]))
@@ -245,9 +245,7 @@ class TestPersistence:
     def test_save_then_load(self, state_path: Path) -> None:
         q1 = RemindersQueue(state_path=state_path)
         rid_t = q1.add_time_reminder(owner_id="42", fire_at=12345, action="xyz")
-        rid_e = q1.add_event_reminder(
-            owner_id="42", chat_id="-100", pattern="pat", action="act"
-        )
+        rid_e = q1.add_event_reminder(owner_id="42", chat_id="-100", pattern="pat", action="act")
         # Новый инстанс — должен подтянуть те же reminders
         q2 = RemindersQueue(state_path=state_path)
         r_t = q2.get(rid_t)

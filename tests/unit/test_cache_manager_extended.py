@@ -14,9 +14,8 @@ import unittest.mock as mock
 
 import pytest
 
-from src.cache_manager import CacheManager, DEFAULT_TTL_SECONDS
+from src.cache_manager import DEFAULT_TTL_SECONDS, CacheManager
 from src.core.exceptions import CacheError
-
 
 # ---------------------------------------------------------------------------
 # Фикстура: изолированный кэш в tmp_path

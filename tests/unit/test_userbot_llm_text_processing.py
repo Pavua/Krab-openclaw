@@ -479,9 +479,7 @@ def test_escape_bare_url_single() -> None:
 
 def test_escape_bare_url_multiple() -> None:
     """Несколько URL в одной строке — каждый оборачивается отдельно."""
-    result = KraabUserbot.escape_urls_for_restricted_groups(
-        "https://a.com and https://b.com"
-    )
+    result = KraabUserbot.escape_urls_for_restricted_groups("https://a.com and https://b.com")
     assert result == "`https://a.com` and `https://b.com`"
 
 
