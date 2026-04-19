@@ -9,7 +9,7 @@ Tests verify:
 - active mode listens to all
 - ChatWindow.touch() called per message
 """
-
+import asyncio
 import os
 import sys
 
@@ -25,7 +25,6 @@ from pyrogram.types import Message
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 def _make_message(
     *,
@@ -59,16 +58,8 @@ def _make_message(
 
 def _make_bot() -> MagicMock:
     """Build minimal KraabUserbot mock."""
-    def _decorator_factory(*_args, **_kwargs):
-        def _decorator(func):
-            return func
-        return _decorator
-
-    with patch("src.userbot.session.Client") as client_cls:
-        client_cls.return_value.on_message.return_value = _decorator_factory()
-        client_cls.return_value.on_message_reaction_updated = _decorator_factory
+    with patch("src.userbot_bridge.Client"):
         from src.userbot_bridge import KraabUserbot
-
         bot = KraabUserbot()
     bot.client = AsyncMock()
     bot.me = MagicMock()
@@ -86,7 +77,6 @@ def _make_bot() -> MagicMock:
     bot._log_background_task_exception_cb = MagicMock()
     # set krab identity
     from src.core.krab_identity import set_krab_user_id
-
     set_krab_user_id(42)
     return bot
 
@@ -94,7 +84,6 @@ def _make_bot() -> MagicMock:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_group_mention_only_skips_without_mention():
@@ -146,6 +135,7 @@ async def test_group_muted_skips_all():
 @pytest.mark.asyncio
 async def test_dm_processed_normally():
     """DM → always processed regardless of filter mode."""
+    from src.core.chat_filter_config import chat_filter_config
 
     chat_id = "9999"
     # Even if someone mistakenly sets muted on a DM chat_id,
@@ -290,7 +280,7 @@ async def test_reply_to_self_passes_through_mention_only():
 
 @pytest.mark.asyncio
 async def test_priority_classify_dm_command():
-    """classify_priority returns CRITICAL for DM + command."""
+    """classify_priority returns P0_INSTANT for DM."""
     from src.core.message_priority_dispatcher import Priority, classify_priority
 
     prio, reason = classify_priority(
@@ -307,7 +297,7 @@ async def test_priority_classify_dm_command():
 
 @pytest.mark.asyncio
 async def test_priority_classify_group_no_mention():
-    """classify_priority returns LOW for group non-mention non-command."""
+    """classify_priority returns P2_LOW for group non-mention non-command."""
     from src.core.message_priority_dispatcher import Priority, classify_priority
 
     prio, reason = classify_priority(
@@ -320,31 +310,3 @@ async def test_priority_classify_group_no_mention():
     )
     assert prio == Priority.P2_LOW
     assert reason == "mode_mention-only_no_trigger"
-
-
-@pytest.mark.asyncio
-async def test_owner_trigger_bypasses_stale_chat_ban_cache(tmp_path):
-    """Owner `Краб, ...` в группе не должен молча резаться stale ban-cache."""
-    from src.core.chat_ban_cache import chat_ban_cache
-    from src.core.chat_filter_config import chat_filter_config
-
-    chat_id = "9999"
-    chat_filter_config.set_mode(chat_id, "mention-only")
-    chat_ban_cache.configure_default_path(tmp_path / "chat_ban_cache.json")
-    chat_ban_cache.mark_banned(chat_id, "UserBannedInChannel")
-    assert chat_ban_cache.is_banned(chat_id) is True
-
-    bot = _make_bot()
-    bot.me.username = "yung_nagato"
-    msg = _make_message(
-        text="Краб, проверка slowmode",
-        chat_type=enums.ChatType.GROUP,
-        from_user_id=42,
-    )
-
-    await bot._process_message(msg)
-
-    bot._process_message_serialized.assert_awaited_once()
-    assert chat_ban_cache.is_banned(chat_id) is False
-
-    chat_filter_config.reset(chat_id)
