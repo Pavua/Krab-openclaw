@@ -4249,14 +4249,41 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
     part1 = _build_part(part1_cats, "🦀 **Krab Commands** (1/2)\n━━━━━━━━━━━━━━━")
     part2 = _build_part(part2_cats, "🦀 **Krab Commands** (2/2)\n━━━━━━━━━━━━━━━")
 
-    # Отправляем одним или двумя сообщениями (Telegram лимит 4096)
+    # Отправляем одним или несколькими сообщениями (Telegram лимит 4096)
     page_limit = 4000
+
+    # Проверяем, может ли быть отправлено одним сообщением
     combined = part1 + "\n\n" + part2
     if len(combined) <= page_limit:
         await message.reply(combined)
-    else:
+    # Если одна из частей превышает лимит, отправляем по частям
+    elif len(part1) <= page_limit and len(part2) <= page_limit:
         await message.reply(part1)
         await message.reply(part2)
+    # Если даже одна часть слишком большая, разбиваем дальше по категориям
+    else:
+        current_msg = []
+        for cat in cats:
+            icon = _category_icons.get(cat, "•")
+            label = _category_labels.get(cat, cat)
+            cat_header = f"{icon} **{label}**"
+            cat_lines = [cat_header]
+            for cmd in _reg.by_category(cat):
+                cat_lines.append(f"`!{cmd.name}` — {cmd.description}")
+            cat_text = "\n".join(cat_lines)
+
+            # Проверяем, можем ли добавить категорию к текущему сообщению
+            test_msg = "\n\n".join(current_msg + [cat_text]) if current_msg else cat_text
+            if len(test_msg) > page_limit and current_msg:
+                # Отправляем накопленное сообщение
+                await message.reply("\n\n".join(current_msg))
+                current_msg = [cat_text]
+            else:
+                current_msg.append(cat_text)
+
+        # Отправляем оставшееся сообщение
+        if current_msg:
+            await message.reply("\n\n".join(current_msg))
 
 
 async def handle_diagnose(bot: "KraabUserbot", message: Message) -> None:

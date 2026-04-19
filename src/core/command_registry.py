@@ -436,8 +436,8 @@ _COMMANDS: list[CommandInfo] = [
     CommandInfo(
         name="memory",
         category="notes",
-        description="Память: recent записи workspace / stats по Memory Layer",
-        usage="!memory recent [source_filter] | !memory stats",
+        description="Память: recent / stats / clear / rebuild в Memory Layer",
+        usage="!memory recent [source_filter] | !memory stats | !memory clear | !memory rebuild",
     ),
     # ── management ───────────────────────────────────────────────────────────
     CommandInfo(
