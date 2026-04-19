@@ -4874,6 +4874,11 @@ async def handle_cron(bot: "KraabUserbot", message: Message) -> None:
         await _handle_cron_quick(bot, message, arg)
         return
 
+    # ---------- !cron native — управление native fallback jobs ----------
+    if sub == "native":
+        await _handle_cron_native(message, arg)
+        return
+
     # ---------- Неизвестная субкоманда ----------
     await message.reply(
         "🗓 **!cron** — управление OpenClaw cron jobs\n\n"
@@ -4883,7 +4888,9 @@ async def handle_cron(bot: "KraabUserbot", message: Message) -> None:
         "`!cron run <name>` — запустить job немедленно\n"
         "`!cron status` — общая статистика\n"
         '`!cron quick "<время>" "<промпт>"` — создать job в текущем чате\n'
-        '   Пример: `!cron quick "каждый день в 10:00" "AI-ресёрч и саммари"`'
+        '   Пример: `!cron quick "каждый день в 10:00" "AI-ресёрч и саммари"`\n'
+        "`!cron native list` — native fallback jobs\n"
+        '`!cron native add "0 10 * * *" "промпт"` — добавить native job'
     )
 
 
@@ -4968,8 +4975,20 @@ async def _handle_cron_quick(bot: "KraabUserbot", message: Message, args: str) -
     )
     if not ok:
         short = raw_out[:200] if raw_out else "no output"
-        logger.warning("cron_quick_create_failed", name=job_name, spec=cron_spec, raw=short)
-        await message.reply(f"❌ Ошибка создания job:\n`{short}`")
+        logger.warning("cron_quick_create_failed_fallback_native", name=job_name, spec=cron_spec, raw=short)
+        # Fallback: сохраняем в native store (native fallback)
+        from ..core.cron_native_store import add_job as _native_add_job  # noqa: PLC0415
+        native_id = _native_add_job(cron_spec=cron_spec, prompt=prompt, job_id=job_name)
+        prompt_preview = prompt[:80] + ("…" if len(prompt) > 80 else "")
+        await message.reply(
+            "✅ **Cron создан (native fallback)**\n"
+            f"• ID: `{native_id}`\n"
+            f"• Расписание: `{cron_spec}` (из `{time_expr}`)\n"
+            f"• Промпт: `{prompt_preview}`\n"
+            f"• Chat: `{chat_id}`\n"
+            f"Выключить: `!cron native disable {native_id}`\n"
+            "_OpenClaw CLI недоступен — job сохранён в native scheduler._",
+        )
         return
 
     prompt_preview = prompt[:80] + ("…" if len(prompt) > 80 else "")
@@ -4980,6 +4999,99 @@ async def _handle_cron_quick(bot: "KraabUserbot", message: Message, args: str) -
         f"• Промпт: `{prompt_preview}`\n"
         f"• Chat: `{chat_id}`\n"
         f"Выключить: `!cron disable {job_name}`",
+    )
+
+
+async def _handle_cron_native(message: Message, args: str) -> None:
+    """!cron native <subcmd> [args] — управление native fallback cron jobs."""
+    import shlex  # noqa: PLC0415
+
+    from ..core.cron_native_store import (  # noqa: PLC0415
+        add_job,
+        list_jobs,
+        remove_job,
+        toggle_job,
+    )
+
+    parts = args.split(maxsplit=1) if args else []
+    nsub = parts[0].lower() if parts else "list"
+    narg = parts[1].strip() if len(parts) > 1 else ""
+
+    if nsub in {"list", "ls", "список", ""}:
+        jobs = list_jobs()
+        if not jobs:
+            await message.reply("🗓 Native cron jobs: пусто.")
+            return
+        lines = ["🗓 **Native Cron Jobs** _(fallback)_\n"]
+        for j in jobs:
+            flag = "✅" if j.get("enabled") else "⏸"
+            jid = str(j.get("id") or "?")
+            spec = str(j.get("cron_spec") or "?")
+            runs = int(j.get("run_count") or 0)
+            prompt_prev = str(j.get("prompt") or "")[:50]
+            lines.append(f"{flag} `{jid}` — `{spec}` (runs: {runs})")
+            lines.append(f"   {prompt_prev}")
+        await message.reply("\n".join(lines))
+        return
+
+    if nsub == "add":
+        if not narg:
+            await message.reply(
+                '❌ Формат: `!cron native add "0 10 * * *" "промпт"`',
+            )
+            return
+        try:
+            sp = shlex.split(narg)
+        except ValueError:
+            await message.reply("❌ Не распарсил аргументы. Используй кавычки.")
+            return
+        if len(sp) < 2:
+            await message.reply('❌ Нужно: `"cron_spec" "промпт"`')
+            return
+        spec = sp[0]
+        prompt = " ".join(sp[1:])
+        new_id = add_job(cron_spec=spec, prompt=prompt)
+        await message.reply(
+            f"✅ Native job добавлен: `{new_id}`\n"
+            f"• spec: `{spec}`\n"
+            f"• промпт: `{prompt[:60]}`\n"
+            f"Удалить: `!cron native remove {new_id}`"
+        )
+        return
+
+    if nsub in {"remove", "rm", "del", "удалить"}:
+        if not narg:
+            await message.reply("❌ Укажи id job: `!cron native remove <id>`")
+            return
+        ok = remove_job(narg)
+        if ok:
+            await message.reply(f"✅ Native job `{narg}` удалён.")
+        else:
+            await message.reply(f"❌ Native job `{narg}` не найден.")
+        return
+
+    if nsub in {"enable", "вкл"}:
+        if not narg:
+            await message.reply("❌ Укажи id: `!cron native enable <id>`")
+            return
+        ok = toggle_job(narg, enabled=True)
+        await message.reply(f"✅ Native job `{narg}` включён." if ok else f"❌ Job `{narg}` не найден.")
+        return
+
+    if nsub in {"disable", "выкл"}:
+        if not narg:
+            await message.reply("❌ Укажи id: `!cron native disable <id>`")
+            return
+        ok = toggle_job(narg, enabled=False)
+        await message.reply(f"⏸ Native job `{narg}` выключен." if ok else f"❌ Job `{narg}` не найден.")
+        return
+
+    await message.reply(
+        "🗓 **!cron native** — native fallback cron\n\n"
+        "`!cron native list` — список jobs\n"
+        '`!cron native add "0 10 * * *" "промпт"` — добавить\n'
+        "`!cron native remove <id>` — удалить\n"
+        "`!cron native enable/disable <id>` — вкл/выкл"
     )
 
 

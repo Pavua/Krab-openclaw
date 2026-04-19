@@ -34,6 +34,7 @@ from .core.chat_ban_cache import chat_ban_cache
 from .core.chat_capability_cache import chat_capability_cache
 from .core.chat_filter_config import chat_filter_config
 from .core.chat_window_manager import chat_window_manager
+from .core.cron_native_scheduler import cron_native_scheduler
 from .core.exceptions import KrabError, UserInputError
 from .core.inbox_service import inbox_service
 from .core.logger import bind_contextvars, clear_contextvars, get_logger
@@ -1623,6 +1624,11 @@ class KraabUserbot(
                     swarm_scheduler.start()
                     logger.info("swarm_scheduler_runtime_started")
 
+            # Native cron scheduler — fallback когда OpenClaw CLI недоступен
+            if not cron_native_scheduler.is_running:
+                cron_native_scheduler.start()
+                logger.info("cron_native_scheduler_runtime_started")
+
             # Swarm channels — live broadcast в Telegram-группы
             if self.me and self.client:
                 swarm_channels.bind(client=self.client, owner_id=self.me.id)
@@ -2300,6 +2306,11 @@ class KraabUserbot(
                 swarm_scheduler.stop()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("swarm_scheduler_stop_failed", error=str(exc), non_fatal=True)
+        if cron_native_scheduler.is_running:
+            try:
+                cron_native_scheduler.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("cron_native_scheduler_stop_failed", error=str(exc), non_fatal=True)
         await self._cancel_background_task("_telegram_watchdog_task")
         await self._cancel_background_task("_background_task_reaper_task")
         await self._cancel_background_task("_proactive_watch_task")
