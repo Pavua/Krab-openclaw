@@ -114,20 +114,37 @@ async def collect_health_deep(
                 integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
                 msg_count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
                 chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+                fts_orphans: int | None
+                vec_orphans: int | None
                 try:
-                    fts_orphans: int | str = conn.execute(
-                        "SELECT COUNT(*) FROM fts5_messages WHERE rowid NOT IN "
-                        "(SELECT rowid FROM messages)"
+                    # Orphan = строка в FTS shadow table без соответствующего chunks.id
+                    fts_orphans = conn.execute(
+                        """
+                        SELECT COUNT(*) FROM messages_fts_docsize AS d
+                        LEFT JOIN chunks AS c ON c.id = d.id
+                        WHERE c.id IS NULL
+                        """
                     ).fetchone()[0]
                 except sqlite3.OperationalError:
-                    fts_orphans = "n/a"
+                    fts_orphans = None
                 try:
-                    vec_orphans: int | str = conn.execute(
-                        "SELECT COUNT(*) FROM vec_chunks WHERE chunk_id NOT IN "
-                        "(SELECT id FROM chunks)"
+                    # Загружаем sqlite-vec extension для доступа к vec_chunks_rowids
+                    import sqlite_vec  # type: ignore[import-not-found]
+
+                    conn.enable_load_extension(True)
+                    try:
+                        sqlite_vec.load(conn)
+                    finally:
+                        conn.enable_load_extension(False)
+                    vec_orphans = conn.execute(
+                        """
+                        SELECT COUNT(*) FROM vec_chunks_rowids AS vr
+                        LEFT JOIN chunks AS c ON c.id = vr.id
+                        WHERE c.id IS NULL
+                        """
                     ).fetchone()[0]
-                except sqlite3.OperationalError:
-                    vec_orphans = "n/a"
+                except Exception:  # noqa: BLE001
+                    vec_orphans = None
             finally:
                 conn.close()
             size_mb = round(db_path.stat().st_size / 1024 / 1024, 2)

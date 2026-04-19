@@ -7533,12 +7533,25 @@ async def _health_deep_report(bot: "KraabUserbot") -> str:
     else:
         integ_icon = "✅" if integrity == "ok" else "❌"
         size_mb = adb.get("size_mb", 0)
+        fts_orph = adb.get("orphan_fts5")
+        vec_orph = adb.get("orphan_vec")
+        # Формируем строку с orphan-счётчиками; ⚠️ если есть сироты
+        if fts_orph is None and vec_orph is None:
+            orph_line = "• FTS5 orphans: n/a | vec orphans: n/a"
+        else:
+            fts_str = str(fts_orph) if fts_orph is not None else "n/a"
+            vec_str = str(vec_orph) if vec_orph is not None else "n/a"
+            has_orphans = (isinstance(fts_orph, int) and fts_orph > 0) or (
+                isinstance(vec_orph, int) and vec_orph > 0
+            )
+            prefix = "⚠️ " if has_orphans else ""
+            orph_line = f"• {prefix}FTS5 orphans: {fts_str} | vec orphans: {vec_str}"
         sections.append(
             f"**Archive.db**\n"
             f"• Integrity: {integ_icon} {integrity}\n"
             f"• Messages: {adb.get('messages', '?'):,} | Chunks: {adb.get('chunks', '?'):,}\n"
             f"• Size: {size_mb:.1f} MB\n"
-            f"• FTS5 orphans: {adb.get('orphan_fts5', '?')} | vec orphans: {adb.get('orphan_vec', '?')}"
+            f"{orph_line}"
         )
 
     # ── 5. Reminders ─────────────────────────────────────────────────────────
