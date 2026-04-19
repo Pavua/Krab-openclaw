@@ -22,7 +22,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pyrogram import enums
 from pyrogram.types import Message
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -281,33 +280,33 @@ async def test_reply_to_self_passes_through_mention_only():
 
 @pytest.mark.asyncio
 async def test_priority_classify_dm_command():
-    """classify_priority returns CRITICAL for DM + command."""
+    """classify_priority returns P0_INSTANT for DM."""
     from src.core.message_priority_dispatcher import Priority, classify_priority
 
     prio, reason = classify_priority(
-        message_text="!health",
-        chat_type="ChatType.PRIVATE",
+        "!health",
+        chat_type="PRIVATE",
         is_dm=True,
         is_reply_to_self=False,
         has_mention=False,
         chat_mode="active",
     )
-    assert prio == Priority.CRITICAL
-    assert reason == "dm_command"
+    assert prio == Priority.P0_INSTANT
+    assert reason == "dm"
 
 
 @pytest.mark.asyncio
 async def test_priority_classify_group_no_mention():
-    """classify_priority returns LOW for group non-mention non-command."""
+    """classify_priority returns P2_LOW for group non-mention non-command."""
     from src.core.message_priority_dispatcher import Priority, classify_priority
 
     prio, reason = classify_priority(
-        message_text="случайное",
-        chat_type="ChatType.GROUP",
+        "случайное",
+        chat_type="GROUP",
         is_dm=False,
         is_reply_to_self=False,
         has_mention=False,
         chat_mode="mention-only",
     )
-    assert prio == Priority.LOW
-    assert reason == "group_no_mention"
+    assert prio == Priority.P2_LOW
+    assert reason == "mode_mention-only_no_trigger"
