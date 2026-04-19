@@ -808,6 +808,15 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             await message.reply(f"🎧 Team listeners: **{status}**")
         return
 
+    # !swarm status deep — комплексная диагностика swarm-системы (owner-only)
+    if args.lower() in {"status deep", "status"}:
+        access_profile = bot._get_access_profile(message.from_user)
+        if access_profile.level != AccessLevel.OWNER:
+            raise UserInputError(user_message="🔒 `!swarm status deep` доступен только владельцу.")
+        report = await _swarm_status_deep_report()
+        await message.reply(report)
+        return
+
     # !swarm info <team> — детальная инфо о команде
     if args.lower().startswith("info"):
         info_tokens = args.split(maxsplit=1)
@@ -7605,6 +7614,150 @@ async def _health_deep_report(bot: "KraabUserbot") -> str:
     # Обрезаем по Telegram-лимиту
     if len(report) > 4000:
         report = report[:3990] + "\n…(truncated)"
+    return report
+
+
+async def _swarm_status_deep_report() -> str:
+    """Собирает подробный диагностический отчёт (!swarm status deep). Owner-only.
+
+    Возвращает markdown-строку до 4000 символов.
+    8 секций: teams clients, listeners, channels, active rounds,
+    memory, task board, contacts, recent DM events.
+    """
+    from ..core.swarm_bus import TEAM_REGISTRY
+    from ..core.swarm_channels import swarm_channels
+    from ..core.swarm_memory import swarm_memory
+    from ..core.swarm_task_board import swarm_task_board
+    from ..core.swarm_team_listener import is_listeners_enabled
+
+    # Лимит символов под Telegram
+    _limit = 4000
+
+    _team_emoji: dict[str, str] = {
+        "traders": "📈",
+        "coders": "💻",
+        "analysts": "📊",
+        "creative": "🎨",
+    }
+
+    sections: list[str] = ["🐝 **Swarm Status Deep**", "══════════════════════"]
+
+    all_teams = list(TEAM_REGISTRY.keys())
+
+    # ── 1. Team clients ──────────────────────────────────────────────────────
+    client_lines: list[str] = ["**1. Team clients:**"]
+    team_clients: dict[str, object] = getattr(swarm_channels, "_team_clients", {})
+    for team in all_teams:
+        emoji = _team_emoji.get(team, "🤖")
+        cl = team_clients.get(team.lower())
+        if cl is None:
+            client_lines.append(f"  {emoji} {team}: ❌ нет клиента")
+        else:
+            connected = getattr(cl, "is_connected", False)
+            username = getattr(cl, "_username", None) or getattr(cl, "username", None) or "?"
+            icon = "🟢" if connected else "🔴"
+            client_lines.append(f"  {emoji} {team}: {icon} @{username}")
+    sections.append("\n".join(client_lines))
+
+    # ── 2. Listeners state ───────────────────────────────────────────────────
+    listeners_on = is_listeners_enabled()
+    listener_icon = "✅ ON" if listeners_on else "🔇 OFF"
+    sections.append(
+        f"**2. Listeners:** {listener_icon}\n"
+        f"  owner detection: `access_control.is_owner_user_id`"
+    )
+
+    # ── 3. Channels ──────────────────────────────────────────────────────────
+    chan_lines: list[str] = ["**3. Channels:**"]
+    forum_chat_id: int | None = getattr(swarm_channels, "_forum_chat_id", None)
+    team_topics: dict[str, int] = getattr(swarm_channels, "_team_topics", {})
+    if forum_chat_id:
+        chan_lines.append(f"  forum_chat_id: `{forum_chat_id}`")
+        for team in all_teams:
+            topic_id = team_topics.get(team.lower())
+            icon = "✅" if topic_id else "❌"
+            tip = f"topic `{topic_id}`" if topic_id else "нет топика"
+            chan_lines.append(f"  {_team_emoji.get(team, '•')} {team}: {icon} {tip}")
+    else:
+        chan_lines.append("  ⚠️ forum mode не настроен")
+        team_chats: dict[str, int] = getattr(swarm_channels, "_team_chats", {})
+        if team_chats:
+            for team, cid in team_chats.items():
+                chan_lines.append(f"  {team}: legacy chat `{cid}`")
+        else:
+            chan_lines.append("  нет привязанных групп")
+    sections.append("\n".join(chan_lines))
+
+    # ── 4. Active rounds ─────────────────────────────────────────────────────
+    round_lines: list[str] = ["**4. Active rounds:**"]
+    any_active = False
+    for team in all_teams:
+        if swarm_channels.is_round_active(team):
+            any_active = True
+            round_lines.append(f"  🟢 {team}: раунд активен")
+    if not any_active:
+        round_lines.append("  ⚪ нет активных раундов")
+    sections.append("\n".join(round_lines))
+
+    # ── 5. Memory ────────────────────────────────────────────────────────────
+    mem_lines: list[str] = ["**5. Memory:**"]
+    known_mem_teams = swarm_memory.all_teams()
+    for team in all_teams:
+        if team in known_mem_teams:
+            stats = swarm_memory.get_team_stats(team)
+            total = stats.get("total_runs", 0)
+            last = stats.get("last_run", "—")
+            if hasattr(last, "isoformat"):
+                last = last.isoformat()[:16]
+            elif isinstance(last, str) and len(last) > 16:
+                last = last[:16]
+            mem_lines.append(f"  {_team_emoji.get(team, '•')} {team}: {total} прогонов (послед.: {last})")
+        else:
+            mem_lines.append(f"  {_team_emoji.get(team, '•')} {team}: 0 прогонов")
+    sections.append("\n".join(mem_lines))
+
+    # ── 6. Task board ────────────────────────────────────────────────────────
+    board_summary = swarm_task_board.get_board_summary()
+    by_team = board_summary.get("by_team", {})
+    by_status = board_summary.get("by_status", {})
+    total_tasks = board_summary.get("total", 0)
+    task_lines: list[str] = [f"**6. Task board:** {total_tasks} задач"]
+    # Статусы глобально
+    for st in ("pending", "in_progress", "done", "failed"):
+        cnt = by_status.get(st, 0)
+        if cnt:
+            st_icon = {"pending": "⏳", "in_progress": "🔄", "done": "✅", "failed": "❌"}.get(st, "•")
+            task_lines.append(f"  {st_icon} {st}: {cnt}")
+    # По командам
+    for team in all_teams:
+        cnt = by_team.get(team, 0)
+        if cnt:
+            task_lines.append(f"  {_team_emoji.get(team, '•')} {team}: {cnt}")
+    sections.append("\n".join(task_lines))
+
+    # ── 7. Contacts status ───────────────────────────────────────────────────
+    # p0lrd MCP недоступен из handler-слоя напрямую — skip с заметкой
+    sections.append(
+        "**7. Contacts:** ℹ️ проверка через p0lrd MCP недоступна из handler-слоя\n"
+        "  (используй !swarm contacts для проверки через внешний MCP)"
+    )
+
+    # ── 8. Recent DM events ──────────────────────────────────────────────────
+    # swarm_team_listener не хранит историю входящих DM — статичный статус
+    dm_lines: list[str] = ["**8. Recent DM events:**"]
+    if listeners_on:
+        dm_lines.append("  🎧 Listeners ON — team accounts слушают DM")
+        dm_lines.append("  ℹ️ история DM не персистируется (in-memory only)")
+    else:
+        dm_lines.append("  🔇 Listeners OFF — DM игнорируются")
+    sections.append("\n".join(dm_lines))
+
+    # Сборка отчёта
+    report = "\n\n".join(sections)
+    if len(report) > _limit:
+        # Считаем сколько символов обрезали
+        extra_chars = len(report) - _limit
+        report = report[:_limit - 40] + f"\n…(truncated {extra_chars} chars)"
     return report
 
 
