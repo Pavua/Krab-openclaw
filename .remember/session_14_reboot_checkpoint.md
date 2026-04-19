@@ -73,3 +73,16 @@ Their results may resurface в next session start (git log --oneline --all).
 ## Next session starter
 `.remember/session_14_start_prompt.md` + `.remember/next_session.md` — ready.
 Main HEAD check: `git log main --oneline -1` должно показать `b0868f8` (или новее если in-flight merged).
+
+## IMPORTANT Google diagnostic finding (added post-checkpoint)
+
+**"Google ⚠️ недоступно" — FALSE ALARM.** Diagnostic agent verified:
+- Direct HTTP probe: ✅ 200 OK
+- `gemini-3-pro-preview` via OpenClaw: ✅ 200 OK (75s latency but works)
+- Background gemini-2.5-flash translator: ✅ 200 OK
+
+Issue = diagnostic probe hangs в event loop contention с long OpenClaw requests (read=None timeout). `_cloud_tier_state` caches `network_error` falsely.
+
+**Fix для Session 15:** wrap `probe_gemini_key` в `asyncio.wait_for(..., timeout=15)` + 60s TTL cache. Low-priority polish.
+
+**Critical takeaway:** Wave 29-XX vision routing REALLY WORKS — Gemini fallback available для photo requests.
