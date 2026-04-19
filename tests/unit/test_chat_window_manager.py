@@ -150,7 +150,7 @@ class TestEnvConfiguration:
     def test_default_env_values(self):
         """Должны быть корректные defaults."""
         assert CAPACITY == 100
-        assert MESSAGE_CAP_PER_WINDOW == 20
+        assert MESSAGE_CAP_PER_WINDOW == 50
         assert IDLE_EVICTION_SEC == 3600
 
     def test_capacity_env_override(self, monkeypatch):

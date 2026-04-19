@@ -83,6 +83,50 @@ class TestAccessControlMixinIsTrigger:
         with patch("src.config.config", self._make_config(["!краб"])):
             assert obj._is_trigger("") is False
 
+    def test_runtime_username_mention_is_trigger(self):
+        """
+        `@yung_nagato ...` должен будить Краба даже если username не прописали
+        вручную в TRIGGER_PREFIXES. Это живой регресс How2AI: владелец пинговал
+        userbot-аккаунт, а trigger guard молчал.
+        """
+        obj = self._mixin()
+        obj.me = types.SimpleNamespace(username="yung_nagato")
+        cfg = self._make_config([])
+        cfg.OWNER_USERNAME = "@yung_nagato"
+        with patch("src.config.config", cfg):
+            assert obj._is_trigger("@yung_nagato защищай меня") is True
+            assert obj._is_trigger("@yung_nagato, защищай меня") is True
+            assert obj._is_trigger("@yung_nagatobot защищай меня") is False
+
+
+class TestLLMTextProcessingMixinCleanText:
+    """Очистка trigger/mention перед отправкой текста в LLM."""
+
+    def _mixin(self):
+        from src.userbot.access_control import AccessControlMixin
+        from src.userbot.llm_text_processing import LLMTextProcessingMixin
+
+        class FakeBot(AccessControlMixin, LLMTextProcessingMixin):
+            pass
+
+        obj = FakeBot.__new__(FakeBot)
+        obj.me = types.SimpleNamespace(username="yung_nagato")
+        return obj
+
+    def test_runtime_username_mention_is_removed_from_prompt(self):
+        """В модель должен уходить чистый запрос без `@username`."""
+        obj = self._mixin()
+        cfg = MagicMock()
+        cfg.TRIGGER_PREFIXES = ["!краб", "@краб"]
+        cfg.OWNER_USERNAME = "@yung_nagato"
+        with patch("src.userbot.llm_text_processing.config", cfg):
+            assert obj._get_clean_text("@yung_nagato защищай меня") == "защищай меня"
+            assert obj._get_clean_text("@yung_nagato, защищай меня") == "защищай меня"
+            assert (
+                obj._get_clean_text("@yung_nagatobot защищай меня")
+                == "@yung_nagatobot защищай меня"
+            )
+
 
 class TestAccessControlMixinIsNotificationSender:
     """Определение SMS/OTP shortcode-отправителей."""

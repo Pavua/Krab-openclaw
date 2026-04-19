@@ -430,6 +430,28 @@ class LLMTextProcessingMixin:
                 if clean.startswith(","):
                     clean = clean[1:].strip()
                 return clean
+
+        # Симметрично `_is_trigger`: mention userbot-аккаунта — это адресация,
+        # а не часть запроса к модели. Чистим `@yung_nagato ...`, но не режем
+        # похожие username без границы (`@yung_nagatobot`).
+        mention_aliases: set[str] = set()
+        self_username = getattr(getattr(self, "me", None), "username", "") or ""
+        if self_username:
+            mention_aliases.add(f"@{self_username}".lower())
+        owner_username = str(getattr(config, "OWNER_USERNAME", "") or "").strip()
+        if owner_username:
+            mention_aliases.add(
+                owner_username.lower()
+                if owner_username.startswith("@")
+                else f"@{owner_username.lower()}"
+            )
+        for alias in sorted(mention_aliases, key=len, reverse=True):
+            match = re.match(rf"^{re.escape(alias)}(?:$|[\s,.:;!?])", text_lower)
+            if match:
+                clean = text[match.end() :].strip()
+                if clean.startswith(","):
+                    clean = clean[1:].strip()
+                return clean
         return text.strip()
 
     def _split_message(self, text: str, limit: int = 4000) -> list[str]:

@@ -106,7 +106,15 @@ async def _warmup_runtime_route_truth() -> None:
     """
     await asyncio.sleep(1.5)
     try:
-        report = await openclaw_client.warmup_runtime_route()
+        # Ночной smoke 2026-04-19 показал, что production-route warmup может
+        # зависнуть на транспортном слое Codex/OpenClaw и косвенно оставить
+        # owner-panel в состоянии `Syncing...`. Верхний timeout здесь важнее
+        # идеальной стартовой route-truth: runtime должен оставаться живым,
+        # даже если первичная модель или gateway-stream сейчас деградировали.
+        report = await asyncio.wait_for(
+            openclaw_client.warmup_runtime_route(),
+            timeout=float(os.getenv("KRAB_RUNTIME_ROUTE_WARMUP_TIMEOUT_SEC", "20")),
+        )
         logger.info(
             "runtime_route_warmup_finished",
             ok=bool(report.get("ok")),

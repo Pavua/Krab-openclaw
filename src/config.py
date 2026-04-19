@@ -474,7 +474,7 @@ class Config:
     # Формат: comma-separated chat_id (отрицательные для супергрупп и каналов).
     VOICE_REPLY_BLOCKED_CHATS: list[str] = [
         s.strip() for s in os.getenv("VOICE_REPLY_BLOCKED_CHATS", "").split(",") if s.strip()
-    ]
+    ] or ["-1001587432709"]
 
     # Session watchdog heartbeat (сек). Проверяет Telegram MTProto alive.
     # Не тратит токенов, чисто внутренняя проверка.

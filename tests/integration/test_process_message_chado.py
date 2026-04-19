@@ -59,7 +59,14 @@ def _make_message(
 
 def _make_bot() -> MagicMock:
     """Build minimal KraabUserbot mock."""
-    with patch("src.userbot_bridge.Client"):
+    def _decorator_factory(*_args, **_kwargs):
+        def _decorator(func):
+            return func
+        return _decorator
+
+    with patch("src.userbot.session.Client") as client_cls:
+        client_cls.return_value.on_message.return_value = _decorator_factory()
+        client_cls.return_value.on_message_reaction_updated = _decorator_factory
         from src.userbot_bridge import KraabUserbot
         bot = KraabUserbot()
     bot.client = AsyncMock()
@@ -285,15 +292,15 @@ async def test_priority_classify_dm_command():
     from src.core.message_priority_dispatcher import Priority, classify_priority
 
     prio, reason = classify_priority(
-        message_text="!health",
-        chat_type="ChatType.PRIVATE",
+        "!health",
+        chat_type="PRIVATE",
         is_dm=True,
         is_reply_to_self=False,
         has_mention=False,
         chat_mode="active",
     )
-    assert prio == Priority.CRITICAL
-    assert reason == "dm_command"
+    assert prio == Priority.P0_INSTANT
+    assert reason == "dm"
 
 
 @pytest.mark.asyncio
@@ -302,12 +309,40 @@ async def test_priority_classify_group_no_mention():
     from src.core.message_priority_dispatcher import Priority, classify_priority
 
     prio, reason = classify_priority(
-        message_text="случайное",
-        chat_type="ChatType.GROUP",
+        "случайное",
+        chat_type="GROUP",
         is_dm=False,
         is_reply_to_self=False,
         has_mention=False,
         chat_mode="mention-only",
     )
-    assert prio == Priority.LOW
-    assert reason == "group_no_mention"
+    assert prio == Priority.P2_LOW
+    assert reason == "mode_mention-only_no_trigger"
+
+
+@pytest.mark.asyncio
+async def test_owner_trigger_bypasses_stale_chat_ban_cache(tmp_path):
+    """Owner `Краб, ...` в группе не должен молча резаться stale ban-cache."""
+    from src.core.chat_ban_cache import chat_ban_cache
+    from src.core.chat_filter_config import chat_filter_config
+
+    chat_id = "9999"
+    chat_filter_config.set_mode(chat_id, "mention-only")
+    chat_ban_cache.configure_default_path(tmp_path / "chat_ban_cache.json")
+    chat_ban_cache.mark_banned(chat_id, "UserBannedInChannel")
+    assert chat_ban_cache.is_banned(chat_id) is True
+
+    bot = _make_bot()
+    bot.me.username = "yung_nagato"
+    msg = _make_message(
+        text="Краб, проверка slowmode",
+        chat_type=enums.ChatType.GROUP,
+        from_user_id=42,
+    )
+
+    await bot._process_message(msg)
+
+    bot._process_message_serialized.assert_awaited_once()
+    assert chat_ban_cache.is_banned(chat_id) is False
+
+    chat_filter_config.reset(chat_id)

@@ -3795,22 +3795,50 @@ class KraabUserbot(
             # заблокированный чат команды — например `!chatban clear`, чтобы
             # снять отметку. Поэтому self + command = пропускаем guard.
             _is_self_for_guard = bool(self.me and user.id == self.me.id)
-            _raw_text_for_guard = (message.text or "").strip()
+            _raw_text_for_guard = (message.text or message.caption or "").strip()
             _is_command_for_guard = (
                 _raw_text_for_guard[:1] in ("!", "/", ".") if _raw_text_for_guard else False
             )
-            if (
-                chat_id
-                and not (_is_self_for_guard and _is_command_for_guard)
-                and chat_ban_cache.is_banned(chat_id)
-            ):
-                logger.info(
-                    "chat_ban_cached_skip",
-                    chat_id=chat_id,
-                    reason="chat_in_ban_cache",
-                    user=getattr(user, "username", None),
+            # Owner live-probe: если владелец сам обращается к Крабу в группе
+            # (`Краб, ...`, `@yung_nagato ...` или reply на сообщение Краба),
+            # ban-cache не должен молча глушить запрос. Этот cache — защитный
+            # short-circuit от повторных Telegram-отказов, но stale-запись в
+            # How2AI уже приводила к ложному «Краб ничего не пишет», хотя
+            # slowmode чата был известен и отправка могла просто подождать 10с.
+            _reply_for_guard = getattr(message, "reply_to_message", None)
+            _reply_from_for_guard = (
+                getattr(_reply_for_guard, "from_user", None) if _reply_for_guard else None
+            )
+            _is_reply_to_me_for_guard = bool(
+                _reply_from_for_guard is not None
+                and self.me
+                and getattr(_reply_from_for_guard, "id", None) == self.me.id
+            )
+            _owner_directed_probe_for_guard = bool(
+                _is_self_for_guard
+                and (
+                    _is_command_for_guard
+                    or self._is_trigger(_raw_text_for_guard)
+                    or _is_reply_to_me_for_guard
                 )
-                return
+            )
+            if chat_id and chat_ban_cache.is_banned(chat_id):
+                if _owner_directed_probe_for_guard:
+                    cleared = chat_ban_cache.clear(chat_id)
+                    logger.info(
+                        "chat_ban_cached_owner_probe_bypass",
+                        chat_id=chat_id,
+                        cleared=cleared,
+                        user=getattr(user, "username", None),
+                    )
+                else:
+                    logger.info(
+                        "chat_ban_cached_skip",
+                        chat_id=chat_id,
+                        reason="chat_in_ban_cache",
+                        user=getattr(user, "username", None),
+                    )
+                    return
 
             # MONITOR: проверяем активные мониторинги чатов на ключевые слова.
             # Уникальная фича юзербота — видим ВСЕ сообщения во всех чатах.

@@ -22,13 +22,22 @@ import time
 def main() -> int:
     parser = argparse.ArgumentParser(description="OpenClaw model autoswitch (no-op)")
     parser.add_argument("--dry-run", action="store_true", help="Только диагностика")
+    parser.add_argument(
+        "--profile",
+        default="current",
+        choices=("current", "toggle", "local-first", "cloud-first", "balanced"),
+        help="Профиль autoswitch-контракта для web-панели",
+    )
     args = parser.parse_args()
 
+    # Web endpoint уже передаёт --profile во всех режимах. Заглушка должна
+    # принимать тот же CLI-контракт, иначе UI Sync зависает/падает на статусе.
     payload = {
         "ok": True,
         "mode": "dry-run" if args.dry_run else "apply",
         "status": "ready",
         "changed": False,
+        "profile": args.profile,
         "reason": "autoswitch_stub_active",
         "timestamp": int(time.time()),
         "details": {

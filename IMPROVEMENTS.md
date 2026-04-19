@@ -975,3 +975,11 @@ redact (4/4 пойманы) → chunking (7 chunks) → FTS5 index → Model2Vec
 - [ ] **Update launchd plists:** add `<key>ExitTimeout</key><integer>120</integer>` to both `ai.krab.core.plist` and `ai.openclaw.gateway.plist`.
 - [ ] **Add ThrottleInterval** (optional): `ai.openclaw.gateway.plist` — set `<key>ThrottleInterval</key><integer>5</integer>` to space out rapid restarts.
 - [ ] **Audit remaining singleton loaders:** apply async-to-thread pattern for any >20-item singletons.
+
+## Nightly Self-Diagnostics — 2026-04-19 03:08 CEST
+
+- **попытался сделать:** проверил `openclaw gateway`, `ai.krab.core`, owner panel `:8080`, gateway `:18789`, cron state, логи и unit smoke.
+- **Исправлено частично:** добавлен bounded timeout `KRAB_RUNTIME_ROUTE_WARMUP_TIMEOUT_SEC` (default 20s) вокруг startup `runtime_route_warmup`, чтобы зависший Codex/OpenClaw warmup не держал runtime бесконечно.
+- **Проверено:** `./venv/bin/python -m pytest tests/unit/test_userbot_capability_truth.py -q` → 11 passed, 5 skipped; после restart `ai.krab.core` `/api/health/lite` OK, userbot running/connected, scheduler enabled, memory indexer running, gateway `/health` OK.
+- **Осталось/сомнение:** `openclaw gateway status` и `openclaw status` продолжают зависать до timeout; owner-panel тяжёлые endpoints (`/api/model/catalog`, `/api/openclaw/control-compat/status`, `/api/openclaw/cron/status`, `/api/model/local/status`) могут заблокировать UI `Syncing...` и затем подвесить lite health до restart core. Нужен отдельный fix-pass: вынести тяжёлые сборщики endpoint-ов в bounded worker/thread или вернуть stale-cache/fallback без блокировки event loop.
+- **Артефакт:** `artifacts/ops/nightly_self_diag_20260419_030921.txt`.

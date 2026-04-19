@@ -19,6 +19,7 @@ Access-control mixin для `KraabUserbot`.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -57,6 +58,26 @@ class AccessControlMixin:
         # Но по просьбе пользователя: "может и просто откликаться на Краб"
         if text_lower.startswith("краб"):
             return True
+
+        # Runtime mention alias: владелец часто пингует userbot-аккаунт
+        # напрямую (`@yung_nagato ...`). Не хардкодим только env-префиксы:
+        # берём актуальный username из `self.me` и OWNER_USERNAME из конфига.
+        # Граница после alias защищает от ложных совпадений вроде
+        # `@yung_nagatobot`.
+        mention_aliases: set[str] = set()
+        self_username = getattr(getattr(self, "me", None), "username", "") or ""
+        if self_username:
+            mention_aliases.add(f"@{self_username}".lower())
+        owner_username = str(getattr(config, "OWNER_USERNAME", "") or "").strip()
+        if owner_username:
+            mention_aliases.add(
+                owner_username.lower()
+                if owner_username.startswith("@")
+                else f"@{owner_username.lower()}"
+            )
+        for alias in mention_aliases:
+            if re.match(rf"^{re.escape(alias)}(?:$|[\s,.:;!?])", text_lower):
+                return True
 
         return False
 
