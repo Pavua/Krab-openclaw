@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Тесты для !health deep — расширенная диагностика Краба (Wave 29-EE).
+Тесты для !health deep — расширенная диагностика Краба (Wave 29-EE/FF).
+
+После Wave 29-FF логика сбора перенесена в collect_health_deep().
+_health_deep_report теперь форматирует dict → markdown.
+Тесты патчат collect_health_deep в его собственном модуле.
 """
 
 from __future__ import annotations
@@ -12,6 +16,12 @@ import pytest
 from src.core.access_control import AccessLevel
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import _health_deep_report, handle_health
+
+# Патчим collect_health_deep в его собственном модуле (local import внутри _health_deep_report
+# делает `from ..core.health_deep_collector import collect_health_deep`, поэтому
+# патч должен быть на объект в этом модуле).
+_MOCK_PATH = "src.core.health_deep_collector.collect_health_deep"
+
 
 # ─── вспомогательные фабрики ────────────────────────────────────────────────
 
@@ -39,17 +49,25 @@ def _make_message() -> MagicMock:
     return msg
 
 
-def _common_patches():
-    """Набор стандартных патчей для _health_deep_report без реальных ресурсов."""
-    vm_mock = MagicMock()
-    vm_mock.total = 32 * 1024**3
-    vm_mock.available = 20 * 1024**3
-    vm_mock.percent = 37.5
-
-    proc_mock = MagicMock()
-    proc_mock.memory_info.return_value = MagicMock(rss=512 * 1024 * 1024)
-
-    return vm_mock, proc_mock
+def _base_data(**overrides) -> dict:
+    """Базовый dict, который возвращает collect_health_deep в mock."""
+    base: dict = {
+        "krab": {"uptime_sec": 3600, "rss_mb": 512, "cpu_pct": 1.0},
+        "openclaw": {"healthy": True, "last_route": {"model": "gemini-3-pro"}},
+        "lm_studio": {"state": "offline", "active_model": None},
+        "archive_db": {"integrity": "missing", "orphan_fts5": 0, "orphan_vec": 0},
+        "reminders": {"pending": 0},
+        "memory_validator": {"pending_confirm": 0},
+        "sigterm_recent_count": 0,
+        "system": {
+            "load_avg": [1.0, 1.5, 2.0],
+            "free_mb": 20480,
+            "total_mb": 32768,
+            "used_pct": 37.5,
+        },
+    }
+    base.update(overrides)
+    return base
 
 
 # ─── тесты ──────────────────────────────────────────────────────────────────
@@ -70,31 +88,8 @@ async def test_health_deep_non_owner_rejected():
 async def test_health_deep_report_contains_sections():
     """_health_deep_report возвращает строку со всеми ожидаемыми секциями."""
     bot = _make_bot()
-    vm_mock, proc_mock = _common_patches()
 
-    with (
-        patch(
-            "src.handlers.command_handlers.is_lm_studio_available",
-            new=AsyncMock(return_value=False),
-        ),
-        patch("src.handlers.command_handlers.openclaw_client") as mock_oc,
-        patch("src.handlers.command_handlers.config") as mock_cfg,
-        patch("src.handlers.command_handlers.get_runtime_primary_model", return_value="gemini-3-pro"),
-        patch("psutil.Process", return_value=proc_mock),
-        patch("psutil.virtual_memory", return_value=vm_mock),
-        patch("os.getloadavg", return_value=(1.0, 1.5, 2.0)),
-        patch("subprocess.run", return_value=MagicMock(stdout="")),
-        patch("pathlib.Path.exists", return_value=False),
-        patch("src.core.memory_validator.memory_validator") as mock_mv,
-        patch("src.core.scheduler.krab_scheduler") as mock_ks,
-    ):
-        mock_oc.health_check = AsyncMock(return_value=True)
-        mock_oc.get_last_runtime_route = MagicMock(return_value={"model": "gemini-3-pro"})
-        mock_cfg.LM_STUDIO_URL = "http://localhost:1234"
-        mock_cfg.MODEL = "gemini-3-pro"
-        mock_mv.list_pending.return_value = []
-        mock_ks.list_reminders.return_value = []
-
+    with patch(_MOCK_PATH, new=AsyncMock(return_value=_base_data())):
         report = await _health_deep_report(bot)
 
     assert "Health Deep" in report
@@ -109,40 +104,17 @@ async def test_health_deep_report_contains_sections():
 
 @pytest.mark.asyncio
 async def test_health_deep_truncation():
-    """Отчёт обрезается до 4000 символов при очень длинных ответах log."""
+    """Отчёт обрезается до 4000 символов при длинных данных."""
     bot = _make_bot()
-    vm_mock, proc_mock = _common_patches()
-    vm_mock.total = 1024**3
-    vm_mock.available = 512 * 1024**2
-    vm_mock.percent = 50.0
-    proc_mock.memory_info.return_value = MagicMock(rss=256 * 1024 * 1024)
 
-    # Лог с 5000 символов SIGTERM (спровоцирует длинный отчёт)
-    long_log = "SIGTERM " * 600
+    # Длинное имя модели спровоцирует большой отчёт
+    data = _base_data()
+    data["openclaw"] = {
+        "healthy": True,
+        "last_route": {"model": "g" * 3000},
+    }
 
-    with (
-        patch(
-            "src.handlers.command_handlers.is_lm_studio_available",
-            new=AsyncMock(return_value=False),
-        ),
-        patch("src.handlers.command_handlers.openclaw_client") as mock_oc,
-        patch("src.handlers.command_handlers.config") as mock_cfg,
-        patch("src.handlers.command_handlers.get_runtime_primary_model", return_value="m"),
-        patch("psutil.Process", return_value=proc_mock),
-        patch("psutil.virtual_memory", return_value=vm_mock),
-        patch("os.getloadavg", return_value=(0.1, 0.1, 0.1)),
-        patch("subprocess.run", return_value=MagicMock(stdout=long_log)),
-        patch("pathlib.Path.exists", return_value=False),
-        patch("src.core.memory_validator.memory_validator") as mock_mv,
-        patch("src.core.scheduler.krab_scheduler") as mock_ks,
-    ):
-        mock_oc.health_check = AsyncMock(return_value=True)
-        mock_oc.get_last_runtime_route = MagicMock(return_value={})
-        mock_cfg.LM_STUDIO_URL = "http://localhost:1234"
-        mock_cfg.MODEL = "m"
-        mock_mv.list_pending.return_value = []
-        mock_ks.list_reminders.return_value = []
-
+    with patch(_MOCK_PATH, new=AsyncMock(return_value=data)):
         report = await _health_deep_report(bot)
 
     assert len(report) <= 4000
@@ -152,35 +124,10 @@ async def test_health_deep_truncation():
 async def test_health_deep_openclaw_offline():
     """Если OpenClaw недоступен, секция OpenClaw помечается ❌ offline."""
     bot = _make_bot()
-    vm_mock, proc_mock = _common_patches()
-    vm_mock.total = 1024**3
-    vm_mock.available = 512 * 1024**2
-    vm_mock.percent = 50.0
-    proc_mock.memory_info.return_value = MagicMock(rss=128 * 1024 * 1024)
+    data = _base_data()
+    data["openclaw"] = {"healthy": False, "last_route": {"model": "m"}}
 
-    with (
-        patch(
-            "src.handlers.command_handlers.is_lm_studio_available",
-            new=AsyncMock(return_value=False),
-        ),
-        patch("src.handlers.command_handlers.openclaw_client") as mock_oc,
-        patch("src.handlers.command_handlers.config") as mock_cfg,
-        patch("src.handlers.command_handlers.get_runtime_primary_model", return_value="m"),
-        patch("psutil.Process", return_value=proc_mock),
-        patch("psutil.virtual_memory", return_value=vm_mock),
-        patch("os.getloadavg", return_value=(0.1, 0.1, 0.1)),
-        patch("subprocess.run", return_value=MagicMock(stdout="")),
-        patch("pathlib.Path.exists", return_value=False),
-        patch("src.core.memory_validator.memory_validator") as mock_mv,
-        patch("src.core.scheduler.krab_scheduler") as mock_ks,
-    ):
-        mock_oc.health_check = AsyncMock(return_value=False)
-        mock_oc.get_last_runtime_route = MagicMock(return_value={})
-        mock_cfg.LM_STUDIO_URL = "http://localhost:1234"
-        mock_cfg.MODEL = "m"
-        mock_mv.list_pending.return_value = []
-        mock_ks.list_reminders.return_value = []
-
+    with patch(_MOCK_PATH, new=AsyncMock(return_value=data)):
         report = await _health_deep_report(bot)
 
     assert "❌" in report
@@ -191,38 +138,11 @@ async def test_health_deep_openclaw_offline():
 async def test_health_deep_pending_memory_validator():
     """Если есть pending confirms, секция Memory validator показывает ⚠️ и count."""
     bot = _make_bot()
-    vm_mock, proc_mock = _common_patches()
-    vm_mock.total = 1024**3
-    vm_mock.available = 512 * 1024**2
-    vm_mock.percent = 50.0
-    proc_mock.memory_info.return_value = MagicMock(rss=128 * 1024 * 1024)
+    data = _base_data()
+    data["memory_validator"] = {"pending_confirm": 3}
 
-    with (
-        patch(
-            "src.handlers.command_handlers.is_lm_studio_available",
-            new=AsyncMock(return_value=False),
-        ),
-        patch("src.handlers.command_handlers.openclaw_client") as mock_oc,
-        patch("src.handlers.command_handlers.config") as mock_cfg,
-        patch("src.handlers.command_handlers.get_runtime_primary_model", return_value="m"),
-        patch("psutil.Process", return_value=proc_mock),
-        patch("psutil.virtual_memory", return_value=vm_mock),
-        patch("os.getloadavg", return_value=(0.1, 0.1, 0.1)),
-        patch("subprocess.run", return_value=MagicMock(stdout="")),
-        patch("pathlib.Path.exists", return_value=False),
-        patch("src.core.memory_validator.memory_validator") as mock_mv,
-        patch("src.core.scheduler.krab_scheduler") as mock_ks,
-    ):
-        mock_oc.health_check = AsyncMock(return_value=True)
-        mock_oc.get_last_runtime_route = MagicMock(return_value={"model": "m"})
-        mock_cfg.LM_STUDIO_URL = "http://localhost:1234"
-        mock_cfg.MODEL = "m"
-        # 3 pending подтверждения
-        mock_mv.list_pending.return_value = [MagicMock(), MagicMock(), MagicMock()]
-        mock_ks.list_reminders.return_value = []
-
+    with patch(_MOCK_PATH, new=AsyncMock(return_value=data)):
         report = await _health_deep_report(bot)
 
     assert "⚠️" in report
-    # Pending !confirm: 3
     assert "Pending !confirm: 3" in report

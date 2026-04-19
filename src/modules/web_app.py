@@ -7538,6 +7538,20 @@ class WebApp:
                 result["telegram_rate_limiter"] = _rate_limiter_stats
             return result
 
+        @self.app.get("/api/health/deep")
+        async def get_health_deep():
+            """Расширенная диагностика Краба — структурированный JSON для Dashboard V4.
+
+            Зеркало !health deep (Wave 29-EE), но возвращает dict вместо markdown.
+            Включает: krab process, openclaw, lm_studio, archive_db,
+            reminders, memory_validator, sigterm_recent_count, system.
+            """
+            from ..core.health_deep_collector import collect_health_deep
+
+            userbot = self.deps.get("userbot")
+            session_start = getattr(userbot, "_session_start_time", None) if userbot else None
+            return await collect_health_deep(session_start_time=session_start)
+
         # ── Prometheus metrics ───────────────────────────────────────────────
 
         @self.app.get("/metrics")
