@@ -43,6 +43,28 @@ from .subprocess_env import clean_subprocess_env
 
 logger = get_logger(__name__)
 
+# ─── Prometheus counter ───────────────────────────────────────────────────────
+
+try:
+    from prometheus_client import Counter as _Counter
+
+    _auto_restart_skipped_high_load_total = _Counter(
+        "krab_auto_restart_skipped_high_load_total",
+        "Сколько раз restart был пропущен из-за высокой системной нагрузки",
+        ["service"],
+    )
+except Exception:  # noqa: BLE001
+    _auto_restart_skipped_high_load_total = None  # type: ignore[assignment]
+
+
+def _inc_skipped_high_load(service: str) -> None:
+    """Увеличиваем счётчик пропущенных рестартов."""
+    if _auto_restart_skipped_high_load_total is not None:
+        try:
+            _auto_restart_skipped_high_load_total.labels(service=service).inc()
+        except Exception:  # noqa: BLE001
+            pass
+
 
 # ─── Env flag ─────────────────────────────────────────────────────────────────
 
@@ -51,6 +73,24 @@ def _auto_restart_enabled() -> bool:
     """Читаем флаг AUTO_RESTART_ENABLED при каждом вызове (test-friendly)."""
     raw = os.environ.get("AUTO_RESTART_ENABLED", "").strip().lower()
     return raw in ("1", "true", "yes", "on")
+
+
+def _load_multiplier() -> float:
+    """AUTO_RESTART_LOAD_MULTIPLIER определяет порог CPU starvation (default 3.0)."""
+    try:
+        return float(os.environ.get("AUTO_RESTART_LOAD_MULTIPLIER", "3.0"))
+    except (ValueError, TypeError):
+        return 3.0
+
+
+def _system_load_too_high() -> bool:
+    """Пропустить restart если система CPU-starved (load avg > multiplier × cpu_count)."""
+    try:
+        load_1m, *_ = os.getloadavg()
+        cpu_count = os.cpu_count() or 16
+        return load_1m > _load_multiplier() * cpu_count
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # Для backward compat — некоторые old call sites читают AUTO_RESTART_ENABLED на импорте.
@@ -222,6 +262,20 @@ class AutoRestartPolicy:
         if not service_cfg:
             return False, "unknown_service"
 
+        # Пропускаем restart при CPU starvation — system сам восстановится.
+        if _system_load_too_high():
+            load_1m, *_ = os.getloadavg()
+            cpu_count = os.cpu_count() or 16
+            logger.warning(
+                "auto_restart_skipped_high_load",
+                service=service,
+                load_1m=round(load_1m, 2),
+                cpu_count=cpu_count,
+                threshold=round(_load_multiplier() * cpu_count, 2),
+            )
+            _inc_skipped_high_load(service)
+            return False, "high_load"
+
         if self._is_on_cooldown(service):
             return False, "cooldown"
 
@@ -296,4 +350,6 @@ __all__ = [
     "bootstrap_service_if_unloaded",
     "is_auto_restart_enabled",
     "is_service_loaded_in_launchd",
+    "_load_multiplier",
+    "_system_load_too_high",
 ]
