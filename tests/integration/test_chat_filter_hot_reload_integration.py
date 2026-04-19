@@ -203,6 +203,39 @@ class TestRaceConditions:
             pass
 
 
+class TestSetModeExternalEdits:
+    """Test set_mode() awareness of external edits."""
+
+    def test_set_mode_aware_of_external_edits(self, fresh_config):
+        """set_mode() должен подтянуть внешние изменения перед записью.
+
+        Сценарий: внешний процесс добавил правило для chat "ext".
+        Затем set_mode() меняет другой чат "own".
+        Правило "ext" НЕ должно быть затёрто.
+        """
+        import time
+
+        cfg = fresh_config
+
+        # Внешний процесс пишет правило для "ext"
+        _write_config(
+            cfg._path,
+            {"ext": {"mode": "muted", "updated_at": time.time(), "note": "external"}},
+        )
+        # Откатить кэш — имитируем что внешняя запись была позже нашего _last_mtime
+        _backdated(cfg)
+
+        # Наш процесс вызывает set_mode для другого чата
+        cfg.set_mode("own", "active")
+
+        # Внешнее правило должно сохраниться
+        assert cfg.get_mode("ext", is_group=True) == "muted", (
+            "set_mode() должен вызвать _maybe_reload() и не затереть внешние правила"
+        )
+        # Наше правило тоже должно быть записано
+        assert cfg.get_mode("own", is_group=True) == "active"
+
+
 class TestMaybeReloadHook:
     """Test _maybe_reload() integration in get_mode()."""
 

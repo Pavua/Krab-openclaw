@@ -147,6 +147,8 @@ class ChatFilterConfig:
         """
         if mode not in VALID_MODES:
             raise ValueError(f"Invalid mode: {mode!r}. Valid: {sorted(VALID_MODES)}")
+        # Сначала подтягиваем внешние изменения — не затираем правки других процессов
+        self._maybe_reload()
         cid = str(chat_id)
         self._rules[cid] = ChatFilterRule(
             chat_id=cid, mode=mode, updated_at=time.time(), note=note
