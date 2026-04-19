@@ -383,3 +383,108 @@ def test_metrics_chat_windows_zero_when_empty():
     assert "krab_chat_windows_active 0" in text
 
     chat_window_manager._windows.clear()
+
+
+# ---------------------------------------------------------------------------
+# krab_auto_restart_attempts_total
+# ---------------------------------------------------------------------------
+
+
+def test_auto_restart_attempts_counter_increments():
+    """_inc_attempts_total увеличивает счётчик по service."""
+    from src.core.auto_restart_policy import _attempts_total, _inc_attempts_total
+
+    _attempts_total.clear()
+    _inc_attempts_total("openclaw_gateway")
+    _inc_attempts_total("openclaw_gateway")
+    _inc_attempts_total("mcp_yung_nagato")
+
+    assert _attempts_total["openclaw_gateway"] == 2
+    assert _attempts_total["mcp_yung_nagato"] == 1
+    _attempts_total.clear()
+
+
+def test_auto_restart_attempts_appear_in_metrics():
+    """krab_auto_restart_attempts_total попадает в prometheus output."""
+    from src.core.auto_restart_policy import _attempts_total, _inc_attempts_total
+
+    _attempts_total.clear()
+    _inc_attempts_total("test_service")
+
+    from src.core.prometheus_metrics import collect_metrics
+
+    text = collect_metrics()
+    assert "krab_auto_restart_attempts_total" in text
+    assert 'service="test_service"' in text
+
+    _attempts_total.clear()
+
+
+def test_auto_restart_attempts_empty_not_in_metrics():
+    """Если попыток не было — метрика не добавляется в output."""
+    from src.core.auto_restart_policy import _attempts_total
+
+    _attempts_total.clear()
+
+    from src.core.prometheus_metrics import collect_metrics
+
+    text = collect_metrics()
+    # Метрика должна отсутствовать когда нет данных
+    assert "krab_auto_restart_attempts_total" not in text
+
+
+def test_auto_restart_mark_attempt_increments_counter():
+    """AutoRestartPolicy._mark_attempt вызывает _inc_attempts_total."""
+    from src.core.auto_restart_policy import AutoRestartPolicy, _attempts_total
+
+    _attempts_total.clear()
+    policy = AutoRestartPolicy()
+    policy._mark_attempt("inbox_watcher")
+    policy._mark_attempt("inbox_watcher")
+
+    assert _attempts_total.get("inbox_watcher", 0) == 2
+    _attempts_total.clear()
+
+
+# ---------------------------------------------------------------------------
+# krab_llm_route_latency_seconds — инкремент из openclaw_client._openclaw_completion_once
+# ---------------------------------------------------------------------------
+
+
+def test_llm_latency_observe_via_tracker():
+    """llm_latency_tracker.observe корректно записывает данные для histogram."""
+    from src.core.llm_latency_tracker import llm_latency_tracker
+
+    llm_latency_tracker.reset()
+    llm_latency_tracker.observe(provider="google", model="gemini-3-pro", duration_s=1.5)
+
+    snapshot = llm_latency_tracker.snapshot()
+    assert len(snapshot) == 1
+    s = snapshot[0]
+    assert s["provider"] == "google"
+    assert s["model"] == "gemini-3-pro"
+    assert s["count"] == 1
+    assert abs(s["sum"] - 1.5) < 1e-6
+    # Bucket <=1.0 = 0, <=2.5 = 1
+    assert s["buckets"]["1.0"] == 0
+    assert s["buckets"]["2.5"] == 1
+
+    llm_latency_tracker.reset()
+
+
+def test_llm_latency_histogram_in_metrics_output():
+    """После observe — krab_llm_route_latency_seconds_bucket появляется в /metrics."""
+    from src.core.llm_latency_tracker import llm_latency_tracker
+
+    llm_latency_tracker.reset()
+    llm_latency_tracker.observe(provider="local", model="qwen3-30b", duration_s=3.0)
+
+    from src.core.prometheus_metrics import collect_metrics
+
+    text = collect_metrics()
+    assert "krab_llm_route_latency_seconds_bucket" in text
+    assert 'provider="local"' in text
+    assert 'model="qwen3-30b"' in text
+    assert "krab_llm_route_latency_seconds_count" in text
+
+    llm_latency_tracker.reset()

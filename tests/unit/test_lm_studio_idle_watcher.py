@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Тесты LmStudioIdleWatcher: idle-unload логика, env-gate, counter."""
+"""Тесты LmStudioIdleWatcher: idle-unload логика, env-gate, counter, bootstrap."""
 
 from __future__ import annotations
 
@@ -13,7 +13,9 @@ from src.core.lm_studio_idle_watcher import (
     LmStudioIdleWatcher,
     _get_threshold_sec,
     _is_enabled,
+    configure,
     get_idle_unloads_total,
+    get_watcher,
 )
 
 # ---------------------------------------------------------------------------
@@ -173,3 +175,69 @@ async def test_start_stop_task_lifecycle() -> None:
         # Даём asyncio обработать отмену
         await asyncio.sleep(0)
         assert watcher._task.done()
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap: configure() / get_watcher() — паттерн singleton
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_configure_creates_singleton_and_starts() -> None:
+    """configure() возвращает watcher, get_watcher() возвращает тот же объект."""
+    import src.core.lm_studio_idle_watcher as mod
+
+    mm = _make_mm(current_model=None)
+    prev = mod._watcher
+    try:
+        w = configure(mm)
+        assert w is get_watcher()
+        assert w._task is not None
+        assert not w._task.done()
+    finally:
+        # Останавливаем task и восстанавливаем состояние
+        w.stop()
+        await asyncio.sleep(0)
+        mod._watcher = prev
+
+
+@pytest.mark.asyncio
+async def test_configure_replaces_existing_watcher() -> None:
+    """Повторный вызов configure() останавливает старый watcher и создаёт новый."""
+    import src.core.lm_studio_idle_watcher as mod
+
+    mm = _make_mm(current_model=None)
+    prev = mod._watcher
+    try:
+        w1 = configure(mm)
+        old_task = w1._task
+
+        w2 = configure(mm)
+        # старый task должен быть отменён
+        await asyncio.sleep(0)
+        assert old_task is None or old_task.done()
+        # новый watcher отличается (или тот же объект, но пересоздан)
+        assert w2 is get_watcher()
+    finally:
+        get_watcher().stop()  # type: ignore[union-attr]
+        await asyncio.sleep(0)
+        mod._watcher = prev
+
+
+@pytest.mark.asyncio
+async def test_watcher_stop_via_get_watcher() -> None:
+    """get_watcher().stop() корректно завершает task."""
+    import src.core.lm_studio_idle_watcher as mod
+
+    mm = _make_mm(current_model=None)
+    prev = mod._watcher
+    try:
+        configure(mm)
+        w = get_watcher()
+        assert w is not None
+        assert not w._task.done()  # type: ignore[union-attr]
+
+        w.stop()
+        await asyncio.sleep(0)
+        assert w._task.done()  # type: ignore[union-attr]
+    finally:
+        mod._watcher = prev

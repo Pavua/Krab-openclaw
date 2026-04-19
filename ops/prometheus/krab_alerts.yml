@@ -32,51 +32,6 @@ groups:
           summary: "archive.db > 1 GB"
           description: "Memory Layer archive exceeded critical threshold, prune required"
 
-      - alert: MemoryQueryLatencyHigh
-        expr: histogram_quantile(0.95, rate(krab_memory_query_duration_seconds_bucket[5m])) > 2.0
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Memory query p95 latency > 2s"
-          description: "Memory Layer queries slow, check archive size and embeddings"
-
-      - alert: MessageBatcherBackpressure
-        expr: krab_message_batcher_queue_depth > 500
-        for: 3m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Message batcher queue depth > 500"
-          description: "Backpressure on message ingest pipeline"
-
-      - alert: LLMErrorRateHigh
-        expr: rate(krab_llm_errors_total[5m]) > 0.1
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "LLM error rate > 0.1/sec"
-          description: "Provider instability, check cloud gateway and LM Studio"
-
-      - alert: CommandHandlerErrors
-        expr: rate(krab_command_errors_total[5m]) > 0.05
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Command handler error rate > 0.05/sec"
-          description: "Userbot command pipeline failing, inspect logs"
-
-      - alert: TelegramRateLimited
-        expr: increase(krab_telegram_flood_wait_total[15m]) > 5
-        for: 1m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Telegram FLOOD_WAIT > 5 occurrences in 15m"
-          description: "Telegram API rate limiter active, slow down userbot actions"
-
       - alert: MemoryValidatorPendingHigh
         expr: krab_memory_validator_pending > 10
         for: 10m
@@ -130,3 +85,21 @@ groups:
         annotations:
           summary: "Memory confirm failures at {{ $value }}/sec"
           description: "User часто использует !reset вместо !confirm — UX friction"
+
+      - alert: LLMRouteLatencyHigh
+        expr: histogram_quantile(0.95, rate(krab_llm_route_latency_seconds_bucket[5m])) > 10.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM route p95 latency > 10s"
+          description: "Provider {{ $labels.provider }} / {{ $labels.model }} отвечает медленно"
+
+      - alert: KrabAutoRestartSpiking
+        expr: rate(krab_auto_restart_attempts_total[10m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Auto-restart attempts > 0.1/sec за 10 мин"
+          description: "Service {{ $labels.service }} нестабилен — нужен manual investigation"

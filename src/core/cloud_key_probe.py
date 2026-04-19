@@ -14,12 +14,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+# TTL кеша успешных результатов probe (секунды)
+_PROBE_CACHE_TTL = 60.0
+
+# Внешний таймаут обёртки wait_for (секунды)
+_PROBE_OUTER_TIMEOUT = 15.0
+
+# Кеш: (api_key, key_source, key_tier) -> (CloudProbeResult, timestamp)
+_probe_ok_cache: dict[tuple[str, str, str], tuple[Any, float]] = {}
 
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 PREFERRED_GEMINI_PROBE_MODELS = (
@@ -134,34 +145,15 @@ def _pick_probe_model(preferred_model: str, available_models: set[str]) -> str:
     return candidate or DEFAULT_GEMINI_MODEL
 
 
-async def probe_gemini_key(
-    api_key: str | None,
+async def _do_probe(
+    api_key: str,
     *,
     key_source: str,
     key_tier: str,
-    timeout: float = 12.0,
-    model: str = DEFAULT_GEMINI_MODEL,
+    timeout: float,
+    model: str,
 ) -> CloudProbeResult:
-    """Проверяет ключ Gemini двумя шагами: list models + generate."""
-    if not api_key:
-        return CloudProbeResult(
-            provider_status="missing",
-            key_source=key_source,
-            key_tier=key_tier,
-            semantic_error_code="missing_api_key",
-            recovery_action="configure_key",
-        )
-
-    if not is_ai_studio_key(api_key):
-        return CloudProbeResult(
-            provider_status="invalid",
-            key_source=key_source,
-            key_tier=key_tier,
-            semantic_error_code="unsupported_key_type",
-            recovery_action="replace_with_aistudio_key",
-            detail="Ожидается API key формата AIza...",
-        )
-
+    """Внутренняя реализация HTTP-probe (без таймаута-обёртки и кеша)."""
     params = {"key": api_key}
     list_url = "https://generativelanguage.googleapis.com/v1beta/models"
     try:
@@ -219,6 +211,78 @@ async def probe_gemini_key(
             recovery_action="retry_or_fallback",
             detail=str(exc),
         )
+
+
+async def probe_gemini_key(
+    api_key: str | None,
+    *,
+    key_source: str,
+    key_tier: str,
+    timeout: float = 12.0,
+    model: str = DEFAULT_GEMINI_MODEL,
+) -> CloudProbeResult:
+    """
+    Проверяет ключ Gemini двумя шагами: list models + generate.
+
+    Поведение при event loop contention:
+    - Оборачиваем весь probe в asyncio.wait_for(_PROBE_OUTER_TIMEOUT).
+    - TimeoutError → probe_timeout (не network_error), кеш tier не засоряется.
+    - Успешные результаты кешируются на _PROBE_CACHE_TTL секунд.
+    """
+    if not api_key:
+        return CloudProbeResult(
+            provider_status="missing",
+            key_source=key_source,
+            key_tier=key_tier,
+            semantic_error_code="missing_api_key",
+            recovery_action="configure_key",
+        )
+
+    if not is_ai_studio_key(api_key):
+        return CloudProbeResult(
+            provider_status="invalid",
+            key_source=key_source,
+            key_tier=key_tier,
+            semantic_error_code="unsupported_key_type",
+            recovery_action="replace_with_aistudio_key",
+            detail="Ожидается API key формата AIza...",
+        )
+
+    # Проверяем кеш успешных результатов
+    cache_key = (api_key, key_source, key_tier)
+    cached = _probe_ok_cache.get(cache_key)
+    if cached is not None:
+        cached_result, cached_at = cached
+        if (time.monotonic() - cached_at) < _PROBE_CACHE_TTL:
+            return cached_result
+
+    try:
+        result = await asyncio.wait_for(
+            _do_probe(
+                api_key,
+                key_source=key_source,
+                key_tier=key_tier,
+                timeout=timeout,
+                model=model,
+            ),
+            timeout=_PROBE_OUTER_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        # Зависание event loop — не сигнализируем network_error
+        return CloudProbeResult(
+            provider_status="timeout",
+            key_source=key_source,
+            key_tier=key_tier,
+            semantic_error_code="probe_timeout",
+            recovery_action="retry_later",
+            detail=f"probe timed out after {_PROBE_OUTER_TIMEOUT}s",
+        )
+
+    # Кешируем только успешный результат
+    if result.provider_status == "ok":
+        _probe_ok_cache[cache_key] = (result, time.monotonic())
+
+    return result
 
 
 def default_openclaw_models_path() -> Path:

@@ -170,18 +170,15 @@ def collect_metrics() -> str:
 
     # === Auto-restart ===
     try:
-        from src.core.auto_restart_policy import (
-            auto_restart_manager,  # type: ignore[import-not-found]
-        )
+        from src.core.auto_restart_policy import _attempts_total as _arp_attempts
 
-        for svc_name, state in getattr(auto_restart_manager, "_states", {}).items():
-            attempts = getattr(state, "attempts", []) or []
+        for svc_name, attempt_count in _arp_attempts.items():
             lines.append(
                 _format_metric(
                     "krab_auto_restart_attempts_total",
-                    len(attempts),
+                    attempt_count,
                     labels={"service": str(svc_name)[:50]},
-                    help_text="Auto-restart attempts last hour",
+                    help_text="Total auto-restart attempts since process start",
                     mtype="counter",
                 )
             )
@@ -229,8 +226,7 @@ def collect_metrics() -> str:
                 lines.append(f"{metric_name}_bucket{{{label_str}}} {cnt}")
             # sum / count
             label_str_base = (
-                f'provider="{_sanitize_label(provider)}",'
-                f'model="{_sanitize_label(model)}"'
+                f'provider="{_sanitize_label(provider)}",model="{_sanitize_label(model)}"'
             )
             lines.append(f"{metric_name}_sum{{{label_str_base}}} {series['sum']:.6f}")
             lines.append(f"{metric_name}_count{{{label_str_base}}} {series['count']}")

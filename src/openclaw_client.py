@@ -2141,6 +2141,16 @@ class OpenClawClient:
         _elapsed_ms = (time.monotonic() - _t0) * 1000
         metrics.add_latency(_elapsed_ms)
         metrics.inc("llm_success")
+        # Записываем latency в Prometheus histogram
+        try:
+            from src.core.llm_latency_tracker import llm_latency_tracker as _llt
+
+            _parts = str(model_id).split("/", 1)
+            _provider_tag = _parts[0] if len(_parts) == 2 else "unknown"
+            _model_tag = _parts[1] if len(_parts) == 2 else str(model_id)
+            _llt.observe(provider=_provider_tag, model=_model_tag, duration_s=_elapsed_ms / 1000.0)
+        except Exception:  # noqa: BLE001
+            pass
         return full_response.strip()
 
     async def _resolve_local_model_for_retry(
@@ -2250,7 +2260,9 @@ class OpenClawClient:
             normalized = str(candidate or "").strip()
             if not normalized or normalized == str(current_model or "").strip():
                 continue
-            if _supports_vision(normalized) and self._is_cloud_candidate_usable(normalized, model_manager):
+            if _supports_vision(normalized) and self._is_cloud_candidate_usable(
+                normalized, model_manager
+            ):
                 return normalized
         return ""
 
@@ -2555,10 +2567,7 @@ class OpenClawClient:
                 self._sessions[chat_id].append(
                     {"role": "system", "content": effective_system_prompt}
                 )
-            elif (
-                effective_system_prompt
-                and self._sessions[chat_id][0].get("role") != "system"
-            ):
+            elif effective_system_prompt and self._sessions[chat_id][0].get("role") != "system":
                 self._sessions[chat_id].insert(
                     0, {"role": "system", "content": effective_system_prompt}
                 )
@@ -2577,18 +2586,14 @@ class OpenClawClient:
             if _nonce and system_prompt and self._sessions[chat_id]:
                 first_msg = self._sessions[chat_id][0]
                 if isinstance(first_msg, dict) and first_msg.get("role") == "system":
-                    first_msg["content"] = (
-                        f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
-                    )
+                    first_msg["content"] = f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
                 else:
                     # Нет system-сообщения — вставим его с nonce.
                     self._sessions[chat_id].insert(
                         0,
                         {
                             "role": "system",
-                            "content": (
-                                f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
-                            ),
+                            "content": (f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"),
                         },
                     )
                 # Consume nonce после применения: чтобы не обновлять system при каждом запросе.

@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import threading as _threading
 import time
 from pathlib import Path
 from typing import Any
@@ -43,7 +44,7 @@ from .subprocess_env import clean_subprocess_env
 
 logger = get_logger(__name__)
 
-# ─── Prometheus counter ───────────────────────────────────────────────────────
+# ─── Prometheus counters ─────────────────────────────────────────────────────
 
 try:
     from prometheus_client import Counter as _Counter
@@ -64,6 +65,18 @@ def _inc_skipped_high_load(service: str) -> None:
             _auto_restart_skipped_high_load_total.labels(service=service).inc()
         except Exception:  # noqa: BLE001
             pass
+
+
+# Thread-safe счётчик попыток рестарта — читается prometheus_metrics.collect_metrics()
+_attempts_lock = _threading.Lock()
+# service_name → int
+_attempts_total: dict[str, int] = {}
+
+
+def _inc_attempts_total(service: str) -> None:
+    """Инкремент счётчика попыток restart (для Prometheus krab_auto_restart_attempts_total)."""
+    with _attempts_lock:
+        _attempts_total[service] = _attempts_total.get(service, 0) + 1
 
 
 # ─── Env flag ─────────────────────────────────────────────────────────────────
@@ -248,6 +261,7 @@ class AutoRestartPolicy:
 
     def _mark_attempt(self, service: str) -> None:
         self._last_attempt[service] = time.monotonic()
+        _inc_attempts_total(service)
 
     async def attempt_restart(self, service: str) -> tuple[bool, str]:
         """
