@@ -308,7 +308,7 @@ def test_metrics_include_chat_filter_modes():
     from src.core.chat_filter_config import chat_filter_config
 
     # Сбросим состояние
-    chat_filter_config._modes.clear()
+    chat_filter_config._rules.clear()
     chat_filter_config.set_mode("chat_a", "muted")
     chat_filter_config.set_mode("chat_b", "mention-only")
 
@@ -319,14 +319,14 @@ def test_metrics_include_chat_filter_modes():
     assert 'mode="muted"' in text
     assert 'mode="mention-only"' in text
 
-    chat_filter_config._modes.clear()
+    chat_filter_config._rules.clear()
 
 
 def test_metrics_chat_filter_empty_when_no_overrides():
     """Если нет явных режимов — метрика не падает."""
     from src.core.chat_filter_config import chat_filter_config
 
-    chat_filter_config._modes.clear()
+    chat_filter_config._rules.clear()
 
     from src.core.prometheus_metrics import collect_metrics
 
@@ -341,7 +341,7 @@ def test_metrics_include_chat_windows():
     chat_window_manager._windows.clear()
     chat_window_manager.get_or_create("test_cw_1")
     chat_window_manager.get_or_create("test_cw_2")
-    chat_window_manager.get_or_create("test_cw_1").push({"text": "hello"})
+    chat_window_manager.get_or_create("test_cw_1").append_message("user", "hello")
 
     from src.core.prometheus_metrics import collect_metrics
 
@@ -360,7 +360,7 @@ def test_metrics_chat_windows_counts_messages():
     chat_window_manager._windows.clear()
     w = chat_window_manager.get_or_create("cnt_test")
     for i in range(5):
-        w.push({"id": i})
+        w.append_message("user", f"msg_{i}")
 
     stats = chat_window_manager.stats()
     assert stats["total_messages"] == 5
