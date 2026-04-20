@@ -1,5 +1,5 @@
 ---
-name: krab-weekly-recap
+name: krab-openclaw-weekly-recap
 description: Weekly recap + Canva infographic generation
 ---
 

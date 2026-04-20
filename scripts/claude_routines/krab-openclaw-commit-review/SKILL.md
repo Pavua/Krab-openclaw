@@ -1,5 +1,5 @@
 ---
-name: krab-commit-review
+name: krab-openclaw-commit-review
 description: Daily commit review of Krab main — flag concerns to Linear
 ---
 

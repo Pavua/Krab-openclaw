@@ -1,5 +1,5 @@
 ---
-name: krab-lunch-status
+name: krab-openclaw-lunch-status
 description: Weekday lunch-time Krab ecosystem quick digest
 ---
 

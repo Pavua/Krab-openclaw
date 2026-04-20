@@ -1,5 +1,5 @@
 ---
-name: krab-monthly-arch
+name: krab-openclaw-monthly-arch
 description: Monthly architecture diagram refresh via Canva
 ---
 

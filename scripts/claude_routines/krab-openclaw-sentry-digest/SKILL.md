@@ -1,5 +1,5 @@
 ---
-name: krab-sentry-digest
+name: krab-openclaw-sentry-digest
 description: Daily Sentry unresolved errors digest for Krab
 ---
 

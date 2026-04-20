@@ -1,5 +1,5 @@
 ---
-name: krab-evening-cleanup
+name: krab-openclaw-evening-cleanup
 description: Evening Linear auto-close — match commits to issues
 ---
 

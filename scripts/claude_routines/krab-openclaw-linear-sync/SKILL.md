@@ -1,5 +1,5 @@
 ---
-name: krab-linear-sync
+name: krab-openclaw-linear-sync
 description: Daily Linear status sync for Krab project
 ---
 
