@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Routine #Backend Log Scanner (launchd, FREE — не тратит CronCreate quota)
+
+        Scans openclaw.log каждые 4 часа на anomaly patterns:
+        errors, timeouts, leak signatures, SIGTERM loops, FloodWait, LLM timeouts.
+
+        Alerts через Sentry DSN HTTP endpoint (silent skip если DSN не задан).
+
+        Install:
+          launchctl bootstrap gui/501 \
+            /Users/pablito/Antigravity_AGENTS/Краб/scripts/launchagents/ai.krab.backend-log-scanner.plist
+    -->
+    <key>Label</key>
+    <string>ai.krab.backend-log-scanner</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/krab_backend_log_scanner.py</string>
+    </array>
+
+    <!-- 4 часа = 14400 sec -->
+    <key>StartInterval</key>
+    <integer>14400</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/krab_backend_log_scanner_stderr.log</string>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
