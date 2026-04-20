@@ -306,6 +306,13 @@ class Config:
     OWNER_USER_IDS: list[str] = [
         u.strip() for u in os.getenv("OWNER_USER_IDS", "").split(",") if u.strip()
     ]
+    # Sentry — runtime error tracking.
+    # DSN из ~/.env. Если пустой — Sentry не инициализируется, работа продолжается без трекинга.
+    # Seer AI analysis доступен через MCP mcp__sentry__analyze_issue_with_seer.
+    SENTRY_DSN: str = os.getenv("SENTRY_DSN", "").strip()
+    KRAB_ENV: str = os.getenv("KRAB_ENV", "dev").strip()
+    SENTRY_TRACES_SAMPLE_RATE: float = float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1"))
+    SENTRY_PROFILES_SAMPLE_RATE: float = float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", "0.1"))
     FULL_ACCESS_USERS: list[str] = [
         u.strip().lstrip("@")
         for u in os.getenv("FULL_ACCESS_USERS", os.getenv("ALLOWED_USERS", "pablito,admin")).split(
