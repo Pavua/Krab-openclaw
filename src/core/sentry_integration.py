@@ -64,13 +64,45 @@ def _redact_dict(d: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
-    """
-    Sentry hook: редактирует PII в event перед отправкой.
+def _is_noise_event(event: dict[str, Any]) -> bool:
+    """Фильтр известных "шумных" событий, которые НЕ indicate actionable bug.
 
-    Может вернуть None чтобы drop event целиком (если слишком опасный).
+    Примеры:
+    - pyrogram Session.restart() после graceful Client.stop() — закрытая storage
+      (это benign race во время shutdown, не runtime bug)
+    - asyncio task cancelled during shutdown
     """
     try:
+        exception_values = (event.get("exception") or {}).get("values") or []
+        for ex in exception_values:
+            value = str(ex.get("value", ""))
+            frames = (ex.get("stacktrace") or {}).get("frames") or []
+            filenames = " ".join(str(f.get("filename", "")) for f in frames)
+
+            # pyrogram graceful shutdown noise
+            if "Cannot operate on a closed database" in value and "pyrogram/session" in filenames:
+                return True
+            # asyncio CancelledError во время shutdown
+            if "CancelledError" in value and "Session.restart" in " ".join(
+                str(f.get("function", "")) for f in frames
+            ):
+                return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
+def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
+    """
+    Sentry hook: редактирует PII в event перед отправкой + фильтрует noise.
+
+    Может вернуть None чтобы drop event целиком.
+    """
+    try:
+        # Фильтр известного benign noise (pyrogram shutdown race, etc.)
+        if _is_noise_event(event):
+            return None
+
         # Redact message
         if "message" in event and isinstance(event["message"], str):
             event["message"] = _redact_string(event["message"])
