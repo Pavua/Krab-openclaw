@@ -151,6 +151,11 @@ class WebApp:
         # поэтому write-path панели использует отдельный короткий cache.
         self._model_catalog_cache: tuple[float, dict[str, Any]] | None = None
         self._vg_subscriber: VoiceGatewayEventSubscriber | None = None
+        # Глобальный лимит параллельных openclaw CLI subprocess'ов.
+        # Защита от утечек при одновременных polling запросах.
+        _cli_budget = int(os.getenv("OPENCLAW_CLI_SPAWN_BUDGET", "3"))
+        self._openclaw_cli_sem = asyncio.Semaphore(_cli_budget)
+        logger.info("openclaw_cli_semaphore_init", budget=_cli_budget)
         self._setup_routes()
 
     @property
@@ -2629,54 +2634,71 @@ class WebApp:
         - owner-панель получает truthful state ровно из того же CLI-контура,
           который пользователь может вызвать вручную.
         """
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "openclaw",
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env=self._openclaw_cli_env(),
-            )
+        async with self._openclaw_cli_sem:
             try:
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            except asyncio.TimeoutError:
-                if proc.returncode is None:
-                    try:
-                        proc.terminate()
-                    except ProcessLookupError:
-                        pass
+                proc = await asyncio.create_subprocess_exec(
+                    "openclaw",
+                    *args,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=self._openclaw_cli_env(),
+                )
+                try:
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    if proc.returncode is None:
+                        try:
+                            proc.terminate()
+                        except ProcessLookupError:
+                            pass
+                        else:
+                            # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
+                            try:
+                                await asyncio.wait_for(proc.wait(), timeout=2.0)
+                            except asyncio.TimeoutError:
+                                try:
+                                    proc.kill()
+                                except ProcessLookupError:
+                                    pass
+                                try:
+                                    await asyncio.wait_for(proc.wait(), timeout=1.0)
+                                except asyncio.TimeoutError:
+                                    logger.warning(
+                                        "openclaw_cli_force_killed_but_no_reap",
+                                        pid=proc.pid,
+                                    )
+                    return {
+                        "ok": False,
+                        "error": "openclaw_timeout",
+                        "detail": f"Команда openclaw {' '.join(args)} превысила {int(timeout)} сек.",
+                        "exit_code": None,
+                        "raw": "",
+                    }
+            except Exception as exc:
                 return {
                     "ok": False,
-                    "error": "openclaw_timeout",
-                    "detail": f"Команда openclaw {' '.join(args)} превысила {int(timeout)} сек.",
+                    "error": "openclaw_exec_failed",
+                    "detail": str(exc),
                     "exit_code": None,
                     "raw": "",
                 }
-        except Exception as exc:
-            return {
-                "ok": False,
-                "error": "openclaw_exec_failed",
-                "detail": str(exc),
-                "exit_code": None,
-                "raw": "",
+
+            raw_output = stdout.decode("utf-8", errors="replace")
+            result: dict[str, Any] = {
+                "ok": proc.returncode == 0,
+                "exit_code": proc.returncode,
+                "raw": raw_output,
             }
+            if not expect_json:
+                return result
 
-        raw_output = stdout.decode("utf-8", errors="replace")
-        result: dict[str, Any] = {
-            "ok": proc.returncode == 0,
-            "exit_code": proc.returncode,
-            "raw": raw_output,
-        }
-        if not expect_json:
+            try:
+                result["data"] = json.loads(raw_output or "{}")
+            except Exception as exc:
+                result["ok"] = False
+                result["error"] = "openclaw_json_parse_failed"
+                result["detail"] = f"Не удалось распарсить JSON ответа openclaw: {exc}"
             return result
-
-        try:
-            result["data"] = json.loads(raw_output or "{}")
-        except Exception as exc:
-            result["ok"] = False
-            result["error"] = "openclaw_json_parse_failed"
-            result["detail"] = f"Не удалось распарсить JSON ответа openclaw: {exc}"
-        return result
 
     @staticmethod
     def _normalize_openclaw_cron_job(job: dict[str, Any]) -> dict[str, Any]:
@@ -6128,40 +6150,57 @@ class WebApp:
         timeout_sec: float = 12.0,
     ) -> tuple[dict[str, Any], str]:
         """Запускает `openclaw ... --json` и безопасно возвращает `(payload, error)`."""
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "openclaw",
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=self._openclaw_cli_env(),
-            )
-        except Exception as exc:
-            return {}, f"cli_spawn_failed: {exc}"
+        async with self._openclaw_cli_sem:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "openclaw",
+                    *args,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=self._openclaw_cli_env(),
+                )
+            except Exception as exc:
+                return {}, f"cli_spawn_failed: {exc}"
 
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
-        except asyncio.TimeoutError:
-            if proc.returncode is None:
-                try:
-                    proc.terminate()
-                except ProcessLookupError:
-                    pass
-            return {}, "cli_timeout"
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
+            except asyncio.TimeoutError:
+                if proc.returncode is None:
+                    try:
+                        proc.terminate()
+                    except ProcessLookupError:
+                        pass
+                    else:
+                        # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=2.0)
+                        except asyncio.TimeoutError:
+                            try:
+                                proc.kill()
+                            except ProcessLookupError:
+                                pass
+                            try:
+                                await asyncio.wait_for(proc.wait(), timeout=1.0)
+                            except asyncio.TimeoutError:
+                                logger.warning(
+                                    "openclaw_cli_force_killed_but_no_reap",
+                                    pid=proc.pid,
+                                )
+                return {}, "cli_timeout"
 
-        stdout_text = stdout.decode("utf-8", errors="replace").strip()
-        stderr_text = stderr.decode("utf-8", errors="replace").strip()
-        if int(proc.returncode or 0) != 0:
-            return {}, stderr_text or stdout_text or f"exit_code={proc.returncode}"
-        if not stdout_text:
-            return {}, ""
-        try:
-            payload = json.loads(stdout_text)
-        except ValueError:
-            return {}, f"invalid_json_output: {self._tail_text(stdout_text, max_chars=240)}"
-        if not isinstance(payload, dict):
-            return {"raw": payload}, ""
-        return payload, ""
+            stdout_text = stdout.decode("utf-8", errors="replace").strip()
+            stderr_text = stderr.decode("utf-8", errors="replace").strip()
+            if int(proc.returncode or 0) != 0:
+                return {}, stderr_text or stdout_text or f"exit_code={proc.returncode}"
+            if not stdout_text:
+                return {}, ""
+            try:
+                payload = json.loads(stdout_text)
+            except ValueError:
+                return {}, f"invalid_json_output: {self._tail_text(stdout_text, max_chars=240)}"
+            if not isinstance(payload, dict):
+                return {"raw": payload}, ""
+            return payload, ""
 
     async def _collect_stable_browser_cli_runtime(
         self,
@@ -6248,6 +6287,22 @@ class WebApp:
                         proc.terminate()
                     except ProcessLookupError:
                         pass
+                    else:
+                        # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=2.0)
+                        except asyncio.TimeoutError:
+                            try:
+                                proc.kill()
+                            except ProcessLookupError:
+                                pass
+                            try:
+                                await asyncio.wait_for(proc.wait(), timeout=1.0)
+                            except asyncio.TimeoutError:
+                                logger.warning(
+                                    "openclaw_cli_force_killed_but_no_reap",
+                                    pid=proc.pid,
+                                )
                 gateway_probe_error = "gateway_probe_timeout"
         except Exception as exc:
             gateway_probe_error = f"gateway_probe_failed: {exc}"
@@ -11356,6 +11411,22 @@ class WebApp:
                             proc.terminate()
                         except ProcessLookupError:
                             pass
+                        else:
+                            # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
+                            try:
+                                await asyncio.wait_for(proc.wait(), timeout=2.0)
+                            except asyncio.TimeoutError:
+                                try:
+                                    proc.kill()
+                                except ProcessLookupError:
+                                    pass
+                                try:
+                                    await asyncio.wait_for(proc.wait(), timeout=1.0)
+                                except asyncio.TimeoutError:
+                                    logger.warning(
+                                        "openclaw_cli_force_killed_but_no_reap",
+                                        pid=proc.pid,
+                                    )
                     return {
                         "ok": False,
                         "error": "openclaw_timeout",
@@ -14778,6 +14849,7 @@ class WebApp:
                 IDLE_EVICTION_SEC,
                 MESSAGE_CAP_PER_WINDOW,
             )
+
             return {
                 "ok": True,
                 "capacity": CAPACITY,
@@ -14804,6 +14876,7 @@ class WebApp:
             """Выгнать окна, неактивные дольше max_age_sec."""
             self._assert_write_access(x_krab_web_key, token)
             from src.core.chat_window_manager import IDLE_EVICTION_SEC
+
             timeout = max_age_sec if max_age_sec > 0 else IDLE_EVICTION_SEC
             count = chat_window_manager.evict_idle(timeout_sec=timeout)
             return {

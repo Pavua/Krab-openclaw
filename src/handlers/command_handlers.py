@@ -4752,6 +4752,22 @@ async def _cron_run_openclaw(
                     proc.terminate()
                 except ProcessLookupError:
                     pass
+                else:
+                    # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=2.0)
+                    except asyncio.TimeoutError:
+                        try:
+                            proc.kill()
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=1.0)
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "openclaw_cli_force_killed_but_no_reap",
+                                pid=proc.pid,
+                            )
             return False, "timeout"
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
@@ -5011,9 +5027,12 @@ async def _handle_cron_quick(bot: "KraabUserbot", message: Message, args: str) -
     )
     if not ok:
         short = raw_out[:200] if raw_out else "no output"
-        logger.warning("cron_quick_create_failed_fallback_native", name=job_name, spec=cron_spec, raw=short)
+        logger.warning(
+            "cron_quick_create_failed_fallback_native", name=job_name, spec=cron_spec, raw=short
+        )
         # Fallback: сохраняем в native store (native fallback)
         from ..core.cron_native_store import add_job as _native_add_job  # noqa: PLC0415
+
         native_id = _native_add_job(cron_spec=cron_spec, prompt=prompt, job_id=job_name)
         prompt_preview = prompt[:80] + ("…" if len(prompt) > 80 else "")
         await message.reply(
@@ -5111,7 +5130,9 @@ async def _handle_cron_native(message: Message, args: str) -> None:
             await message.reply("❌ Укажи id: `!cron native enable <id>`")
             return
         ok = toggle_job(narg, enabled=True)
-        await message.reply(f"✅ Native job `{narg}` включён." if ok else f"❌ Job `{narg}` не найден.")
+        await message.reply(
+            f"✅ Native job `{narg}` включён." if ok else f"❌ Job `{narg}` не найден."
+        )
         return
 
     if nsub in {"disable", "выкл"}:
@@ -5119,7 +5140,9 @@ async def _handle_cron_native(message: Message, args: str) -> None:
             await message.reply("❌ Укажи id: `!cron native disable <id>`")
             return
         ok = toggle_job(narg, enabled=False)
-        await message.reply(f"⏸ Native job `{narg}` выключен." if ok else f"❌ Job `{narg}` не найден.")
+        await message.reply(
+            f"⏸ Native job `{narg}` выключен." if ok else f"❌ Job `{narg}` не найден."
+        )
         return
 
     await message.reply(
@@ -5394,19 +5417,31 @@ async def _handle_memory_rebuild(message: Message) -> None:
             env=clean_subprocess_env(),
         )
         try:
-            stdout, _ = await asyncio.wait_for(
-                proc.communicate(), timeout=_MEMORY_REBUILD_TIMEOUT
-            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_MEMORY_REBUILD_TIMEOUT)
         except asyncio.TimeoutError:
             if proc.returncode is None:
                 try:
                     proc.terminate()
                 except ProcessLookupError:
                     pass
+                else:
+                    # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=2.0)
+                    except asyncio.TimeoutError:
+                        try:
+                            proc.kill()
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=1.0)
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "openclaw_cli_force_killed_but_no_reap",
+                                pid=proc.pid,
+                            )
             elapsed = time.monotonic() - t0
-            await message.reply(
-                f"⚠️ Repair timeout после {elapsed:.0f}s. Проверь лог вручную."
-            )
+            await message.reply(f"⚠️ Repair timeout после {elapsed:.0f}s. Проверь лог вручную.")
             logger.warning("memory_rebuild_timeout", elapsed=elapsed)
             return
     except Exception as exc:  # noqa: BLE001
@@ -5434,9 +5469,7 @@ async def _handle_memory_rebuild(message: Message) -> None:
                 break
         tail = f"\n`{summary_line}`" if summary_line else ""
         snippet = output[-800:]
-        await message.reply(
-            f"✅ Repair done за {elapsed:.1f}s.{tail}\n\n```\n{snippet}\n```"
-        )
+        await message.reply(f"✅ Repair done за {elapsed:.1f}s.{tail}\n\n```\n{snippet}\n```")
         logger.info("memory_rebuild_done", elapsed=elapsed, returncode=0)
     else:
         snippet = output[-800:]
@@ -5449,6 +5482,7 @@ async def _handle_memory_rebuild(message: Message) -> None:
             returncode=proc.returncode,
             elapsed=elapsed,
         )
+
 
 def _collect_memory_archive_stats() -> dict[str, Any]:
     """Read-only снимок archive.db: counts + size. Graceful fallback."""
@@ -7567,6 +7601,7 @@ async def handle_bench(bot: "KraabUserbot", message: Message) -> None:
 
     # Bump command в реестр
     from ..core.command_registry import bump_command
+
     bump_command("bench")
 
     # Маппинг пресетов на количество итераций
@@ -7579,9 +7614,7 @@ async def handle_bench(bot: "KraabUserbot", message: Message) -> None:
     iterations = iterations_map.get(preset, 20)
 
     # Отправляем статус
-    await message.reply(
-        f"⏱ Benchmark `{preset}` (iterations={iterations})..."
-    )
+    await message.reply(f"⏱ Benchmark `{preset}` (iterations={iterations})...")
 
     try:
         krab_root = pathlib.Path.home() / "Antigravity_AGENTS" / "Краб"
@@ -7594,9 +7627,7 @@ async def handle_bench(bot: "KraabUserbot", message: Message) -> None:
         )
 
         # Берём последние 1500 символов для вывода
-        output = (
-            result.stdout[-1500:] if len(result.stdout) > 1500 else result.stdout
-        )
+        output = result.stdout[-1500:] if len(result.stdout) > 1500 else result.stdout
 
         if not output:
             output = "(empty output)"
@@ -7639,10 +7670,7 @@ async def _health_deep_report(bot: "KraabUserbot") -> str:
         rss_mb = krab.get("rss_mb", "?")
         cpu = krab.get("cpu_pct", "?")
         sections.append(
-            f"**Krab process**\n"
-            f"• Uptime: {uptime_str}\n"
-            f"• RSS: {rss_mb} MB\n"
-            f"• Load avg (1m): {cpu}"
+            f"**Krab process**\n• Uptime: {uptime_str}\n• RSS: {rss_mb} MB\n• Load avg (1m): {cpu}"
         )
 
     # ── 2. OpenClaw gateway ──────────────────────────────────────────────────
@@ -7655,9 +7683,7 @@ async def _health_deep_report(bot: "KraabUserbot") -> str:
         oc_icon = "✅" if oc_ok else "❌"
         oc_status = "up" if oc_ok else "offline"
         sections.append(
-            f"**OpenClaw gateway**\n"
-            f"• Status: {oc_icon} {oc_status}\n"
-            f"• Active model: `{oc_model}`"
+            f"**OpenClaw gateway**\n• Status: {oc_icon} {oc_status}\n• Active model: `{oc_model}`"
         )
 
     # ── 3. LM Studio ─────────────────────────────────────────────────────────
@@ -7718,17 +7744,13 @@ async def _health_deep_report(bot: "KraabUserbot") -> str:
     else:
         pend_count = mv.get("pending_confirm", 0)
         pend_icon = "✅" if pend_count == 0 else "⚠️"
-        sections.append(
-            f"**Memory validator** {pend_icon}\n• Pending !confirm: {pend_count}"
-        )
+        sections.append(f"**Memory validator** {pend_icon}\n• Pending !confirm: {pend_count}")
 
     # ── 7. SIGTERM log events ─────────────────────────────────────────────────
     sigterm_count = data.get("sigterm_recent_count", 0)
     if isinstance(sigterm_count, int) and sigterm_count >= 0:
         sig_icon = "✅" if sigterm_count == 0 else "⚠️"
-        sections.append(
-            f"**Log (last 500 lines)** {sig_icon}\n• SIGTERM events: {sigterm_count}"
-        )
+        sections.append(f"**Log (last 500 lines)** {sig_icon}\n• SIGTERM events: {sigterm_count}")
     elif "sigterm_error" in data:
         sections.append(f"**Log** ❌ {data['sigterm_error']}")
     else:
@@ -7802,8 +7824,7 @@ async def _swarm_status_deep_report() -> str:
     listeners_on = is_listeners_enabled()
     listener_icon = "✅ ON" if listeners_on else "🔇 OFF"
     sections.append(
-        f"**2. Listeners:** {listener_icon}\n"
-        f"  owner detection: `access_control.is_owner_user_id`"
+        f"**2. Listeners:** {listener_icon}\n  owner detection: `access_control.is_owner_user_id`"
     )
 
     # ── 3. Channels ──────────────────────────────────────────────────────────
@@ -7850,7 +7871,9 @@ async def _swarm_status_deep_report() -> str:
                 last = last.isoformat()[:16]
             elif isinstance(last, str) and len(last) > 16:
                 last = last[:16]
-            mem_lines.append(f"  {_team_emoji.get(team, '•')} {team}: {total} прогонов (послед.: {last})")
+            mem_lines.append(
+                f"  {_team_emoji.get(team, '•')} {team}: {total} прогонов (послед.: {last})"
+            )
         else:
             mem_lines.append(f"  {_team_emoji.get(team, '•')} {team}: 0 прогонов")
     sections.append("\n".join(mem_lines))
@@ -7865,7 +7888,9 @@ async def _swarm_status_deep_report() -> str:
     for st in ("pending", "in_progress", "done", "failed"):
         cnt = by_status.get(st, 0)
         if cnt:
-            st_icon = {"pending": "⏳", "in_progress": "🔄", "done": "✅", "failed": "❌"}.get(st, "•")
+            st_icon = {"pending": "⏳", "in_progress": "🔄", "done": "✅", "failed": "❌"}.get(
+                st, "•"
+            )
             task_lines.append(f"  {st_icon} {st}: {cnt}")
     # По командам
     for team in all_teams:
@@ -7896,7 +7921,7 @@ async def _swarm_status_deep_report() -> str:
     if len(report) > _limit:
         # Считаем сколько символов обрезали
         extra_chars = len(report) - _limit
-        report = report[:_limit - 40] + f"\n…(truncated {extra_chars} chars)"
+        report = report[: _limit - 40] + f"\n…(truncated {extra_chars} chars)"
     return report
 
 
@@ -7914,7 +7939,11 @@ async def handle_health(bot: "KraabUserbot", message: Message) -> None:
     from ..core.telegram_rate_limiter import telegram_rate_limiter
 
     # Проверяем субкоманду deep
-    raw_args = (bot._get_command_args(message) if hasattr(bot, "_get_command_args") else "").strip().lower()
+    raw_args = (
+        (bot._get_command_args(message) if hasattr(bot, "_get_command_args") else "")
+        .strip()
+        .lower()
+    )
     if raw_args == "deep":
         access_profile = bot._get_access_profile(message.from_user)
         if access_profile.level != AccessLevel.OWNER:
@@ -8316,9 +8345,7 @@ async def handle_archive(bot: "KraabUserbot", message: Message) -> None:
                     chunk_count = 0
                 # последняя запись по полю date
                 try:
-                    last_row = conn.execute(
-                        "SELECT MAX(date) FROM messages"
-                    ).fetchone()[0]
+                    last_row = conn.execute("SELECT MAX(date) FROM messages").fetchone()[0]
                     last_write = last_row if last_row else "—"
                 except sqlite3.OperationalError:
                     last_write = "—"
@@ -16555,6 +16582,22 @@ async def handle_whois(bot: "KraabUserbot", message: Message) -> None:
                     proc.terminate()
                 except ProcessLookupError:
                     pass
+                else:
+                    # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=2.0)
+                    except asyncio.TimeoutError:
+                        try:
+                            proc.kill()
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=1.0)
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "subprocess_force_killed_but_no_reap",
+                                pid=proc.pid,
+                            )
             await status_msg.edit(f"❌ WHOIS timeout для `{domain}` (>20 сек).")
             return
     except FileNotFoundError:

@@ -49,6 +49,9 @@ _SWARM_STALL_FACTOR: float = 2.0
 
 logger = get_logger(__name__)
 
+# Лимит одного параллельного cron probe — защита от накопления orphan Node.js процессов
+_cron_probe_sem = asyncio.Semaphore(1)
+
 
 def _now_utc_iso() -> str:
     """Возвращает timezone-aware UTC timestamp для snapshot/state."""
@@ -77,32 +80,49 @@ async def _fetch_openclaw_cron_jobs() -> list[dict[str, Any]]:
 
     Возвращает пустой список при любой ошибке — не должна ронять proactive_watch.
     """
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "openclaw",
-            "cron",
-            "list",
-            "--json",
-            "--all",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            env=clean_subprocess_env(),
-        )
+    async with _cron_probe_sem:
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20.0)
-        except asyncio.TimeoutError:
-            if proc.returncode is None:
-                try:
-                    proc.terminate()
-                except ProcessLookupError:
-                    pass
+            proc = await asyncio.create_subprocess_exec(
+                "openclaw",
+                "cron",
+                "list",
+                "--json",
+                "--all",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                env=clean_subprocess_env(),
+            )
+            try:
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20.0)
+            except asyncio.TimeoutError:
+                if proc.returncode is None:
+                    try:
+                        proc.terminate()
+                    except ProcessLookupError:
+                        pass
+                    else:
+                        # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=2.0)
+                        except asyncio.TimeoutError:
+                            try:
+                                proc.kill()
+                            except ProcessLookupError:
+                                pass
+                            try:
+                                await asyncio.wait_for(proc.wait(), timeout=1.0)
+                            except asyncio.TimeoutError:
+                                logger.warning(
+                                    "openclaw_cli_force_killed_but_no_reap",
+                                    pid=proc.pid,
+                                )
+                return []
+            raw = stdout.decode("utf-8", errors="replace").strip()
+            payload = json.loads(raw)
+            jobs = payload.get("jobs") if isinstance(payload.get("jobs"), list) else []
+            return [j for j in jobs if isinstance(j, dict)]
+        except Exception:  # noqa: BLE001
             return []
-        raw = stdout.decode("utf-8", errors="replace").strip()
-        payload = json.loads(raw)
-        jobs = payload.get("jobs") if isinstance(payload.get("jobs"), list) else []
-        return [j for j in jobs if isinstance(j, dict)]
-    except Exception:  # noqa: BLE001
-        return []
 
 
 @dataclass
@@ -581,9 +601,7 @@ class ProactiveWatchService:
                 if cmd is None:
                     entry["restart"] = {"attempted": False, "reason": "no_cmd"}
                 else:
-                    success, reason = await auto_restart_manager.attempt_restart(
-                        service, cmd
-                    )
+                    success, reason = await auto_restart_manager.attempt_restart(service, cmd)
                     entry["restart"] = {
                         "attempted": True,
                         "success": success,
@@ -610,9 +628,7 @@ class ProactiveWatchService:
     def start_auto_restart_loop(self) -> "asyncio.Task[None]":
         """Запускает фоновую задачу auto-restart и возвращает Task."""
         loop = asyncio.get_event_loop()
-        task = loop.create_task(
-            self._auto_restart_checks_loop(), name="krab_auto_restart_checks"
-        )
+        task = loop.create_task(self._auto_restart_checks_loop(), name="krab_auto_restart_checks")
         logger.info(
             "auto_restart_loop_started",
             interval_sec=self.AUTO_RESTART_CHECKS_INTERVAL_SEC,
@@ -985,7 +1001,9 @@ class ProactiveWatchService:
         Cooldown 12 часов между повторными alert'ами (дедупе по state_key).
         Возвращает True если алерт сработал.
         """
-        db_path = Path(os.environ.get("ARCHIVE_DB_PATH", "~/.openclaw/krab_memory/archive.db")).expanduser()
+        db_path = Path(
+            os.environ.get("ARCHIVE_DB_PATH", "~/.openclaw/krab_memory/archive.db")
+        ).expanduser()
         if not db_path.exists():
             return False
 
