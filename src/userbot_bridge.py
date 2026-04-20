@@ -24,7 +24,7 @@ from typing import Any, Optional
 from pyrogram import Client, enums, filters
 from pyrogram.types import Message
 
-from .config import config
+from .config import config, emit_deprecation_warnings
 from .core import lm_studio_idle_watcher as _lm_idle_watcher
 from .core.access_control import (
     USERBOT_KNOWN_COMMANDS,
@@ -1851,6 +1851,8 @@ class KraabUserbot(
         """Запуск юзербота"""
         self._set_startup_state(state="starting")
         logger.info("starting_userbot")
+        # Предупреждения об устаревших конфигурациях (один раз при старте).
+        emit_deprecation_warnings()
         # Persisted chat ban cache (B.8) + chat capability cache (B.6).
         # Оба persist путь в ~/.openclaw/krab_runtime_state/, совпадая с
         # swarm_channels.json / inbox_state.json / krab_main.log. Конфигурируется

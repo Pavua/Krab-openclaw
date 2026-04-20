@@ -1,0 +1,1118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Costs — Krab AI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --glass-bg:       rgba(255,255,255,0.06);
+            --glass-bg-hover: rgba(255,255,255,0.10);
+            --glass-border:   rgba(255,255,255,0.10);
+            --glass-blur:     40px;
+            --glass-specular: inset 0 0.5px 0 rgba(255,255,255,0.12);
+            --glass-shadow:   0 8px 40px rgba(0,0,0,0.25);
+            --bg-primary:     #0a0a1a;
+            --accent-cyan:    #7dd3fc;
+            --accent-purple:  #a78bfa;
+            --accent-green:   #34d399;
+            --accent-red:     #f87171;
+            --accent-yellow:  #fbbf24;
+            --radius-card:    20px;
+            --radius-btn:     12px;
+        }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--bg-primary);
+            background-image:
+                radial-gradient(circle at 15% 50%, rgba(125,211,252,0.15), transparent 35%),
+                radial-gradient(circle at 85% 30%, rgba(167,139,250,0.15), transparent 35%),
+                radial-gradient(circle at 50% 80%, rgba(52,211,153,0.05), transparent 40%);
+            background-attachment: fixed;
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Outfit', system-ui, sans-serif;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            overflow-x: hidden;
+            padding-bottom: 80px;
+        }
+        .glass-nav {
+            position: sticky; top: 0; height: 56px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+            -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+            border-bottom: 1px solid var(--glass-border);
+            box-shadow: var(--glass-specular);
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 2rem; z-index: 200;
+        }
+        .nav-logo { font-weight: 700; color: var(--accent-cyan); font-size: 1.25rem; letter-spacing: -0.5px; }
+        .nav-links { display: flex; align-items: center; gap: 0.25rem; }
+        .nav-link {
+            color: rgba(255,255,255,0.7); text-decoration: none;
+            padding: 0.375rem 0.75rem; border-radius: 8px; font-size: 0.875rem; transition: all 0.2s;
+        }
+        .nav-link:hover { background: var(--glass-bg-hover); color: #fff; }
+        .nav-link.active { background: rgba(125,211,252,0.15); color: var(--accent-cyan); }
+        .nav-right { display: flex; align-items: center; gap: 0.75rem; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-green); transition: background 0.3s; box-shadow: 0 0 6px var(--accent-green); }
+        .status-dot.error { background: var(--accent-red); box-shadow: 0 0 6px var(--accent-red); }
+        .nav-timer { font-size: 0.75rem; color: rgba(255,255,255,0.5); }
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem 1rem; }
+        .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); gap: 1rem; }
+        .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px,1fr)); gap: 1rem; }
+        .grid-2x2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+        .flex { display: flex; }
+        .flex-col { flex-direction: column; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
+        .justify-center { justify-content: center; }
+        .gap-2 { gap: 0.5rem; } .gap-3 { gap: 0.75rem; } .gap-4 { gap: 1rem; }
+        .mt-2 { margin-top: 0.5rem; } .mt-4 { margin-top: 1rem; }
+        .mb-2 { margin-bottom: 0.5rem; } .mb-4 { margin-bottom: 1rem; }
+        .w-full { width: 100%; }
+        .text-right { text-align: right; }
+        .text-center { text-align: center; }
+        .glass-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+            -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+            border: 1px solid var(--glass-border);
+            box-shadow: var(--glass-specular), var(--glass-shadow);
+            border-radius: var(--radius-card);
+            padding: 1.5rem;
+            transition: all 0.3s cubic-bezier(0.25,0.8,0.25,1);
+        }
+        .glass-card:hover { background: var(--glass-bg-hover); }
+        .glass-card.p-3 { padding: 1rem; }
+        .text-xs  { font-size: 0.75rem; }
+        .text-sm  { font-size: 0.875rem; }
+        .text-lg  { font-size: 1.125rem; font-weight: 600; }
+        .text-xl  { font-size: 1.5rem; font-weight: 700; }
+        .text-2xl { font-size: 2rem; font-weight: 700; }
+        .text-3xl { font-size: 2.5rem; font-weight: 800; letter-spacing: -0.02em; }
+        .text-muted  { color: rgba(255,255,255,0.55); }
+        .text-cyan   { color: var(--accent-cyan); }
+        .text-green  { color: var(--accent-green); }
+        .text-red    { color: var(--accent-red); }
+        .text-yellow { color: var(--accent-yellow); }
+        .text-purple { color: var(--accent-purple); }
+        .section-title {
+            font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em;
+            text-transform: uppercase; color: rgba(255,255,255,0.4); margin-bottom: 1rem;
+        }
+        .progress-track { background: rgba(0,0,0,0.3); border-radius: 999px; height: 12px; width: 100%; overflow: hidden; border: 1px solid var(--glass-border); }
+        .progress-fill { height: 100%; width: 0%; border-radius: 999px; transition: width 0.8s cubic-bezier(0.25,0.8,0.25,1), background 0.5s; }
+        .btn {
+            display: inline-flex; align-items: center; gap: 0.5rem;
+            padding: 0.5rem 1rem; border-radius: var(--radius-btn);
+            border: 1px solid var(--glass-border);
+            background: var(--glass-bg); color: #fff;
+            font-size: 0.875rem; font-weight: 500; cursor: pointer; transition: all 0.2s;
+            text-decoration: none; font-family: inherit;
+        }
+        .btn:hover { background: var(--glass-bg-hover); border-color: rgba(255,255,255,0.2); }
+        .btn-primary { background: rgba(125,211,252,0.15); border-color: rgba(125,211,252,0.3); color: var(--accent-cyan); }
+        .btn-primary:hover { background: rgba(125,211,252,0.25); }
+        .btn-sm { padding: 0.25rem 0.625rem; font-size: 0.75rem; }
+        .badge {
+            padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600;
+            display: inline-flex; align-items: center; gap: 0.25rem;
+        }
+        .badge-green  { background: rgba(52,211,153,0.2); color: var(--accent-green); border: 1px solid rgba(52,211,153,0.3); }
+        .badge-yellow { background: rgba(251,191,36,0.2); color: var(--accent-yellow); border: 1px solid rgba(251,191,36,0.3); }
+        .badge-red    { background: rgba(248,113,113,0.2); color: var(--accent-red); border: 1px solid rgba(248,113,113,0.3); }
+        .badge-cyan   { background: rgba(125,211,252,0.15); color: var(--accent-cyan); border: 1px solid rgba(125,211,252,0.25); }
+        .stat-card { display: flex; flex-direction: column; align-items: flex-start; min-height: 130px; gap: 0.25rem; transition: transform 0.2s; }
+        .stat-card:hover { transform: translateY(-3px); }
+        .sparkline-wrap { width: 100%; height: 32px; margin-top: auto; }
+        .trend-badge { font-size: 0.7rem; font-weight: 600; padding: 0.1rem 0.4rem; border-radius: 4px; display: none; }
+        .trend-up   { background: rgba(52,211,153,0.2); color: var(--accent-green); }
+        .trend-down { background: rgba(248,113,113,0.2); color: var(--accent-red); }
+        @keyframes shimmer { 0% { opacity:.25; } 50% { opacity:.55; } 100% { opacity:.25; } }
+        .skeleton { animation: shimmer 1.5s infinite; background: var(--glass-bg-hover); border-radius: 4px; color: transparent !important; min-height: 1em; display: inline-block; pointer-events: none; }
+        .bar-row { display: grid; grid-template-columns: 110px 1fr 60px; gap: 0.75rem; align-items: center; margin-bottom: 0.625rem; }
+        .bar-label { font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .bar-track { background: rgba(0,0,0,0.3); border-radius: 999px; height: 6px; overflow: hidden; }
+        .bar-fill { height: 100%; border-radius: 999px; transition: width 0.6s; }
+        .bar-val { font-size: 0.75rem; text-align: right; color: rgba(255,255,255,0.6); }
+        .donut-wrap { position: relative; width: 180px; height: 180px; flex-shrink: 0; }
+        .donut-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); text-align: center; pointer-events: none; }
+        .legend-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.6rem; border-radius: 8px; cursor: pointer; transition: background 0.2s; border: 1px solid transparent; font-size: 0.825rem; }
+        .legend-item:hover { background: var(--glass-bg-hover); }
+        .legend-item.active { border-color: rgba(255,255,255,0.2); background: var(--glass-bg-hover); }
+        .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+        .runway-number { font-size: 3.5rem; font-weight: 800; letter-spacing: -0.04em; line-height: 1; }
+        .runway-sub { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: 1.25rem; }
+        .runway-metric { text-align: center; padding: 0.75rem; border-radius: 12px; background: rgba(0,0,0,0.2); }
+        .alert-wrap { max-width: 1200px; margin: 1rem auto 0; padding: 0 1rem; }
+        .alert-banner { padding: 0.875rem 1.25rem; border-radius: 14px; display: none; align-items: center; justify-content: space-between; gap: 1rem; }
+        .alert-banner.show { display: flex; }
+        .alert-red    { background: rgba(248,113,113,0.15); border: 1px solid rgba(248,113,113,0.3); }
+        .alert-yellow { background: rgba(251,191,36,0.15); border: 1px solid rgba(251,191,36,0.3); }
+        .chart-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+        .chart-tab { padding: 0.375rem 0.875rem; border-radius: 8px; font-size: 0.8rem; font-weight: 500; cursor: pointer; background: var(--glass-bg); border: 1px solid var(--glass-border); color: rgba(255,255,255,0.6); transition: all 0.2s; font-family: inherit; }
+        .chart-tab.active { background: rgba(125,211,252,0.15); border-color: rgba(125,211,252,0.3); color: var(--accent-cyan); }
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 0.625rem 0.75rem; text-align: left; font-size: 0.825rem; border-bottom: 1px solid var(--glass-border); }
+        th { color: rgba(255,255,255,0.5); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+        tbody tr { transition: background 0.15s; }
+        tbody tr:hover { background: var(--glass-bg-hover); }
+        .pagination { display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap; }
+        .page-btn { padding: 0.3rem 0.7rem; border-radius: 8px; font-size: 0.8rem; background: var(--glass-bg); border: 1px solid var(--glass-border); color: rgba(255,255,255,0.7); cursor: pointer; transition: all 0.2s; font-family: inherit; }
+        .page-btn:hover { background: var(--glass-bg-hover); }
+        .page-btn.active { background: rgba(125,211,252,0.15); color: var(--accent-cyan); border-color: rgba(125,211,252,0.3); }
+        .page-btn:disabled { opacity: 0.3; cursor: default; }
+        .filter-chip { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0.625rem; border-radius: 999px; font-size: 0.75rem; background: rgba(125,211,252,0.15); border: 1px solid rgba(125,211,252,0.3); color: var(--accent-cyan); }
+        .filter-chip .x { opacity: 0.7; cursor: pointer; }
+        .filter-chip .x:hover { opacity: 1; }
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(8px); z-index: 500; display: none; align-items: center; justify-content: center; }
+        .modal-overlay.open { display: flex; }
+        .modal { max-width: 420px; width: 90%; }
+        .glass-input { background: rgba(0,0,0,0.25); border: 1px solid var(--glass-border); color: #fff; padding: 0.625rem 1rem; border-radius: 10px; width: 100%; font-size: 0.9rem; font-family: inherit; outline: none; transition: border-color 0.2s; }
+        .glass-input:focus { border-color: rgba(125,211,252,0.5); }
+        #toast-container { position: fixed; bottom: 90px; right: 1.5rem; z-index: 999; display: flex; flex-direction: column; gap: 0.5rem; }
+        .toast { padding: 0.75rem 1rem; border-radius: 12px; font-size: 0.85rem; background: rgba(20,20,35,0.95); border: 1px solid var(--glass-border); backdrop-filter: blur(20px); max-width: 320px; animation: slideIn 0.3s ease; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+        @keyframes slideIn { from { opacity:0; transform: translateX(20px); } to { opacity:1; transform: translateX(0); } }
+        .toast.warning { border-color: rgba(251,191,36,0.4); color: var(--accent-yellow); }
+        .toast.success { border-color: rgba(52,211,153,0.4); color: var(--accent-green); }
+        .toast.error   { border-color: rgba(248,113,113,0.4); color: var(--accent-red); }
+        .tab-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 64px; background: rgba(10,10,26,0.9); backdrop-filter: blur(20px); border-top: 1px solid var(--glass-border); display: none; justify-content: space-around; align-items: center; z-index: 300; }
+        .tab-item { display: flex; flex-direction: column; align-items: center; gap: 2px; text-decoration: none; color: rgba(255,255,255,0.5); font-size: 0.65rem; transition: color 0.2s; }
+        .tab-item.active { color: var(--accent-cyan); }
+        @media (max-width: 768px) {
+            .nav-links { display: none; }
+            .tab-bar { display: flex; }
+            .grid-2x2 { grid-template-columns: 1fr; }
+            .donut-wrap { width: 150px; height: 150px; }
+            .runway-number { font-size: 2.5rem; }
+        }
+        @media (max-width: 480px) {
+            .container { padding: 1rem 0.75rem; }
+            .glass-card { padding: 1rem; }
+        }
+    </style>
+</head>
+<body>
+
+<nav class="glass-nav">
+    <div class="nav-logo">Krab AI</div>
+    <div class="nav-links">
+        <a href="/v4/" class="nav-link">Hub</a>
+        <a href="/v4/chat" class="nav-link">Chat</a>
+        <a href="/v4/costs" class="nav-link active">Costs</a>
+        <a href="/v4/inbox" class="nav-link">Inbox</a>
+        <a href="/v4/swarm" class="nav-link">Swarm</a>
+        <a href="/v4/translator" class="nav-link">Translator</a>
+        <a href="/v4/ops" class="nav-link">Ops</a>
+    </div>
+    <div class="nav-right">
+        <div class="status-dot" id="api-dot"></div>
+        <span class="nav-timer" id="nav-timer">&#x21bb; 30s</span>
+    </div>
+</nav>
+
+<div id="toast-container"></div>
+<div class="alert-wrap"><div id="runway-alert" class="alert-banner"></div></div>
+
+<main class="container">
+
+    <div class="flex justify-between items-center mb-4" style="flex-wrap:wrap; gap:0.75rem;">
+        <div>
+            <h1 style="font-size:1.75rem; font-weight:700; letter-spacing:-0.02em;">Costs Dashboard</h1>
+            <p class="text-muted text-sm mt-2">AI &#1088;&#1072;&#1089;&#1093;&#1086;&#1076;&#1099; &middot; FinOps &middot; Runway</p>
+        </div>
+        <div class="flex gap-2">
+            <button class="btn btn-sm" id="btn-json">JSON</button>
+            <button class="btn btn-sm btn-primary" id="btn-csv">Export CSV</button>
+        </div>
+    </div>
+
+    <!-- Budget Progress -->
+    <div class="glass-card mb-4">
+        <div class="flex justify-between items-center mb-2" style="flex-wrap:wrap; gap:0.5rem;">
+            <div>
+                <div class="section-title">Monthly Budget</div>
+                <span id="budget-status-text" class="text-sm text-muted">&#1047;&#1072;&#1075;&#1088;&#1091;&#1079;&#1082;&#1072;...</span>
+            </div>
+            <button class="btn btn-sm btn-primary" id="btn-set-budget">Set Budget</button>
+        </div>
+        <div class="progress-track mt-4">
+            <div class="progress-fill" id="budget-fill"></div>
+        </div>
+        <div class="flex justify-between mt-4" style="gap:1rem; flex-wrap:wrap;">
+            <div>
+                <div class="text-muted text-xs mb-1">Spent</div>
+                <div class="text-xl text-red skeleton" id="budget-spent">$0.00</div>
+            </div>
+            <div class="text-center">
+                <div class="text-muted text-xs mb-1">Used</div>
+                <div class="text-xl skeleton" id="budget-pct">0%</div>
+            </div>
+            <div class="text-right">
+                <div class="text-muted text-xs mb-1">Remaining <span id="budget-limit-label" class="text-xs">(of $--)</span></div>
+                <div class="text-xl text-green skeleton" id="budget-remaining">$0.00</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Row -->
+    <div class="grid-3 mb-4">
+        <div class="glass-card stat-card">
+            <div class="flex justify-between items-center w-full">
+                <span class="text-muted text-xs">Total Cost</span>
+                <span class="trend-badge" id="trend-cost"></span>
+            </div>
+            <div class="text-2xl text-green skeleton mt-2" id="total-cost">$0.00</div>
+            <div class="text-muted text-xs">&#1101;&#1090;&#1086;&#1090; &#1084;&#1077;&#1089;&#1103;&#1094;</div>
+            <div class="sparkline-wrap"><canvas id="sparkline-cost"></canvas></div>
+        </div>
+        <div class="glass-card stat-card">
+            <div class="flex justify-between items-center w-full">
+                <span class="text-muted text-xs">Total Calls</span>
+                <span class="trend-badge" id="trend-calls"></span>
+            </div>
+            <div class="text-2xl text-cyan skeleton mt-2" id="total-calls">0</div>
+            <div class="text-muted text-xs">&#1079;&#1072;&#1087;&#1088;&#1086;&#1089;&#1086;&#1074; &#1082; API</div>
+            <div class="sparkline-wrap"><canvas id="sparkline-calls"></canvas></div>
+        </div>
+        <div class="glass-card stat-card">
+            <div class="flex justify-between items-center w-full">
+                <span class="text-muted text-xs">Total Tokens</span>
+                <span class="trend-badge" id="trend-tokens"></span>
+            </div>
+            <div class="text-2xl text-purple skeleton mt-2" id="total-tokens">0</div>
+            <div class="text-muted text-xs">input + output</div>
+            <div class="sparkline-wrap"><canvas id="sparkline-tokens"></canvas></div>
+        </div>
+    </div>
+
+    <!-- Provider Donut + Runway -->
+    <div class="grid-2 mb-4">
+        <div class="glass-card">
+            <div class="section-title">Provider Breakdown</div>
+            <div class="flex gap-4 items-center" style="flex-wrap:wrap;">
+                <div class="donut-wrap">
+                    <canvas id="donut-chart"></canvas>
+                    <div class="donut-center">
+                        <div class="text-sm text-muted">total</div>
+                        <div style="font-size:1.1rem; font-weight:700;" id="donut-center-val">$0</div>
+                    </div>
+                </div>
+                <div id="donut-legend" style="flex:1; min-width:160px; display:flex; flex-direction:column; gap:0.25rem;">
+                    <div class="skeleton" style="height:2rem; border-radius:8px;"></div>
+                    <div class="skeleton" style="height:2rem; border-radius:8px;"></div>
+                </div>
+            </div>
+            <div id="filter-row" class="mt-4" style="display:none;">
+                <span class="text-muted text-xs">&#1060;&#1080;&#1083;&#1100;&#1090;&#1088;: </span>
+                <span class="filter-chip" id="filter-chip">
+                    <span id="filter-chip-label"></span>
+                    <span class="x" id="filter-clear">&#x2715;</span>
+                </span>
+            </div>
+        </div>
+
+        <div class="glass-card">
+            <div class="flex justify-between items-center">
+                <div class="section-title">Runway Estimate</div>
+                <span class="badge badge-green skeleton" id="runway-badge">OK</span>
+            </div>
+            <div class="flex items-center gap-3 mt-2">
+                <div class="runway-number text-green" id="runway-days">--</div>
+                <div class="text-muted text-sm">&#1076;&#1085;&#1077;&#1081; &#1076;&#1086;<br>&#1080;&#1089;&#1095;&#1077;&#1088;&#1087;&#1072;&#1085;&#1080;&#1103;</div>
+            </div>
+            <div class="runway-sub">
+                <div class="runway-metric">
+                    <div class="text-muted text-xs mb-1">Daily Burn</div>
+                    <div class="text-sm skeleton" id="runway-burn">$0.00</div>
+                </div>
+                <div class="runway-metric">
+                    <div class="text-muted text-xs mb-1">Credits Left</div>
+                    <div class="text-sm skeleton" id="runway-credits">$0</div>
+                </div>
+                <div class="runway-metric">
+                    <div class="text-muted text-xs mb-1">Safe Calls/Day</div>
+                    <div class="text-sm skeleton" id="runway-calls">0</div>
+                </div>
+                <div class="runway-metric">
+                    <div class="text-muted text-xs mb-1">Avg Cost/Call</div>
+                    <div class="text-sm skeleton" id="runway-avg">$0.000</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- FinOps + Channels -->
+    <div class="grid-2 mb-4">
+        <div class="glass-card">
+            <div class="section-title">FinOps Breakdown</div>
+            <div class="grid-2x2">
+                <div class="glass-card p-3 text-center">
+                    <div class="text-muted text-xs mb-2">Tool Calls</div>
+                    <div class="text-xl skeleton" id="tool-calls">0</div>
+                </div>
+                <div class="glass-card p-3 text-center">
+                    <div class="text-muted text-xs mb-2">Fallbacks</div>
+                    <div class="flex items-center justify-center gap-2">
+                        <div class="text-xl text-yellow skeleton" id="fallbacks">0</div>
+                        <span class="badge badge-yellow" id="fallbacks-badge" style="display:none;">warn</span>
+                    </div>
+                </div>
+                <div class="glass-card p-3 text-center">
+                    <div class="text-muted text-xs mb-2">Avg Context</div>
+                    <div class="text-xl skeleton" id="avg-context">0</div>
+                </div>
+                <div class="glass-card p-3 text-center">
+                    <div class="text-muted text-xs mb-2">Cost / Request</div>
+                    <div class="text-xl skeleton" id="cost-per-req">$0.0000</div>
+                </div>
+            </div>
+        </div>
+        <div class="glass-card">
+            <div class="section-title">By Channel</div>
+            <div id="channels-wrap">
+                <div class="skeleton" style="height:1rem; margin-bottom:.75rem; border-radius:4px;"></div>
+                <div class="skeleton" style="height:1rem; margin-bottom:.75rem; border-radius:4px;"></div>
+                <div class="skeleton" style="height:1rem; border-radius:4px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trend Line -->
+    <div class="glass-card mb-4">
+        <div class="flex justify-between items-center mb-4" style="flex-wrap:wrap; gap:.75rem;">
+            <div class="section-title" style="margin-bottom:0;">Trend</div>
+            <div class="chart-tabs">
+                <button class="chart-tab active" id="tab-cost">Cost</button>
+                <button class="chart-tab" id="tab-calls">Calls</button>
+                <button class="chart-tab" id="tab-tokens">Tokens</button>
+            </div>
+        </div>
+        <div style="height:200px; position:relative;">
+            <canvas id="trend-chart"></canvas>
+        </div>
+    </div>
+
+    <!-- History Table -->
+    <div class="glass-card mb-4">
+        <div class="flex justify-between items-center mb-4" style="flex-wrap:wrap; gap:.5rem;">
+            <div class="flex items-center gap-3">
+                <div class="section-title" style="margin-bottom:0;">History</div>
+                <span class="badge badge-cyan skeleton" id="history-count">0 &#1079;&#1072;&#1087;&#1080;&#1089;&#1077;&#1081;</span>
+            </div>
+            <div class="flex gap-2 items-center" style="flex-wrap:wrap;">
+                <input type="date" id="date-from" class="glass-input" style="width:140px; padding:.3rem .6rem;">
+                <span class="text-muted text-xs">--</span>
+                <input type="date" id="date-to" class="glass-input" style="width:140px; padding:.3rem .6rem;">
+                <button class="btn btn-sm" id="btn-clear-dates">&#1057;&#1073;&#1088;&#1086;&#1089;&#1080;&#1090;&#1100;</button>
+            </div>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr>
+                    <th>Timestamp</th><th>Model</th><th>Channel</th>
+                    <th class="text-right">Cost</th><th class="text-right">Tokens In</th>
+                    <th class="text-right">Tokens Out</th><th>Fallback</th>
+                </tr></thead>
+                <tbody id="history-tbody"><tr><td colspan="7" class="text-muted text-center" style="padding:2rem;">&#1047;&#1072;&#1075;&#1088;&#1091;&#1079;&#1082;&#1072;...</td></tr></tbody>
+            </table>
+        </div>
+        <div class="pagination" id="pagination"></div>
+    </div>
+
+    <div class="flex justify-between items-center text-muted text-xs mt-4">
+        <span id="last-updated">&#1055;&#1086;&#1089;&#1083;&#1077;&#1076;&#1085;&#1077;&#1077; &#1086;&#1073;&#1085;&#1086;&#1074;&#1083;&#1077;&#1085;&#1080;&#1077;: --</span>
+        <span id="footer-timer">&#1054;&#1073;&#1085;&#1086;&#1074;&#1083;&#1077;&#1085;&#1080;&#1077; &#1095;&#1077;&#1088;&#1077;&#1079; 30&#1089;</span>
+    </div>
+</main>
+
+<!-- Budget Modal -->
+<div class="modal-overlay" id="budget-modal">
+    <div class="glass-card modal">
+        <h3 class="text-lg text-cyan mb-4">&#1059;&#1089;&#1090;&#1072;&#1085;&#1086;&#1074;&#1080;&#1090;&#1100; &#1084;&#1077;&#1089;&#1103;&#1095;&#1085;&#1099;&#1081; &#1073;&#1102;&#1076;&#1078;&#1077;&#1090;</h3>
+        <div class="mb-4">
+            <label class="text-muted text-sm" style="display:block; margin-bottom:.5rem;">&#1051;&#1080;&#1084;&#1080;&#1090; (USD)</label>
+            <input type="number" step="0.01" min="1" id="budget-input" class="glass-input" placeholder="&#1085;&#1072;&#1087;&#1088;&#1080;&#1084;&#1077;&#1088; 50.00">
+        </div>
+        <div class="flex gap-2 mt-4">
+            <button class="btn" style="flex:1;" id="btn-cancel-budget">&#1054;&#1090;&#1084;&#1077;&#1085;&#1072;</button>
+            <button class="btn btn-primary" style="flex:1;" id="btn-save-budget">&#1057;&#1086;&#1093;&#1088;&#1072;&#1085;&#1080;&#1090;&#1100;</button>
+        </div>
+    </div>
+</div>
+
+<!-- Mobile Tab Bar -->
+<div class="tab-bar">
+    <a href="/v4/" class="tab-item">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        Hub
+    </a>
+    <a href="/v4/costs" class="tab-item active">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+        Costs
+    </a>
+    <a href="/v4/inbox" class="tab-item">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+        Inbox
+    </a>
+    <a href="/v4/swarm" class="tab-item">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Swarm
+    </a>
+    <a href="/v4/ops" class="tab-item">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Ops
+    </a>
+</div>
+
+<script>
+// ============================================================
+// Конфиг
+// ============================================================
+const TOKEN = '';
+const BASE  = '';
+
+// ============================================================
+// Mock данные (brief §8)
+// ============================================================
+const MOCK_REPORT = {
+    total_cost_usd: 42.15, total_calls: 1254,
+    budget_monthly_usd: 50.0, budget_remaining_usd: 7.85, budget_used_pct: 84.3,
+    input_tokens: 850000, output_tokens: 210000,
+    total_tool_calls: 342, total_fallbacks: 12,
+    total_context_tokens: 1060000, avg_context_tokens: 845,
+    by_model: {
+        "gpt-4o":            { cost_usd: 28.50, calls: 800,  input_tokens: 520000, output_tokens: 80000 },
+        "claude-3-5-sonnet": { cost_usd: 12.20, calls: 350,  input_tokens: 290000, output_tokens: 110000 },
+        "llama-3-70b":       { cost_usd:  1.45, calls: 104,  input_tokens:  40000, output_tokens: 20000 }
+    },
+    by_channel: { "telegram": 850, "translator": 200, "swarm": 154, "api": 50 }
+};
+const MOCK_BUDGET  = { monthly_limit_usd: 50.0, spent_usd: 42.15, remaining_usd: 7.85, used_pct: 84.3 };
+const MOCK_RUNWAY  = { credits_usd: 300.0, daily_burn_usd: 1.40, runway_days: 192, safe_calls_per_day: 754, avg_cost_per_call_usd: 0.00336 };
+const MOCK_HISTORY = [
+    { model_id:"gpt-4o", input_tokens:12000, output_tokens:400, cost_usd:0.025, timestamp:1713484800, channel:"telegram", is_fallback:false, tool_calls_count:2 },
+    { model_id:"claude-3-5-sonnet", input_tokens:8500, output_tokens:200, cost_usd:0.018, timestamp:1713398400, channel:"swarm", is_fallback:false, tool_calls_count:0 },
+    { model_id:"llama-3-70b", input_tokens:3000, output_tokens:150, cost_usd:0.001, timestamp:1713312000, channel:"translator", is_fallback:true, tool_calls_count:0 },
+    { model_id:"gpt-4o", input_tokens:15000, output_tokens:600, cost_usd:0.031, timestamp:1713225600, channel:"api", is_fallback:false, tool_calls_count:5 },
+    { model_id:"claude-3-5-sonnet", input_tokens:5000, output_tokens:100, cost_usd:0.011, timestamp:1713139200, channel:"telegram", is_fallback:false, tool_calls_count:1 },
+    { model_id:"gpt-4o", input_tokens:20000, output_tokens:800, cost_usd:0.041, timestamp:1713052800, channel:"swarm", is_fallback:false, tool_calls_count:3 },
+    { model_id:"llama-3-70b", input_tokens:4000, output_tokens:200, cost_usd:0.002, timestamp:1712966400, channel:"translator", is_fallback:false, tool_calls_count:0 }
+];
+const MOCK_TREND = [
+    { date:"2026-04-13", cost_usd:5.5, calls:150, tokens:75000 },
+    { date:"2026-04-14", cost_usd:6.2, calls:180, tokens:82000 },
+    { date:"2026-04-15", cost_usd:4.8, calls:140, tokens:65000 },
+    { date:"2026-04-16", cost_usd:7.1, calls:210, tokens:95000 },
+    { date:"2026-04-17", cost_usd:6.5, calls:190, tokens:88000 },
+    { date:"2026-04-18", cost_usd:8.4, calls:240, tokens:110000 },
+    { date:"2026-04-19", cost_usd:3.7, calls:144, tokens:55000 }
+];
+
+// ============================================================
+// State
+// ============================================================
+const state = {
+    report: null, budget: null, runway: null,
+    history: [], trend: [],
+    apiOk: true, filterModel: null,
+    trendMetric: 'cost', page: 1, perPage: 20
+};
+
+// ============================================================
+// Форматтеры
+// ============================================================
+const fmtUSD  = v => new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v||0);
+const fmtUSD4 = v => '$' + (v||0).toFixed(4);
+const fmtNum  = v => new Intl.NumberFormat('en-US').format(Math.round(v||0));
+const fmtK    = v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1000 ? (v/1000).toFixed(1)+'K' : String(Math.round(v||0));
+const fmtDate = ts => {
+    const d = new Date(ts * 1000);
+    return d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'}) + ' ' + d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+};
+
+// ============================================================
+// API fetch с fallback
+// ============================================================
+async function apiFetch(path, fallback) {
+    const headers = {};
+    if (TOKEN) headers['X-Krab-Web-Key'] = TOKEN;
+    try {
+        const r = await fetch(BASE + path, { headers, signal: AbortSignal.timeout(5000) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return { data: await r.json(), mock: false };
+    } catch(_) {
+        return { data: fallback, mock: true };
+    }
+}
+
+// ============================================================
+// Load all
+// ============================================================
+async function loadAll() {
+    const [
+        { data: rRep, mock: m1 },
+        { data: rBud, mock: m2 },
+        { data: rRun, mock: m3 },
+        { data: rHis, mock: m4 }
+    ] = await Promise.all([
+        apiFetch('/api/costs/report',  { ok:true, report: MOCK_REPORT }),
+        apiFetch('/api/costs/budget',  { ok:true, budget: MOCK_BUDGET }),
+        apiFetch('/api/ops/runway',    { ok:true, runway: MOCK_RUNWAY }),
+        apiFetch('/api/costs/history', { ok:true, history: MOCK_HISTORY })
+    ]);
+
+    state.apiOk  = !(m1||m2||m3||m4);
+    state.report  = rRep.report  || rRep  || MOCK_REPORT;
+    state.budget  = rBud.budget  || rBud  || MOCK_BUDGET;
+    state.runway  = rRun.runway  || rRun  || MOCK_RUNWAY;
+    state.history = (rHis.history || []);
+    if (!state.history.length) state.history = MOCK_HISTORY;
+    state.trend   = buildTrend(state.history);
+    if (!state.trend.length) state.trend = MOCK_TREND;
+
+    renderAll();
+    if (m1||m2||m3||m4) showToast('\u26a0\ufe0f API недоступен — mock данные', 'warning');
+}
+
+function buildTrend(history) {
+    const map = {};
+    history.forEach(h => {
+        const d = new Date(h.timestamp * 1000).toISOString().slice(0,10);
+        if (!map[d]) map[d] = { date:d, cost_usd:0, calls:0, tokens:0 };
+        map[d].cost_usd += h.cost_usd||0;
+        map[d].calls    += 1;
+        map[d].tokens   += (h.input_tokens||0) + (h.output_tokens||0);
+    });
+    return Object.values(map).sort((a,b) => a.date.localeCompare(b.date));
+}
+
+// ============================================================
+// Render
+// ============================================================
+function renderAll() {
+    renderApiDot();
+    renderBudget();
+    renderStats();
+    renderDonut();
+    renderRunway();
+    renderFinOps();
+    renderChannels();
+    renderTrend();
+    renderTable();
+    setText('last-updated', 'Последнее обновление: ' + new Date().toLocaleTimeString('ru-RU'));
+}
+
+function renderApiDot() {
+    document.getElementById('api-dot').className = 'status-dot' + (state.apiOk ? '' : ' error');
+}
+
+// --- Budget ---
+function renderBudget() {
+    const b = state.budget, r = state.report;
+    const spent     = b.spent_usd ?? r.total_cost_usd ?? 0;
+    const limit     = b.monthly_limit_usd ?? r.budget_monthly_usd ?? null;
+    const remaining = b.remaining_usd ?? r.budget_remaining_usd ?? null;
+    const pct       = b.used_pct ?? r.budget_used_pct ?? (limit ? spent/limit*100 : null);
+
+    const fill = document.getElementById('budget-fill');
+    fill.style.width = Math.min(pct ?? 0, 100) + '%';
+    fill.style.background = pct === null ? 'rgba(255,255,255,0.2)' : pct >= 90 ? 'var(--accent-red)' : pct >= 70 ? 'var(--accent-yellow)' : 'var(--accent-green)';
+
+    setText('budget-spent',    fmtUSD(spent));
+    setText('budget-pct',      pct !== null ? pct.toFixed(1)+'%' : '--');
+    setText('budget-remaining', remaining !== null ? fmtUSD(remaining) : '--');
+    document.getElementById('budget-limit-label').textContent = limit !== null ? '(of '+fmtUSD(limit)+')' : '(не установлен)';
+    document.getElementById('budget-status-text').textContent = limit === null
+        ? 'Бюджет не установлен'
+        : 'Потрачено ' + fmtUSD(spent) + ' из ' + fmtUSD(limit);
+}
+
+// --- Stats Row ---
+function renderStats() {
+    const r = state.report;
+    const totalTok = (r.input_tokens||0) + (r.output_tokens||0);
+    setText('total-cost',   fmtUSD(r.total_cost_usd));
+    setText('total-calls',  fmtNum(r.total_calls));
+    setText('total-tokens', fmtK(totalTok));
+    if (state.trend.length >= 2) {
+        const a = state.trend[state.trend.length-2], b = state.trend[state.trend.length-1];
+        setTrendBadge('trend-cost',   b.cost_usd, a.cost_usd);
+        setTrendBadge('trend-calls',  b.calls,    a.calls);
+        setTrendBadge('trend-tokens', b.tokens,   a.tokens);
+    }
+    const c = state.trend.map(t=>t.cost_usd),
+          k = state.trend.map(t=>t.calls),
+          tk = state.trend.map(t=>t.tokens);
+    drawSparkline('sparkline-cost',   c,  '#34d399');
+    drawSparkline('sparkline-calls',  k,  '#7dd3fc');
+    drawSparkline('sparkline-tokens', tk, '#a78bfa');
+}
+
+function setTrendBadge(id, cur, prev) {
+    const el = document.getElementById(id);
+    if (!el || prev === 0) return;
+    const p = ((cur-prev)/prev*100).toFixed(1), up = cur >= prev;
+    el.textContent = (up?'\u2191':'\u2193') + Math.abs(p) + '%';
+    el.className   = 'trend-badge ' + (up ? 'trend-up' : 'trend-down');
+    el.style.display = 'inline-block';
+}
+
+// --- Sparklines ---
+const _sparks = {};
+function drawSparkline(id, data, color) {
+    const cv = document.getElementById(id); if (!cv) return;
+    if (_sparks[id]) _sparks[id].destroy();
+    _sparks[id] = new Chart(cv, {
+        type: 'line',
+        data: { labels: data.map((_,i)=>i), datasets:[{ data, borderColor:color, borderWidth:1.5, pointRadius:0, fill:true, backgroundColor:hexRGBA(color,0.12), tension:0.4 }] },
+        options: { responsive:true, maintainAspectRatio:false, animation:false, plugins:{legend:{display:false},tooltip:{enabled:false}}, scales:{x:{display:false},y:{display:false}} }
+    });
+}
+
+// --- Donut ---
+const _mcolors = { gpt:'#7dd3fc', openai:'#7dd3fc', codex:'#7dd3fc', claude:'#a78bfa', anthropic:'#a78bfa', llama:'#34d399', local:'#34d399', lm:'#34d399', gemini:'#fbbf24', google:'#fbbf24' };
+const _palette = ['#7dd3fc','#a78bfa','#34d399','#fbbf24','#f87171','#818cf8','#fb923c'];
+function modelColor(name, idx) {
+    const n = name.toLowerCase();
+    for (const k of Object.keys(_mcolors)) if (n.includes(k)) return _mcolors[k];
+    return _palette[idx % _palette.length];
+}
+
+let _donut = null;
+function renderDonut() {
+    const bm = state.report.by_model || {};
+    const labels = Object.keys(bm);
+    const values = labels.map(k=>bm[k].cost_usd||0);
+    const colors = labels.map((k,i)=>modelColor(k,i));
+    const total  = values.reduce((a,b)=>a+b,0);
+    setText('donut-center-val', fmtUSD(total));
+
+    const cv = document.getElementById('donut-chart');
+    if (_donut) _donut.destroy();
+    _donut = new Chart(cv, {
+        type: 'doughnut',
+        data: { labels, datasets:[{ data:values, backgroundColor:colors, borderColor:'rgba(10,10,26,0.8)', borderWidth:2, hoverOffset:6 }] },
+        options: {
+            responsive:true, maintainAspectRatio:false, cutout:'68%',
+            plugins:{
+                legend:{display:false},
+                tooltip:{ callbacks:{ label:ctx => ' '+ctx.label+': '+fmtUSD(ctx.raw)+' ('+((ctx.raw/total*100).toFixed(1))+'%)' } }
+            },
+            onClick(_, el) { if (el.length) toggleFilter(labels[el[0].index]); }
+        }
+    });
+
+    // Legend через DOM API (без innerHTML)
+    const leg = document.getElementById('donut-legend');
+    while (leg.firstChild) leg.removeChild(leg.firstChild);
+    labels.forEach((lbl, i) => {
+        const pct = total ? (values[i]/total*100).toFixed(1) : '0.0';
+        const item = document.createElement('div');
+        item.className = 'legend-item' + (state.filterModel === lbl ? ' active' : '');
+        item.dataset.model = lbl;
+
+        const dot = document.createElement('div');
+        dot.className = 'legend-dot';
+        dot.style.background = colors[i];
+
+        const name = document.createElement('span');
+        name.className = 'text-sm';
+        name.style.cssText = 'flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+        name.textContent = lbl;
+
+        const pctEl = document.createElement('span');
+        pctEl.className = 'text-muted text-xs';
+        pctEl.textContent = pct + '%';
+
+        const costEl = document.createElement('span');
+        costEl.className = 'text-xs';
+        costEl.style.cssText = 'color:'+colors[i]+'; min-width:50px; text-align:right;';
+        costEl.textContent = fmtUSD(values[i]);
+
+        item.appendChild(dot);
+        item.appendChild(name);
+        item.appendChild(pctEl);
+        item.appendChild(costEl);
+        item.addEventListener('click', () => toggleFilter(lbl));
+        leg.appendChild(item);
+    });
+}
+
+// --- Runway ---
+function renderRunway() {
+    const rw = state.runway;
+    const d  = rw.runway_days || 0;
+    const dEl = document.getElementById('runway-days');
+    const bEl = document.getElementById('runway-badge');
+    bEl.classList.remove('skeleton');
+
+    if (d > 3650) {
+        dEl.textContent = '\u221e'; dEl.className = 'runway-number text-green';
+        setBadge(bEl, 'green', 'Безопасно');
+    } else if (d < 30) {
+        dEl.textContent = Math.round(d); dEl.className = 'runway-number text-red';
+        setBadge(bEl, 'red', 'Критично');
+        showRunwayAlert('red', d);
+    } else if (d < 90) {
+        dEl.textContent = Math.round(d); dEl.className = 'runway-number text-yellow';
+        setBadge(bEl, 'yellow', 'Внимание');
+        showRunwayAlert('yellow', d);
+    } else {
+        dEl.textContent = Math.round(d); dEl.className = 'runway-number text-green';
+        setBadge(bEl, 'green', 'OK');
+    }
+
+    setText('runway-burn',    '$' + (rw.daily_burn_usd||0).toFixed(3));
+    setText('runway-credits', fmtUSD(rw.credits_usd||0));
+    setText('runway-calls',   fmtNum(rw.safe_calls_per_day||0));
+    setText('runway-avg',     fmtUSD4(rw.avg_cost_per_call_usd||0));
+}
+
+function setBadge(el, color, text) {
+    el.className = 'badge badge-' + color;
+    el.textContent = text;
+}
+
+function showRunwayAlert(level, days) {
+    const el = document.getElementById('runway-alert');
+    el.className = 'alert-banner show alert-' + level;
+    // DOM-safe построение
+    while (el.firstChild) el.removeChild(el.firstChild);
+    const msg = document.createElement('span');
+    const icon = level === 'red' ? '\uD83D\uDD34 ' : '\uD83D\uDFE1 ';
+    msg.textContent = icon + 'Runway критически мал: ' + Math.round(days) + ' дней до исчерпания бюджета';
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-sm';
+    btn.textContent = '\u2715';
+    btn.addEventListener('click', () => { el.style.display = 'none'; });
+    el.appendChild(msg);
+    el.appendChild(btn);
+}
+
+// --- FinOps ---
+function renderFinOps() {
+    const r = state.report;
+    const cpr = r.total_calls ? r.total_cost_usd / r.total_calls : 0;
+    setText('tool-calls',   fmtNum(r.total_tool_calls||0));
+    setText('fallbacks',    fmtNum(r.total_fallbacks||0));
+    setText('avg-context',  fmtK(r.avg_context_tokens||0));
+    setText('cost-per-req', fmtUSD4(cpr));
+    if ((r.total_fallbacks||0) > 0) document.getElementById('fallbacks-badge').style.display = 'inline-flex';
+}
+
+// --- Channels ---
+function renderChannels() {
+    const ch = state.report.by_channel || {};
+    const max = Math.max(...Object.values(ch), 1);
+    const clrs = ['#7dd3fc','#a78bfa','#34d399','#fbbf24','#f87171'];
+    const wrap = document.getElementById('channels-wrap');
+    while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
+    Object.entries(ch).forEach(([name, val], i) => {
+        const row = document.createElement('div');
+        row.className = 'bar-row';
+        const lbl = document.createElement('div');
+        lbl.className = 'bar-label text-muted';
+        lbl.textContent = name;
+        const track = document.createElement('div');
+        track.className = 'bar-track w-full';
+        const fill = document.createElement('div');
+        fill.className = 'bar-fill';
+        fill.style.cssText = 'width:' + (val/max*100).toFixed(1) + '%; background:' + clrs[i % clrs.length] + ';';
+        track.appendChild(fill);
+        const valEl = document.createElement('div');
+        valEl.className = 'bar-val';
+        valEl.textContent = fmtNum(val);
+        row.appendChild(lbl); row.appendChild(track); row.appendChild(valEl);
+        wrap.appendChild(row);
+    });
+}
+
+// --- Trend Chart ---
+let _trend = null;
+function renderTrend() {
+    const t = state.trend;
+    if (!t.length) return;
+    const labels = t.map(d => d.date.slice(5));
+    let values, label, color;
+    if (state.trendMetric === 'cost')   { values = t.map(d=>d.cost_usd); label='Cost (USD)'; color='#34d399'; }
+    else if (state.trendMetric === 'calls')  { values = t.map(d=>d.calls);   label='Calls';     color='#7dd3fc'; }
+    else                                { values = t.map(d=>d.tokens);  label='Tokens';    color='#a78bfa'; }
+
+    const cv = document.getElementById('trend-chart');
+    if (_trend) _trend.destroy();
+    _trend = new Chart(cv, {
+        type:'line',
+        data:{
+            labels,
+            datasets:[{ label, data:values, borderColor:color, borderWidth:2,
+                pointBackgroundColor:color, pointRadius:4, pointHoverRadius:6,
+                fill:true, backgroundColor:hexRGBA(color,0.1), tension:0.35 }]
+        },
+        options:{
+            responsive:true, maintainAspectRatio:false, animation:{duration:400},
+            plugins:{
+                legend:{display:false},
+                tooltip:{ backgroundColor:'rgba(10,10,26,0.9)', borderColor:'rgba(255,255,255,0.1)', borderWidth:1, titleColor:'#fff', bodyColor:'rgba(255,255,255,0.7)' }
+            },
+            scales:{
+                x:{ ticks:{color:'rgba(255,255,255,0.4)',font:{size:11}}, grid:{color:'rgba(255,255,255,0.05)'} },
+                y:{ ticks:{color:'rgba(255,255,255,0.4)',font:{size:11}}, grid:{color:'rgba(255,255,255,0.05)'} }
+            }
+        }
+    });
+}
+
+// --- History Table ---
+function renderTable() {
+    let rows = [...state.history];
+    if (state.filterModel) rows = rows.filter(r => r.model_id === state.filterModel);
+    const from = document.getElementById('date-from').value;
+    const to   = document.getElementById('date-to').value;
+    if (from) rows = rows.filter(r => new Date(r.timestamp*1000) >= new Date(from));
+    if (to)   rows = rows.filter(r => new Date(r.timestamp*1000) <= new Date(to+'T23:59:59'));
+
+    const countEl = document.getElementById('history-count');
+    countEl.textContent = fmtNum(rows.length) + ' записей';
+    countEl.classList.remove('skeleton');
+
+    const total = Math.max(1, Math.ceil(rows.length / state.perPage));
+    if (state.page > total) state.page = total;
+    const start = (state.page-1) * state.perPage;
+    const pageRows = rows.slice(start, start + state.perPage);
+
+    const tbody = document.getElementById('history-tbody');
+    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+
+    if (!pageRows.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 7; td.className = 'text-muted text-center'; td.style.padding = '2rem';
+        td.textContent = 'Нет данных';
+        tr.appendChild(td); tbody.appendChild(tr);
+    } else {
+        pageRows.forEach(r => {
+            const tr = document.createElement('tr');
+            const color = modelColor(r.model_id||'', 0);
+
+            const cells = [
+                { text: fmtDate(r.timestamp), cls: 'text-muted' },
+                { text: r.model_id||'unknown', color },
+                null, // channel badge
+                { text: fmtUSD4(r.cost_usd), cls: 'text-right text-green' },
+                { text: fmtK(r.input_tokens||0), cls: 'text-right text-muted' },
+                { text: fmtK(r.output_tokens||0), cls: 'text-right text-muted' },
+                null  // fallback badge
+            ];
+
+            cells.forEach((c, idx) => {
+                const td = document.createElement('td');
+                if (idx === 2) {
+                    // channel badge
+                    const badge = document.createElement('span');
+                    badge.className = 'badge badge-cyan';
+                    badge.textContent = r.channel||'--';
+                    td.appendChild(badge);
+                } else if (idx === 6) {
+                    // fallback badge
+                    if (r.is_fallback) {
+                        const badge = document.createElement('span');
+                        badge.className = 'badge badge-yellow';
+                        badge.textContent = 'fallback';
+                        td.appendChild(badge);
+                    } else {
+                        td.textContent = '--';
+                    }
+                } else if (c) {
+                    if (c.color) {
+                        td.style.color = c.color;
+                        td.style.fontWeight = '500';
+                    }
+                    if (c.cls) td.className = c.cls;
+                    td.textContent = c.text;
+                }
+                tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+        });
+    }
+    renderPagination(total);
+}
+
+function renderPagination(total) {
+    const pg = document.getElementById('pagination');
+    while (pg.firstChild) pg.removeChild(pg.firstChild);
+    if (total <= 1) return;
+
+    const mkBtn = (label, page, disabled, active) => {
+        const b = document.createElement('button');
+        b.className = 'page-btn' + (active ? ' active' : '');
+        b.textContent = label;
+        b.disabled = disabled;
+        if (!disabled) b.addEventListener('click', () => { state.page = page; renderTable(); });
+        return b;
+    };
+
+    pg.appendChild(mkBtn('\u2039', state.page-1, state.page <= 1, false));
+    for (let i=1; i<=total; i++) {
+        if (total<=7 || i===1 || i===total || Math.abs(i-state.page)<=1) {
+            pg.appendChild(mkBtn(String(i), i, false, i===state.page));
+        } else if (Math.abs(i-state.page)===2) {
+            const sp = document.createElement('span');
+            sp.className = 'text-muted'; sp.style.padding = '0 .25rem'; sp.textContent = '\u2026';
+            pg.appendChild(sp);
+        }
+    }
+    pg.appendChild(mkBtn('\u203a', state.page+1, state.page >= total, false));
+}
+
+// ============================================================
+// Filter
+// ============================================================
+function toggleFilter(name) {
+    if (state.filterModel === name) { clearFilter(); return; }
+    state.filterModel = name;
+    state.page = 1;
+    document.getElementById('filter-chip-label').textContent = name;
+    document.getElementById('filter-row').style.display = 'block';
+    renderDonut(); renderTable();
+}
+
+function clearFilter() {
+    state.filterModel = null; state.page = 1;
+    document.getElementById('filter-row').style.display = 'none';
+    renderDonut(); renderTable();
+}
+
+// ============================================================
+// Budget Modal
+// ============================================================
+function openBudgetModal() {
+    document.getElementById('budget-modal').classList.add('open');
+    const limit = state.budget && state.budget.monthly_limit_usd;
+    if (limit) document.getElementById('budget-input').value = limit.toFixed(2);
+}
+
+function closeBudgetModal() {
+    document.getElementById('budget-modal').classList.remove('open');
+}
+
+async function submitBudget() {
+    const val = parseFloat(document.getElementById('budget-input').value);
+    if (isNaN(val)||val<=0) { showToast('Введите корректный лимит', 'error'); return; }
+    const headers = { 'Content-Type':'application/json' };
+    if (TOKEN) headers['X-Krab-Web-Key'] = TOKEN;
+    try {
+        const r = await fetch(BASE + '/api/costs/budget', { method:'POST', headers, body:JSON.stringify({monthly_limit_usd:val}), signal:AbortSignal.timeout(5000) });
+        if (!r.ok) throw new Error('HTTP '+r.status);
+        showToast('Бюджет сохранён: ' + fmtUSD(val), 'success');
+        closeBudgetModal();
+        if (state.budget) {
+            state.budget.monthly_limit_usd = val;
+            state.budget.remaining_usd = val - (state.budget.spent_usd||0);
+            state.budget.used_pct = (state.budget.spent_usd||0) / val * 100;
+        }
+        renderBudget();
+    } catch(_) { showToast('Ошибка сохранения бюджета', 'error'); }
+}
+
+// ============================================================
+// Export
+// ============================================================
+function exportCSV() {
+    const hdr = ['timestamp','model_id','channel','cost_usd','input_tokens','output_tokens','is_fallback','tool_calls_count'];
+    const csv = [hdr.join(','), ...state.history.map(r => hdr.map(k => JSON.stringify(r[k]??'')).join(','))].join('\n');
+    dlBlob(csv, 'krab_costs_'+new Date().toISOString().slice(0,10)+'.csv', 'text/csv');
+    showToast('CSV экспортирован', 'success');
+}
+
+function exportJSON() {
+    const data = { report:state.report, budget:state.budget, runway:state.runway, exported_at:new Date().toISOString() };
+    dlBlob(JSON.stringify(data,null,2), 'krab_costs_'+new Date().toISOString().slice(0,10)+'.json', 'application/json');
+    showToast('JSON экспортирован', 'success');
+}
+
+function dlBlob(content, name, mime) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([content],{type:mime}));
+    a.download = name; a.click(); URL.revokeObjectURL(a.href);
+}
+
+// ============================================================
+// Toast
+// ============================================================
+function showToast(msg, type) {
+    const el = document.createElement('div');
+    el.className = 'toast' + (type ? ' '+type : '');
+    el.textContent = msg;
+    const c = document.getElementById('toast-container');
+    c.appendChild(el);
+    setTimeout(() => { el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(()=>el.remove(),350); }, 4000);
+}
+
+// ============================================================
+// Утилиты
+// ============================================================
+function setText(id, val) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = val;
+    el.classList.remove('skeleton');
+}
+
+function hexRGBA(hex, a) {
+    const r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16);
+    return 'rgba('+r+','+g+','+b+','+a+')';
+}
+
+// ============================================================
+// Polling 30s
+// ============================================================
+let _cd = 30;
+setInterval(() => {
+    _cd--;
+    document.getElementById('nav-timer').textContent = '\u21bb ' + _cd + 's';
+    document.getElementById('footer-timer').textContent = 'Обновление через ' + _cd + 'с';
+    if (_cd <= 0) { _cd = 30; loadAll(); }
+}, 1000);
+
+// ============================================================
+// Event listeners (без inline onclick)
+// ============================================================
+document.getElementById('btn-set-budget').addEventListener('click', openBudgetModal);
+document.getElementById('btn-cancel-budget').addEventListener('click', closeBudgetModal);
+document.getElementById('btn-save-budget').addEventListener('click', submitBudget);
+document.getElementById('btn-csv').addEventListener('click', exportCSV);
+document.getElementById('btn-json').addEventListener('click', exportJSON);
+document.getElementById('filter-clear').addEventListener('click', clearFilter);
+document.getElementById('btn-clear-dates').addEventListener('click', () => {
+    document.getElementById('date-from').value = '';
+    document.getElementById('date-to').value   = '';
+    renderTable();
+});
+document.getElementById('date-from').addEventListener('change', renderTable);
+document.getElementById('date-to').addEventListener('change', renderTable);
+document.getElementById('budget-modal').addEventListener('click', e => {
+    if (e.target === document.getElementById('budget-modal')) closeBudgetModal();
+});
+['tab-cost','tab-calls','tab-tokens'].forEach(id => {
+    document.getElementById(id).addEventListener('click', function() {
+        state.trendMetric = id.replace('tab-','');
+        document.querySelectorAll('.chart-tab').forEach(t => t.classList.remove('active'));
+        this.classList.add('active');
+        renderTrend();
+    });
+});
+
+// ============================================================
+// Запуск
+// ============================================================
+loadAll();
+</script>
+</body>
+</html>

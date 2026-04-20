@@ -3,11 +3,15 @@
 """
 
 import json
+import logging
 import os
+import warnings
 from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import load_dotenv
+
+_config_logger = logging.getLogger(__name__)
 
 # Загрузить .env файл
 load_dotenv()
@@ -105,9 +109,7 @@ class Config:
         "RESTORE_PREFERRED_ON_IDLE_UNLOAD", "0"
     ).strip().lower() in ("1", "true", "yes")
     # qwen3-30b routing: preferred LLM для voice channel + text (VA Phase 1.6)
-    KRAB_MODEL_QWEN3_30B: str = os.getenv(
-        "KRAB_MODEL_QWEN3_30B", "qwen3-30b-a3b-instruct-2507"
-    )
+    KRAB_MODEL_QWEN3_30B: str = os.getenv("KRAB_MODEL_QWEN3_30B", "qwen3-30b-a3b-instruct-2507")
     # LRU eviction TTL (секунды): если модель не использовалась дольше,
     # она выгружается при загрузке другой модели (LRU policy).
     KRAB_LRU_EVICT_AFTER_SEC: float = float(os.getenv("KRAB_LRU_EVICT_AFTER_SEC", "300"))
@@ -183,7 +185,9 @@ class Config:
     OPENCLAW_AUTO_RETRY_DELAY_SEC: float = float(os.getenv("OPENCLAW_AUTO_RETRY_DELAY_SEC", "2.0"))
     # Таймаут ожидания готовности OpenClaw при старте userbot.
     # При высокой нагрузке на CPU startup может занять до 42 мин — минимум 10s enforced.
-    OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC: int = max(10, int(os.getenv("OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC", "90")))
+    OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC: int = max(
+        10, int(os.getenv("OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC", "90"))
+    )
     # Ограничение длины ответа userbot (ускоряет локальные модели в чатах).
     USERBOT_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_MAX_OUTPUT_TOKENS", "1200"))
     USERBOT_PHOTO_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_PHOTO_MAX_OUTPUT_TOKENS", "420"))
@@ -397,9 +401,7 @@ class Config:
     # дольше этого порога — Краб отменяет текущий запрос (codex-cli hung
     # после gateway restart). Default 120 сек: меньше 90 — ложные срабатывания
     # на больших моделях, больше 180 — пользователь заметно "виснет".
-    LLM_STAGNATION_THRESHOLD_SEC: float = float(
-        os.getenv("LLM_STAGNATION_THRESHOLD_SEC", "120")
-    )
+    LLM_STAGNATION_THRESHOLD_SEC: float = float(os.getenv("LLM_STAGNATION_THRESHOLD_SEC", "120"))
     # Streaming UI: показывать reasoning (chain-of-thought) в сообщении.
     TELEGRAM_STREAM_SHOW_REASONING: bool = os.getenv(
         "TELEGRAM_STREAM_SHOW_REASONING", "0"
@@ -645,7 +647,12 @@ class Config:
                 elif key == "TELEGRAM_STREAM_UPDATE_INTERVAL_SEC":
                     cls.TELEGRAM_STREAM_UPDATE_INTERVAL_SEC = max(0.5, float(value))
                 elif key == "TELEGRAM_REACTIONS_ENABLED":
-                    cls.TELEGRAM_REACTIONS_ENABLED = value.strip().lower() in ("1", "true", "yes", "on")
+                    cls.TELEGRAM_REACTIONS_ENABLED = value.strip().lower() in (
+                        "1",
+                        "true",
+                        "yes",
+                        "on",
+                    )
                 elif key == "DEFAULT_WEATHER_CITY":
                     cls.DEFAULT_WEATHER_CITY = value.strip()
 
@@ -702,3 +709,20 @@ class Config:
 
 # Синглтон для удобства
 config = Config()
+
+
+def emit_deprecation_warnings() -> None:
+    """
+    Логирует предупреждения об устаревших конфигурациях.
+    Вызывается один раз при старте userbot'а.
+    """
+    owner_ids = getattr(config, "OWNER_USER_IDS", [])
+    if owner_ids and os.getenv("OWNER_USER_IDS", "").strip():
+        # env var присутствует и не пустой — предупреждаем
+        msg = (
+            "deprecated: OWNER_USER_IDS env var is set but will be removed in Session 20. "
+            "Migrate owners to ACL json (~/.openclaw/krab_userbot_acl.json). "
+            "See docs/OWNER_USER_IDS_DEPRECATION.md for migration guide."
+        )
+        _config_logger.warning("owner_user_ids_env_deprecated: %s", msg)
+        warnings.warn(msg, DeprecationWarning, stacklevel=2)
