@@ -18,6 +18,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from .openclaw_cli_budget import get_global_semaphore, terminate_and_reap
 from .subprocess_env import clean_subprocess_env
 
 _DEFAULT_OPENCLAW_BIN_CANDIDATES = (
@@ -142,15 +143,27 @@ async def reload_openclaw_secrets(timeout_sec: float = 25.0) -> dict[str, Any]:
     cli_path = str(cli_resolution.get("path") or "openclaw")
     cli_source = str(cli_resolution.get("source") or "")
     try:
-        proc = await asyncio.create_subprocess_exec(
-            cli_path,
-            "secrets",
-            "reload",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=clean_subprocess_env(),
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
+        async with get_global_semaphore():
+            proc = await asyncio.create_subprocess_exec(
+                cli_path,
+                "secrets",
+                "reload",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=clean_subprocess_env(),
+            )
+            try:
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
+            except asyncio.TimeoutError:
+                await terminate_and_reap(proc)
+                return {
+                    "ok": False,
+                    "exit_code": 124,
+                    "error": "secrets_reload_timeout",
+                    "cli_path": cli_path,
+                    "cli_source": cli_source,
+                    "output": "secrets_reload_timeout",
+                }
         output = stdout.decode("utf-8", errors="replace").strip()
         return {
             "ok": proc.returncode == 0,

@@ -3638,13 +3638,29 @@ async def handle_version(bot: "KraabUserbot", message: Message) -> None:
 
     # OpenClaw версия через CLI
     try:
-        result = subprocess.run(
-            ["openclaw", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=5,
+        from ..core.openclaw_cli_budget import (  # noqa: PLC0415
+            get_global_semaphore,
+            terminate_and_reap,
         )
-        oc_raw = (result.stdout.strip() or result.stderr.strip()).splitlines()
+        from ..core.subprocess_env import clean_subprocess_env  # noqa: PLC0415
+
+        async with get_global_semaphore():
+            oc_proc = await asyncio.create_subprocess_exec(
+                "openclaw",
+                "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=clean_subprocess_env(),
+            )
+            try:
+                oc_stdout, oc_stderr = await asyncio.wait_for(oc_proc.communicate(), timeout=5.0)
+            except asyncio.TimeoutError:
+                await terminate_and_reap(oc_proc)
+                oc_stdout, oc_stderr = b"", b""
+        oc_raw = (
+            oc_stdout.decode("utf-8", errors="replace").strip()
+            or oc_stderr.decode("utf-8", errors="replace").strip()
+        ).splitlines()
         oc_ver = oc_raw[0] if oc_raw else "unknown"
     except Exception:
         oc_ver = "unknown"
@@ -4734,41 +4750,23 @@ async def _cron_run_openclaw(
     Запускает `openclaw` с переданными аргументами.
     Возвращает (success, raw_output).
     """
+    from ..core.openclaw_cli_budget import get_global_semaphore, terminate_and_reap  # noqa: PLC0415
     from ..core.subprocess_env import clean_subprocess_env  # noqa: PLC0415
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "openclaw",
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=clean_subprocess_env(),
-        )
-        try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            if proc.returncode is None:
-                try:
-                    proc.terminate()
-                except ProcessLookupError:
-                    pass
-                else:
-                    # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
-                    try:
-                        await asyncio.wait_for(proc.wait(), timeout=2.0)
-                    except asyncio.TimeoutError:
-                        try:
-                            proc.kill()
-                        except ProcessLookupError:
-                            pass
-                        try:
-                            await asyncio.wait_for(proc.wait(), timeout=1.0)
-                        except asyncio.TimeoutError:
-                            logger.warning(
-                                "openclaw_cli_force_killed_but_no_reap",
-                                pid=proc.pid,
-                            )
-            return False, "timeout"
+        async with get_global_semaphore():
+            proc = await asyncio.create_subprocess_exec(
+                "openclaw",
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=clean_subprocess_env(),
+            )
+            try:
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                await terminate_and_reap(proc)
+                return False, "timeout"
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
 

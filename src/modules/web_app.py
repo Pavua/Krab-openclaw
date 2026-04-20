@@ -71,6 +71,11 @@ from src.core.observability import (  # noqa: E402
     metrics,
     timeline,
 )
+from src.core.openclaw_cli_budget import (  # noqa: E402
+    get_global_semaphore,
+    get_sync_semaphore,
+    terminate_and_reap,
+)
 from src.core.openclaw_runtime_signal_truth import (  # noqa: E402
     discover_gateway_signal_log,
     runtime_auth_failed_providers_from_signal_log,
@@ -680,21 +685,47 @@ class WebApp:
         Нужен, чтобы owner UI опирался на тот же auth/runtime view,
         который уже считает сам OpenClaw, а не на самодельный разбор текста.
         """
+        timeout_sec = cls._float_env(
+            "KRAB_WEB_OPENCLAW_MODELS_STATUS_TIMEOUT_SEC",
+            2.5,
+            min_value=0.2,
+            max_value=15.0,
+        )
         try:
-            proc = subprocess.run(
-                ["openclaw", "models", "status", "--json"],
-                cwd=str(cls._project_root()),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=15,
-            )
+            # Семафор ограничивает одновременные openclaw probe'ы из sync callsites.
+            with get_sync_semaphore():
+                # Не используем subprocess.run(timeout=...): `openclaw models status`
+                # может породить дочерний `codex login status`, и при зависании
+                # простой timeout оставляет сироту, который держит web-запрос.
+                # Отдельная process group позволяет погасить весь probe целиком.
+                proc = subprocess.Popen(
+                    ["openclaw", "models", "status", "--json"],
+                    cwd=str(cls._project_root()),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                )
+                try:
+                    stdout, _stderr = proc.communicate(timeout=timeout_sec)
+                except subprocess.TimeoutExpired:
+                    # Диагностический probe не должен блокировать owner-панель.
+                    # Лучше вернуть деградированный срез, чем повесить event loop.
+                    try:
+                        os.killpg(proc.pid, 15)
+                        proc.communicate(timeout=1.0)
+                    except Exception:
+                        try:
+                            os.killpg(proc.pid, 9)
+                        except Exception:
+                            pass
+                    return {}
         except Exception:
             return {}
         if proc.returncode != 0:
             return {}
         try:
-            payload = json.loads(str(proc.stdout or "{}"))
+            payload = json.loads(str(stdout or "{}"))
         except (TypeError, ValueError):
             return {}
 
@@ -758,21 +789,43 @@ class WebApp:
     @classmethod
     def _openclaw_models_full_catalog(cls) -> dict[str, Any]:
         """Читает `openclaw models list --all --json` и группирует модели по provider."""
+        timeout_sec = cls._float_env(
+            "KRAB_WEB_OPENCLAW_MODELS_LIST_TIMEOUT_SEC",
+            3.0,
+            min_value=0.2,
+            max_value=20.0,
+        )
         try:
-            proc = subprocess.run(
-                ["openclaw", "models", "list", "--all", "--json"],
-                cwd=str(cls._project_root()),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=20,
-            )
+            # Семафор ограничивает одновременные openclaw probe'ы из sync callsites.
+            with get_sync_semaphore():
+                # Этот probe обслуживает только UI-каталог. Если CLI или вложенный
+                # provider-probe зависнет, нельзя блокировать весь web event loop.
+                proc = subprocess.Popen(
+                    ["openclaw", "models", "list", "--all", "--json"],
+                    cwd=str(cls._project_root()),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                )
+                try:
+                    stdout, _stderr = proc.communicate(timeout=timeout_sec)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(proc.pid, 15)
+                        proc.communicate(timeout=1.0)
+                    except Exception:
+                        try:
+                            os.killpg(proc.pid, 9)
+                        except Exception:
+                            pass
+                    return {"count": 0, "providers": {}}
         except Exception:
             return {"count": 0, "providers": {}}
         if proc.returncode != 0:
             return {"count": 0, "providers": {}}
         try:
-            payload = json.loads(str(proc.stdout or "{}"))
+            payload = json.loads(str(stdout or "{}"))
         except (TypeError, ValueError):
             return {"count": 0, "providers": {}}
 
@@ -6266,44 +6319,25 @@ class WebApp:
         gateway_detail = ""
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "openclaw",
-                "gateway",
-                "probe",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env=self._openclaw_cli_env(),
-            )
-            try:
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=12.0)
-                gateway_probe_raw = stdout.decode("utf-8", errors="replace")
-                parsed_probe = self._parse_openclaw_gateway_probe(gateway_probe_raw)
-                gateway_reachable = bool(parsed_probe.get("gateway_reachable"))
-                local_target = str(parsed_probe.get("local_target") or "")
-                gateway_detail = str(parsed_probe.get("detail") or "")
-            except asyncio.TimeoutError:
-                if proc.returncode is None:
-                    try:
-                        proc.terminate()
-                    except ProcessLookupError:
-                        pass
-                    else:
-                        # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
-                        try:
-                            await asyncio.wait_for(proc.wait(), timeout=2.0)
-                        except asyncio.TimeoutError:
-                            try:
-                                proc.kill()
-                            except ProcessLookupError:
-                                pass
-                            try:
-                                await asyncio.wait_for(proc.wait(), timeout=1.0)
-                            except asyncio.TimeoutError:
-                                logger.warning(
-                                    "openclaw_cli_force_killed_but_no_reap",
-                                    pid=proc.pid,
-                                )
-                gateway_probe_error = "gateway_probe_timeout"
+            async with get_global_semaphore():
+                proc = await asyncio.create_subprocess_exec(
+                    "openclaw",
+                    "gateway",
+                    "probe",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=self._openclaw_cli_env(),
+                )
+                try:
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=12.0)
+                    gateway_probe_raw = stdout.decode("utf-8", errors="replace")
+                    parsed_probe = self._parse_openclaw_gateway_probe(gateway_probe_raw)
+                    gateway_reachable = bool(parsed_probe.get("gateway_reachable"))
+                    local_target = str(parsed_probe.get("local_target") or "")
+                    gateway_detail = str(parsed_probe.get("detail") or "")
+                except asyncio.TimeoutError:
+                    await terminate_and_reap(proc)
+                    gateway_probe_error = "gateway_probe_timeout"
         except Exception as exc:
             gateway_probe_error = f"gateway_probe_failed: {exc}"
 
@@ -11394,44 +11428,25 @@ class WebApp:
 
             async def _inner() -> dict:
                 # [R9] Безопасный запуск через asyncio subprocess с таймаутом.
-                proc = await asyncio.create_subprocess_exec(
-                    "openclaw",
-                    "channels",
-                    "status",
-                    "--probe",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    env=self._openclaw_cli_env(),
-                )
-                try:
-                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=45.0)
-                except asyncio.TimeoutError:
-                    if proc.returncode is None:
-                        try:
-                            proc.terminate()
-                        except ProcessLookupError:
-                            pass
-                        else:
-                            # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
-                            try:
-                                await asyncio.wait_for(proc.wait(), timeout=2.0)
-                            except asyncio.TimeoutError:
-                                try:
-                                    proc.kill()
-                                except ProcessLookupError:
-                                    pass
-                                try:
-                                    await asyncio.wait_for(proc.wait(), timeout=1.0)
-                                except asyncio.TimeoutError:
-                                    logger.warning(
-                                        "openclaw_cli_force_killed_but_no_reap",
-                                        pid=proc.pid,
-                                    )
-                    return {
-                        "ok": False,
-                        "error": "openclaw_timeout",
-                        "detail": "Запрос статуса каналов превысил 45 сек.",
-                    }
+                async with get_global_semaphore():
+                    proc = await asyncio.create_subprocess_exec(
+                        "openclaw",
+                        "channels",
+                        "status",
+                        "--probe",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                        env=self._openclaw_cli_env(),
+                    )
+                    try:
+                        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=45.0)
+                    except asyncio.TimeoutError:
+                        await terminate_and_reap(proc)
+                        return {
+                            "ok": False,
+                            "error": "openclaw_timeout",
+                            "detail": "Запрос статуса каналов превысил 45 сек.",
+                        }
 
                 raw_output = stdout.decode("utf-8", errors="replace")
 
@@ -14485,25 +14500,23 @@ class WebApp:
                 # --- Шаг 1: проверяем runtime каналов ---
                 runtime_ok = False
                 try:
-                    proc_channels = await asyncio.create_subprocess_exec(
-                        "openclaw",
-                        "channels",
-                        "status",
-                        "--probe",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                    )
-                    try:
-                        stdout_ch, _ = await asyncio.wait_for(
-                            proc_channels.communicate(), timeout=30.0
+                    async with get_global_semaphore():
+                        proc_channels = await asyncio.create_subprocess_exec(
+                            "openclaw",
+                            "channels",
+                            "status",
+                            "--probe",
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.STDOUT,
                         )
-                        runtime_ok = proc_channels.returncode == 0
-                    except asyncio.TimeoutError:
                         try:
-                            proc_channels.terminate()
-                        except ProcessLookupError:
-                            pass
-                        runtime_ok = False
+                            stdout_ch, _ = await asyncio.wait_for(
+                                proc_channels.communicate(), timeout=30.0
+                            )
+                            runtime_ok = proc_channels.returncode == 0
+                        except asyncio.TimeoutError:
+                            await terminate_and_reap(proc_channels)
+                            runtime_ok = False
                 except Exception:
                     runtime_ok = False
 
@@ -14511,32 +14524,30 @@ class WebApp:
                 schema_markers = {"unsupported schema node", "schema", "validation"}
                 control_schema_warnings: list[str] = []
                 try:
-                    proc_logs = await asyncio.create_subprocess_exec(
-                        "openclaw",
-                        "logs",
-                        "--tail",
-                        "200",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                    )
-                    try:
-                        stdout_logs, _ = await asyncio.wait_for(
-                            proc_logs.communicate(), timeout=10.0
+                    async with get_global_semaphore():
+                        proc_logs = await asyncio.create_subprocess_exec(
+                            "openclaw",
+                            "logs",
+                            "--tail",
+                            "200",
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.STDOUT,
                         )
-                        raw_logs = stdout_logs.decode("utf-8", errors="replace")
-                        for line in raw_logs.splitlines():
-                            line_lower = line.lower()
-                            # Ищем строки, содержащие хотя бы один из маркеров схемы
-                            if any(marker in line_lower for marker in schema_markers):
-                                stripped = line.strip()
-                                if stripped:
-                                    control_schema_warnings.append(stripped)
-                    except asyncio.TimeoutError:
                         try:
-                            proc_logs.terminate()
-                        except ProcessLookupError:
-                            pass
-                        # При таймауте логов — не считаем это runtime-риском
+                            stdout_logs, _ = await asyncio.wait_for(
+                                proc_logs.communicate(), timeout=10.0
+                            )
+                            raw_logs = stdout_logs.decode("utf-8", errors="replace")
+                            for line in raw_logs.splitlines():
+                                line_lower = line.lower()
+                                # Ищем строки, содержащие хотя бы один из маркеров схемы
+                                if any(marker in line_lower for marker in schema_markers):
+                                    stripped = line.strip()
+                                    if stripped:
+                                        control_schema_warnings.append(stripped)
+                        except asyncio.TimeoutError:
+                            await terminate_and_reap(proc_logs)
+                            # При таймауте логов — не считаем это runtime-риском
                 except Exception:
                     # CLI openclaw logs недоступен — просто нет данных для schema-анализа
                     pass
