@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Krab Daily Maintenance (launchd, FREE)
+
+        Runs daily at 02:07 local time:
+          1. Archive.db backup (keep last 7 days)
+          2. Log rotation (openclaw.log, gateway.log > 100 MB → .gz)
+
+        Install:
+          launchctl bootstrap gui/501 \
+            /Users/pablito/Antigravity_AGENTS/Краб/scripts/launchagents/ai.krab.daily-maintenance.plist
+    -->
+    <key>Label</key>
+    <string>ai.krab.daily-maintenance</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/krab_daily_maintenance.py</string>
+    </array>
+
+    <!-- Runs daily at 02:07 (avoid :00) -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>2</integer>
+        <key>Minute</key>
+        <integer>7</integer>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/krab_daily_maintenance_stderr.log</string>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
