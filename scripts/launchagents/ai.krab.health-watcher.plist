@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Routines #2 + #9 + #14 combined:
+        - #2: Krab panel health ping
+        - #9: OpenClaw gateway health (auto-kickstart)
+        - #14: Gemini API quota check
+        + disk space safety check
+
+        Runs every 15 min.
+        Install:
+          launchctl bootstrap gui/501 \
+            /Users/pablito/Antigravity_AGENTS/Краб/scripts/launchagents/ai.krab.health-watcher.plist
+    -->
+    <key>Label</key>
+    <string>ai.krab.health-watcher</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/krab_health_watcher.py</string>
+    </array>
+
+    <!-- 15 минут = 900 sec -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>KRAB_REPO</key>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+    </dict>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/krab_health_watcher_stderr.log</string>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

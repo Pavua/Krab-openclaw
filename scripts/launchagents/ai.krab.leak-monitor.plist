@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Routine #1: Krab Leak Monitor
+
+        Runs scripts/krab_leak_monitor.py every 30 minutes.
+        Independent от Krab — запускается launchd напрямую, работает
+        даже когда Krab crashed (это главная функция — защита).
+
+        Install:
+            launchctl bootstrap gui/501 \
+              /Users/pablito/Antigravity_AGENTS/Краб/scripts/launchagents/ai.krab.leak-monitor.plist
+
+        Check:
+            launchctl list | grep ai.krab.leak-monitor
+
+        Logs:
+            ~/.openclaw/krab_runtime_state/leak_monitor.log
+            /tmp/krab_leak_monitor_stderr.log
+    -->
+    <key>Label</key>
+    <string>ai.krab.leak-monitor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/krab_leak_monitor.py</string>
+    </array>
+
+    <!-- Каждые 30 мин: 30 * 60 = 1800 sec -->
+    <key>StartInterval</key>
+    <integer>1800</integer>
+
+    <!-- Сразу при load LaunchAgent — чтобы сразу знать baseline -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Один процесс одновременно, не forkать несколько -->
+    <key>AbandonProcessGroup</key>
+    <false/>
+
+    <!-- Working directory для относительных путей -->
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <!-- Environment: загружаем .env через wrapper (см. ProgramArguments) -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>KRAB_LEAK_THRESHOLD_CRITICAL</key>
+        <string>25</string>
+        <key>KRAB_LEAK_THRESHOLD_WARNING</key>
+        <string>18</string>
+    </dict>
+
+    <!-- Stderr → log file (stdout пишется внутри скрипта в ~/.openclaw/...) -->
+    <key>StandardErrorPath</key>
+    <string>/tmp/krab_leak_monitor_stderr.log</string>
+
+    <!-- Не keep-alive (запускаем по интервалу, не continuously) -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Low priority чтобы не грузить system -->
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
