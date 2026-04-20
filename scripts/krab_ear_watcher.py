@@ -123,8 +123,14 @@ def check_launchagent_state() -> tuple[bool, str]:
             timeout=5,
             check=False,
         )
+        # Только реальные Ear сервисы, НЕ наш watcher (ai.krab.ear-watcher).
+        # Ear services: ai.krab.ear.agent, ai.krab.ear.rest, com.krab.ear.*
+        ear_patterns = ("ai.krab.ear.", "com.krab.ear.", "ai.krab.ear\t")
         for line in out.stdout.splitlines():
-            if "ai.krab.ear" in line or "com.krab.ear" in line:
+            # Skip watcher'ы — они monitor Ear, не part of Ear
+            if "ear-watcher" in line or "ear_watcher" in line:
+                continue
+            if any(p in line for p in ear_patterns):
                 return True, line.strip()
         return False, "not_loaded"
     except (subprocess.TimeoutExpired, OSError):
@@ -214,29 +220,62 @@ def main() -> int:
     checks["launchagent_loaded"] = lc_loaded
     checks["launchagent_state"] = lc_state
 
-    # Decision: alert только если LaunchAgent LOADED but процесс down 2+ checks
+    # Decision: alert только если LaunchAgent LOADED but процесс down 2+ checks.
+    # Escalation: alert 1 раз при первом crossing threshold (2→3), потом silent
+    # пока не recovery (state reset) ИЛИ до следующего escalation threshold (8, 24, 72)
+    # — чтобы не spam'ить каждые 15 мин.
     # (Если ear НЕ loaded — user его выключил специально, не alert)
     alert_needed = False
     alert_text_parts = []
 
+    def _should_alert(count: int, prev_count: int) -> bool:
+        """Alert на FIRST threshold cross + escalation milestones."""
+        # First crossing 2→3 — initial alert
+        if prev_count < DOWN_THRESHOLD_CHECKS <= count:
+            return True
+        # Escalation milestones (hourly → 4h → 24h @ 15-min intervals)
+        for milestone in (8, 24, 96):  # 2h, 6h, 24h down
+            if prev_count < milestone <= count:
+                return True
+        return False
+
+    prev_state = state.copy()
     if lc_loaded:
-        if state["swift_agent_down_count"] >= DOWN_THRESHOLD_CHECKS and not swift_ok:
+        if not swift_ok and _should_alert(
+            state["swift_agent_down_count"], prev_state.get("swift_agent_down_count_last_alert", -1)
+        ):
             alert_text_parts.append(
-                f"Swift agent down {state['swift_agent_down_count']}× (expected UP — LaunchAgent loaded)"
+                f"Swift agent down {state['swift_agent_down_count']}×"
             )
             alert_needed = True
-        if state["python_backend_down_count"] >= DOWN_THRESHOLD_CHECKS and not python_ok:
+            state["swift_agent_down_count_last_alert"] = state["swift_agent_down_count"]
+        if not python_ok and _should_alert(
+            state["python_backend_down_count"],
+            prev_state.get("python_backend_down_count_last_alert", -1),
+        ):
             alert_text_parts.append(
                 f"Python backend socket missing {state['python_backend_down_count']}×"
             )
             alert_needed = True
+            state["python_backend_down_count_last_alert"] = state["python_backend_down_count"]
         if (
             KRAB_EAR_PANEL_URL
-            and state["panel_down_count"] >= DOWN_THRESHOLD_CHECKS
             and not panel_ok
+            and _should_alert(
+                state["panel_down_count"], prev_state.get("panel_down_count_last_alert", -1)
+            )
         ):
             alert_text_parts.append(f"Ear panel down {state['panel_down_count']}×")
             alert_needed = True
+            state["panel_down_count_last_alert"] = state["panel_down_count"]
+
+    # Reset alert markers при recovery
+    if swift_ok:
+        state.pop("swift_agent_down_count_last_alert", None)
+    if python_ok:
+        state.pop("python_backend_down_count_last_alert", None)
+    if panel_ok:
+        state.pop("panel_down_count_last_alert", None)
 
     if alert_needed:
         text = "🎙️ Krab Ear health issue: " + "; ".join(alert_text_parts)
