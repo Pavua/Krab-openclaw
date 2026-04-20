@@ -244,21 +244,8 @@ def main() -> int:
             _log("gateway_kickstart_failed", "error")
             actions.append("gateway_kickstart_failed")
 
-    # 3. Gemini quota
-    gemini_ok, gemini_status = check_gemini_quota()
-    checks["gemini_ok"] = gemini_ok
-    checks["gemini_status"] = gemini_status
-    if not gemini_ok:
-        state["gemini_fail_count"] += 1
-        if state["gemini_fail_count"] >= DOWN_THRESHOLD_CHECKS:
-            text = f"⚠️ Gemini API check failed: {gemini_status}"
-            _log(text, "warning")
-            notify(text, "warning")
-            actions.append(f"gemini_alert_{gemini_status}")
-    else:
-        state["gemini_fail_count"] = 0
-
-    # 4. Disk space
+    # 3. Disk space
+    # (Gemini quota check removed — covered by Sentry daily digest routine)
     disk_ok, free_gb = check_disk_space()
     checks["disk_ok"] = disk_ok
     checks["disk_free_gb"] = free_gb
