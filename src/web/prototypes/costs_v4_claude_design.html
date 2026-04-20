@@ -194,7 +194,7 @@
         <div class="flex items-center gap-4" style="flex-wrap:wrap;">
             <div>
                 <div class="runway-big skeleton" id="runway-days" data-val="0">--</div>
-                <div class="text-muted text-sm mt-2">days remaining</div>
+                <div class="text-muted text-sm mt-2" id="runway-label">days remaining</div>
             </div>
         </div>
         <div class="runway-sub">
@@ -340,7 +340,7 @@
                 </tbody>
             </table>
         </div>
-        <div class="flex justify-between items-center mt-3 text-sm text-muted">
+        <div id="hist-pagination" class="flex justify-between items-center mt-3 text-sm text-muted">
             <span id="history-info"></span>
             <div class="flex gap-2">
                 <button class="glass-button export-btn" id="hist-prev">Prev</button>
@@ -519,7 +519,7 @@ function updateTrend(id, data, isCost) {
     if (!prev) { el.style.display='none'; return; }
     const pct = ((cur - prev) / prev) * 100;
     el.style.display = 'inline-flex';
-    el.textContent = (pct > 0 ? 'up ' : 'dn ') + Math.abs(pct).toFixed(1) + '%';
+    el.textContent = (pct > 0 ? '\u2191 ' : '\u2193 ') + Math.abs(pct).toFixed(1) + '%';
     el.style.color = pct > 0 ? (isCost ? '#fca5a5' : '#6ee7b7') : (isCost ? '#6ee7b7' : '#fca5a5');
 }
 
@@ -529,7 +529,13 @@ function renderBarChart(containerId, dataObj) {
     if (!c || !dataObj) return;
     while (c.firstChild) c.removeChild(c.firstChild);
     const entries = Object.entries(dataObj).sort(function(a,b){return b[1]-a[1];}).slice(0, 8);
-    if (!entries.length) return;
+    if (!entries.length) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'text-align:center;color:var(--text-muted);padding:2rem;';
+        empty.textContent = 'Нет данных по каналам';
+        c.appendChild(empty);
+        return;
+    }
     const maxVal = entries[0][1] || 1;
     const palette = ['#bae6fd','#c4b5fd','#6ee7b7','#fde68a','#fca5a5'];
     entries.forEach(function(entry, i) {
@@ -560,7 +566,18 @@ function providerColor(name) {
 }
 
 function renderDonut(byModel) {
-    if (!byModel || !Object.keys(byModel).length) return;
+    if (!byModel || !Object.keys(byModel).length) {
+        // empty state — скрыть canvas+legend, показать заглушку
+        const wrapper = document.querySelector('.donut-wrapper');
+        if (wrapper) {
+            while (wrapper.firstChild) wrapper.removeChild(wrapper.firstChild);
+            const empty = document.createElement('div');
+            empty.style.cssText = 'text-align:center;color:var(--text-muted);padding:2rem;width:100%;';
+            empty.textContent = '\uD83D\uDCCA Нет данных — сделай первый AI-запрос в Telegram';
+            wrapper.appendChild(empty);
+        }
+        return;
+    }
     const labels = Object.keys(byModel);
     const costs = labels.map(function(k){return byModel[k].cost_usd||0;});
     const colors = labels.map(function(k){return providerColor(k);});
@@ -741,6 +758,8 @@ function renderHistoryTable() {
             tbody.appendChild(tr);
         });
     }
+    const pagination = document.getElementById('hist-pagination');
+    if (pagination) pagination.style.display = total === 0 ? 'none' : '';
     if (info) info.textContent = total + ' записей, стр. ' + (currentHistPage+1) + '/' + Math.max(1,Math.ceil(total/HIST_PAGE_SIZE));
     document.getElementById('hist-prev').disabled = currentHistPage === 0;
     document.getElementById('hist-next').disabled = start + HIST_PAGE_SIZE >= total;
@@ -773,34 +792,69 @@ function resetDateFilter() {
 // ── Runway ─────────────────────────────────────────────────────────────────
 function renderRunway(runway) {
     if (!runway) return;
-    const days = runway.runway_days || 0;
     const badge = document.getElementById('runway-badge');
     const banner = document.getElementById('runway-banner');
     const bannerText = document.getElementById('runway-banner-text');
-
     const daysEl = document.getElementById('runway-days');
-    if (daysEl) {
-        daysEl.classList.remove('skeleton');
-        if (days > 3650) {
-            daysEl.textContent = '\u221e (safe)';
-            daysEl.style.color = '#34d399';
+
+    // Явно различаем три случая:
+    //   a) runway_days отсутствует / null → "Не рассчитано" (neutral)
+    //   b) runway_days == 0 И monthly_cost_usd == 0 → "∞" (нет расходов, safe)
+    //   c) runway_days > 3650 → "∞ (safe)" (недосягаемо)
+    //   d) нормальное число → считаем по порогам
+    const rawDays = runway.runway_days;
+    const monthlyCost = Number(runway.monthly_cost_usd || 0);
+    const hasNoSpend = monthlyCost === 0;
+    const isValidNumber = typeof rawDays === 'number' && isFinite(rawDays) && !isNaN(rawDays);
+
+    let displayText, displayColor, badgeClass, badgeText;
+    let bannerVisible = false, bannerLevel = null;
+
+    if (!isValidNumber || rawDays === null) {
+        displayText = '—';
+        displayColor = 'var(--text-muted)';
+        badgeClass = 'runway-badge green';
+        badgeText = 'N/A';
+    } else if (rawDays === 0 && hasNoSpend) {
+        displayText = '\u221e';
+        displayColor = '#34d399';
+        badgeClass = 'runway-badge green';
+        badgeText = 'БЕЗ РАСХОДОВ';
+    } else if (rawDays > 3650) {
+        displayText = '\u221e (safe)';
+        displayColor = '#34d399';
+        badgeClass = 'runway-badge green';
+        badgeText = 'OK';
+    } else {
+        displayText = Math.round(rawDays).toLocaleString();
+        if (rawDays >= 90) {
+            displayColor = '#34d399';
+            badgeClass = 'runway-badge green'; badgeText = 'OK';
+        } else if (rawDays >= 30) {
+            displayColor = '#fbbf24';
+            badgeClass = 'runway-badge amber'; badgeText = 'ВНИМАНИЕ';
+            bannerVisible = true; bannerLevel = 'amber';
         } else {
-            daysEl.textContent = Math.round(days).toLocaleString();
-            daysEl.style.color = days < 30 ? '#f87171' : days < 90 ? '#fbbf24' : '#34d399';
+            displayColor = '#f87171';
+            badgeClass = 'runway-badge red'; badgeText = 'КРИТИЧНО';
+            bannerVisible = true; bannerLevel = 'red';
         }
     }
-    if (badge) {
-        if (days > 3650 || days >= 90) { badge.className = 'runway-badge green'; badge.textContent = 'OK'; }
-        else if (days >= 30) { badge.className = 'runway-badge amber'; badge.textContent = 'ВНИМАНИЕ'; }
-        else { badge.className = 'runway-badge red'; badge.textContent = 'КРИТИЧНО'; }
+
+    if (daysEl) {
+        daysEl.classList.remove('skeleton');
+        daysEl.textContent = displayText;
+        daysEl.style.color = displayColor;
     }
+    const labelEl = document.getElementById('runway-label');
+    if (labelEl) labelEl.style.display = (!isValidNumber || rawDays === null) ? 'none' : '';
+    if (badge) { badge.className = badgeClass; badge.textContent = badgeText; }
     if (banner && bannerText) {
-        if (days > 0 && days < 30) {
-            banner.className = 'runway-alert-banner red visible';
-            bannerText.textContent = 'Критично: до исчерпания кредитов ' + Math.round(days) + ' дней. Пополните баланс.';
-        } else if (days > 0 && days < 90) {
-            banner.className = 'runway-alert-banner amber visible';
-            bannerText.textContent = 'Внимание: до исчерпания кредитов ' + Math.round(days) + ' дней.';
+        if (bannerVisible) {
+            banner.className = 'runway-alert-banner ' + bannerLevel + ' visible';
+            bannerText.textContent = (bannerLevel === 'red' ? 'Критично' : 'Внимание') +
+                ': до исчерпания кредитов ' + Math.round(rawDays) + ' дней.' +
+                (bannerLevel === 'red' ? ' Пополните баланс.' : '');
         } else {
             banner.className = 'runway-alert-banner';
         }
@@ -871,8 +925,16 @@ function renderReport(report) {
 
     // Model table
     const tbody = document.getElementById('model-tbody');
-    if (tbody && report.by_model) {
+    if (tbody) {
         while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+        if (!report.by_model || !Object.keys(report.by_model).length) {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = 5; td.className = 'text-center text-muted'; td.textContent = 'Нет данных';
+            tr.appendChild(td); tbody.appendChild(tr);
+        }
+    }
+    if (tbody && report.by_model && Object.keys(report.by_model).length) {
         Object.entries(report.by_model).sort(function(a,b){return b[1].cost_usd-a[1].cost_usd;}).forEach(function(entry) {
             const name = entry[0], m = entry[1];
             const tokens = (m.input_tokens||0) + (m.output_tokens||0);
