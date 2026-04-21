@@ -23,6 +23,8 @@ from typing import Any
 
 import structlog
 
+from ..core.stealth_metrics import record_detection
+
 logger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -75,6 +77,15 @@ async def search_mercadona(query: str, max_results: int = 10) -> str:
         """Перехватчик ответов — собирает JSON из API Mercadona."""
         url = response.url
         if not any(pattern in url for pattern in _API_PATTERNS):
+            return
+        # Детектируем антибот-ответы
+        if response.status == 429:
+            record_detection("ratelimit")
+            logger.warning("mercadona_ratelimited", url=url)
+            return
+        if response.status in (401, 403):
+            record_detection("blocked")
+            logger.warning("mercadona_blocked", status=response.status, url=url)
             return
         # Принимаем только успешные JSON-ответы
         if response.status < 200 or response.status >= 300:
@@ -131,6 +142,7 @@ async def search_mercadona(query: str, max_results: int = 10) -> str:
         try:
             await page.goto(_HOME_URL, wait_until="domcontentloaded", timeout=20_000)
         except Exception as exc:
+            record_detection("fetch_error")
             logger.warning("mercadona_goto_timeout", error=repr(exc))
         await page.wait_for_timeout(1_500)
         await _accept_cookies_if_present(page)
@@ -277,6 +289,24 @@ async def _submit_search_query(page: Any, query: str) -> bool:
 
 async def _extract_products_from_dom(page: Any) -> list[dict[str, Any]]:
     """Читает карточки товаров со страницы `search-results`, если API-маршрут скрыт от нас."""
+    # Проверяем наличие капчи перед ожиданием результатов
+    try:
+        captcha_indicators = (
+            "iframe[src*='captcha']",
+            "iframe[src*='recaptcha']",
+            "iframe[src*='hcaptcha']",
+            "[data-testid='captcha']",
+            ".captcha",
+            "#captcha",
+        )
+        for selector in captcha_indicators:
+            if await page.locator(selector).count():
+                record_detection("captcha")
+                logger.warning("mercadona_captcha_detected", selector=selector, url=page.url)
+                break
+    except Exception:
+        pass
+
     try:
         await page.wait_for_selector("button.product-cell__content-link", timeout=8_000)
     except Exception as exc:
