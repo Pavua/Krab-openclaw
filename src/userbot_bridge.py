@@ -3403,6 +3403,63 @@ class KraabUserbot(
                 )
             )
 
+        # ──────────────────────────────────────────────────────────────────
+        # SECURITY: guest в группе без упоминания → forward-only, LLM skip.
+        #
+        # Инцидент 2026-04-21 05:13 How2AI: гость @SwMaster через prompt injection
+        # получил email оператора, URL репо и SSH-ключ. ACL правильно помечал его
+        # как GUEST, но LLM всё равно генерировал ответ с данными оператора.
+        #
+        # Правило XOR:
+        #   - если user не owner (GUEST) И chat это группа И нет @mention Краба
+        #     → ТОЛЬКО forward к оператору, ответ LLM не генерируется.
+        #   - Если есть @mention или reply-to-Krab — нормальная обработка.
+        # ──────────────────────────────────────────────────────────────────
+        if not is_self:
+            from .core.access_control import AccessLevel  # noqa: PLC0415
+            from .core.krab_identity import is_krab_mentioned  # noqa: PLC0415
+            from .core.prometheus_metrics import _GUEST_LLM_SKIPPED_COUNTER  # noqa: PLC0415
+
+            _chat_obj = getattr(message, "chat", None)
+            _chat_type_for_guard = getattr(_chat_obj, "type", None)
+            _is_group_for_guard = _chat_type_for_guard in (
+                enums.ChatType.GROUP,
+                enums.ChatType.SUPERGROUP,
+            )
+            _is_guest = access_profile.level == AccessLevel.GUEST
+            if _is_group_for_guard and _is_guest:
+                # Pyrogram native mention flag + text scan через krab_identity
+                _pyrogram_mentioned = bool(getattr(message, "mentioned", False))
+                _text_mention = is_krab_mentioned(text or "")
+                _is_reply_to_krab = bool(
+                    getattr(message, "reply_to_message", None)
+                    and self.me
+                    and getattr(getattr(message, "reply_to_message", None), "from_user", None)
+                    and message.reply_to_message.from_user.id == self.me.id
+                )
+                if not _pyrogram_mentioned and not _text_mention and not _is_reply_to_krab:
+                    # Forward-only: информируем оператора, LLM не вызываем
+                    _skip_reason = "not_owner_no_mention"
+                    _GUEST_LLM_SKIPPED_COUNTER[_skip_reason] = (
+                        _GUEST_LLM_SKIPPED_COUNTER.get(_skip_reason, 0) + 1
+                    )
+                    logger.info(
+                        "guest_llm_reply_skipped",
+                        reason=_skip_reason,
+                        chat_id=chat_id,
+                        user_id=str(getattr(user, "id", "?")),
+                        username=str(getattr(user, "username", "?")),
+                    )
+                    if bool(getattr(config, "FORWARD_UNKNOWN_INCOMING", True)):
+                        asyncio.create_task(
+                            self._forward_guest_incoming_to_owner(
+                                message=message,
+                                query=query or text or "",
+                                krab_response="[LLM пропущен: гость в группе без @mention]",
+                            )
+                        )
+                    return
+
         # Реакция "видит" — owner сразу понимает что Краб получил сообщение.
         # Только для owner-сообщений (is_self=True или is_allowed_sender+is_self check).
         if is_self:
@@ -3688,6 +3745,24 @@ class KraabUserbot(
             is_allowed_sender=is_allowed_sender,
             access_level=access_profile.level,
         )
+
+        # SENDER CONTEXT: Инъектируем identity отправителя в system prompt.
+        # Защита от identity confusion — LLM видит is_owner явно и не может
+        # перепутать гостя с владельцем на основе текста сообщения.
+        try:
+            from .core.access_control import AccessLevel as _AccessLevel  # noqa: PLC0415
+            from .core.sender_context import (  # noqa: PLC0415
+                attach_to_system_prompt,
+                build_context_block,
+            )
+
+            _sender_is_owner = (
+                hasattr(access_profile, "level") and access_profile.level == _AccessLevel.OWNER
+            )
+            _sender_ctx = build_context_block(message, is_owner=_sender_is_owner)
+            system_prompt = attach_to_system_prompt(system_prompt, _sender_ctx)
+        except Exception:  # noqa: BLE001
+            pass  # Никогда не ломаем LLM flow из-за context injection
 
         # CONTEXT: Добавляем контекст чата для групп (сэндвич-защита от инъекций)
         if is_allowed_sender and message.chat.type != enums.ChatType.PRIVATE:
