@@ -3668,8 +3668,18 @@ class KraabUserbot(
                     message = await self._safe_edit(
                         message, f"🦀 {query}\n\n👀 *Разглядываю фото...*"
                     )
-                else:
+                elif _show_progress_notices and temp_msg is not message:
+                    # temp_msg — наше собственное ack-сообщение (личный чат) → можно редактировать
                     temp_msg = await self._safe_edit(temp_msg, "👀 *Разглядываю фото...*")
+                else:
+                    # Групповой чат: temp_msg == message (чужое) → нельзя редактировать.
+                    # Отправляем реплай-статус молча, чтобы не падать и не блокировать download.
+                    try:
+                        temp_msg = await self._safe_reply_or_send_new(
+                            message, "👀 *Разглядываю фото...*"
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass  # статусное сообщение не критично — продолжаем download
 
                 # Защита от зависания media-path: ограничиваем download timeout.
                 photo_timeout_sec = float(getattr(config, "PHOTO_DOWNLOAD_TIMEOUT_SEC", 40.0))
