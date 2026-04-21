@@ -10951,6 +10951,45 @@ class WebApp:
 
             return collect_memory_stats()
 
+        @self.app.get("/api/memory/coverage-audit")
+        async def memory_coverage_audit(
+            threshold: int = Query(default=100, ge=1, le=100000),
+        ):
+            """Аудит покрытия чатов в archive.db.
+
+            Сравнивает количество сообщений в archive.db с реальным числом
+            в Telegram (если pyrogram доступен) или флагует чаты < threshold.
+
+            Params:
+              threshold: порог «мало сообщений» (default 100)
+
+            Returns:
+              { generated_at, db_path, threshold, total_chats,
+                total_db_messages, under_threshold_count, rows }
+            """
+            from pathlib import Path as _Path
+
+            from scripts.audit_chat_coverage import run_audit  # type: ignore[import]
+
+            db_path = _Path("~/.openclaw/krab_memory/archive.db").expanduser()
+
+            try:
+                result = run_audit(
+                    db_path=db_path,
+                    threshold=threshold,
+                    skip_telegram=True,  # web endpoint: не блокируем на TG API
+                    output=None,  # не перезаписывать MD при каждом GET
+                )
+                return result
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("coverage_audit_failed", error=str(exc))
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse(
+                    status_code=503,
+                    content={"ok": False, "error": str(exc)},
+                )
+
         @self.app.get("/api/memory/doctor")
         async def memory_doctor_get():
             """Диагностика Memory Layer — 6 проверок без side-effects.
