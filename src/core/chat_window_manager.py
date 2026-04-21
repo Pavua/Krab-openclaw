@@ -77,10 +77,17 @@ class ChatWindow:
 class ChatWindowManager:
     """Менеджер окон активности по chat_id с LRU-eviction."""
 
-    def __init__(self, capacity: int | None = None, max_messages_per_window: int | None = None) -> None:
+    def __init__(
+        self, capacity: int | None = None, max_messages_per_window: int | None = None
+    ) -> None:
         self._capacity = capacity if capacity is not None else CAPACITY
-        self._max_messages = max_messages_per_window if max_messages_per_window is not None else MESSAGE_CAP_PER_WINDOW
+        self._max_messages = (
+            max_messages_per_window
+            if max_messages_per_window is not None
+            else MESSAGE_CAP_PER_WINDOW
+        )
         self._windows: OrderedDict[str, ChatWindow] = OrderedDict()
+        self._evicted_counts: dict[str, int] = {"lru": 0, "idle": 0}
 
     def get_or_create(self, chat_id: str) -> ChatWindow:
         """Вернуть существующее окно или создать новое (LRU-evict если нужно)."""
@@ -91,6 +98,7 @@ class ChatWindowManager:
         # Evict LRU если capacity превышен
         if len(self._windows) >= self._capacity:
             self._windows.popitem(last=False)
+            self._evicted_counts["lru"] += 1
 
         window = ChatWindow(chat_id, max_messages=self._max_messages)
         self._windows[chat_id] = window
@@ -107,6 +115,7 @@ class ChatWindowManager:
         idle_ids = [cid for cid, w in self._windows.items() if now - w.last_activity_at > threshold]
         for cid in idle_ids:
             del self._windows[cid]
+        self._evicted_counts["idle"] += len(idle_ids)
         return len(idle_ids)
 
     def list_windows(self) -> list[dict[str, Any]]:
@@ -125,6 +134,10 @@ class ChatWindowManager:
         count = len(self._windows)
         self._windows.clear()
         return count
+
+    def get_eviction_counts(self) -> dict[str, int]:
+        """Счётчики eviction по причине: lru и idle."""
+        return dict(self._evicted_counts)
 
     @property
     def active_count(self) -> int:

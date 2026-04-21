@@ -279,6 +279,17 @@ def collect_metrics() -> str:
                 help_text="Total messages buffered across all ChatWindows",
             )
         )
+        evicted = chat_window_manager.get_eviction_counts()
+        for reason, count in evicted.items():
+            lines.append(
+                _format_metric(
+                    "krab_chat_windows_evicted_total",
+                    count,
+                    labels={"reason": reason},
+                    help_text="Total ChatWindow evictions by reason (lru, idle)",
+                    mtype="counter",
+                )
+            )
     except Exception:
         pass
 
