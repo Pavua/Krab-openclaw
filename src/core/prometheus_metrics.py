@@ -293,6 +293,23 @@ def collect_metrics() -> str:
     except Exception:
         pass
 
+    # === Memory query relevance score percentiles ===
+    try:
+        from src.core.memory_retrieval_scores import rrf_score_window
+
+        pcts = rrf_score_window.percentiles()
+        if pcts:
+            for quantile, value in pcts.items():
+                lines.append(
+                    _format_metric(
+                        f"krab_memory_query_relevance_score_{quantile}",
+                        round(value, 6),
+                        help_text=f"RRF score distribution {quantile} (last {len(rrf_score_window)} queries)",
+                    )
+                )
+    except Exception:
+        pass
+
     # === Adaptive rerank usage ===
     lines.append(
         _format_metric(
@@ -302,6 +319,25 @@ def collect_metrics() -> str:
             mtype="counter",
         )
     )
+
+    # === Stealth detection counters ===
+    try:
+        from src.core.stealth_metrics import get_counts as _stealth_get_counts
+
+        stealth_counts = _stealth_get_counts()
+        if stealth_counts:
+            for layer, count in stealth_counts.items():
+                lines.append(
+                    _format_metric(
+                        "krab_stealth_detection_total",
+                        count,
+                        labels={"layer": layer[:30]},
+                        help_text="Anti-bot detection signals by layer (canvas/webgl/webrtc/captcha/ratelimit/blocked)",
+                        mtype="counter",
+                    )
+                )
+    except Exception:
+        pass
 
     # === Timestamps ===
     lines.append(
