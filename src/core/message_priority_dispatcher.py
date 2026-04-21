@@ -59,3 +59,17 @@ def classify_priority(
 
     # P2: mention-only без упоминания, или неизвестный режим
     return Priority.P2_LOW, f"mode_{chat_mode}_no_trigger"
+
+
+def get_mode_for_chat(chat_id: int | str, *, is_group: bool = True) -> str:
+    """Получить текущий filter mode для чата из персистентного конфига.
+
+    Delegate к chat_filter_config.get_chat_mode — единый источник истины.
+    Используется вышестоящими компонентами для передачи chat_mode в classify_priority.
+
+    Returns:
+        "active" | "mention-only" | "muted"
+    """
+    from .chat_filter_config import chat_filter_config  # lazy import — избегаем цикла
+
+    return chat_filter_config.get_chat_mode(chat_id, is_group=is_group)

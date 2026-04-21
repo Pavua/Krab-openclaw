@@ -18102,3 +18102,59 @@ async def handle_listen(bot: "KraabUserbot", message: Message) -> None:
     await message.reply(
         "❌ Неизвестный режим. Используйте: active, mention-only, muted, reset, reload, list, stats",
     )
+
+
+# ── !filter — per-chat filter mode toggle (Chado §3 P2) ──────────────────────
+
+
+async def handle_filter(bot: "KraabUserbot", message: Message) -> None:
+    """Управление per-chat filter mode (Chado §3 P2).
+
+    Синтаксис:
+      !filter status         — показать текущий режим (=!filter без аргументов)
+      !filter active         — реагировать на все сообщения
+      !filter mention-only   — только на @mention или reply
+      !filter muted          — молчать в этом чате
+      !filter reset          — вернуть к дефолту
+
+    Тонкий алиас !listen — делегирует ту же логику через chat_filter_config.
+    """
+    from ..core.chat_filter_config import chat_filter_config
+    from ..core.command_registry import bump_command
+    from ..core.message_priority_dispatcher import get_mode_for_chat
+
+    bump_command("filter")
+
+    raw = (bot._get_command_args(message) or "").strip().lower()
+    # "status" — алиас для показа режима
+    args = "" if raw == "status" else raw
+    chat_id = message.chat.id
+    is_group = message.chat.type in ("group", "supergroup")
+
+    if args in ("active", "mention-only", "muted"):
+        chat_filter_config.set_chat_mode(chat_id, args)
+        mode_label = {
+            "active": "все сообщения",
+            "mention-only": "@mention и reply",
+            "muted": "молчать",
+        }[args]
+        await message.reply(f"✅ Чат `{chat_id}`: режим → `{args}` ({mode_label})")
+        return
+
+    if args == "reset":
+        chat_filter_config.reset(chat_id)
+        await message.reply(f"🔄 Чат `{chat_id}`: режим сброшен к дефолту")
+        return
+
+    if not args:
+        mode = get_mode_for_chat(chat_id, is_group=is_group)
+        emoji = {"active": "🟢", "mention-only": "🟡", "muted": "🔴"}.get(mode, "⚪")
+        await message.reply(
+            f"{emoji} Текущий режим: `{mode}`\n\n"
+            "Команды: `!filter active` · `!filter mention-only` · `!filter muted` · `!filter reset`"
+        )
+        return
+
+    await message.reply(
+        "❌ Неизвестный режим.\nИспользуйте: `status`, `active`, `mention-only`, `muted`, `reset`"
+    )

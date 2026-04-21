@@ -20,6 +20,7 @@ Default (absent from config):
 Hot-reload: при каждом get_mode проверяется mtime файла;
 если изменился — правила перезагружаются без рестарта.
 """
+
 from __future__ import annotations
 
 import json
@@ -85,7 +86,9 @@ class ChatFilterConfig:
         try:
             current_mtime = self._path.stat().st_mtime
             if current_mtime != self._last_mtime:
-                logger.info("chat_filter_hot_reload", old_mtime=self._last_mtime, new_mtime=current_mtime)
+                logger.info(
+                    "chat_filter_hot_reload", old_mtime=self._last_mtime, new_mtime=current_mtime
+                )
                 self._rules.clear()
                 self._load()
         except Exception as e:  # noqa: BLE001
@@ -119,7 +122,9 @@ class ChatFilterConfig:
         except Exception as e:  # noqa: BLE001
             logger.warning("chat_filter_save_failed", error=str(e))
 
-    def get_mode(self, chat_id: str | int, *, is_group: bool = True, default_if_group: str | None = None) -> str:
+    def get_mode(
+        self, chat_id: str | int, *, is_group: bool = True, default_if_group: str | None = None
+    ) -> str:
         """Получить mode для чата.
 
         Args:
@@ -150,9 +155,7 @@ class ChatFilterConfig:
         # Сначала подтягиваем внешние изменения — не затираем правки других процессов
         self._maybe_reload()
         cid = str(chat_id)
-        self._rules[cid] = ChatFilterRule(
-            chat_id=cid, mode=mode, updated_at=time.time(), note=note
-        )
+        self._rules[cid] = ChatFilterRule(chat_id=cid, mode=mode, updated_at=time.time(), note=note)
         self._save()
         logger.info("chat_filter_set", chat_id=cid, mode=mode)
         return True
@@ -170,6 +173,18 @@ class ChatFilterConfig:
             logger.info("chat_filter_reset", chat_id=cid)
             return True
         return False
+
+    # ── alias API (Chado §3 P2) ───────────────────────────────────────────────
+
+    def get_chat_mode(self, chat_id: int | str, *, is_group: bool = True) -> str:
+        """Alias get_mode → возвращает "active"|"mention-only"|"muted"."""
+        return self.get_mode(chat_id, is_group=is_group)
+
+    def set_chat_mode(self, chat_id: int | str, mode: str) -> bool:
+        """Alias set_mode с валидацией. Raises ValueError на некорректный mode."""
+        return self.set_mode(chat_id, mode)
+
+    # ── /alias API ────────────────────────────────────────────────────────────
 
     def list_rules(self, mode: Optional[str] = None) -> list[ChatFilterRule]:
         """Список всех правил, опционально отфильтрованных по mode."""
