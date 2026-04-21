@@ -12041,6 +12041,89 @@ class WebApp:
                 filename=out_path.name,
             )
 
+        @self.app.get("/api/ecosystem/comparison")
+        async def ecosystem_comparison():
+            """Observable delta Krab vs known peer agents (Chado §7 P2).
+
+            self — динамические данные из CommandRegistry / маршрутов / memory_stats.
+            peers — hardcoded профиль Chado (Telethon-based userbot с 7 anti-bot слоями).
+            """
+            # ── self.commands_count ──────────────────────────────────────────
+            commands_count = 154  # fallback из CLAUDE.md
+            try:
+                from ..core.command_registry import registry as _reg
+
+                commands_count = len(_reg.all())
+            except Exception as _exc:  # noqa: BLE001
+                logger.debug("ecosystem_comparison_commands_count_failed", error=str(_exc))
+
+            # ── self.api_endpoints_count ────────────────────────────────────
+            api_endpoints_count = 204  # fallback из CLAUDE.md
+            try:
+                api_endpoints_count = len(self.app.routes)
+            except Exception as _exc:  # noqa: BLE001
+                logger.debug("ecosystem_comparison_routes_count_failed", error=str(_exc))
+
+            # ── self.chats_active ───────────────────────────────────────────
+            chats_active: int | None = None
+            try:
+                from ..core.chat_window_manager import chat_window_manager as _cwm
+
+                cw_stats = _cwm.stats()
+                chats_active = cw_stats.get("active_windows") or cw_stats.get("size") or 0
+            except Exception as _exc:  # noqa: BLE001
+                logger.debug("ecosystem_comparison_chat_windows_failed", error=str(_exc))
+
+            # ── self.memory_* ───────────────────────────────────────────────
+            memory_messages: int | None = None
+            memory_chunks: int | None = None
+            try:
+                from ..core.memory_stats import collect_memory_stats as _cms
+
+                mem = _cms()
+                memory_messages = mem.get("total_messages")
+                memory_chunks = mem.get("total_chunks")
+            except Exception as _exc:  # noqa: BLE001
+                logger.debug("ecosystem_comparison_memory_stats_failed", error=str(_exc))
+
+            self_profile: dict[str, Any] = {
+                "commands_count": commands_count,
+                "api_endpoints_count": api_endpoints_count,
+                "chats_active": chats_active,
+                "memory_messages": memory_messages,
+                "memory_chunks": memory_chunks,
+                "routines_launchd": 5,
+                "routines_desktop": 7,
+                "tests_count_estimate": 6800,
+                "integrations": [
+                    "telegram_userbot",
+                    "openclaw_gateway",
+                    "sentry",
+                    "linear",
+                    "canva",
+                    "figma",
+                    "claude_design",
+                ],
+            }
+
+            peers = [
+                {
+                    "name": "chado",
+                    "profile": "elegant minimalist",
+                    "known_patterns": {
+                        "event_driven": "Telethon + asyncio Queue/Lock/Event",
+                        "backpressure": "per-chat CW + LRU + batching",
+                        "anti_bot_layers": 7,
+                    },
+                }
+            ]
+
+            return {
+                "self": self_profile,
+                "peers": peers,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            }
+
         @self.app.get("/api/model/recommend")
         async def model_recommend(
             profile: str = Query(default="chat", description="Профиль задачи"),
