@@ -791,9 +791,13 @@ class TestSession10DedicatedChrome:
     """[Session 10] Проверка _session_10_dedicated_chrome."""
 
     def test_default_disabled(self, monkeypatch):
-        """Без ENV — enabled=False, port=9222."""
+        """Без ENV — enabled=False, port=9222. HTTP-чек замокан → running=False."""
         monkeypatch.delenv("DEDICATED_CHROME_ENABLED", raising=False)
         monkeypatch.delenv("DEDICATED_CHROME_PORT", raising=False)
+        # Мокаем HTTP-чек: Chrome может быть реально запущен на 9222 в CI/dev,
+        # но тест проверяет логику ENV-парсинга, а не живой процесс.
+        import src.integrations.dedicated_chrome as _dc
+        monkeypatch.setattr(_dc, "is_dedicated_chrome_running", lambda *a, **kw: False)
         result = EcosystemHealthService._session_10_dedicated_chrome()
         assert result["enabled"] is False
         assert result["port"] == 9222
