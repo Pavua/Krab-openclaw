@@ -3411,54 +3411,63 @@ class KraabUserbot(
         # как GUEST, но LLM всё равно генерировал ответ с данными оператора.
         #
         # Правило XOR:
-        #   - если user не owner (GUEST) И chat это группа И нет @mention Краба
+        #   - если user GUEST И chat это группа И нет @mention Краба
         #     → ТОЛЬКО forward к оператору, ответ LLM не генерируется.
-        #   - Если есть @mention или reply-to-Krab — нормальная обработка.
+        #   - Исключение: trusted_guests allowlist — legit friends (@dodik_ggt etc.)
+        #     могут получать LLM-ответы даже без @mention.
+        #   - DM и non-GUEST уровни не затронуты.
         # ──────────────────────────────────────────────────────────────────
         if not is_self:
-            from .core.access_control import AccessLevel  # noqa: PLC0415
+            from .core.access_control import AccessLevel as _AL  # noqa: PLC0415, N814
             from .core.krab_identity import is_krab_mentioned  # noqa: PLC0415
-            from .core.prometheus_metrics import _GUEST_LLM_SKIPPED_COUNTER  # noqa: PLC0415
+            from .core.trusted_guests import trusted_guests  # noqa: PLC0415
 
-            _chat_obj = getattr(message, "chat", None)
-            _chat_type_for_guard = getattr(_chat_obj, "type", None)
-            _is_group_for_guard = _chat_type_for_guard in (
+            _chat_obj_g = getattr(message, "chat", None)
+            _chat_type_g = getattr(_chat_obj_g, "type", None)
+            _is_group_g = _chat_type_g in (
                 enums.ChatType.GROUP,
                 enums.ChatType.SUPERGROUP,
             )
-            _is_guest = access_profile.level == AccessLevel.GUEST
-            if _is_group_for_guard and _is_guest:
-                # Pyrogram native mention flag + text scan через krab_identity
-                _pyrogram_mentioned = bool(getattr(message, "mentioned", False))
-                _text_mention = is_krab_mentioned(text or "")
-                _is_reply_to_krab = bool(
-                    getattr(message, "reply_to_message", None)
-                    and self.me
-                    and getattr(getattr(message, "reply_to_message", None), "from_user", None)
-                    and message.reply_to_message.from_user.id == self.me.id
-                )
-                if not _pyrogram_mentioned and not _text_mention and not _is_reply_to_krab:
-                    # Forward-only: информируем оператора, LLM не вызываем
-                    _skip_reason = "not_owner_no_mention"
-                    _GUEST_LLM_SKIPPED_COUNTER[_skip_reason] = (
-                        _GUEST_LLM_SKIPPED_COUNTER.get(_skip_reason, 0) + 1
+            _is_guest_g = access_profile.level == _AL.GUEST
+            if _is_group_g and _is_guest_g:
+                _uid_g = int(getattr(user, "id", 0) or 0)
+                _uname_g = str(getattr(user, "username", "") or "")
+                _cid_g = int(chat_id) if str(chat_id).lstrip("-").isdigit() else 0
+                _is_trusted = trusted_guests.is_trusted(_cid_g, _uid_g, _uname_g)
+
+                if not _is_trusted:
+                    _pyrogram_mentioned = bool(getattr(message, "mentioned", False))
+                    _text_mention = is_krab_mentioned(text or "")
+                    _is_reply_to_krab = bool(
+                        getattr(message, "reply_to_message", None)
+                        and self.me
+                        and getattr(getattr(message, "reply_to_message", None), "from_user", None)
+                        and message.reply_to_message.from_user.id == self.me.id
                     )
-                    logger.info(
-                        "guest_llm_reply_skipped",
-                        reason=_skip_reason,
-                        chat_id=chat_id,
-                        user_id=str(getattr(user, "id", "?")),
-                        username=str(getattr(user, "username", "?")),
-                    )
-                    if bool(getattr(config, "FORWARD_UNKNOWN_INCOMING", True)):
-                        asyncio.create_task(
-                            self._forward_guest_incoming_to_owner(
-                                message=message,
-                                query=query or text or "",
-                                krab_response="[LLM пропущен: гость в группе без @mention]",
-                            )
+                    if not _pyrogram_mentioned and not _text_mention and not _is_reply_to_krab:
+                        logger.info(
+                            "guest_llm_reply_skipped",
+                            reason="not_owner_no_mention",
+                            chat_id=chat_id,
+                            user_id=str(_uid_g),
+                            username=_uname_g,
                         )
-                    return
+                        if bool(getattr(config, "FORWARD_UNKNOWN_INCOMING", True)):
+                            asyncio.create_task(
+                                self._forward_guest_incoming_to_owner(
+                                    message=message,
+                                    query=query or text or "",
+                                    krab_response="[LLM пропущен: гость в группе без @mention]",
+                                )
+                            )
+                        return
+                else:
+                    logger.debug(
+                        "trusted_guest_llm_allowed",
+                        chat_id=chat_id,
+                        user_id=str(_uid_g),
+                        username=_uname_g,
+                    )
 
         # Реакция "видит" — owner сразу понимает что Краб получил сообщение.
         # Только для owner-сообщений (is_self=True или is_allowed_sender+is_self check).
@@ -4108,6 +4117,113 @@ class KraabUserbot(
                         mode=chat_filter_config.get_mode(chat_id),
                     )
                     return
+
+            # FORWARD BATCH: если входящее сообщение является пересылкой,
+            # буферизуем в ForwardBatchBuffer — дожидаемся конца пачки (5s окно)
+            # и обрабатываем всё одним LLM-запросом с per-sender attribution.
+            # Команды (!) и self-сообщения не буферизуем.
+            _is_fwd_message = bool(
+                not is_command
+                and not is_self
+                and (
+                    getattr(message, "forward_from", None) is not None
+                    or getattr(message, "forward_sender_name", None) is not None
+                    or getattr(message, "forward_from_chat", None) is not None
+                )
+            )
+            if _is_fwd_message and message.text:
+                from .core.message_batcher import PendingMessage, message_batcher  # noqa: PLC0415
+
+                # Извлекаем данные об оригинальном отправителе
+                _fwd_from = getattr(message, "forward_from", None)
+                _fwd_name = getattr(message, "forward_sender_name", None) or ""
+                _fwd_from_chat = getattr(message, "forward_from_chat", None)
+                if _fwd_from is not None:
+                    _fwd_uname = str(getattr(_fwd_from, "username", "") or "")
+                    _fwd_display = (
+                        _fwd_uname
+                        or " ".join(
+                            filter(
+                                None,
+                                [
+                                    str(getattr(_fwd_from, "first_name", "") or ""),
+                                    str(getattr(_fwd_from, "last_name", "") or ""),
+                                ],
+                            )
+                        ).strip()
+                        or str(getattr(_fwd_from, "id", "unknown"))
+                    )
+                elif _fwd_from_chat is not None:
+                    _fwd_uname = str(getattr(_fwd_from_chat, "username", "") or "")
+                    _fwd_display = _fwd_uname or str(
+                        getattr(_fwd_from_chat, "title", "") or "channel"
+                    )
+                else:
+                    _fwd_uname = ""
+                    _fwd_display = str(_fwd_name) if _fwd_name else "unknown"
+
+                _fwd_date = getattr(message, "forward_date", None)
+                if _fwd_date is not None and not isinstance(_fwd_date, int):
+                    # pyrogram может вернуть datetime
+                    _fwd_date = int(getattr(_fwd_date, "timestamp", lambda: _fwd_date)())
+
+                _pending_fwd = PendingMessage(
+                    text=str(message.text),
+                    sender_id=str(getattr(user, "id", "") or ""),
+                    ts=time.time(),
+                    message_id=getattr(message, "id", None),
+                    is_forwarded=True,
+                    forward_sender_name=_fwd_display,
+                    forward_sender_username=_fwd_uname,
+                    forward_date=_fwd_date,
+                )
+
+                # Closure захватывает контекст для обработки пачки
+                _fwd_access_profile = access_profile
+                _fwd_is_allowed = is_allowed_sender
+                _fwd_message = message  # первое сообщение пачки — reply target
+
+                async def _process_forward_batch(
+                    _chat_id: str,
+                    msgs: list,
+                    _ap=_fwd_access_profile,
+                    _ia=_fwd_is_allowed,
+                    _orig_msg=_fwd_message,
+                ) -> None:
+                    """Обрабатываем накопленную пачку пересланных сообщений."""
+                    from .core.message_batcher import ForwardBatchBuffer  # noqa: PLC0415
+
+                    # Собираем batched prompt
+                    buf = ForwardBatchBuffer(chat_id=_chat_id)
+                    buf.messages = msgs
+                    combined = buf.format_prompt()
+                    if not combined:
+                        return
+
+                    logger.info(
+                        "forward_batch_processing",
+                        chat_id=_chat_id,
+                        count=len(msgs),
+                        combined_len=len(combined),
+                    )
+
+                    async with self._get_chat_processing_lock(_chat_id):
+                        await self._process_message_serialized(
+                            message=_orig_msg,
+                            user=_orig_msg.from_user,
+                            access_profile=_ap,
+                            is_allowed_sender=_ia,
+                            chat_id=_chat_id,
+                            _forward_batch_prompt=combined,
+                        )
+
+                buffered = message_batcher.add_forward(
+                    chat_id=chat_id,
+                    msg=_pending_fwd,
+                    on_flush=_process_forward_batch,
+                )
+                if buffered:
+                    return  # пачка накапливается, выходим из обработчика
 
             # P0_INSTANT bypass: classify_priority сигнализирует, что сообщение
             # требует немедленного ответа (DM, mention, reply-to-self, команда).
