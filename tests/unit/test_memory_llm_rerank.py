@@ -74,7 +74,7 @@ def test_is_enabled_wrong_value(monkeypatch):
 def test_no_provider_returns_unchanged_top_k(monkeypatch):
     monkeypatch.setenv("KRAB_RAG_LLM_RERANK_ENABLED", "1")
     candidates = [_mk(str(i), float(10 - i)) for i in range(20)]
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         llm_rerank("query", candidates, top_k=5, provider=None)
     )
     assert len(result) == 5
@@ -85,7 +85,7 @@ def test_no_provider_returns_unchanged_top_k(monkeypatch):
 def test_env_disabled_no_provider_returns_top_k(monkeypatch):
     monkeypatch.setenv("KRAB_RAG_LLM_RERANK_ENABLED", "0")
     candidates = [_mk(str(i), float(5 - i)) for i in range(5)]
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         llm_rerank("q", candidates, top_k=3, provider=None)
     )
     assert len(result) == 3
@@ -106,7 +106,7 @@ def test_mock_provider_sorts_by_llm_score(monkeypatch):
         _mk("c", 0.7),
     ]
     provider = MockProvider("[3, 9, 6]")
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         llm_rerank("q", candidates, top_k=3, provider=provider)
     )
     assert len(result) == 3
@@ -119,7 +119,7 @@ def test_mock_provider_llm_scores_populated(monkeypatch):
     monkeypatch.setenv("KRAB_RAG_LLM_RERANK_ENABLED", "1")
     candidates = [_mk("x", 0.5), _mk("y", 0.4)]
     provider = MockProvider("[8, 2]")
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         llm_rerank("q", candidates, top_k=2, provider=provider)
     )
     assert result[0].llm_score == pytest.approx(0.8)
@@ -130,7 +130,7 @@ def test_mock_provider_top_k_limits_output(monkeypatch):
     monkeypatch.setenv("KRAB_RAG_LLM_RERANK_ENABLED", "1")
     candidates = [_mk(str(i), float(10 - i)) for i in range(10)]
     provider = MockProvider("[1,2,3,4,5,6,7,8,9,10]")
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         llm_rerank("q", candidates, top_k=5, provider=provider)
     )
     assert len(result) == 5
@@ -144,7 +144,7 @@ def test_mock_provider_top_k_limits_output(monkeypatch):
 def test_timeout_returns_original_top_k(monkeypatch):
     monkeypatch.setenv("KRAB_RAG_LLM_RERANK_ENABLED", "1")
     candidates = [_mk(str(i), float(5 - i)) for i in range(5)]
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         llm_rerank("q", candidates, top_k=3, provider=SlowProvider(10.0), timeout_sec=0.01)
     )
     # Fallback: top-3 в исходном порядке.
@@ -161,7 +161,7 @@ def test_timeout_returns_original_top_k(monkeypatch):
 
 def test_empty_candidates_returns_empty(monkeypatch):
     monkeypatch.setenv("KRAB_RAG_LLM_RERANK_ENABLED", "1")
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         llm_rerank("q", [], top_k=5, provider=MockProvider("[1,2,3]"))
     )
     assert result == []
@@ -175,7 +175,7 @@ def test_empty_candidates_returns_empty(monkeypatch):
 def test_provider_raises_returns_original(monkeypatch):
     monkeypatch.setenv("KRAB_RAG_LLM_RERANK_ENABLED", "1")
     candidates = [_mk(str(i), float(5 - i)) for i in range(4)]
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         llm_rerank("q", candidates, top_k=3, provider=RaisingProvider())
     )
     # Нет краша, возвращает исходные top-3.
@@ -193,7 +193,7 @@ def test_disabled_env_skips_provider(monkeypatch):
     candidates = [_mk("a", 0.9), _mk("b", 0.8), _mk("c", 0.7)]
     # Провайдер с обратными оценками: если бы сработал, переставил бы порядок.
     provider = MockProvider("[1, 5, 9]")
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         llm_rerank("q", candidates, top_k=3, provider=provider)
     )
     # Порядок должен остаться исходным (LLM не вызывался).
