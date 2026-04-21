@@ -1,12 +1,15 @@
 """Optional LLM re-ranking поверх RRF output (Chado §6 P1).
 
-Концепция: после RRF+MMR у нас top-N кандидатов (score 0.0-1.0). Gemini flash
+Концепция: после RRF+MMR у нас top-N кандидатов (score 0.0-1.0). Gemini 3 Pro
 оценивает каждого по релевантности к query, возвращает top-K refined.
 
 Opt-in через KRAB_RAG_LLM_RERANK_ENABLED=1. По умолчанию off (cost+latency).
 
-Cost estimate: ~500 tokens prompt × 50 candidates × $0.02/1M input = $0.0005/query.
-Latency: ~1-2s для gemini-3-flash-preview.
+Default provider: `google/gemini-3-pro-preview` (качество важнее latency — user preference).
+Translator остаётся flash для sub-second UX; здесь pro.
+
+Cost estimate: ~500 tokens prompt × 50 candidates = ~25k tokens / query.
+Latency: ~2-4s pro.
 
 Public:
 - async llm_rerank(query, candidates, top_k=10, *, provider=None, timeout=3.0) -> list[Candidate]
