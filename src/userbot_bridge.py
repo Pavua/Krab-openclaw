@@ -40,6 +40,7 @@ from .core.exceptions import KrabError, UserInputError
 from .core.inbox_service import inbox_service
 from .core.logger import bind_contextvars, clear_contextvars, get_logger
 from .core.memory_indexer_worker import get_indexer
+from .core.message_priority_dispatcher import Priority, classify_priority
 from .core.operator_identity import build_trace_id
 from .core.proactive_watch import proactive_watch
 from .core.routing_errors import RouterError, user_message_for_surface
@@ -4005,25 +4006,71 @@ class KraabUserbot(
                     )
                     return
 
-            async with self._get_chat_processing_lock(chat_id):
-                if self._consume_batched_followup_message_id(
+            # P0_INSTANT bypass: classify_priority сигнализирует, что сообщение
+            # требует немедленного ответа (DM, mention, reply-to-self, команда).
+            # В этих случаях не ждём per-chat lock — обрабатываем напрямую.
+            _chat_type_str = str(getattr(getattr(message, "chat", None), "type", "")).upper()
+            # Нормализуем pyrogram enum → строку, понятную classify_priority
+            _chat_type_str = (
+                _chat_type_str.split(".")[-1]  # "ChatType.GROUP" → "GROUP"
+                if "." in _chat_type_str
+                else _chat_type_str
+            )
+            _has_mention_p0 = bool(
+                _is_group_chat
+                and (
+                    getattr(message, "mentioned", False)
+                    # _is_mention определена только внутри блока group-filter выше;
+                    # если не определена (DM или команда), pyrogram.mentioned достаточно.
+                    or locals().get("_is_mention", False)
+                )
+            )
+            _is_reply_to_self_p0 = bool(
+                getattr(message, "reply_to_message", None)
+                and self.me
+                and getattr(getattr(message, "reply_to_message", None), "from_user", None)
+                and message.reply_to_message.from_user.id == self.me.id
+            )
+            _msg_priority, _msg_priority_reason = classify_priority(
+                text=raw_text,
+                chat_type=_chat_type_str,
+                is_dm=not _is_group_chat and not _is_self_for_guard,
+                is_reply_to_self=_is_reply_to_self_p0,
+                has_mention=_has_mention_p0,
+                chat_mode="active",  # фильтр уже прошли выше — достаточно "active"
+            )
+
+            _process_kwargs = dict(
+                message=message,
+                user=user,
+                access_profile=access_profile,
+                is_allowed_sender=is_allowed_sender,
+                chat_id=chat_id,
+            )
+
+            if _msg_priority == Priority.P0_INSTANT:
+                # Не ждём lock — P0 обрабатывается немедленно.
+                logger.debug(
+                    "p0_instant_bypass",
                     chat_id=chat_id,
+                    reason=_msg_priority_reason,
                     message_id=str(getattr(message, "id", "") or ""),
-                ):
-                    logger.info(
-                        "skip_batched_followup_message",
+                )
+                await self._process_message_serialized(**_process_kwargs)
+            else:
+                async with self._get_chat_processing_lock(chat_id):
+                    if self._consume_batched_followup_message_id(
                         chat_id=chat_id,
                         message_id=str(getattr(message, "id", "") or ""),
-                        user=getattr(user, "username", None),
-                    )
-                    return
-                await self._process_message_serialized(
-                    message=message,
-                    user=user,
-                    access_profile=access_profile,
-                    is_allowed_sender=is_allowed_sender,
-                    chat_id=chat_id,
-                )
+                    ):
+                        logger.info(
+                            "skip_batched_followup_message",
+                            chat_id=chat_id,
+                            message_id=str(getattr(message, "id", "") or ""),
+                            user=getattr(user, "username", None),
+                        )
+                        return
+                    await self._process_message_serialized(**_process_kwargs)
 
         except KrabError as e:
             logger.warning("provider_error", error=str(e), retryable=e.retryable)
