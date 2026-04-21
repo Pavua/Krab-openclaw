@@ -121,6 +121,19 @@ src/
     telegram_rate_limiter.py — rate limiter для Telegram API
     auth_recovery_readiness.py — готовность к восстановлению авторизации
     exceptions.py       — кастомные исключения
+    sender_context.py   — контекст отправителя (session 17)
+    operator_info_guard.py — guard оператора (session 17)
+    memory_llm_rerank.py   — LLM rerank результатов памяти (session 17)
+    gemini_rerank_provider.py — Gemini rerank провайдер (session 17)
+    skill_scope.py      — scope-фильтр навыков (session 17)
+    cross_ai_review.py  — кросс-AI ревью ответов (session 17)
+    skill_discovery_check.py — проверка доступности навыков (session 17)
+    mention_detector.py — детектор упоминаний (session 17)
+    fingerprint_http.py — HTTP fingerprinting (session 17)
+    human_like.py       — human-like задержки/поведение (session 17)
+    stealth_metrics.py  — метрики stealth-режима (session 17)
+    memory_retrieval_scores.py — скоры поиска памяти (session 17)
+    memory_doctor.py    — диагностика и авторемонт индекса памяти (session 17)
   handlers/
     command_handlers.py — 175+ команд, _AgentRoomRouterAdapter
   integrations/
@@ -149,7 +162,7 @@ src/
     imessage.py         — iMessage интеграция
     web_search.py       — веб-поиск
   modules/
-    web_app.py          — Owner panel FastAPI (:8080), 180+ endpoints
+    web_app.py          — Owner panel FastAPI (:8080), 238 endpoints
     web_app_costs_dashboard.py  — дашборд расходов
     web_app_inbox_dashboard.py  — дашборд inbox
     web_app_landing_page.py     — главная страница
@@ -175,6 +188,8 @@ src/
 MCP серверы — SSE транспорт. Claude Desktop подключается через `npx mcp-remote` proxy.
 MCP Hammerspoon (8013) зарегистрирован в Claude Desktop (session 6).
 Plists: `scripts/launchagents/`
+
+**Итого routines: 13** (5 launchd LaunchAgents + 7 Claude Desktop + 1 chado-sync новый из W5.4)
 
 ## Модели и routing
 
@@ -237,11 +252,11 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - **Handoff** — после изменений обновляй memory и IMPROVEMENTS.md
 - **Проверяй после правок**: `pytest tests/ -q`, `ruff check src/`
 
-## Phase 7 статус (12.04.2026)
+## Phase 7 статус (21.04.2026)
 
-- **Phase 7: ~98%** (session 7 завершила 40%→88%, session 8 target: 100%)
-- Готово: ErrorDigest, WeeklyDigest, Research Pipeline, AlertSystem, Cost Budget Alerts, TaskBoard, CommandRegistry, 175+ команд, 180+ API endpoints
-- В работе (session 8): !members, !cron, !log финализация; Dashboard frontend (Gemini spec готов); Swarm listeners e2e; KrabEar диаризация
+- **Phase 7: 100%** (session 17 финализировала: Memory Layer Phase 2, cross-AI review, skill discovery, !mem/!chado/!filter, 238 endpoints)
+- Готово: ErrorDigest, WeeklyDigest, Research Pipeline, AlertSystem, Cost Budget Alerts, TaskBoard, CommandRegistry, 151 prod команд, 238 API endpoints, Memory heatmap/doctor/rerank
+- Session 17 новое: sender_context, operator_info_guard, memory_llm_rerank, gemini_rerank_provider, skill_scope, cross_ai_review, skill_discovery_check, mention_detector, fingerprint_http, human_like, stealth_metrics, memory_retrieval_scores, memory_doctor
 
 ## Ссылки
 
@@ -637,10 +652,11 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | Session 5 | 2071 |
 | Session 6 | 3633 |
 | Session 7 | ~6826+ |
+| Session 17 | ~7226+ (+400 новых: memory doctor/rerank/heatmap, skill_scope, cross_ai_review) |
 
 <!-- BEGIN:auto-endpoints -->
 
-### Auto-generated endpoints table (204 маршрутов)
+### Auto-generated endpoints table (238 маршрутов)
 
 | Endpoint | Метод |
 |----------|-------|
@@ -848,12 +864,18 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/voice/runtime/update` | POST |
 | `/api/voice/toggle` | POST |
 | `/metrics` | GET |
+| `/api/ecosystem/comparison` | GET |
+| `/api/memory/heatmap` | GET |
+| `/api/memory/doctor` | GET |
+| `/api/memory/indexer/backfill` | POST |
+| `/api/swarm/channels/status` | GET |
+| `/api/memory/coverage-audit` | GET |
 
 <!-- END:auto-endpoints -->
 
 <!-- BEGIN:auto-commands -->
 
-### Auto-generated handlers (154 команд)
+### Auto-generated handlers (151 prod + beta: !mem, !chado, !filter)
 
 `!acl`, `!afk`, `!agent`, `!alias`, `!archive`, `!ask`
 `!audio_message`, `!autodel`, `!b64`, `!backup`, `!bench`, `!blocked`
@@ -881,6 +903,8 @@ Endpoints session 7 (добавлены, ~180+ итого):
 `!tts`, `!typing`, `!unarchive`, `!unpin`, `!uptime`, `!urban`
 `!version`, `!voice`, `!watch`, `!weather`, `!web`, `!welcome`
 `!who`, `!whois`, `!write`, `!yt`
+
+Beta (Session 17): `!mem` — быстрый поиск по архиву памяти; `!chado` — chado-sync агент (W5.4); `!filter` — фильтрация сообщений по паттерну
 
 <!-- END:auto-commands -->
 
