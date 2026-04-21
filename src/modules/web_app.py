@@ -7802,6 +7802,139 @@ class WebApp:
                 "results": results,
             }
 
+        # ── Memory Heatmap (Dashboard V4 — chat × time density) ─────────────
+
+        @self.app.get("/api/memory/heatmap")
+        async def memory_heatmap(
+            bucket_hours: int = 24,
+            top_chats: int = 20,
+        ):
+            """
+            Плотность сообщений по чатам и дням для Dashboard V4 (heatmap).
+
+            Params:
+              bucket_hours: размер bucket в часах (default 24 = daily)
+              top_chats: сколько топ-чатов включить (default 20)
+
+            Returns:
+              { bucket_hours, chats: [{chat_id, chat_title, buckets: [{ts, count}]}], generated_at }
+            """
+            import sqlite3 as _sqlite3
+            from datetime import datetime, timezone
+            from pathlib import Path
+
+            db_path = Path("~/.openclaw/krab_memory/archive.db").expanduser()
+
+            if not db_path.exists():
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse(
+                    status_code=503,
+                    content={"error": f"archive.db not found: {db_path}"},
+                )
+
+            try:
+                uri = f"file:{db_path}?mode=ro"
+                conn = _sqlite3.connect(uri, uri=True)
+            except _sqlite3.OperationalError as exc:
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse(
+                    status_code=503,
+                    content={"error": f"archive.db open failed: {exc}"},
+                )
+
+            try:
+                # Определяем топ-чаты по общему количеству сообщений
+                try:
+                    top_rows = conn.execute(
+                        """
+                        SELECT chat_id, COUNT(*) as cnt
+                        FROM messages
+                        GROUP BY chat_id
+                        ORDER BY cnt DESC
+                        LIMIT ?
+                        """,
+                        (max(1, top_chats),),
+                    ).fetchall()
+                except _sqlite3.DatabaseError as exc:
+                    from fastapi.responses import JSONResponse
+
+                    return JSONResponse(
+                        status_code=503,
+                        content={"error": f"archive.db malformed: {exc}"},
+                    )
+
+                if not top_rows:
+                    return {
+                        "bucket_hours": bucket_hours,
+                        "chats": [],
+                        "generated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+
+                top_chat_ids = [r[0] for r in top_rows]
+
+                # Загружаем title из chats (если есть)
+                chat_titles: dict[str, str] = {}
+                try:
+                    placeholders = ",".join("?" * len(top_chat_ids))
+                    title_rows = conn.execute(
+                        f"SELECT chat_id, title FROM chats WHERE chat_id IN ({placeholders})",
+                        top_chat_ids,
+                    ).fetchall()
+                    chat_titles = {r[0]: r[1] for r in title_rows if r[1]}
+                except _sqlite3.DatabaseError:
+                    pass  # chats table может отсутствовать — fallback к chat_id
+
+                # Агрегируем по (chat_id, день) — strftime('%Y-%m-%d', timestamp)
+                try:
+                    placeholders = ",".join("?" * len(top_chat_ids))
+                    density_rows = conn.execute(
+                        f"""
+                        SELECT chat_id,
+                               strftime('%Y-%m-%d', timestamp) AS day,
+                               COUNT(*) AS cnt
+                        FROM messages
+                        WHERE chat_id IN ({placeholders})
+                        GROUP BY chat_id, day
+                        ORDER BY chat_id, day
+                        """,
+                        top_chat_ids,
+                    ).fetchall()
+                except _sqlite3.DatabaseError as exc:
+                    from fastapi.responses import JSONResponse
+
+                    return JSONResponse(
+                        status_code=503,
+                        content={"error": f"archive.db malformed on density query: {exc}"},
+                    )
+
+                # Группируем в словарь chat_id → [{ts, count}]
+                from collections import defaultdict
+
+                buckets_by_chat: dict[str, list[dict]] = defaultdict(list)
+                for chat_id, day, cnt in density_rows:
+                    buckets_by_chat[chat_id].append({"ts": day, "count": cnt})
+
+                chats_out = []
+                for chat_id in top_chat_ids:
+                    chats_out.append(
+                        {
+                            "chat_id": chat_id,
+                            "chat_title": chat_titles.get(chat_id, chat_id),
+                            "buckets": buckets_by_chat.get(chat_id, []),
+                        }
+                    )
+
+                return {
+                    "bucket_hours": bucket_hours,
+                    "chats": chats_out,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+            finally:
+                conn.close()
+
         # ── Stats Dashboard (session 4+, Gemini 3.1 Pro frontend) ──────────
 
         @self.app.get("/api/stats/caches")

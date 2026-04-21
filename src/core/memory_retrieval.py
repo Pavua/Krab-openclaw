@@ -353,9 +353,16 @@ class HybridRetriever:
                     )
                     for r in results
                 ]
-                # Нет провайдера — llm_rerank возвращает candidates[:top_k] no-op.
+                # Подключаем Gemini-провайдер если доступен (Chado §6 P1).
+                _rerank_provider = None
+                try:
+                    from src.core.gemini_rerank_provider import default_provider as _grp_default
+
+                    _rerank_provider = _grp_default()
+                except Exception:  # noqa: BLE001
+                    pass
                 reranked_cands = asyncio.get_event_loop().run_until_complete(
-                    llm_rerank(query, candidates, top_k=top_k, provider=None)
+                    llm_rerank(query, candidates, top_k=top_k, provider=_rerank_provider)
                 )
                 # Восстанавливаем порядок SearchResult по chunk_id.
                 order = {c.chunk_id: i for i, c in enumerate(reranked_cands)}
