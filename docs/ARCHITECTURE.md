@@ -17,7 +17,9 @@ Skeleton: `docs/ARCHITECTURE_V2_SKELETON.md`
 - Features: 5 swimlanes (SURFACE/RUNTIME/GATEWAY/TOOLS/DATA), toggle overlays (fallback paths, control signals, animate data flow), shape invariant (cylinders = stores with TRUTH badges only), 3 arrow types max.
 
 **Artifact 3 — Ops / Truth (Claude Design)**
-- [Pending — Session 17 next]
+- Live (Claude Design): https://claude.ai/design/p/90d6069e-1ccf-4144-863d-db54f3c08685?file=Ops+Dashboard.html
+- Canva mirror (editable): https://www.canva.com/d/3dkWS667S3h08UB
+- Features: 12 панелей на 2000×1200 canvas (System Health, LLM Route, Cost Runway, Archive DB, Memory Indexer, Swarm Status, Alert Paths, Cron Routines, Inbox, State Files, Recovery Map, 24H Timeline). Реальные данные (752,184 msgs / 417 MB / 19 chats, $142/$500 budget, swarm-042 active team). Tweaks toggles: red alert overlay (P7), density, pulse status dots. Print-ready variant — `Ops Dashboard-print.html`.
 
 ### v1 (2026-04-20 Session 16)
 - Claude Design (edit): https://claude.ai/design/p/11567838-b049-4ab7-b217-83103fe5ec68?file=Krab+Architecture.html
