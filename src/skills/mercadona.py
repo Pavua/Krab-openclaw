@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -26,18 +27,19 @@ logger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Антибот: JS-патч, скрывающий следы автоматизации Playwright/CDP
+# Загружается из src/integrations/stealth_init.js; fallback — минимальный инлайн.
 # ---------------------------------------------------------------------------
-_STEALTH_SCRIPT = """
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-    Object.defineProperty(navigator, 'languages', { get: () => ['es-ES', 'es', 'en'] });
-    window.chrome = { runtime: {} };
-    const originalQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = (parameters) =>
-        parameters.name === 'notifications'
-            ? Promise.resolve({ state: Notification.permission })
-            : originalQuery(parameters);
-"""
+_STEALTH_JS_PATH = Path(__file__).parent.parent / "integrations" / "stealth_init.js"
+_STEALTH_SCRIPT_FALLBACK = (
+    "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
+    "Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});"
+    "window.chrome={runtime:{}};"
+)
+try:
+    _STEALTH_SCRIPT = _STEALTH_JS_PATH.read_text(encoding="utf-8")
+except Exception:
+    logger.warning("mercadona_stealth_js_load_failed", path=str(_STEALTH_JS_PATH))
+    _STEALTH_SCRIPT = _STEALTH_SCRIPT_FALLBACK
 
 _MERCADONA_BASE = "https://tienda.mercadona.es"
 _HOME_URL = f"{_MERCADONA_BASE}/"
