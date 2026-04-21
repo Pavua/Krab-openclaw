@@ -2571,33 +2571,41 @@ class OpenClawClient:
                 self._sessions[chat_id].insert(
                     0, {"role": "system", "content": effective_system_prompt}
                 )
+            elif effective_system_prompt and self._sessions[chat_id][0].get("role") == "system":
+                # ФИКС регрессии «Мой Господин»: обновляем system message при каждом запросе,
+                # чтобы sender context (is_owner: true/false) отражал текущего отправителя,
+                # а не того кто инициализировал сессию. Без этого гость получал is_owner=true
+                # если owner первым открыл чат.
+                self._sessions[chat_id][0]["content"] = effective_system_prompt
 
             # Nonce consumed при первом применении к новой/пустой сессии.
             if _nonce:
                 clear_gemini_nonce(chat_id)
         else:
             # Сессия уже загружена в памяти (например, !reset --layer=gemini не чистил её).
-            # Проверяем, есть ли pending nonce: если да — обновляем content первого
-            # system-message, чтобы на следующем request Gemini получил отличающийся
-            # system_prompt и cache инвалидировался.
+            # ФИКС регрессии «Мой Господин»: всегда обновляем system message из system_prompt,
+            # чтобы sender context (is_owner) всегда соответствовал текущему отправителю.
             from .core.gemini_cache_nonce import clear_gemini_nonce, get_gemini_nonce
 
             _nonce = get_gemini_nonce(chat_id)
-            if _nonce and system_prompt and self._sessions[chat_id]:
+            if system_prompt and self._sessions[chat_id]:
                 first_msg = self._sessions[chat_id][0]
+                effective_sp = (
+                    f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
+                    if _nonce
+                    else system_prompt
+                )
                 if isinstance(first_msg, dict) and first_msg.get("role") == "system":
-                    first_msg["content"] = f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
+                    first_msg["content"] = effective_sp
                 else:
-                    # Нет system-сообщения — вставим его с nonce.
+                    # Нет system-сообщения — вставим его.
                     self._sessions[chat_id].insert(
                         0,
-                        {
-                            "role": "system",
-                            "content": (f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"),
-                        },
+                        {"role": "system", "content": effective_sp},
                     )
-                # Consume nonce после применения: чтобы не обновлять system при каждом запросе.
-                clear_gemini_nonce(chat_id)
+                # Consume nonce после применения.
+                if _nonce:
+                    clear_gemini_nonce(chat_id)
 
         self._sanitize_session_and_cache(chat_id)
 
