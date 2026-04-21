@@ -21,6 +21,20 @@ from src.config import config
 
 logger = structlog.get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# Persistent Chrome profile — сохраняет cookies/history между сессиями.
+# Anti-bot видит "старого пользователя" вместо чистого профиля.
+# ---------------------------------------------------------------------------
+_KRAB_CHROME_PROFILE_DIR_DEFAULT = "~/.openclaw/krab_chrome_profile"
+_PERSISTENT_CHROME_PROFILE_DIR: Path = Path(
+    os.getenv("KRAB_CHROME_PROFILE_DIR", "").strip() or _KRAB_CHROME_PROFILE_DIR_DEFAULT
+).expanduser()
+
+# ---------------------------------------------------------------------------
+# Stealth init script — инжектируется в каждую страницу через add_init_script.
+# ---------------------------------------------------------------------------
+_STEALTH_INIT_JS_PATH: Path = Path(__file__).parent / "stealth_init.js"
+
 
 class RawCDPConnection:
     """
@@ -483,7 +497,11 @@ class BrowserBridge:
         return await self._with_page_session_via_raw_cdp(ws_endpoint, _handler)
 
     async def _connect_browser(self):
-        """Подключает Playwright к Chrome, пробуя сначала HTTP CDP, затем websocket fallback."""
+        """Подключает Playwright к Chrome, пробуя сначала HTTP CDP, затем websocket fallback.
+
+        При запуске нового Chromium (launch_persistent_context fallback) использует
+        _PERSISTENT_CHROME_PROFILE_DIR чтобы сохранять cookies/history между сессиями.
+        """
         from playwright.async_api import async_playwright
 
         if self._playwright is None:
@@ -515,6 +533,7 @@ class BrowserBridge:
                     home=str(Path.home()),
                     operator_home=str(os.getenv("KRAB_OPERATOR_HOME", "") or ""),
                     ws_endpoint=ws_endpoint or "",
+                    persistent_profile=str(_PERSISTENT_CHROME_PROFILE_DIR),
                 )
 
         raise last_error or RuntimeError("browser_bridge_connect_failed")
@@ -577,17 +596,50 @@ class BrowserBridge:
                 )
                 return False
 
+    async def _inject_stealth_if_available(self, page) -> None:
+        """
+        Инжектирует stealth_init.js через add_init_script() если файл существует.
+
+        Вызывается при получении страницы — скрипт запускается ПЕРЕД загрузкой
+        каждой новой страницы (evaluateOnNewDocument семантика).
+        Если файл отсутствует — логируем предупреждение, продолжаем без краша.
+        """
+        if _STEALTH_INIT_JS_PATH.exists():
+            try:
+                await page.add_init_script(path=str(_STEALTH_INIT_JS_PATH))
+            except Exception as exc:
+                logger.warning(
+                    "browser_bridge_stealth_inject_failed",
+                    path=str(_STEALTH_INIT_JS_PATH),
+                    error=repr(exc),
+                )
+        else:
+            logger.warning(
+                "browser_bridge_stealth_js_missing",
+                path=str(_STEALTH_INIT_JS_PATH),
+            )
+
     async def _active_page(self):
-        """Возвращает активную (первую) страницу из первого контекста."""
+        """Возвращает активную (первую) страницу из первого контекста.
+
+        Перед возвратом инжектирует stealth_init.js если файл существует —
+        скрипт будет применён ко всем последующим навигациям на этой странице.
+        """
         browser = await self._get_browser()
         contexts = browser.contexts
         if not contexts:
             ctx = await browser.new_context()
-            return await ctx.new_page()
+            page = await ctx.new_page()
+            await self._inject_stealth_if_available(page)
+            return page
         pages = contexts[0].pages
         if not pages:
-            return await contexts[0].new_page()
-        return pages[-1]
+            page = await contexts[0].new_page()
+            await self._inject_stealth_if_available(page)
+            return page
+        page = pages[-1]
+        await self._inject_stealth_if_available(page)
+        return page
 
     async def list_tabs(self) -> list[dict]:
         """Возвращает список вкладок: [{title, url, id}]."""
