@@ -198,7 +198,47 @@ def provider_runtime_policy(
     }
 
 
+def allow_experimental_for_chat(chat_id: int | None) -> bool:
+    """
+    Разрешить ли экспериментальные команды в данном чате.
+
+    Возвращает True если:
+    - установлена переменная окружения KRAB_EXPERIMENTAL=1, ИЛИ
+    - chat_id совпадает с owner-чатом (из OWNER_CHAT_ID env),
+      ИЛИ chat_id равен None/0 (системный/owner-контекст без явного чата).
+    """
+    if os.getenv("KRAB_EXPERIMENTAL") == "1":
+        return True
+
+    # None или 0 — считаем owner-контекстом (безопасный default)
+    if not chat_id:
+        return True
+
+    # Проверяем OWNER_CHAT_ID env (один чат) и OWNER_CHAT_IDS (список через запятую)
+    owner_chat_id_raw = os.getenv("OWNER_CHAT_ID", "").strip()
+    if owner_chat_id_raw:
+        try:
+            if int(owner_chat_id_raw) == chat_id:
+                return True
+        except ValueError:
+            pass
+
+    owner_chat_ids_raw = os.getenv("OWNER_CHAT_IDS", "").strip()
+    if owner_chat_ids_raw:
+        for part in owner_chat_ids_raw.split(","):
+            part = part.strip()
+            if part:
+                try:
+                    if int(part) == chat_id:
+                        return True
+                except ValueError:
+                    pass
+
+    return False
+
+
 __all__ = [
+    "allow_experimental_for_chat",
     "current_runtime_mode",
     "provider_runtime_policy",
     "runtime_mode_release_safe",

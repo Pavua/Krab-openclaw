@@ -628,6 +628,53 @@ class SwarmChannels:
         combined = "\n".join(messages)
         return f"\n\n👑 **Директива владельца:**\n{combined}\n"
 
+    async def broadcast_to_topic(
+        self,
+        team_or_topic_key: str | int,
+        text: str,
+        client: Any = None,
+    ) -> bool:
+        """
+        Публикует текст в конкретный топик или команду Forum-группы.
+
+        Args:
+            team_or_topic_key: имя команды/топика ("traders", "crossteam") или
+                               числовой topic_id напрямую.
+            text: текст сообщения.
+            client: Pyrogram-клиент (если None — используется self._client).
+
+        Returns:
+            True если сообщение отправлено успешно, False иначе.
+        """
+        if not self._forum_chat_id:
+            logger.warning("broadcast_to_topic_no_forum", key=team_or_topic_key)
+            return False
+
+        # Определяем topic_id
+        if isinstance(team_or_topic_key, int):
+            topic_id: int | None = team_or_topic_key
+        else:
+            topic_id = self._team_topics.get(team_or_topic_key.lower())
+            if topic_id is None:
+                logger.warning(
+                    "broadcast_to_topic_unknown_key",
+                    key=team_or_topic_key,
+                    known=list(self._team_topics.keys()),
+                )
+                return False
+
+        try:
+            await self._send_message(
+                self._forum_chat_id,
+                text,
+                topic_id=topic_id,
+                client=client,
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("broadcast_to_topic_failed", key=team_or_topic_key, error=str(exc))
+            return False
+
     # -- formatting -----------------------------------------------------------
 
     def format_status(self) -> str:

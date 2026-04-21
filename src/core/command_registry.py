@@ -30,7 +30,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, ClassVar
+from typing import Callable, ClassVar, Literal
 
 import structlog
 
@@ -160,6 +160,13 @@ class CommandInfo:
     usage: str
     owner_only: bool = False
     aliases: list[str] = field(default_factory=list)
+    stage: Literal["experimental", "beta", "production"] = "production"
+
+    def __post_init__(self) -> None:
+        if self.stage not in ("experimental", "beta", "production"):
+            raise ValueError(
+                f"Invalid stage: {self.stage!r}. Must be 'experimental', 'beta', or 'production'."
+            )
 
     def to_dict(self) -> dict:
         return {
@@ -169,7 +176,12 @@ class CommandInfo:
             "owner_only": self.owner_only,
             "aliases": list(self.aliases),
             "usage": self.usage,
+            "stage": self.stage,
         }
+
+    def api_response(self) -> dict:
+        """Расширенный ответ для API — включает stage."""
+        return self.to_dict()
 
 
 # ---------------------------------------------------------------------------
