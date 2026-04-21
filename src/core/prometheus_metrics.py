@@ -20,6 +20,10 @@ logger = structlog.get_logger(__name__)
 # Счётчик использований adaptive rerank (mutable singleton для hot-path инкремента).
 _ADAPTIVE_RERANK_COUNTER: list[int] = [0]
 
+# Security: счётчик пропущенных LLM-ответов гостям в группах (SwMaster incident 2026-04-21).
+# Словарь reason → count. Инкрементируется из userbot_bridge._process_message_serialized.
+_GUEST_LLM_SKIPPED_COUNTER: dict[str, int] = {}
+
 
 def _sanitize_label(value: str) -> str:
     """Escape кавычек и переводов строк в значении label."""
@@ -338,6 +342,18 @@ def collect_metrics() -> str:
                 )
     except Exception:
         pass
+
+    # === Guest LLM skip (security ACL) ===
+    for _skip_reason, _skip_count in _GUEST_LLM_SKIPPED_COUNTER.items():
+        lines.append(
+            _format_metric(
+                "krab_guest_llm_skipped_total",
+                _skip_count,
+                labels={"reason": _skip_reason[:60]},
+                help_text="LLM replies skipped for guests in groups (security ACL)",
+                mtype="counter",
+            )
+        )
 
     # === Timestamps ===
     lines.append(
