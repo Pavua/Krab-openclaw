@@ -5,8 +5,23 @@
 
 ## Live URLs
 
-- **Claude Design** (edit): https://claude.ai/design/p/11567838-b049-4ab7-b217-83103fe5ec68?file=Krab+Architecture.html
-- **Canva** (editable export): https://www.canva.com/d/22tGJQlMa2UbXyi
+### v2 (2026-04-21) — 3 artifacts per Krab+Chado critique
+Skeleton: `docs/ARCHITECTURE_V2_SKELETON.md`
+
+**Artifact 1 — Hero / Vision (Canva)**
+- Variant 4 (primary): https://www.canva.com/d/wDX_xg3mClWE0t7
+- Variant 1 (alt): https://www.canva.com/d/rZnjP7YLE8JzKaY
+
+**Artifact 2 — Engineering / Runtime (Claude Design)**
+- Live: https://claude.ai/design/p/f8108663-9376-444f-8c2c-1e93302a02d6?file=Krab+Architecture.html
+- Features: 5 swimlanes (SURFACE/RUNTIME/GATEWAY/TOOLS/DATA), toggle overlays (fallback paths, control signals, animate data flow), shape invariant (cylinders = stores with TRUTH badges only), 3 arrow types max.
+
+**Artifact 3 — Ops / Truth (Claude Design)**
+- [Pending — Session 17 next]
+
+### v1 (2026-04-20 Session 16)
+- Claude Design (edit): https://claude.ai/design/p/11567838-b049-4ab7-b217-83103fe5ec68?file=Krab+Architecture.html
+- Canva (editable export): https://www.canva.com/d/22tGJQlMa2UbXyi
 
 ## Preview
 
