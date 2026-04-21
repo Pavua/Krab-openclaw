@@ -242,6 +242,14 @@ class ChatBanCache:
             )
         return len(purged)
 
+    def prune_expired(self) -> int:
+        """Алиас для sweep_expired — публичный API для /runtime/recover и тестов.
+
+        Удаляет все истёкшие записи из памяти и persist'ит результат на диск.
+        Возвращает количество удалённых записей.
+        """
+        return self.sweep_expired()
+
     async def periodic_cleanup(self, interval_seconds: float = 300.0) -> None:
         """Фоновый async loop: sweep_expired каждые `interval_seconds` секунд.
 
@@ -335,9 +343,7 @@ class ChatBanCache:
             return
         if not isinstance(raw, dict):
             elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
-            logger.warning(
-                "chat_ban_cache_load_malformed", path=str(path), elapsed_ms=elapsed_ms
-            )
+            logger.warning("chat_ban_cache_load_malformed", path=str(path), elapsed_ms=elapsed_ms)
             return
         now = self._now()
         loaded = 0
