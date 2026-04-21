@@ -432,7 +432,7 @@ def _insert_chunk(
     assert chunk.end_timestamp is not None
 
     cur = conn.execute(
-        "INSERT INTO chunks "
+        "INSERT OR IGNORE INTO chunks "
         "(chunk_id, chat_id, start_ts, end_ts, message_count, char_len, text_redacted) "
         "VALUES (?, ?, ?, ?, ?, ?, ?);",
         (
