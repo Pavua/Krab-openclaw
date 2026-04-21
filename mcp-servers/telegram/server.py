@@ -849,13 +849,22 @@ async def krab_memory_stats() -> str:
                 except (sqlite3.OperationalError, ValueError, TypeError):
                     archive["schema_version"] = None
 
-                # Embedded chunks (vec_chunks может отсутствовать, если нет sqlite-vec)
+                # Embedded chunks — считаем через vec_chunks_rowids (sqlite-vec индекс).
+                # Fallback: legacy-таблица vec_chunks (если мигрировано).
+                # Совпадает с логикой collect_memory_stats() из src/core/memory_stats.py.
                 try:
                     archive["embedded"] = conn.execute(
-                        "SELECT COUNT(*) FROM vec_chunks"
+                        "SELECT COUNT(*) FROM vec_chunks_rowids"
                     ).fetchone()[0]
                 except sqlite3.OperationalError:
-                    archive["embedded"] = 0
+                    try:
+                        archive["embedded"] = conn.execute(
+                            "SELECT COUNT(*) FROM vec_chunks"
+                        ).fetchone()[0]
+                    except sqlite3.OperationalError:
+                        archive["embedded"] = 0
+                # Поле encoded_chunks — синоним для совместимости с /api/memory/stats.
+                archive["encoded_chunks"] = archive["embedded"]
             finally:
                 conn.close()
         except Exception as exc:  # noqa: BLE001

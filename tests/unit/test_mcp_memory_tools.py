@@ -258,6 +258,60 @@ async def test_memory_stats_reads_db(server_mod, tmp_path, monkeypatch) -> None:
     assert data["archive"]["chats"] == 1
     assert data["archive"]["chunks"] == 1
     assert data["archive"]["schema_version"] == 1
-    # vec_chunks нет — embedded должен быть 0
+    # vec_chunks_rowids нет — embedded должен быть 0
     assert data["archive"]["embedded"] == 0
+    # encoded_chunks — синоним embedded (совместимость с /api/memory/stats)
+    assert data["archive"]["encoded_chunks"] == 0
     assert data["archive"]["size_mb"] > 0
+
+
+@pytest.mark.asyncio
+async def test_memory_stats_embedded_via_vec_chunks_rowids(server_mod, tmp_path, monkeypatch) -> None:
+    """embedded считается через vec_chunks_rowids, а не через vec_chunks."""
+    import sqlite3
+
+    db = tmp_path / "archive.db"
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE messages (id INTEGER PRIMARY KEY);
+            CREATE TABLE chats (id INTEGER PRIMARY KEY);
+            CREATE TABLE chunks (id INTEGER PRIMARY KEY);
+            CREATE TABLE vec_chunks_rowids (
+                rowid INTEGER PRIMARY KEY, id INTEGER, chunk_id INTEGER, chunk_offset INTEGER
+            );
+            INSERT INTO meta(key, value) VALUES ('schema_version', '2');
+            INSERT INTO messages DEFAULT VALUES;
+            INSERT INTO chats DEFAULT VALUES;
+            INSERT INTO chunks DEFAULT VALUES;
+            INSERT INTO chunks DEFAULT VALUES;
+            INSERT INTO vec_chunks_rowids(rowid, id, chunk_id, chunk_offset) VALUES (1, 1, 1, 0);
+            INSERT INTO vec_chunks_rowids(rowid, id, chunk_id, chunk_offset) VALUES (2, 2, 2, 0);
+            INSERT INTO vec_chunks_rowids(rowid, id, chunk_id, chunk_offset) VALUES (3, 3, 1, 1);
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    import pathlib
+
+    orig_expanduser = pathlib.Path.expanduser
+
+    def fake_expanduser(self):
+        if "krab_memory" in str(self):
+            return db
+        return orig_expanduser(self)
+
+    monkeypatch.setattr(pathlib.Path, "expanduser", fake_expanduser)
+
+    raw = await server_mod.krab_memory_stats()
+    data = json.loads(raw)
+
+    assert data["archive"]["exists"] is True
+    # vec_chunks_rowids содержит 3 строки — embedded должен быть 3
+    assert data["archive"]["embedded"] == 3
+    # encoded_chunks — синоним, одинаковое значение
+    assert data["archive"]["encoded_chunks"] == data["archive"]["embedded"]
