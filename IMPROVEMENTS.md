@@ -1010,3 +1010,10 @@ redact (4/4 пойманы) → chunking (7 chunks) → FTS5 index → Model2Vec
 - [ ] **Add e2e test:** fresh userbot setup → add_team_accounts_to_contacts → verify team replies work (catches Telegram paywall regression).
 - [ ] **Add contract validation tests:** `inspect.signature()` on public API (Chado, cache_manager, etc.) before deploy.
 
+## Nightly Self-Diagnostics — 2026-04-21 03:23 CEST
+
+- **попытался сделать:** проверил живой health owner panel `:8080/api/health/lite`, gateway `:18789/health`, процессы `openclaw-gateway` / Chrome debug / userbot-контур, хвост `logs/krab_launchd.out.log` и `logs/krab_launchd.err.log`.
+- **Исправлено:** прибраны зависшие CLI-процессы `openclaw status` / `openclaw gateway status`, которые были раскручены таймаутящимся status-check и жрали CPU. После зачистки web health остался зелёным: `:8080` → `status=up`, `:18789/health` → `ok=true`.
+- **Осталось/сомнение:** сами CLI-команды `openclaw status` и `openclaw gateway status` в этой среде снова висят дольше 12s и оставляют залипшие дочерние `openclaw`-процессы. Нужен отдельный fix-pass: понять, почему status CLI не завершается при живом gateway/web, и добавить bounded timeout/cleanup в CLI или диагностическом обвязочном коде.
+- **Осталось/сомнение:** в `logs/krab_launchd.out.log` виден повторяемый `sqlite3.ProgrammingError: Cannot operate on a closed database.` во время `Session.restart()`, а до поднятия OpenClaw были `openclaw_health_check_failed: All connection attempts failed`. Сейчас сервис восстановлен, но ошибка restart-path остаётся и требует кодового разбора.
+

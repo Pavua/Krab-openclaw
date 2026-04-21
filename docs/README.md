@@ -1,6 +1,6 @@
 # Krab Documentation Index
 
-Auto-generated overview of `docs/` directory — **36 documents**.
+Auto-generated overview of `docs/` directory — **41 documents**.
 
 ## Root-level documentation
 
@@ -8,11 +8,14 @@ Auto-generated overview of `docs/` directory — **36 documents**.
 |------|-------|-------|
 | [BACKEND_R16_REPORT_RU.md](BACKEND_R16_REPORT_RU.md) | Отчет по Спринту R16: Cloud Cost Routing + Anti-Stuck Reply Pipeline | Спринт был сосредоточен на повышении стабильности бэкенда при работе с облачными моделями и пре |
 | [CHAT_FILTERS_GUIDE.md](CHAT_FILTERS_GUIDE.md) | Chat Filters — гид пользователя | Как Krab решает, в каких чатах отвечать, и как этим управлять из Telegram |
+| [CLAUDE_DESIGN_BRIEF_COSTS_V4.md](CLAUDE_DESIGN_BRIEF_COSTS_V4.md) | Claude Design Brief: Krab Dashboard V4 — /costs Page | > Ready-to-use brief. Paste directly into Claude Design (claude.ai/design) |
 | [CLAUDE_MD_AUDIT_2026_04_18.md](CLAUDE_MD_AUDIT_2026_04_18.md) | CLAUDE.md Audit (18.04.2026) | **File length:** 689 lines |
 | [CODEX_WORKSTREAM_R14_RU.md](CODEX_WORKSTREAM_R14_RU.md) | Codex Workstream R14 Ru | План текущего автономного потока Codex, пока Antigravity закрывает параллельные задачи |
-| [COMMANDS_CHEATSHEET.md](COMMANDS_CHEATSHEET.md) | Krab Telegram Commands Cheatsheet | Generated: 2026-04-17 23:47 · Total: 145 commands |
+| [COMMANDS_CHEATSHEET.md](COMMANDS_CHEATSHEET.md) | Krab Telegram Commands Cheatsheet | Generated: 2026-04-18 21:33 · Total: 147 commands |
 | [COVERAGE_GAPS_2026-04-09.md](COVERAGE_GAPS_2026-04-09.md) | Анализ покрытия тестами зоны `src/core/` | > Сгенерировано: 2026-04-09 (session 4 coverage agent) |
 | [DASHBOARD_COSTS_UPDATE_SPEC.md](DASHBOARD_COSTS_UPDATE_SPEC.md) | Dashboard: /costs Page Update Spec — Gemini 3.1 Pro | > Обновление существующей /costs page с новыми FinOps полями |
+| [DASHBOARD_COSTS_V4_A11Y_AUDIT.md](DASHBOARD_COSTS_V4_A11Y_AUDIT.md) | WCAG 2.1 AA Accessibility Audit — Costs Dashboard V4 | **File audited:** `src/web/prototypes/costs_v4_claude_design.html` |
+| [DASHBOARD_COSTS_V4_HANDOFF.md](DASHBOARD_COSTS_V4_HANDOFF.md) | Handoff Spec: Krab Dashboard V4 — /costs Page | **Version:** 1.0 (2026-04-20) |
 | [DASHBOARD_INBOX_UPDATE_SPEC.md](DASHBOARD_INBOX_UPDATE_SPEC.md) | Dashboard: /inbox Page Update Spec — Gemini 3.1 Pro | > Обновление /inbox page с актуальными API endpoints |
 | [DASHBOARD_LANDING_UPDATE_SPEC.md](DASHBOARD_LANDING_UPDATE_SPEC.md) | Dashboard: Landing Page (/) Update Spec — Gemini 3.1 Pro | > Обновление главной страницы с полным runtime summary |
 | [DASHBOARD_REDESIGN_SPEC.md](DASHBOARD_REDESIGN_SPEC.md) | Krab Owner Panel — Dashboard Redesign Spec | > Спецификация для Gemini 3.1 Pro: полный редизайн Owner Panel (`http://127.0.0.1:8080`) |
@@ -30,8 +33,10 @@ Auto-generated overview of `docs/` directory — **36 documents**.
 | [EXTERNAL_PROMPT_AG_R22_BACKEND_RU.md](EXTERNAL_PROMPT_AG_R22_BACKEND_RU.md) | AG Prompt R22 Backend — Control Compatibility + Routing Source of Truth | Контекст: |
 | [EXTERNAL_PROMPT_AG_R22_FRONTEND_RU.md](EXTERNAL_PROMPT_AG_R22_FRONTEND_RU.md) | AG Prompt R22 Frontend — UX Clarity + RU Localization для OpenClaw Control | Контекст: |
 | [MEMORY_LAYER_GUIDE.md](MEMORY_LAYER_GUIDE.md) | Memory Layer — User Guide | Hybrid retrieval поверх Telegram-архива: FTS5 BM25 + Model2Vec embeddings в SQLite, |
+| [OWNER_USER_IDS_DEPRECATION.md](OWNER_USER_IDS_DEPRECATION.md) | OWNER_USER_IDS — Migration Guide | Env var `OWNER_USER_IDS` устарел в пользу unified ACL json |
 | [PLAN_TRACK_B_MAIN_KRAB.md](PLAN_TRACK_B_MAIN_KRAB.md) | Track B — Main Krab (Telegram userbot ядро) | > **Project:** Краб (`/Users/pablito/Antigravity_AGENTS/Краб`) |
 | [PLAN_TRACK_E_MEMORY_LAYER.md](PLAN_TRACK_E_MEMORY_LAYER.md) | Track E — Memory Layer для Краба | **Статус:** Phase 0–3 merged (PRs #12, #13, #14, #15). Phase 4 in progress |
+| [PRECOMMIT.md](PRECOMMIT.md) | Pre-commit hooks | Hooks установлены в `.git/hooks/pre-commit` |
 | [PROMETHEUS_MONITORING.md](PROMETHEUS_MONITORING.md) | Prometheus Monitoring для Krab | Документация по настройке внешнего мониторинга Krab через Prometheus + Grafana |
 | [R13_FRONTEND_REPORT_RU.md](R13_FRONTEND_REPORT_RU.md) | Отчёт о выполнении R13 (Frontend API & UX Cockpit) | **Этап A (Ops Cockpit UX):** |
 | [RUNBOOK_CLOUD_TIER_RU.md](RUNBOOK_CLOUD_TIER_RU.md) | Runbook: Cloud Tier State — проверка вживую (R23) | Убедиться что free→paid autoswitch и reset работают в production контуре без перезапуска бота |
@@ -47,7 +52,7 @@ Auto-generated overview of `docs/` directory — **36 documents**.
 
 - **`2026-03-21/`** — 14 markdown files
 - **`2026-03-29/`** — 1 markdown files
-- **`handoff/`** — 12824 markdown files
+- **`handoff/`** — 13 markdown files
 - **`superpowers/`** — 2 markdown files
 
 ## Related files (project root)
