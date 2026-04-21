@@ -18158,3 +18158,192 @@ async def handle_filter(bot: "KraabUserbot", message: Message) -> None:
     await message.reply(
         "❌ Неизвестный режим.\nИспользуйте: `status`, `active`, `mention-only`, `muted`, `reset`"
     )
+
+
+# ── !chado — статус cross-AI синхронизации с Chado (Chado §9) ───────────────
+
+
+async def handle_chado(bot: "KraabUserbot", message: Message) -> None:
+    """Статус cross-AI синхронизации с Chado (Chado §9 P2).
+
+    Субкоманды:
+      !chado              — то же что !chado status
+      !chado status       — last sync ts, кол-во сообщений Chado в archive.db,
+                            последняя цитата, ссылка на crossteam-топик
+      !chado ping         — отправить ping в Forum Topic crossteam
+      !chado digest       — dry-run preview cron_chado_sync.py
+    """
+    from ..core.command_registry import bump_command
+
+    bump_command("chado")
+
+    raw = (bot._get_command_args(message) or "").strip().lower()
+    sub = raw.split()[0] if raw else "status"
+
+    if sub in ("", "status"):
+        await _handle_chado_status(message)
+    elif sub == "ping":
+        await _handle_chado_ping(bot, message)
+    elif sub == "digest":
+        await _handle_chado_digest(message)
+    else:
+        await message.reply(
+            "❌ Неизвестная субкоманда.\nИспользуйте: `!chado status` · `!chado ping` · `!chado digest`"
+        )
+
+
+async def _handle_chado_status(message: Message) -> None:
+    """Показывает текущее состояние cross-AI sync с Chado."""
+    import sqlite3
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from ..core.cross_ai_review import parse_review_bullets  # noqa: F401 — проверяем импорт
+
+    # --- archive.db: count + last message from Chado ---
+    db_path = Path.home() / ".openclaw" / "krab_memory" / "archive.db"
+    chado_count = 0
+    latest_quote = ""
+    try:
+        if db_path.exists():
+            uri = f"file:{db_path}?mode=ro"
+            conn = sqlite3.connect(uri, uri=True, timeout=1.5)
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE sender_name LIKE '%Chado%'"
+                ).fetchone()
+                chado_count = int(row[0]) if row else 0
+
+                latest_row = conn.execute(
+                    "SELECT text FROM messages WHERE sender_name LIKE '%Chado%'"
+                    " ORDER BY date DESC LIMIT 1"
+                ).fetchone()
+                if latest_row and latest_row[0]:
+                    latest_quote = str(latest_row[0])[:200]
+            finally:
+                conn.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("chado_status_archive_query_failed", error=str(exc))
+
+    # --- last cross_ai_review usage (proactive_watch state) ---
+    last_sync_ts = ""
+    try:
+        state_file = Path.home() / ".openclaw" / "krab_runtime_state" / "proactive_watch_state.json"
+        if state_file.exists():
+            import json as _json
+
+            state = _json.loads(state_file.read_text())
+            ts_raw = state.get("last_cross_ai_review_ts") or state.get("cross_ai_review_last_ts")
+            if ts_raw:
+                try:
+                    dt = datetime.fromtimestamp(float(ts_raw), tz=timezone.utc)
+                    last_sync_ts = dt.strftime("%Y-%m-%d %H:%M UTC")
+                except Exception:  # noqa: BLE001
+                    last_sync_ts = str(ts_raw)[:20]
+    except Exception:  # noqa: BLE001
+        pass
+
+    # --- crossteam topic link ---
+    crossteam_link = ""
+    try:
+        from ..core.swarm_channels import swarm_channels
+
+        forum_id = getattr(swarm_channels, "_forum_chat_id", None)
+        topics: dict = getattr(swarm_channels, "_team_topics", {})
+        ct_topic = topics.get("crossteam")
+        if forum_id and ct_topic:
+            crossteam_link = f"t.me/c/{str(forum_id).lstrip('-100')}/{ct_topic}"
+    except Exception:  # noqa: BLE001
+        pass
+
+    # --- next scheduled chado-sync ---
+    next_trigger = "—"
+    try:
+        from ..core.scheduler import krab_scheduler
+
+        jobs = krab_scheduler.list_jobs() if hasattr(krab_scheduler, "list_jobs") else []
+        for job in jobs:
+            name = (getattr(job, "name", None) or "").lower()
+            if "chado" in name or "cross_ai" in name:
+                next_run = getattr(job, "next_run_time", None)
+                if next_run:
+                    next_trigger = str(next_run)[:16]
+                break
+    except Exception:  # noqa: BLE001
+        pass
+
+    lines = ["🤝 **Chado Cross-AI Sync — статус**", ""]
+    lines.append(f"**Последний sync:** {last_sync_ts or '—'}")
+    lines.append(f"**Сообщений Chado в archive.db:** `{chado_count}`")
+    if latest_quote:
+        lines.append(f"**Последняя цитата:**\n_{latest_quote}_")
+    else:
+        lines.append("**Последняя цитата:** —")
+    lines.append(f"**Crossteam топик:** {crossteam_link or '— (не настроен)'}")
+    lines.append(f"**Следующий запуск sync:** {next_trigger}")
+
+    await message.reply("\n".join(lines))
+
+
+async def _handle_chado_ping(bot: "KraabUserbot", message: Message) -> None:
+    """Отправляет ping в Forum Topic crossteam через swarm_channels."""
+    from datetime import datetime, timezone
+
+    from ..core.swarm_channels import swarm_channels
+
+    ts = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    ping_text = (
+        f"🤝 [Chado Ping] Cross-AI sync check\n"
+        f"Инициатор: owner via `!chado ping`\n"
+        f"Время: {ts}\n\n"
+        "Chado, ты здесь? Синхронизация активна."
+    )
+
+    sent = False
+    try:
+        # Используем _resolve_destination + _send_message (публичный контракт через broadcast_delegation)
+        chat_id, topic_id = swarm_channels._resolve_destination("crossteam")
+        if chat_id:
+            await swarm_channels._send_message(chat_id, ping_text, topic_id=topic_id)
+            sent = True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("chado_ping_broadcast_failed", error=str(exc))
+
+    if sent:
+        await message.reply("✅ Ping отправлен в crossteam Forum Topic.")
+    else:
+        await message.reply(
+            "⚠️ Crossteam топик не настроен — ping не отправлен.\n"
+            "Используйте `!swarm setup` для настройки Forum Topics."
+        )
+
+
+async def _handle_chado_digest(message: Message) -> None:
+    """Dry-run preview cron_chado_sync.py."""
+    import importlib.util
+    from pathlib import Path
+
+    script_path = Path(__file__).parent.parent.parent / "scripts" / "cron_chado_sync.py"
+
+    if not script_path.exists():
+        await message.reply(
+            "⚠️ `scripts/cron_chado_sync.py` не найден.\n"
+            "Digest недоступен — скрипт sync ещё не создан."
+        )
+        return
+
+    try:
+        spec = importlib.util.spec_from_file_location("cron_chado_sync", script_path)
+        mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+        if hasattr(mod, "dry_run_preview"):
+            result = mod.dry_run_preview()
+            preview = str(result)[:3000] if result else "— нет данных"
+        else:
+            preview = "⚠️ Функция `dry_run_preview()` не найдена в cron_chado_sync.py"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("chado_digest_dry_run_failed", error=str(exc))
+        preview = f"❌ Ошибка dry-run: {exc}"
+
+    await message.reply(f"📋 **Chado Digest (dry-run)**\n\n{preview}")

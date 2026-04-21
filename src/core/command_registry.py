@@ -1222,6 +1222,18 @@ _COMMANDS: list[CommandInfo] = [
         usage="!rewrite <стиль> | !rewrite [style=concise|verbose|formal|casual]",
         owner_only=True,
     ),
+    # ── Cross-AI (Chado §9) ───────────────────────────────────────────────────
+    CommandInfo(
+        name="chado",
+        category="swarm",
+        description=(
+            "Cross-AI sync статус с Chado: последний sync, сообщения в archive.db, "
+            "ping в crossteam Forum Topic, dry-run digest"
+        ),
+        usage="!chado [status|ping|digest]",
+        owner_only=True,
+        stage="beta",
+    ),
 ]
 
 
