@@ -8,6 +8,7 @@ LRU-eviction при превышении capacity.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from collections import OrderedDict
@@ -88,6 +89,8 @@ class ChatWindowManager:
         )
         self._windows: OrderedDict[str, ChatWindow] = OrderedDict()
         self._evicted_counts: dict[str, int] = {"lru": 0, "idle": 0}
+        # Chado §2 P2 — явный сигнал "перечитай контекст" для каждого чата
+        self._reread_events: dict[int, asyncio.Event] = {}
 
     def get_or_create(self, chat_id: str) -> ChatWindow:
         """Вернуть существующее окно или создать новое (LRU-evict если нужно)."""
@@ -138,6 +141,34 @@ class ChatWindowManager:
     def get_eviction_counts(self) -> dict[str, int]:
         """Счётчики eviction по причине: lru и idle."""
         return dict(self._evicted_counts)
+
+    # ------------------------------------------------------------------
+    # Reread-event API (Chado §2 P2)
+    # ------------------------------------------------------------------
+
+    def get_reread_event(self, chat_id: int) -> asyncio.Event:
+        """Вернуть (lazy-create) Event для сигнала перечтения контекста чата."""
+        if chat_id not in self._reread_events:
+            self._reread_events[chat_id] = asyncio.Event()
+        return self._reread_events[chat_id]
+
+    def signal_reread(self, chat_id: int) -> None:
+        """Установить сигнал — просим LLM flow перечитать контекст чата."""
+        self.get_reread_event(chat_id).set()
+
+    def clear_reread(self, chat_id: int) -> None:
+        """Сбросить сигнал без потребления."""
+        self.get_reread_event(chat_id).clear()
+
+    def consume_reread(self, chat_id: int) -> bool:
+        """Вернуть True если сигнал был установлен, и сразу сбросить его."""
+        event = self.get_reread_event(chat_id)
+        if event.is_set():
+            event.clear()
+            return True
+        return False
+
+    # ------------------------------------------------------------------
 
     @property
     def active_count(self) -> int:
