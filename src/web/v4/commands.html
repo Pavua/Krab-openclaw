@@ -51,6 +51,9 @@
         .badge-pill{padding:.2rem .65rem;border-radius:999px;font-size:.72rem;font-weight:600;display:inline-block;letter-spacing:.02em}
         .badge-owner{background:rgba(251,191,36,.15);color:#fde68a;border:1px solid rgba(251,191,36,.3)}
         .badge-public{background:rgba(110,231,183,.1);color:#6ee7b7;border:1px solid rgba(110,231,183,.25)}
+        .badge-stage-production{background:rgba(110,231,183,.12);color:#6ee7b7;border:1px solid rgba(110,231,183,.3)}
+        .badge-stage-beta{background:rgba(253,230,138,.12);color:#fde68a;border:1px solid rgba(253,230,138,.3)}
+        .badge-stage-experimental{background:rgba(252,165,165,.12);color:#fca5a5;border:1px solid rgba(252,165,165,.3)}
         .badge-cat{padding:.15rem .55rem;border-radius:999px;font-size:.7rem;font-weight:600;display:inline-block}
         /* Category chip filters */
         .cat-chips{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem}
@@ -174,6 +177,13 @@
                 <input type="checkbox" id="filter-owner" style="accent-color:#fde68a;">
                 <label class="text-muted text-xs" style="white-space:nowrap;margin-left:.5rem;">Has aliases</label>
                 <input type="checkbox" id="filter-aliases" style="accent-color:#c4b5fd;">
+                <label class="text-muted text-xs" style="white-space:nowrap;margin-left:.5rem;">Stage</label>
+                <select id="filter-stage" style="background:rgba(0,0,0,.25);border:1px solid var(--glass-border);color:#fff;padding:.3rem .6rem;border-radius:8px;font-size:.78rem;outline:none;">
+                    <option value="">All</option>
+                    <option value="production">🟢 Production</option>
+                    <option value="beta">🟡 Beta</option>
+                    <option value="experimental">🔴 Experimental</option>
+                </select>
             </div>
             <button class="glass-button" id="btn-reset-filters" style="font-size:.78rem;padding:.35rem .9rem;">Reset</button>
         </div>
@@ -203,6 +213,7 @@
                         <th data-col="name">Command <span class="sort-icon"></span></th>
                         <th data-col="category">Category <span class="sort-icon"></span></th>
                         <th data-col="description">Description <span class="sort-icon"></span></th>
+                        <th data-col="stage">Stage <span class="sort-icon"></span></th>
                         <th data-col="usage_count" class="text-right">Uses <span class="sort-icon"></span></th>
                         <th data-col="error_count" class="text-right">Errors <span class="sort-icon"></span></th>
                         <th data-col="owner_only">Access <span class="sort-icon"></span></th>
@@ -324,6 +335,7 @@ var searchQuery = '';
 var activeCategory = null;
 var filterOwner = false;
 var filterAliases = false;
+var filterStage = '';
 var timerLeft = 60;
 var isFirstLoad = true;
 
@@ -488,6 +500,7 @@ function applyFiltersAndRender() {
         if (activeCategory && c.category !== activeCategory) return false;
         if (filterOwner && !c.owner_only) return false;
         if (filterAliases && (!c.aliases || !c.aliases.length)) return false;
+        if (filterStage && (c.stage || 'production') !== filterStage) return false;
         if (q) {
             var inName = c.name.toLowerCase().includes(q);
             var inDesc = (c.description || '').toLowerCase().includes(q);
@@ -553,7 +566,7 @@ function renderTable() {
     if (!page.length) {
         var empty = document.createElement('tr');
         var td = document.createElement('td');
-        td.colSpan = 6;
+        td.colSpan = 7;
         td.className = 'text-center text-muted';
         td.style.padding = '3rem';
         td.textContent = 'No commands match your filters';
@@ -646,9 +659,19 @@ function renderTable() {
         accessB.textContent = cmd.owner_only ? 'owner' : 'public';
         tdAccess.appendChild(accessB);
 
+        // Stage
+        var tdStage = document.createElement('td');
+        var stageVal = cmd.stage || 'production';
+        var stageB = document.createElement('span');
+        stageB.className = 'badge-pill badge-stage-' + stageVal;
+        var stageEmoji = stageVal === 'production' ? '🟢' : stageVal === 'beta' ? '🟡' : '🔴';
+        stageB.textContent = stageEmoji + ' ' + stageVal;
+        tdStage.appendChild(stageB);
+
         tr.appendChild(tdName);
         tr.appendChild(tdCat);
         tr.appendChild(tdDesc);
+        tr.appendChild(tdStage);
         tr.appendChild(tdUsage);
         tr.appendChild(tdErr);
         tr.appendChild(tdAccess);
@@ -929,6 +952,10 @@ function openModal(cmd) {
         catItem.querySelector('.text-sm').style.color = color;
         grid.appendChild(catItem);
         grid.appendChild(metaItem('Access', cmd.owner_only ? 'owner-only' : 'public', cmd.owner_only ? 'text-warning' : 'text-success'));
+        var stageVal2 = cmd.stage || 'production';
+        var stageEmoji2 = stageVal2 === 'production' ? '🟢' : stageVal2 === 'beta' ? '🟡' : '🔴';
+        var stageClr = stageVal2 === 'production' ? 'text-success' : stageVal2 === 'beta' ? 'text-warning' : 'text-error';
+        grid.appendChild(metaItem('Stage', stageEmoji2 + ' ' + stageVal2, stageClr));
         grid.appendChild(metaItem('Usage count', fmtNum(cmd.usage_count || 0), 'text-accent'));
         grid.appendChild(metaItem('Errors', fmtNum(cmd.error_count || 0), (cmd.error_count || 0) > 0 ? 'text-error' : 'text-muted'));
         wrap.appendChild(grid);
@@ -1072,6 +1099,12 @@ document.addEventListener('DOMContentLoaded', function() {
         applyFiltersAndRender();
     });
 
+    // Stage filter
+    document.getElementById('filter-stage').addEventListener('change', function() {
+        filterStage = this.value;
+        applyFiltersAndRender();
+    });
+
     // Reset
     document.getElementById('btn-reset-filters').addEventListener('click', function() {
         searchInput.value = '';
@@ -1079,8 +1112,10 @@ document.addEventListener('DOMContentLoaded', function() {
         searchClear.style.display = 'none';
         document.getElementById('filter-owner').checked = false;
         document.getElementById('filter-aliases').checked = false;
+        document.getElementById('filter-stage').value = '';
         filterOwner = false;
         filterAliases = false;
+        filterStage = '';
         activeCategory = null;
         renderCatChips();
         applyFiltersAndRender();
