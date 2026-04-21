@@ -153,43 +153,42 @@ async def test_mark_memory_recall_dm_skipped():
 
 
 @pytest.mark.asyncio
-async def test_mark_accepted_supergroup_calls_send_reaction():
-    """mark_accepted в SUPERGROUP → send_reaction вызывается."""
+async def test_mark_accepted_supergroup_gratitude_reacts():
+    """mark_accepted с благодарностью в SUPERGROUP → ставит реакцию."""
     bot = _make_bot()
     msg = _make_message_with_chat_type(ChatType.SUPERGROUP)
+    msg.text = "спасибо!"
     with __import__("unittest.mock", fromlist=["patch"]).patch.dict(
-        os.environ, {"AUTO_REACTIONS_ENABLED": "true"}
+        os.environ, {"AUTO_REACTIONS_ENABLED": "true", "KRAB_AUTO_REACTIONS_MODE": "contextual"}
     ):
         result = await ar.mark_accepted(bot, msg)
     assert result is True
     bot.send_reaction.assert_awaited_once()
     _, kwargs = bot.send_reaction.call_args
-    assert kwargs["emoji"] == "👍"
+    assert kwargs["emoji"] in {"👍", "🙏", "❤️"}
 
 
 @pytest.mark.asyncio
-async def test_mark_memory_recall_supergroup_calls_send_reaction():
-    """mark_memory_recall в SUPERGROUP → вызывается с emoji 🧠."""
+async def test_mark_memory_recall_supergroup_is_noop():
+    """mark_memory_recall в SUPERGROUP — теперь no-op, не ставит 🧠."""
     bot = _make_bot()
     msg = _make_message_with_chat_type(ChatType.SUPERGROUP)
     with __import__("unittest.mock", fromlist=["patch"]).patch.dict(
         os.environ, {"AUTO_REACTIONS_ENABLED": "true"}
     ):
         result = await ar.mark_memory_recall(bot, msg)
-    assert result is True
-    _, kwargs = bot.send_reaction.call_args
-    assert kwargs["emoji"] == "🧠"
+    assert result is False
+    bot.send_reaction.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_mark_completed_group_calls_send_reaction():
-    """mark_completed в GROUP → вызывается с emoji ✅."""
+async def test_mark_completed_group_is_noop():
+    """mark_completed в GROUP — теперь no-op, не спамит ✅."""
     bot = _make_bot()
     msg = _make_message_with_chat_type(ChatType.GROUP)
     with __import__("unittest.mock", fromlist=["patch"]).patch.dict(
         os.environ, {"AUTO_REACTIONS_ENABLED": "true"}
     ):
         result = await ar.mark_completed(bot, msg)
-    assert result is True
-    _, kwargs = bot.send_reaction.call_args
-    assert kwargs["emoji"] == "✅"
+    assert result is False
+    bot.send_reaction.assert_not_awaited()

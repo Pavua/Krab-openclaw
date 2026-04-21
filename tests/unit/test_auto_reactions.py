@@ -127,23 +127,51 @@ async def test_set_reaction_exception_returns_false():
 
 
 @pytest.mark.asyncio
-async def test_mark_accepted_uses_thumb_up():
+async def test_mark_accepted_contextual_gratitude():
+    """mark_accepted с благодарственным текстом → ставит контекстную реакцию."""
     bot = _make_bot_with_send_reaction()
     msg = _make_message()
-    with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "true"}):
+    msg.text = "спасибо за помощь!"
+    with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "true", "KRAB_AUTO_REACTIONS_MODE": "contextual"}):
         result = await ar.mark_accepted(bot, msg)
+    # Должна поставить одну из благодарственных реакций
     assert result is True
     bot.send_reaction.assert_awaited_once()
     _, kwargs = bot.send_reaction.call_args
-    assert kwargs["emoji"] == "👍"
+    assert kwargs["emoji"] in {"👍", "🙏", "❤️"}
 
 
 @pytest.mark.asyncio
-async def test_mark_completed_uses_check():
+async def test_mark_accepted_no_reaction_for_plain_command():
+    """mark_accepted с командой (!) → no-op в contextual режиме."""
+    bot = _make_bot_with_send_reaction()
+    msg = _make_message()
+    msg.text = "!ask что-то"
+    with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "true", "KRAB_AUTO_REACTIONS_MODE": "contextual"}):
+        result = await ar.mark_accepted(bot, msg)
+    # Команды не реагируют в contextual режиме (пустой текст или ! команда)
+    # Результат False — нет реакции
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_mark_completed_is_noop():
+    """mark_completed теперь no-op — не ставит ✅ после каждого ответа."""
     bot = _make_bot_with_send_reaction()
     msg = _make_message()
     with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "true"}):
         result = await ar.mark_completed(bot, msg)
+    assert result is False
+    bot.send_reaction.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mark_explicit_completed_uses_check():
+    """mark_explicit_completed ставит ✅ явно."""
+    bot = _make_bot_with_send_reaction()
+    msg = _make_message()
+    with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "true"}):
+        result = await ar.mark_explicit_completed(bot, msg)
     assert result is True
     _, kwargs = bot.send_reaction.call_args
     assert kwargs["emoji"] == "✅"
@@ -174,14 +202,14 @@ async def test_mark_agent_mode():
 
 
 @pytest.mark.asyncio
-async def test_mark_memory_recall():
+async def test_mark_memory_recall_is_noop():
+    """mark_memory_recall теперь no-op — не ставит 🧠 перед каждым ответом."""
     bot = _make_bot_with_send_reaction()
     msg = _make_message()
     with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "true"}):
         result = await ar.mark_memory_recall(bot, msg)
-    assert result is True
-    _, kwargs = bot.send_reaction.call_args
-    assert kwargs["emoji"] == "🧠"
+    assert result is False
+    bot.send_reaction.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
