@@ -1017,3 +1017,19 @@ redact (4/4 пойманы) → chunking (7 chunks) → FTS5 index → Model2Vec
 - **Осталось/сомнение:** сами CLI-команды `openclaw status` и `openclaw gateway status` в этой среде снова висят дольше 12s и оставляют залипшие дочерние `openclaw`-процессы. Нужен отдельный fix-pass: понять, почему status CLI не завершается при живом gateway/web, и добавить bounded timeout/cleanup в CLI или диагностическом обвязочном коде.
 - **Осталось/сомнение:** в `logs/krab_launchd.out.log` виден повторяемый `sqlite3.ProgrammingError: Cannot operate on a closed database.` во время `Session.restart()`, а до поднятия OpenClaw были `openclaw_health_check_failed: All connection attempts failed`. Сейчас сервис восстановлен, но ошибка restart-path остаётся и требует кодового разбора.
 
+
+## Session 17 — Chado Insights Landing (2026-04-21)
+
+**Summary**: 4 waves of parallel sonnet/haiku agents (33+ commits) delivered 24 of 28 action items from `docs/CHADO_INSIGHTS.md`. See `docs/SESSION_17_SUMMARY.md` for full table.
+
+**Highlights**:
+- **Killer bug find**: classify_priority() in message_priority_dispatcher was dead code (0 call sites). W2.7 wired P0_INSTANT bypass — mentions/replies no longer queue behind 30-min LLM loops.
+- **Memory Phase 2**: 43k → 752k msgs in archive.db (17× growth), full hybrid RAG retrieval arsenal live (threshold + MMR + temporal + query expansion + LLM rerank + Gemini 3 Pro wiring).
+- **Cross-AI collaboration**: Chado @callme_chado gave 8-point feedback → integrated to skeleton v2.1 + Design System v1.0 doc + weekly sync routine.
+- **Stealth stack**: stealth_init.js + human_like helpers + curl_cffi JA3 + persistent Chrome profile + detection metrics → 6 layers live.
+- **Test growth**: +24 test files, ~400 new tests, full suite green (645+ tests).
+
+**Architecture v2 live URLs**:
+- Hero (Canva): https://www.canva.com/d/wDX_xg3mClWE0t7
+- Engineering (Claude Design): https://claude.ai/design/p/f8108663-9376-444f-8c2c-1e93302a02d6
+- Ops (Claude Design + Canva mirror): https://www.canva.com/d/3dkWS667S3h08UB
