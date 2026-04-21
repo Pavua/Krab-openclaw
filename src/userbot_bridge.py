@@ -2077,6 +2077,24 @@ class KraabUserbot(
         except Exception as _exc:
             logger.warning("command_usage_load_failed", error=str(_exc))
 
+        # Chado §4 P3: startup self-test — проверяем что все skill-модули импортируются.
+        # Non-fatal: только логируем предупреждения, не прерываем старт.
+        try:
+            from .core.skill_discovery_check import check_all_skills_discovered as _skill_check
+
+            _skill_warnings = _skill_check()
+            if _skill_warnings:
+                for _w in _skill_warnings:
+                    logger.warning("skill_discovery_warning", detail=_w)
+                logger.warning(
+                    "skill_discovery_gaps_found",
+                    count=len(_skill_warnings),
+                )
+            else:
+                logger.info("skill_discovery_ok")
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning("skill_discovery_check_failed", error=str(_exc))
+
         # Запуск фоновых задач (Safe Start)
         self._ensure_maintenance_started()
         self._telegram_watchdog_task = asyncio.create_task(self._telegram_session_watchdog())
