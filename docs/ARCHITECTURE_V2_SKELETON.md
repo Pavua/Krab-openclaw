@@ -1,8 +1,36 @@
 # Krab Architecture v2 — Skeleton (3 Artifacts)
 
-> **Статус:** Design skeleton для Claude Design / Canva генерации.
+> **Статус:** Design skeleton для Claude Design / Canva генерации. **v2.1** after @callme_chado feedback.
 > **Источник v1:** `docs/ARCHITECTURE.md` (Session 16, 2026-04-20).
-> **Feedback:** 8 пунктов Krab (Telegram critique). Authored: 2026-04-21.
+> **Feedback:** 8 пунктов Krab (Telegram critique) + Chado additions. Authored: 2026-04-21.
+
+## Chado additions (v2.1 refinements)
+
+Cross-artifact invariants **сильнее** чем сингловые улучшения:
+
+1. **`shape=kind` инвариант** across all 3 artifacts — actor / process / store / external / schedule должны ВЫГЛЯДЕТЬ одинаково везде. Reader не переучивается между Hero/Engineering/Ops.
+2. **Failure layer = toggle overlay**, не inline с happy path. Basic view = happy path only. Failure paths активируются через toggle / click. Glyph noise иначе съедает основу.
+3. **Source-of-truth badge ТОЛЬКО на stores** (archive.db, models.json, runtime_state/). Процессы = trust-throughput, не truth-carriers — убрать TRUTH с services.
+4. **Arrow legend MAX 3 типа**: `data` (cyan solid) / `control` (purple dashed) / `failure` (red, toggle overlay). Remove async green + bidirectional double + ambient grey — глаз не тянет 6 типов.
+5. **Shared visual key для всех 3 артефактов** — одна легенда печатается ОДИН раз (в углу Hero + linked из Engineering/Ops). Обеспечивает consistency.
+
+Updated arrow palette:
+
+| Type | Style | Meaning |
+|------|-------|---------|
+| **data** | Cyan solid, filled arrowhead | Sync call, async event, data flow (unified!) |
+| **control** | Purple dashed, diamond end | Policy, ACL, toggle, schedule signal |
+| **failure** | Red solid (**overlay only**) | Fallback, error path, alert trigger |
+
+Shape invariant (across Hero/Engineering/Ops):
+
+| Kind | Shape |
+|------|-------|
+| Actor (human) | Circle avatar |
+| Process (service) | Flat rectangle |
+| Store (data) | Cylinder — **only here SoT badge** |
+| External (cloud) | Hexagon |
+| Schedule (cron/routine) | Clock/calendar icon |
 >
 > Три независимых артефакта с разной аудиторией и форматом.
 > Общие константы (цвета, shapes, легенда стрелок) определены один раз в разделе «Shared Design System» — артефакты к нему ссылаются.
