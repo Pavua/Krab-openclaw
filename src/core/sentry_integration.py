@@ -92,6 +92,25 @@ def _is_noise_event(event: dict[str, Any]) -> bool:
     return False
 
 
+def _read_current_session_id() -> str | None:
+    """Read session id from .remember/current_session.md (optional).
+
+    Format fallback: first line after `# Session N` heading, or file content first 32 chars.
+    """
+    try:
+        from pathlib import Path
+
+        path = Path.cwd() / ".remember" / "current_session.md"
+        if not path.exists():
+            return None
+        content = path.read_text(encoding="utf-8")[:256].strip()
+        # Heuristic: look for "Session <N>" pattern
+        match = re.search(r"Session\s+(\d+)", content, re.IGNORECASE)
+        return match.group(1) if match else content.split("\n")[0][:32] or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
     """
     Sentry hook: редактирует PII в event перед отправкой + фильтрует noise.
@@ -178,6 +197,10 @@ def init_sentry() -> bool:
             include_local_variables=False,
             send_default_pii=False,
         )
+        sentry_sdk.set_tag("agent_kin", "krab")
+        session_id = _read_current_session_id()
+        if session_id:
+            sentry_sdk.set_tag("session", session_id)
         logger.info(
             "sentry_initialized",
             environment=config.KRAB_ENV,
