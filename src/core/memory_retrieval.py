@@ -70,6 +70,7 @@ from structlog import get_logger
 
 from src.core.memory_adaptive_rerank import rerank_adaptive
 from src.core.memory_archive import ArchivePaths, open_archive
+from src.core.memory_retrieval_scores import record_scores
 
 logger = get_logger(__name__)
 
@@ -77,6 +78,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # API types.
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class SearchResult:
@@ -97,15 +99,34 @@ class SearchResult:
 
 HISTORICAL_MARKERS = (
     # Русские — прошлое.
-    "раньше", "тогда", "в прошлом", "год назад", "два года",
-    "в 2023", "в 2024", "когда-то", "давно", "ранее",
+    "раньше",
+    "тогда",
+    "в прошлом",
+    "год назад",
+    "два года",
+    "в 2023",
+    "в 2024",
+    "когда-то",
+    "давно",
+    "ранее",
     # Английские.
-    "before", "ago", "last year", "previously", "earlier",
-    "in 2023", "in 2024", "back in", "long ago",
+    "before",
+    "ago",
+    "last year",
+    "previously",
+    "earlier",
+    "in 2023",
+    "in 2024",
+    "back in",
+    "long ago",
 )
 RECENT_MARKERS = (
-    "сейчас", "today", "на этой неделе", "this week",
-    "вчера", "yesterday",
+    "сейчас",
+    "today",
+    "на этой неделе",
+    "this week",
+    "вчера",
+    "yesterday",
 )
 
 
@@ -144,6 +165,7 @@ def detect_decay_mode(query: str) -> str:
 # RRF fusion.
 # ---------------------------------------------------------------------------
 
+
 def reciprocal_rank_fusion(
     *ranked_lists: list[str],
     k: int = 60,
@@ -176,6 +198,7 @@ def normalize_scores_0_1(scores: dict[str, float]) -> dict[str, float]:
 # ---------------------------------------------------------------------------
 # HybridRetriever.
 # ---------------------------------------------------------------------------
+
 
 class HybridRetriever:
     """
@@ -259,6 +282,10 @@ class HybridRetriever:
         else:
             fused = reciprocal_rank_fusion(fts_ids, k=self._rrf_k)
 
+        # Записываем RRF scores для Prometheus percentiles.
+        if fused:
+            record_scores(list(fused.values()))
+
         # Decay.
         effective_mode = decay_mode
         if effective_mode == "auto":
@@ -289,15 +316,21 @@ class HybridRetriever:
                 reranked = rerank_adaptive(chunks, query=query)
                 # Восстанавливаем порядок SearchResult по новому скору.
                 score_by_id = {c["id"]: c["score"] for c in reranked}
-                results = sorted(results, key=lambda r: score_by_id.get(r.message_id, 0.0), reverse=True)
-                logger.debug("memory_adaptive_rerank_applied", query_len=len(query), count=len(results))
+                results = sorted(
+                    results, key=lambda r: score_by_id.get(r.message_id, 0.0), reverse=True
+                )
+                logger.debug(
+                    "memory_adaptive_rerank_applied", query_len=len(query), count=len(results)
+                )
                 try:
                     from src.core.prometheus_metrics import _ADAPTIVE_RERANK_COUNTER
+
                     _ADAPTIVE_RERANK_COUNTER[0] += 1
                 except Exception:
                     pass
             except Exception as exc:  # noqa: BLE001
                 import traceback as _tb
+
                 logger.warning(
                     "memory_adaptive_rerank_failed",
                     error=str(exc),
@@ -481,9 +514,7 @@ class HybridRetriever:
             age_days = (now - ts).total_seconds() / 86400.0 if ts else 0.0
             decayed = raw_score * decay_fn(age_days)
 
-            first_msg_id, ctx_before, ctx_after = self._fetch_context(
-                conn, chunk_id, with_context
-            )
+            first_msg_id, ctx_before, ctx_after = self._fetch_context(conn, chunk_id, with_context)
             sr = SearchResult(
                 message_id=first_msg_id or chunk_id,
                 chat_id=row["chat_id"],
@@ -519,9 +550,7 @@ class HybridRetriever:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _fetch_chunks(
-        conn: sqlite3.Connection, chunk_ids: Iterable[str]
-    ) -> dict[str, sqlite3.Row]:
+    def _fetch_chunks(conn: sqlite3.Connection, chunk_ids: Iterable[str]) -> dict[str, sqlite3.Row]:
         """Достаёт chunks по списку chunk_id одним запросом."""
         ids = list(chunk_ids)
         if not ids:
@@ -601,6 +630,7 @@ class HybridRetriever:
 # Внутренние утилиты.
 # ---------------------------------------------------------------------------
 
+
 def _escape_fts5(query: str) -> str:
     """
     Простой escape для FTS5 MATCH: убираем символы, которые FTS5 интерпретирует
@@ -609,9 +639,7 @@ def _escape_fts5(query: str) -> str:
     """
     # Убираем специальные FTS5 операторы, чтобы пользовательские запросы
     # не падали на syntax error.
-    cleaned = "".join(
-        ch if ch.isalnum() or ch in " -_" else " " for ch in query
-    )
+    cleaned = "".join(ch if ch.isalnum() or ch in " -_" else " " for ch in query)
     cleaned = " ".join(cleaned.split())
     if not cleaned:
         return ""
