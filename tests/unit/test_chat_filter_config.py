@@ -54,7 +54,7 @@ class TestSetGet:
         assert cfg.get_mode("-100222") == "active"
 
     def test_invalid_mode_raises(self, cfg: ChatFilterConfig) -> None:
-        with pytest.raises(ValueError, match="invalid mode"):
+        with pytest.raises(ValueError, match="(?i)invalid mode"):
             cfg.set_mode("-100333", "unknown-mode")
 
     def test_set_returns_true(self, cfg: ChatFilterConfig) -> None:
