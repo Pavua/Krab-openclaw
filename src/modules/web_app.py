@@ -7702,6 +7702,38 @@ class WebApp:
                 "note": "flush будет выполнен в течение batch_timeout_sec",
             }
 
+        @self.app.post("/api/memory/indexer/backfill")
+        async def memory_indexer_backfill(
+            batch: int = 1000,
+            dry_run: bool = False,
+        ):
+            """
+            Enqueue backfill для chunk'ов без embedding в vec_chunks.
+
+            Параметры (query params):
+              batch: сколько chunk_id обработать за один вызов (default 1000).
+              dry_run: если true — только подсчитать, не запускать embed.
+
+            Returns:
+              unencoded_total — найдено chunk'ов без вектора до старта.
+              queued          — chunk_id отправлено в embedder (0 при dry_run).
+              embedded        — реально проэмбеддено (0 при dry_run).
+              elapsed_sec     — время выполнения.
+            """
+            try:
+                import asyncio as _asyncio  # noqa: PLC0415
+
+                from scripts.force_memory_backfill import run_backfill  # noqa: PLC0415
+            except ImportError as exc:
+                return {"error": f"backfill_unavailable: {exc}"}
+
+            result = await _asyncio.to_thread(
+                run_backfill,
+                batch,
+                dry_run,
+            )
+            return result
+
         @self.app.get("/api/memory/search")
         async def memory_search(
             q: str = "",
@@ -10918,6 +10950,33 @@ class WebApp:
             from ..core.memory_stats import collect_memory_stats
 
             return collect_memory_stats()
+
+        @self.app.get("/api/memory/doctor")
+        async def memory_doctor_get():
+            """Диагностика Memory Layer — 6 проверок без side-effects.
+
+            Returns:
+              ok: bool, checks: dict, failed/warnings: list, summary: str
+            """
+            from ..core.memory_doctor import run_diagnostics
+
+            return await run_diagnostics()
+
+        @self.app.post("/api/memory/doctor/fix")
+        async def memory_doctor_fix():
+            """Диагностика + авто-ремонт Memory Layer.
+
+            Действия: WAL checkpoint, backfill embeddings (если ratio < 50%),
+            перезапуск MCP yung-nagato (если недоступен).
+
+            Returns:
+              diagnostics: dict, repairs: list[dict], ok: bool
+            """
+            from ..core.memory_doctor import run_diagnostics, run_repairs
+
+            diag = await run_diagnostics()
+            repair_result = await run_repairs(checks=diag.get("checks"))
+            return {"diagnostics": diag, **repair_result}
 
         @self.app.get("/api/system/clock_drift")
         async def system_clock_drift():
