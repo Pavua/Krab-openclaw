@@ -675,6 +675,43 @@ class SwarmChannels:
             logger.warning("broadcast_to_topic_failed", key=team_or_topic_key, error=str(exc))
             return False
 
+    # -- status snapshot ------------------------------------------------------
+
+    def get_channels_status(self) -> dict:
+        """
+        Read-only снапшот состояния Forum Topics для API/Dashboard.
+
+        Возвращает dict с ключами: forum_chat_id, forum_title, topics,
+        missing_topics, generated_at.
+        """
+        import datetime
+
+        topics_list = []
+        for key in [td["key"] for td in _FORUM_TOPICS]:
+            tid = self._team_topics.get(key)
+            topics_list.append(
+                {
+                    "key": key,
+                    "topic_id": tid,
+                    "last_post_at": None,  # не отслеживается в runtime
+                }
+            )
+
+        configured_keys = set(self._team_topics.keys())
+        expected_keys = {td["key"] for td in _FORUM_TOPICS}
+        missing = [k for k in expected_keys if k not in configured_keys]
+
+        return {
+            "forum_chat_id": str(self._forum_chat_id) if self._forum_chat_id else None,
+            "forum_title": "🐝 Krab Swarm",
+            "is_forum_mode": self.is_forum_mode,
+            "topics": topics_list,
+            "missing_topics": missing,
+            "generated_at": datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+        }
+
     # -- formatting -----------------------------------------------------------
 
     def format_status(self) -> str:

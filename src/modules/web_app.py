@@ -8301,6 +8301,32 @@ class WebApp:
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
 
+        @self.app.get("/api/swarm/channels/status")
+        async def get_swarm_channels_status():
+            """Снапшот состояния Forum Topics свёрма (read-only, для Dashboard)."""
+            try:
+                from ..core.swarm_channels import swarm_channels as _sc
+
+                if not hasattr(_sc, "get_channels_status"):
+                    from fastapi.responses import JSONResponse
+
+                    return JSONResponse(
+                        status_code=503,
+                        content={
+                            "ok": False,
+                            "error": "SwarmChannels.get_channels_status unavailable",
+                        },
+                    )
+                data = _sc.get_channels_status()
+                return {"ok": True, **data}
+            except Exception as exc:
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse(
+                    status_code=503,
+                    content={"ok": False, "error": str(exc)},
+                )
+
         # ── Browser Bridge API ──────────────────────────────────────────────
         from ..integrations.browser_bridge import browser_bridge as _browser_bridge
 
