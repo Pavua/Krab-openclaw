@@ -60,6 +60,7 @@ class SearchResult:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
 from dataclasses import dataclass, field
@@ -337,6 +338,34 @@ class HybridRetriever:
                     error_type=type(exc).__name__,
                     traceback=_tb.format_exc(),
                     fallback="hybrid_reranker",
+                )
+
+        # Opt-in: LLM re-ranking финальная стадия (Chado §6 P1).
+        if os.getenv("KRAB_RAG_LLM_RERANK_ENABLED", "0") == "1" and results:
+            try:
+                from src.core.memory_llm_rerank import Candidate, llm_rerank  # lazy
+
+                candidates = [
+                    Candidate(
+                        chunk_id=r.message_id,
+                        text=r.text_redacted,
+                        rrf_score=r.score,
+                    )
+                    for r in results
+                ]
+                # Нет провайдера — llm_rerank возвращает candidates[:top_k] no-op.
+                reranked_cands = asyncio.get_event_loop().run_until_complete(
+                    llm_rerank(query, candidates, top_k=top_k, provider=None)
+                )
+                # Восстанавливаем порядок SearchResult по chunk_id.
+                order = {c.chunk_id: i for i, c in enumerate(reranked_cands)}
+                results = sorted(results, key=lambda r: order.get(r.message_id, 9999))
+                logger.debug("memory_llm_rerank_applied", count=len(results))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "memory_llm_rerank_hook_failed",
+                    error=str(exc),
+                    fallback="pre_rerank_order",
                 )
 
         return results
