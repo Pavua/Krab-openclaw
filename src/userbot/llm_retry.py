@@ -63,10 +63,10 @@ RETRYABLE_ERROR_CODES: frozenset[str] = frozenset(
 # Коды ошибок, при которых retry НЕ нужен (user error или permanent).
 NON_RETRYABLE_ERROR_CODES: frozenset[str] = frozenset(
     {
-        "auth_unauthorized",      # неверный API ключ — повтор не поможет
-        "unsupported_key_type",   # структурная проблема конфигурации
-        "safety_block",           # safety filter — не ретраить контент
-        "vision_addon_missing",   # конфигурационная проблема
+        "auth_unauthorized",  # неверный API ключ — повтор не поможет
+        "unsupported_key_type",  # структурная проблема конфигурации
+        "safety_block",  # safety filter — не ретраить контент
+        "vision_addon_missing",  # конфигурационная проблема
     }
 )
 
@@ -152,7 +152,5 @@ def build_final_error_notice(
     """Формирует финальное сообщение об ошибке после исчерпания всех попыток."""
     tail = original_error.strip()
     if attempts_made > 0:
-        return (
-            f"❌ Все попытки исчерпаны ({attempts_made}/{max_retries}).\n{tail}"
-        )
+        return f"❌ Все попытки исчерпаны ({attempts_made}/{max_retries}).\n{tail}"
     return tail

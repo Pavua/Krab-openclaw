@@ -71,8 +71,8 @@ async def collect_health_deep(
         if hasattr(openclaw_client, "get_last_runtime_route"):
             route_meta = openclaw_client.get_last_runtime_route() or {}
         if not route_meta.get("model"):
-            route_meta["model"] = (
-                str(get_runtime_primary_model() or getattr(config, "MODEL", "") or "unknown")
+            route_meta["model"] = str(
+                get_runtime_primary_model() or getattr(config, "MODEL", "") or "unknown"
             )
         result["openclaw"] = {
             "healthy": bool(oc_ok),

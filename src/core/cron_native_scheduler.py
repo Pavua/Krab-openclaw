@@ -32,9 +32,7 @@ class CronNativeScheduler:
         # Словарь job_id → timestamp последнего запуска (защита от двойного срабатывания)
         self._last_fired: dict[str, float] = {}
 
-    def bind_sender(
-        self, sender: Callable[[str, str], Awaitable[None]]
-    ) -> None:
+    def bind_sender(self, sender: Callable[[str, str], Awaitable[None]]) -> None:
         """Привязывает callback для отправки промпта в AI pipeline.
 
         callback(chat_id, prompt) → должен выполнить AI-запрос и вернуть ответ.

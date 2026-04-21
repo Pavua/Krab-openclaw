@@ -25,6 +25,7 @@ OBSIDIAN_INBOX = OBSIDIAN_VAULT / "00_Inbox"
 
 class MemoResult(NamedTuple):
     """Результат операции с заметкой."""
+
     success: bool
     message: str
     file_path: Path | None = None
@@ -86,7 +87,7 @@ class MemoService:
         # Теги в YAML-списке
         tags_yaml = ""
         if tags:
-            safe_tags = [t.replace('"', '') for t in tags]
+            safe_tags = [t.replace('"', "") for t in tags]
             tags_yaml = "tags:\n" + "".join(f'  - "{t}"\n' for t in safe_tags)
         return (
             "---\n"
@@ -130,7 +131,9 @@ class MemoService:
         dt = datetime.now()
         filename = self._build_filename(dt)
         file_path = self.inbox_dir / filename
-        content = self._build_content(text.strip(), chat_title, dt, tags=tags, source_type=source_type)
+        content = self._build_content(
+            text.strip(), chat_title, dt, tags=tags, source_type=source_type
+        )
 
         try:
             file_path.write_text(content, encoding="utf-8")
@@ -170,16 +173,16 @@ class MemoService:
                 created = created_match.group(1).strip() if created_match else "—"
                 # Превью: первая непустая строка после frontmatter
                 body = re.sub(r"^---\n.*?^---\n", "", content, flags=re.DOTALL | re.MULTILINE)
-                preview = next(
-                    (line.strip() for line in body.splitlines() if line.strip()), "—"
-                )
+                preview = next((line.strip() for line in body.splitlines() if line.strip()), "—")
                 if len(preview) > 80:
                     preview = preview[:77] + "..."
-                result.append({
-                    "filename": path.name,
-                    "created": created,
-                    "preview": preview,
-                })
+                result.append(
+                    {
+                        "filename": path.name,
+                        "created": created,
+                        "preview": preview,
+                    }
+                )
             except OSError:
                 continue
 
@@ -206,10 +209,12 @@ class MemoService:
                         preview = line.strip()
                         if len(preview) > 100:
                             preview = preview[:97] + "..."
-                        results.append({
-                            "filename": path.name,
-                            "match": preview,
-                        })
+                        results.append(
+                            {
+                                "filename": path.name,
+                                "match": preview,
+                            }
+                        )
                         # Одно совпадение на файл для краткости
                         break
             except OSError:

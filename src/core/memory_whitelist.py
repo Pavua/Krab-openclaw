@@ -122,9 +122,7 @@ class MemoryWhitelist:
     # Публичный API.
     # ------------------------------------------------------------------
 
-    def is_allowed(
-        self, chat_id: str, chat_title: str | None = None
-    ) -> WhitelistDecision:
+    def is_allowed(self, chat_id: str, chat_title: str | None = None) -> WhitelistDecision:
         """
         Основной decision gate. Возвращает и вердикт, и его причину.
 
@@ -147,9 +145,7 @@ class MemoryWhitelist:
         if chat_title:
             for pattern in self._config.deny_title_regex:
                 if pattern.search(chat_title):
-                    return WhitelistDecision(
-                        False, f"deny:title_regex:{pattern.pattern}"
-                    )
+                    return WhitelistDecision(False, f"deny:title_regex:{pattern.pattern}")
 
         # Allow.
         if cid in self._config.allow_ids:
@@ -158,9 +154,7 @@ class MemoryWhitelist:
         if chat_title:
             for pattern in self._config.allow_title_regex:
                 if pattern.search(chat_title):
-                    return WhitelistDecision(
-                        True, f"allow:title_regex:{pattern.pattern}"
-                    )
+                    return WhitelistDecision(True, f"allow:title_regex:{pattern.pattern}")
 
         if self._config.allow_all:
             return WhitelistDecision(True, "allow_all")

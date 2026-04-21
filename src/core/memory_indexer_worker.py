@@ -267,9 +267,7 @@ class MemoryIndexerWorker:
         except (FileNotFoundError, Exception):
             return
         try:
-            rows = conn.execute(
-                "SELECT chat_id, last_message_id FROM indexer_state;"
-            ).fetchall()
+            rows = conn.execute("SELECT chat_id, last_message_id FROM indexer_state;").fetchall()
             self._watermark_cache = {r[0]: r[1] for r in rows}
         except Exception as exc:
             logger.warning("memory_indexer_watermark_load_failed", error=str(exc))
@@ -474,9 +472,7 @@ class MemoryIndexerWorker:
             # Insert сообщений (с PII-redacted текстом)
             for qmsg in batch:
                 redacted = self._redactor.redact(qmsg.text).text
-                ts_str = (
-                    qmsg.timestamp.replace(tzinfo=None).isoformat(timespec="seconds") + "Z"
-                )
+                ts_str = qmsg.timestamp.replace(tzinfo=None).isoformat(timespec="seconds") + "Z"
                 conn.execute(
                     "INSERT OR IGNORE INTO messages "
                     "(message_id, chat_id, sender_id, timestamp, text_redacted, reply_to_id) "
@@ -533,9 +529,8 @@ class MemoryIndexerWorker:
             # Watermark indexer_state
             for chat_id, last_msg_id in per_chat_last_msg_id.items():
                 ts_now = (
-                    datetime.now(timezone.utc)
-                    .replace(tzinfo=None)
-                    .isoformat(timespec="seconds") + "Z"
+                    datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+                    + "Z"
                 )
                 conn.execute(
                     "INSERT INTO indexer_state (chat_id, last_message_id, last_processed_at) "

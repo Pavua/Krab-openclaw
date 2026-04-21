@@ -48,6 +48,7 @@ try:
         mark_failed,
         mark_memory_recall,
     )
+
     _HAS_AUTO_REACTIONS = True
 except ImportError:
     _HAS_AUTO_REACTIONS = False
@@ -453,6 +454,7 @@ class LLMFlowMixin:
         # Auto-reaction: если Memory Layer активен — RAG подключён к контексту
         try:
             from ..core.memory_adapter import is_memory_layer_available as _mem_avail
+
             if _mem_avail():
                 await _safe_react(mark_memory_recall, self, message)
         except Exception:  # noqa: BLE001
@@ -728,9 +730,7 @@ class LLMFlowMixin:
                         )
                         if _stagnant_tasks:
                             for _st in _stagnant_tasks:
-                                _st_age_sec = int(
-                                    time.time() - (_st.last_event_at_ms // 1000)
-                                )
+                                _st_age_sec = int(time.time() - (_st.last_event_at_ms // 1000))
                                 logger.warning(
                                     "llm_stagnation_detected",
                                     task_id=_st.task_id,
@@ -755,9 +755,7 @@ class LLMFlowMixin:
                                             f"🦀 {query}\n\n{stagnation_msg}",
                                         )
                                     else:
-                                        temp_msg = await self._safe_edit(
-                                            temp_msg, stagnation_msg
-                                        )
+                                        temp_msg = await self._safe_edit(temp_msg, stagnation_msg)
                                 except Exception as exc:  # noqa: BLE001
                                     logger.warning(
                                         "llm_stagnation_notice_delivery_failed",

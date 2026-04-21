@@ -538,12 +538,13 @@ class LLMTextProcessingMixin:
             return text
 
         # Паттерн для «голых» URL (не внутри markdown-ссылки и не в бэктиках)
-        _url_re = re.compile(r'https?://[^\s\)\]`>]+', re.IGNORECASE)
+        _url_re = re.compile(r"https?://[^\s\)\]`>]+", re.IGNORECASE)
 
         # Разбиваем по бэктикам: чётные индексы — вне кода, нечётные — внутри.
         parts = text.split("`")
         for i in range(0, len(parts), 2):
             segment = parts[i]
+
             # Не трогаем URL внутри markdown-ссылок вида [текст](url)
             def _maybe_wrap(m: re.Match) -> str:
                 # Смотрим символ перед совпадением: если '(' — это markdown-ссылка

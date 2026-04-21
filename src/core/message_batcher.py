@@ -5,6 +5,7 @@ Per-chat Message Batcher — буферизует incoming msgs пока пре�
 
 TODO Session 13.X: integrate в _process_message когда ChatWindow integration landed.
 """
+
 from __future__ import annotations
 
 import asyncio

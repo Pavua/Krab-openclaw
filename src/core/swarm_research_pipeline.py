@@ -80,14 +80,11 @@ class SwarmResearchPipeline:
                 f"(не менее {self.config.max_sources} источников)."
             )
         else:
-            structure_hint = (
-                f"Найди не менее {self.config.max_sources} источников по теме."
-            )
+            structure_hint = f"Найди не менее {self.config.max_sources} источников по теме."
 
         return (
             f"Проведи исследование по теме: {raw_topic}. "
-            "Обязательно используй web_search для поиска актуальной информации. "
-            + structure_hint
+            "Обязательно используй web_search для поиска актуальной информации. " + structure_hint
         )
 
     # ------------------------------------------------------------------

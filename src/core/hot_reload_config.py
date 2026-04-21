@@ -91,7 +91,7 @@ class HotReloadableConfig:
     """
 
     path: Path
-    parser: Callable[[dict], Any] = field(default_factory=lambda: (lambda d: d))
+    parser: Callable[[dict], Any] = field(default_factory=lambda: lambda d: d)
     _last_mtime: float = field(default=0.0, init=False, repr=False)
     _state: Any = field(default=None, init=False, repr=False)
     _lock: threading.Lock = field(default=None, init=False, repr=False)

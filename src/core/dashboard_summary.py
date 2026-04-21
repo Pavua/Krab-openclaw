@@ -272,9 +272,7 @@ def collect_dashboard_summary(
     *,
     boot_ts: float | None = None,
     router: Any = None,
-    services_probe: (
-        Callable[[], tuple[dict[str, str], int | None]] | None
-    ) = None,
+    services_probe: (Callable[[], tuple[dict[str, str], int | None]] | None) = None,
     archive_probe: Callable[[], dict[str, Any] | None] | None = None,
     memory_probe: Callable[[], dict[str, Any] | None] | None = None,
     activity_probe: Callable[[], dict[str, Any] | None] | None = None,

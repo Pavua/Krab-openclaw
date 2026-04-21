@@ -46,9 +46,7 @@ def _save(jobs: list[dict]) -> None:
     """Сохраняет список jobs в файл (создаёт директорию при необходимости)."""
     _storage_path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {"version": 1, "jobs": jobs}
-    _storage_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    _storage_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def list_jobs() -> list[dict]:
@@ -165,8 +163,14 @@ def next_due(job: dict, now: datetime | None = None) -> float | None:
     # Начинаем со следующей минуты
     base = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
     candidate = _CronDatetime(
-        base.year, base.month, base.day,
-        base.hour, base.minute, 0, 0, tzinfo=base.tzinfo,
+        base.year,
+        base.month,
+        base.day,
+        base.hour,
+        base.minute,
+        0,
+        0,
+        tzinfo=base.tzinfo,
     )
     limit = now + timedelta(days=366)
 
@@ -181,8 +185,14 @@ def next_due(job: dict, now: datetime | None = None) -> float | None:
             return candidate.timestamp()
         nxt = candidate + timedelta(minutes=1)
         candidate = _CronDatetime(
-            nxt.year, nxt.month, nxt.day,
-            nxt.hour, nxt.minute, 0, 0, tzinfo=nxt.tzinfo,
+            nxt.year,
+            nxt.month,
+            nxt.day,
+            nxt.hour,
+            nxt.minute,
+            0,
+            0,
+            tzinfo=nxt.tzinfo,
         )
 
     logger.warning(

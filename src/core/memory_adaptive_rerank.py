@@ -11,6 +11,7 @@ Usage:
     from src.core.memory_adaptive_rerank import rerank_adaptive
     reranked = rerank_adaptive(chunks, query="how to...", strategy="mmr+temporal")
 """
+
 from __future__ import annotations
 
 import time

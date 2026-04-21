@@ -12,6 +12,7 @@ Notification owner через Telegram DM (callback injection).
 - Cooldown между switches (защита от осцилляции fallback-цепочкой).
 - Callback injection для decoupling от `openclaw_client`.
 """
+
 from __future__ import annotations
 
 import os
@@ -150,9 +151,7 @@ class ProviderFailoverPolicy:
         if self._last_failover_at:
             elapsed = (now - self._last_failover_at).total_seconds()
             if elapsed < self._cooldown_sec:
-                return FailoverResult(
-                    triggered=False, reason=f"cooldown:{int(elapsed)}s"
-                )
+                return FailoverResult(triggered=False, reason=f"cooldown:{int(elapsed)}s")
 
         # Выбираем следующего жизнеспособного кандидата из цепочки.
         next_provider = self._pick_next(current_provider, fallback_chain or [])
@@ -175,9 +174,7 @@ class ProviderFailoverPolicy:
                 await self._failover_callback(current_provider, next_provider)
             except Exception as exc:  # noqa: BLE001
                 logger.error("failover_callback_failed", error=str(exc))
-                return FailoverResult(
-                    triggered=False, reason=f"callback_failed:{exc}"
-                )
+                return FailoverResult(triggered=False, reason=f"callback_failed:{exc}")
 
         self._last_failover_at = now
         # Reset failed provider's counter — даём ему второй шанс после recovery.

@@ -17,9 +17,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 # Стандартные bucket-границы (секунды), совместимые с Prometheus defaults
-_DEFAULT_BUCKETS: tuple[float, ...] = (
-    0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, float("inf")
-)
+_DEFAULT_BUCKETS: tuple[float, ...] = (0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, float("inf"))
 
 
 @dataclass

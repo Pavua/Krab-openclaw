@@ -23,6 +23,7 @@ TODO_FILE = Path.home() / ".openclaw" / "krab_runtime_state" / "personal_todos.j
 
 class TodoItem(TypedDict):
     """Структура одной задачи."""
+
     id: int
     text: str
     done: bool

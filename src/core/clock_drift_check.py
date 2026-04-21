@@ -63,9 +63,7 @@ def check_clock_drift_sync(ntp_server: str = "time.apple.com") -> ClockDriftResu
         return ClockDriftResult(local_ts, None, "unavailable", f"sntp failed: {exc}")
 
     if result.returncode != 0:
-        return ClockDriftResult(
-            local_ts, None, "unavailable", f"sntp rc={result.returncode}"
-        )
+        return ClockDriftResult(local_ts, None, "unavailable", f"sntp rc={result.returncode}")
 
     offset = _parse_offset(result.stdout)
     if offset is None:

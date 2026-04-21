@@ -356,10 +356,7 @@ class SwarmTaskBoard:
         Возвращает число удалённых задач.
         """
         removed = 0
-        terminal = [
-            t for t in self._tasks.values()
-            if t.get("status") in {"done", "failed"}
-        ]
+        terminal = [t for t in self._tasks.values() if t.get("status") in {"done", "failed"}]
         terminal.sort(key=lambda t: t.get("updated_at", ""), reverse=True)
         for task in terminal[keep_done:]:
             self._tasks.pop(task["task_id"], None)

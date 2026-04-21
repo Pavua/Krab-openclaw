@@ -148,6 +148,7 @@ CREATE TABLE IF NOT EXISTS indexer_state (
 # Публичный API.
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class ArchivePaths:
     """Пути к БД и директории. `default()` возвращает канонический путь."""
@@ -203,10 +204,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
             "INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?);",
             (
                 "created_at",
-                datetime.now(timezone.utc).replace(tzinfo=None).isoformat(
-                    timespec="seconds"
-                )
-                + "Z",
+                datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds") + "Z",
             ),
         )
         # Если версия уже была и не совпадает — это сигнал к миграции,
@@ -273,9 +271,7 @@ def enforce_archive_permissions(paths: ArchivePaths | None = None) -> None:
 def get_schema_version(conn: sqlite3.Connection) -> int | None:
     """Читает schema_version из meta. Возвращает None если таблицы нет."""
     try:
-        row = conn.execute(
-            "SELECT value FROM meta WHERE key = 'schema_version';"
-        ).fetchone()
+        row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version';").fetchone()
     except sqlite3.OperationalError:
         return None
     if row is None:

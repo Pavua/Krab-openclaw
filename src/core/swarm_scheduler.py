@@ -40,12 +40,13 @@ _MIN_INTERVAL_SEC = 300
 # Максимум рекуррентных jobs
 _MAX_JOBS = 10
 
+
 class WorkflowType(str, Enum):
     """Тип workflow для рекуррентного job."""
 
-    STANDARD = "standard"   # обычный round свёрма
-    RESEARCH = "research"   # research pipeline (web_search обязателен)
-    REPORT = "report"       # генерация отчёта и сохранение артефакта
+    STANDARD = "standard"  # обычный round свёрма
+    RESEARCH = "research"  # research pipeline (web_search обязателен)
+    REPORT = "report"  # генерация отчёта и сохранение артефакта
 
 
 _INTERVAL_PATTERN_MAP = {

@@ -85,9 +85,7 @@ class ModelManager:
         self._lock = asyncio.Lock()
         self._maintenance_task: Optional[asyncio.Task] = None
         # LRU eviction tracking (VA Phase 1.6)
-        self._lru_idle_timeout_sec: float = float(
-            getattr(config, "KRAB_LRU_EVICT_AFTER_SEC", 300)
-        )
+        self._lru_idle_timeout_sec: float = float(getattr(config, "KRAB_LRU_EVICT_AFTER_SEC", 300))
         # Временное исключение локальных моделей, которые гарантированно не загружаются
         # (например, битые пути/удалённые файлы в LM Studio registry).
         self._local_model_excluded_until: dict[str, float] = {}
@@ -989,9 +987,7 @@ class ModelManager:
         """Записывает использование модели для LRU tracking (VA Phase 1.6)."""
         self.touch(model_id)
 
-    async def maybe_evict_idle(
-        self, keep_model: str, max_total_models: int = 1
-    ) -> list[str]:
+    async def maybe_evict_idle(self, keep_model: str, max_total_models: int = 1) -> list[str]:
         """
         Выгружает idle модели, держа keep_model загруженной.
 

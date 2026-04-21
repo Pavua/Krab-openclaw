@@ -21,6 +21,7 @@ Env:
     из `memory_retrieval` с адаптацией результатов к ожидаемому интерфейсу
     (`rrf_score`, `text`, `chunk_id`, `sources`).
 """
+
 from __future__ import annotations
 
 import os

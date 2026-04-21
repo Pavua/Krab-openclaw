@@ -58,6 +58,7 @@ class MemoryStats:
 # Главный handler.
 # ---------------------------------------------------------------------------
 
+
 class MemoryCommandHandler:
     """
     Тонкая обёртка над HybridRetriever + БД для статистики.
@@ -106,9 +107,7 @@ class MemoryCommandHandler:
             return _escape_md("🧠 Memory Layer: ошибка поиска, смотри логи.")
 
         if not results:
-            return _escape_md(
-                f"🧠 По запросу «{query}» ничего не найдено в архиве."
-            )
+            return _escape_md(f"🧠 По запросу «{query}» ничего не найдено в архиве.")
 
         return _format_results(query, results)
 
@@ -132,9 +131,7 @@ class MemoryCommandHandler:
           -1   — vec_chunks таблицы нет ИЛИ sqlite-vec не установлен.
         """
         if not self._paths.db.exists():
-            return MemoryStats(
-                chats=0, messages=0, chunks=0, vectors=-1, db_size_bytes=0
-            )
+            return MemoryStats(chats=0, messages=0, chunks=0, vectors=-1, db_size_bytes=0)
 
         try:
             conn = open_archive(self._paths, read_only=True, create_if_missing=False)
@@ -184,6 +181,7 @@ class MemoryCommandHandler:
 # ---------------------------------------------------------------------------
 # Форматирование.
 # ---------------------------------------------------------------------------
+
 
 def _format_results(query: str, results: Iterable[SearchResult]) -> str:
     """
@@ -261,6 +259,7 @@ def _format_stats(s: MemoryStats) -> str:
     # Phase 4: блок индексера реального времени.
     try:
         from src.core.memory_indexer_worker import get_indexer  # noqa: PLC0415
+
         idx = get_indexer().get_stats()
         status_str = "running" if idx.is_running else "stopped"
         if idx.is_running and idx.started_at:
@@ -271,9 +270,7 @@ def _format_stats(s: MemoryStats) -> str:
         flush_str = "never"
         if idx.last_flush_at:
             age = (datetime.now(timezone.utc) - idx.last_flush_at).total_seconds()
-            flush_str = (
-                f"{int(age)}s ago ({int(idx.last_flush_duration_sec * 1000)}ms)"
-            )
+            flush_str = f"{int(age)}s ago ({int(idx.last_flush_duration_sec * 1000)}ms)"
         skip_parts = [f"{k}={v}" for k, v in idx.skipped.items() if v > 0]
         fail_parts = [f"{k}={v}" for k, v in idx.failed.items() if v > 0]
         idx_text = (
@@ -298,14 +295,14 @@ def _format_stats(s: MemoryStats) -> str:
 
 def _usage_archive() -> str:
     return _escape_md(
-        "🧠 Использование: `!archive <запрос>`\n"
-        "Пример: `!archive dashboard redesign`"
+        "🧠 Использование: `!archive <запрос>`\nПример: `!archive dashboard redesign`"
     )
 
 
 # ---------------------------------------------------------------------------
 # Утилиты.
 # ---------------------------------------------------------------------------
+
 
 def _escape_md(text: str) -> str:
     """Экранирование под Telegram MarkdownV2."""

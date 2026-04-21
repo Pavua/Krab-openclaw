@@ -122,10 +122,7 @@ class AutoTranslateMixin:
             if not result.translated:
                 return False
 
-            reply_text = (
-                f"🔄 {src_lang}→{tgt_lang} ({result.latency_ms}ms)\n"
-                f"_{result.translated}_"
-            )
+            reply_text = f"🔄 {src_lang}→{tgt_lang} ({result.latency_ms}ms)\n_{result.translated}_"
             await self._safe_reply_or_send_new(message, reply_text)
             return True
 

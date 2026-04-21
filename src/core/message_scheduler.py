@@ -119,10 +119,10 @@ class ScheduledMsgRecord:
     record_id: str
     chat_id: str
     text: str
-    schedule_time_iso: str       # когда должно уйти
-    tg_message_id: int           # message_id в Telegram (для cancel)
+    schedule_time_iso: str  # когда должно уйти
+    tg_message_id: int  # message_id в Telegram (для cancel)
     created_at_iso: str
-    status: str = "pending"      # pending | cancelled | sent | unknown
+    status: str = "pending"  # pending | cancelled | sent | unknown
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ScheduledMsgRecord":
@@ -214,9 +214,9 @@ class MessageSchedulerStore:
         """Возвращает pending-записи, отсортированные по времени."""
         records = self._load_all()
         result = [
-            r for r in records.values()
-            if r.status == "pending"
-            and (chat_id is None or r.chat_id == str(chat_id))
+            r
+            for r in records.values()
+            if r.status == "pending" and (chat_id is None or r.chat_id == str(chat_id))
         ]
         result.sort(key=lambda r: r.schedule_time_iso)
         return result
@@ -241,6 +241,7 @@ msg_scheduler_store = MessageSchedulerStore()
 
 
 # ---------- Форматирование ----------
+
 
 def _format_schedule_time(iso: str) -> str:
     """Форматирует ISO-время для отображения в Telegram."""

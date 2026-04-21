@@ -70,14 +70,10 @@ _API_KEY_PATTERNS: dict[str, Pattern[str]] = {
 
 # JWT: три base64-сегмента, разделённые точками. Раньше crypto,
 # т.к. могут попасть под base58-like паттерн.
-_JWT_PATTERN = re.compile(
-    r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"
-)
+_JWT_PATTERN = re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b")
 
 # Email: standard RFC-ish.
-_EMAIL_PATTERN = re.compile(
-    r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"
-)
+_EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
 
 # Phone: E.164 (+ от 10 до 15 цифр) и форматированный RU.
 # Аккуратно: нужно стоять ПОСЛЕ card/Luhn, иначе съест карту.
@@ -127,6 +123,7 @@ _PASSPORT_RU = re.compile(
 # -----------------------------------------------------------------------------
 # Публичный API.
 # -----------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class RedactionStats:
@@ -287,9 +284,7 @@ class PIIRedactor:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _sub_with_counter(
-        pattern: Pattern[str], placeholder: str, text: str
-    ) -> tuple[str, int]:
+    def _sub_with_counter(pattern: Pattern[str], placeholder: str, text: str) -> tuple[str, int]:
         """sub() + учёт попаданий (без дополнительного regex-прохода)."""
         hits = 0
 
@@ -341,6 +336,7 @@ class PIIRedactor:
 # -----------------------------------------------------------------------------
 # Self-check.
 # -----------------------------------------------------------------------------
+
 
 def _selfcheck() -> int:
     """
@@ -396,7 +392,10 @@ def _selfcheck() -> int:
         result = redactor.redact(original)
         found_kinds = {k for k, v in result.stats.counts.items() if v > 0}
         # Сводим подкатегории crypto_*/api_key_* к корневым для сравнения.
-        normalized = {k.split("_")[0] if k.startswith("crypto_") or k.startswith("api_key_") else k for k in found_kinds}
+        normalized = {
+            k.split("_")[0] if k.startswith("crypto_") or k.startswith("api_key_") else k
+            for k in found_kinds
+        }
         expected_normalized = {
             k.split("_")[0] if k.startswith("crypto_") or k.startswith("api_key_") else k
             for k in expected_kinds

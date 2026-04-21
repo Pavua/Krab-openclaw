@@ -29,10 +29,10 @@ def get_krab_user_id() -> int | None:
 
 # Паттерны для обнаружения упоминания Краба
 _KRAB_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"\bкраб\b", re.IGNORECASE),        # русское
-    re.compile(r"\bkrab\b", re.IGNORECASE),         # английское
-    re.compile(r"@[Kk]rab\b"),                      # @mention
-    re.compile(r"🦀"),                              # эмодзи-якорь
+    re.compile(r"\bкраб\b", re.IGNORECASE),  # русское
+    re.compile(r"\bkrab\b", re.IGNORECASE),  # английское
+    re.compile(r"@[Kk]rab\b"),  # @mention
+    re.compile(r"🦀"),  # эмодзи-якорь
 ]
 
 

@@ -45,6 +45,7 @@ DEFAULT_ACTION = "delete"
 # Конфиг (чтение/запись)
 # ---------------------------------------------------------------------------
 
+
 def _load_config() -> dict:
     """Загружает конфиг из JSON. Возвращает {} если файл не существует."""
     try:
@@ -101,7 +102,9 @@ def set_enabled(chat_id: int | str, enabled: bool) -> None:
 def set_action(chat_id: int | str, action: str) -> None:
     """Устанавливает действие при детекте."""
     if action not in VALID_ACTIONS:
-        raise ValueError(f"Недопустимое действие: {action}. Доступны: {', '.join(sorted(VALID_ACTIONS))}")
+        raise ValueError(
+            f"Недопустимое действие: {action}. Доступны: {', '.join(sorted(VALID_ACTIONS))}"
+        )
     cfg = _load_config()
     key = _chat_key(chat_id)
     if key not in cfg:

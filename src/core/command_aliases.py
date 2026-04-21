@@ -44,9 +44,7 @@ class AliasService:
     def __init__(self, storage_path: Optional[Path] = None) -> None:
         # Путь по умолчанию — рядом с остальным runtime-state
         if storage_path is None:
-            storage_path = (
-                Path.home() / ".openclaw" / "krab_runtime_state" / "command_aliases.json"
-            )
+            storage_path = Path.home() / ".openclaw" / "krab_runtime_state" / "command_aliases.json"
         self._path = Path(storage_path)
         self._lock = threading.Lock()
         # Словарь: имя_алиаса → строка команды (без префикса '!')
@@ -62,9 +60,7 @@ class AliasService:
                 raw = self._path.read_text(encoding="utf-8")
                 data = json.loads(raw)
                 if isinstance(data, dict):
-                    self._aliases = {
-                        str(k): str(v) for k, v in data.items() if k and v
-                    }
+                    self._aliases = {str(k): str(v) for k, v in data.items() if k and v}
                     logger.info("alias_service_loaded", count=len(self._aliases))
         except Exception as exc:
             logger.warning("alias_service_load_error", error=str(exc))

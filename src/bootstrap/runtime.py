@@ -63,6 +63,7 @@ async def _start_web_panel(
         krab_ear_client = KrabEarClient()
 
         from ..core.reaction_engine import reaction_engine  # noqa: PLC0415
+
         deps = {
             "router": router_compat,
             "openclaw_client": openclaw_client,

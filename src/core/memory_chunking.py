@@ -45,6 +45,7 @@ from typing import Iterable, Iterator
 # Модели.
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class Message:
     """
@@ -172,10 +173,7 @@ class ChunkBuilder:
         # Пробуем time-gap к самому свежему открытому chunk'у.
         if self._open_chunks:
             latest = self._open_chunks[-1]
-            if (
-                self._can_append(latest, msg)
-                and self._within_time_gap(latest, msg)
-            ):
+            if self._can_append(latest, msg) and self._within_time_gap(latest, msg):
                 latest.append(msg)
                 return
 

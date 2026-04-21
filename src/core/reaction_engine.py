@@ -32,6 +32,7 @@ NEUTRAL_REACTIONS = {"👀", "🤔", "😐", "🤷"}
 @dataclass
 class ReactionEvent:
     """Одно событие реакции от пользователя."""
+
     chat_id: int
     message_id: int
     user_id: Optional[int]
@@ -137,8 +138,10 @@ class ReactionEngine:
                 )
                 self._stats[chat_id].add(event)
                 sentiment = (
-                    "positive" if event.is_positive
-                    else "negative" if event.is_negative
+                    "positive"
+                    if event.is_positive
+                    else "negative"
+                    if event.is_negative
                     else "neutral"
                 )
                 logger.info(

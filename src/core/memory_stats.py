@@ -44,9 +44,7 @@ def collect_memory_stats(db_path: Path | None = None) -> dict[str, Any]:
         # Закодированные chunks: sqlite-vec держит их в vec_chunks_rowids; legacy — колонка embedding.
         encoded = _count(conn, "vec_chunks_rowids")
         if encoded == 0:
-            encoded = _count_where(
-                conn, "memory_chunks", "embedding IS NOT NULL"
-            )
+            encoded = _count_where(conn, "memory_chunks", "embedding IS NOT NULL")
         stats["encoded_chunks"] = encoded
 
         size = path.stat().st_size
@@ -68,9 +66,7 @@ def collect_memory_stats(db_path: Path | None = None) -> dict[str, Any]:
                 "SELECT chat_id, COUNT(*) AS cnt FROM messages "
                 "GROUP BY chat_id ORDER BY cnt DESC LIMIT 10"
             ).fetchall()
-            stats["top_chats"] = [
-                {"chat_id": r["chat_id"], "count": r["cnt"]} for r in rows
-            ]
+            stats["top_chats"] = [{"chat_id": r["chat_id"], "count": r["cnt"]} for r in rows]
         except sqlite3.OperationalError:
             stats["top_chats"] = []
 

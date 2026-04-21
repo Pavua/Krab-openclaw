@@ -67,6 +67,5 @@ class VoiceSession:
 
     def __repr__(self) -> str:  # noqa: D105
         return (
-            f"<VoiceSession id={self.session_id!r} lang={self.language!r}"
-            f" buf={len(self._buffer)}>"
+            f"<VoiceSession id={self.session_id!r} lang={self.language!r} buf={len(self._buffer)}>"
         )

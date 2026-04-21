@@ -45,5 +45,5 @@ def apply_identity_prefix(text: str, chat_type: object) -> str:
 def strip_identity_prefix(text: str) -> str:
     """Убрать 🦀-префикс если он есть (для тестов и нормализации)."""
     if text.startswith(_KRAB_PREFIX):
-        return text[len(_KRAB_PREFIX):]
+        return text[len(_KRAB_PREFIX) :]
     return text
