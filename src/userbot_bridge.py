@@ -3507,6 +3507,13 @@ class KraabUserbot(
                     return
 
         temp_msg = message
+        # W16.3: сохраняем оригинальное сообщение с фото ДО любых edit'ов.
+        # is_self=True → первый _safe_edit (ACK) заменяет message на текстовый объект
+        # у которого photo=None. Проверка `if message.photo:` внизу становится False
+        # → download_media не вызывается → vision miss.
+        # Решение: _photo_download_source хранит ссылку на исходный Message.
+        _photo_download_source = message if bool(getattr(message, "photo", None)) else None
+
         # Формируем информативный ack с моделью и маршрутом
         _ack_model = ""
         try:
@@ -3676,9 +3683,17 @@ class KraabUserbot(
         # VISION: Обработка фото
         images = []
         photo_error = ""
-        if message.photo:
+        # W16.3: при is_self=True первый ACK-edit (выше) заменяет message на объект
+        # без photo. Используем _photo_download_source (сохранён ДО edit'ов).
+        _has_original_photo = bool(message.photo or _photo_download_source)
+        if _has_original_photo:
             try:
+                # _photo_source_msg: оригинальный объект с photo для download_media.
+                # При is_self=True message уже заменён edit'ом (photo=None),
+                # поэтому берём _photo_download_source.
+                _photo_source_msg = _photo_download_source or message
                 if is_self:
+                    # ACK уже был сделан выше (Собираю контекст...). Обновляем на vision-статус.
                     message = await self._safe_edit(
                         message, f"🦀 {query}\n\n👀 *Разглядываю фото...*"
                     )
@@ -3698,29 +3713,53 @@ class KraabUserbot(
                 # Защита от зависания media-path: ограничиваем download timeout.
                 photo_timeout_sec = float(getattr(config, "PHOTO_DOWNLOAD_TIMEOUT_SEC", 40.0))
                 photo_obj = await asyncio.wait_for(
-                    self.client.download_media(message, in_memory=True),
+                    self.client.download_media(_photo_source_msg, in_memory=True),
                     timeout=max(5.0, photo_timeout_sec),
+                )
+                logger.info(
+                    "photo_download_attempt",
+                    chat_id=chat_id,
+                    is_self=is_self,
+                    source_msg_id=getattr(_photo_source_msg, "id", None),
+                    source_has_photo=bool(getattr(_photo_source_msg, "photo", None)),
                 )
                 if photo_obj:
                     img_bytes = photo_obj.getvalue()
                     b64_img = base64.b64encode(img_bytes).decode("utf-8")
                     images.append(b64_img)
+                    logger.info(
+                        "photo_download_success",
+                        chat_id=chat_id,
+                        is_self=is_self,
+                        size_bytes=len(img_bytes),
+                        b64_len=len(b64_img),
+                    )
                 else:
+                    logger.warning(
+                        "photo_download_empty",
+                        chat_id=chat_id,
+                        is_self=is_self,
+                        source_msg_id=getattr(_photo_source_msg, "id", None),
+                    )
                     photo_error = "❌ Не удалось прочитать фото. Отправь изображение повторно."
             except asyncio.TimeoutError:
                 photo_error = "❌ Таймаут загрузки фото. Повтори отправку изображения."
                 logger.error(
                     "photo_processing_timeout",
                     chat_id=chat_id,
+                    is_self=is_self,
                     timeout_sec=float(getattr(config, "PHOTO_DOWNLOAD_TIMEOUT_SEC", 40.0)),
                 )
             except Exception as e:
-                logger.error("photo_processing_error", error=str(e))
+                logger.error(
+                    "photo_processing_error", chat_id=chat_id, is_self=is_self, error=str(e)
+                )
                 photo_error = "❌ Ошибка обработки фото. Попробуй отправить его ещё раз."
 
         # Для фото-пути не продолжаем в AI-stream без успешно загруженного изображения:
         # это исключает зависание на «Разглядываю фото...» и пустые/необъяснимые ответы.
-        if message.photo and not images:
+        # W16.3: используем _has_original_photo (сохранён до edit'ов) вместо message.photo
+        if _has_original_photo and not images:
             safe_query = (query or "(Фото)").strip()
             safe_error = (
                 photo_error or "❌ Фото не удалось обработать. Отправь изображение повторно."
@@ -3817,6 +3856,7 @@ class KraabUserbot(
             and not bool(images)
             and not bool(has_audio_message)
             and not bool(message.photo)
+            and not _has_original_photo
             and not has_document
         )
         if should_defer_background:
