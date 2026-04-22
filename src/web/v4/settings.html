@@ -1,134 +1,105 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Settings V4 - Krab AI</title>
-    <link rel="stylesheet" href="/v4/liquid-glass.css">
-    <style>
-        body { margin:0; background-color:var(--bg-primary); color:#fff; font-family:system-ui,-apple-system,sans-serif; padding-bottom:80px; }
-        .container { max-width:1200px; margin:0 auto; padding:2rem 1rem; }
-        .flex { display:flex; } .flex-col { flex-direction:column; } .flex-1 { flex:1; }
-        .items-center { align-items:center; } .justify-between { justify-content:space-between; }
-        .justify-center { justify-content:center; }
-        .gap-1{gap:.25rem}.gap-2{gap:.5rem}.gap-3{gap:1rem}.gap-4{gap:1.5rem}
-        .mt-1{margin-top:.25rem}.mt-2{margin-top:.5rem}.mt-4{margin-top:1rem}.mb-2{margin-bottom:.5rem}.mb-4{margin-bottom:1rem}
-        .p-4{padding:1rem}.text-center{text-align:center}.text-right{text-align:right}.w-full{width:100%}
-        .text-sm{font-size:.875rem}.text-xs{font-size:.75rem}.text-lg{font-size:1.125rem}
-        .text-xl{font-size:1.25rem;font-weight:600}.text-2xl{font-size:1.5rem;font-weight:700}
-        .text-3xl{font-size:1.875rem;font-weight:700}
-        .text-muted{color:rgba(255,255,255,.72)}.text-success{color:#6ee7b7}
-        .text-error{color:#fca5a5}.text-warning{color:#fde68a}
-        .text-accent{color:#bae6fd}.text-purple{color:#c4b5fd}
-        .grid{display:grid}
-        .grid-2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem}
-        .grid-3{grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1rem}
-        .hidden{display:none!important}
-        @keyframes shimmer{0%{opacity:.3}50%{opacity:.7}100%{opacity:.3}}
-        .skeleton{animation:shimmer 1.5s infinite;background:var(--glass-bg-hover);border-radius:4px;color:transparent!important;min-height:1.2em;display:inline-block}
-        .toast-container{position:fixed;top:70px;right:1rem;z-index:999;display:flex;flex-direction:column;gap:.5rem}
-        .toast{background:rgba(20,20,41,.95);border:1px solid var(--glass-border);backdrop-filter:blur(20px);border-radius:12px;padding:.75rem 1.25rem;font-size:.875rem;min-width:260px;max-width:360px;box-shadow:0 4px 20px rgba(0,0,0,.4)}
-        .toast.error{border-color:rgba(248,113,113,.4)}.toast.success{border-color:rgba(52,211,153,.4)}
-        @keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-        .toast{animation:fadeUp .3s ease}
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Settings - Krab AI</title>
+<link rel="stylesheet" href="/v4/liquid-glass.css">
+<script src="/v4/theme-toggle.js" defer></script>
+<style>
+    .page-content { max-width:1100px; margin:0 auto; padding:2rem; padding-bottom:6rem; }
+    .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.75rem; gap:1rem; flex-wrap:wrap; }
+    .page-header h1 { font-size:1.5rem; font-weight:600; margin:0; }
+    .last-saved { font-size:.75rem; color:rgba(255,255,255,.4); }
 
-        .toggle-wrap{display:flex;align-items:center;gap:.75rem}
-        .toggle{position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0}
-        .toggle input{opacity:0;width:0;height:0}
-        .toggle-slider{position:absolute;cursor:pointer;inset:0;background:rgba(255,255,255,.15);border:1px solid var(--glass-border);border-radius:24px;transition:.25s}
-        .toggle-slider:before{content:"";position:absolute;height:18px;width:18px;left:2px;bottom:2px;background:#fff;border-radius:50%;transition:.25s}
-        input:checked + .toggle-slider{background:var(--accent-cyan,#7dd3fc);border-color:var(--accent-cyan,#7dd3fc)}
-        input:checked + .toggle-slider:before{transform:translateX(20px)}
-        input:disabled + .toggle-slider{opacity:.45;cursor:not-allowed}
+    .section { margin-bottom:1.5rem; }
+    .section-card { padding:1.5rem; }
+    .section-title { display:flex; align-items:center; gap:.65rem; font-size:1.05rem; font-weight:600; margin:0 0 1rem 0; }
+    .section-title .section-icon { width:22px; height:22px; opacity:.7; }
+    .section-desc { font-size:.82rem; color:rgba(255,255,255,.55); margin:-0.35rem 0 1.1rem 0; line-height:1.4; }
 
-        .badge-pill{padding:.25rem .75rem;border-radius:999px;font-size:.75rem;font-weight:600;background:var(--glass-bg);border:1px solid var(--glass-border);display:inline-block}
-        .badge-green{background:rgba(52,211,153,.12);border-color:rgba(52,211,153,.3);color:#6ee7b7}
-        .badge-amber{background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.3);color:#fde68a}
-        .badge-red{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.3);color:#fca5a5}
-        .badge-blue{background:rgba(125,211,252,.1);border-color:rgba(125,211,252,.3);color:#7dd3fc}
-        .badge-muted{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.15);color:rgba(255,255,255,.6)}
-        .badge-deprecated{background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.2);color:#fde68a;opacity:.75}
+    .setting-row { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.75rem 0; border-bottom:1px solid rgba(255,255,255,.05); }
+    .setting-row:last-child { border-bottom:none; }
+    .setting-info { flex:1; min-width:0; }
+    .setting-label { font-size:.92rem; font-weight:500; color:#fff; margin-bottom:.15rem; }
+    .setting-sub { font-size:.75rem; color:rgba(255,255,255,.45); line-height:1.4; }
+    .setting-control { flex-shrink:0; }
 
-        .section-label{font-size:.7rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.45);margin-bottom:.75rem}
+    .switch { position:relative; display:inline-block; width:52px; height:30px; cursor:pointer; }
+    .switch input { opacity:0; width:0; height:0; position:absolute; }
+    .switch .slider { position:absolute; inset:0; background:rgba(255,255,255,.15); border-radius:30px; transition:background .2s; border:1px solid rgba(255,255,255,.08); }
+    .switch .slider::before { content:''; position:absolute; top:2px; left:2px; width:24px; height:24px; background:#fff; border-radius:50%; transition:transform .2s; box-shadow:0 2px 4px rgba(0,0,0,.2); }
+    .switch input:checked + .slider { background:rgba(52,211,153,.55); border-color:rgba(52,211,153,.7); }
+    .switch input:checked + .slider::before { transform:translateX(22px); }
+    .switch.disabled { opacity:.5; cursor:not-allowed; pointer-events:none; }
 
-        .depth-selector{display:inline-flex;background:rgba(0,0,0,.25);border-radius:20px;padding:3px;border:1px solid var(--glass-border);gap:2px;flex-wrap:wrap}
-        .depth-selector button{background:none;border:none;color:rgba(255,255,255,.5);font-size:.8rem;font-weight:600;padding:.3rem .85rem;border-radius:16px;cursor:pointer;transition:all .2s}
-        .depth-selector button.active{background:var(--glass-bg-hover);color:#fff}
+    .setting-value { font-family:monospace; font-size:.85rem; color:rgba(255,255,255,.85); background:rgba(255,255,255,.04); padding:.2rem .5rem; border-radius:6px; border:1px solid rgba(255,255,255,.06); }
 
-        .model-badge{display:inline-flex;align-items:center;gap:.5rem;padding:.4rem 1rem;border-radius:12px;border:1px solid rgba(125,211,252,.3);background:rgba(125,211,252,.08);font-size:.875rem;font-weight:600;color:#bae6fd}
+    .budget-input { width:140px; padding:.5rem .75rem; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.1); border-radius:8px; color:#fff; font-family:inherit; font-size:.9rem; text-align:right; }
+    .budget-input:focus { outline:none; border-color:rgba(125,211,252,.5); background:rgba(255,255,255,.08); }
 
-        .speed-track{background:rgba(0,0,0,.3);border-radius:999px;height:6px;width:100%;overflow:hidden;border:1px solid var(--glass-border)}
-        .speed-fill{height:100%;background:linear-gradient(90deg,#6ee7b7,#7dd3fc);border-radius:999px;transition:width .4s ease}
+    .budget-progress { margin-top:1rem; }
+    .budget-bar-bg { height:10px; background:rgba(255,255,255,.06); border-radius:999px; overflow:hidden; border:1px solid rgba(255,255,255,.05); }
+    .budget-bar { height:100%; background:linear-gradient(90deg, #7dd3fc, #34d399); border-radius:999px; transition:width .3s; }
+    .budget-bar.warn { background:linear-gradient(90deg, #fbbf24, #f87171); }
+    .budget-bar.danger { background:linear-gradient(90deg, #f87171, #dc2626); }
+    .budget-stats { display:flex; justify-content:space-between; font-size:.75rem; color:rgba(255,255,255,.5); margin-top:.4rem; }
 
-        table.acl-table{width:100%;border-collapse:collapse}
-        .acl-table th,.acl-table td{padding:.6rem .75rem;text-align:left;border-bottom:1px solid var(--glass-border)}
-        .acl-table th{color:#bae6fd;font-weight:600;font-size:.8rem}
-        .acl-table tbody tr:hover{background:var(--glass-bg-hover)}
+    .warning-banner { display:none; margin-top:.75rem; padding:.6rem .85rem; border-radius:8px; background:rgba(251,191,36,.12); border:1px solid rgba(251,191,36,.3); color:#fef3c7; font-size:.8rem; }
+    .warning-banner.danger { background:rgba(248,113,113,.12); border-color:rgba(248,113,113,.35); color:#fecaca; }
+    .warning-banner.visible { display:block; }
 
-        .env-row{display:flex;align-items:center;justify-content:space-between;padding:.55rem 0;border-bottom:1px solid var(--glass-border);gap:.75rem}
-        .env-row:last-child{border-bottom:none}
-        .env-key{font-family:monospace;font-size:.8rem;color:#c4b5fd;flex-shrink:0;width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .env-val{font-family:monospace;font-size:.8rem;color:rgba(255,255,255,.65);flex:1;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .runtime-grid { display:grid; grid-template-columns:repeat(2, 1fr); gap:.65rem; }
+    .runtime-item { padding:.65rem .85rem; background:rgba(255,255,255,.03); border-radius:8px; border:1px solid rgba(255,255,255,.05); }
+    .runtime-label { font-size:.7rem; color:rgba(255,255,255,.45); text-transform:uppercase; letter-spacing:.05em; margin-bottom:.2rem; }
+    .runtime-value { font-family:monospace; font-size:.85rem; color:#fff; word-break:break-all; }
 
-        .rt-stat{display:flex;align-items:center;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid var(--glass-border)}
-        .rt-stat:last-child{border-bottom:none}
+    .link-row { display:flex; align-items:center; justify-content:space-between; padding:.85rem 1rem; background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.06); border-radius:10px; text-decoration:none; color:#fff; font-size:.88rem; margin-top:.75rem; transition:all .15s; }
+    .link-row:hover { background:rgba(255,255,255,.06); border-color:rgba(125,211,252,.3); }
+    .link-arrow { color:rgba(125,211,252,.7); font-size:1.1rem; }
 
-        .action-btn{display:flex;align-items:center;gap:.75rem;padding:.8rem 1rem;border-radius:12px;background:rgba(0,0,0,.2);border:1px solid var(--glass-border);cursor:pointer;transition:all .2s;font-size:.875rem;width:100%;text-align:left}
-        .action-btn:hover{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.25)}
-        .action-btn.danger{border-color:rgba(248,113,113,.3)}
-        .action-btn.danger:hover{background:rgba(248,113,113,.08)}
-        .action-btn-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:1.1rem}
-        .action-btn-icon.blue{background:rgba(125,211,252,.12);color:#7dd3fc}
-        .action-btn-icon.green{background:rgba(52,211,153,.12);color:#6ee7b7}
-        .action-btn-icon.red{background:rgba(248,113,113,.12);color:#fca5a5}
-        .action-btn-icon.amber{background:rgba(251,191,36,.1);color:#fde68a}
-        .action-btn-body{flex:1}
-        .action-btn-title{font-weight:600;margin-bottom:.15rem}
-        .action-btn-desc{font-size:.75rem;color:rgba(255,255,255,.55)}
+    .glass-button { background:var(--glass-bg, rgba(255,255,255,.06)); border:1px solid var(--glass-border, rgba(255,255,255,.1)); color:#fff; padding:.55rem 1rem; border-radius:10px; cursor:pointer; font-family:inherit; font-size:.82rem; backdrop-filter:blur(20px); transition:all .15s; }
+    .glass-button:hover { background:rgba(255,255,255,.1); }
+    .glass-button:disabled { opacity:.5; cursor:not-allowed; }
+    .glass-button.primary { background:rgba(125,211,252,.2); border-color:rgba(125,211,252,.4); }
+    .glass-button.primary:hover { background:rgba(125,211,252,.3); }
 
-        .chip{display:inline-flex;align-items:center;gap:.4rem;background:rgba(0,0,0,.25);border:1px solid var(--glass-border);border-radius:999px;padding:.2rem .65rem;font-size:.75rem;font-family:monospace}
+    .toast-container { position:fixed; top:80px; right:20px; z-index:9999; display:flex; flex-direction:column; gap:.5rem; pointer-events:none; }
+    .toast { padding:.7rem 1rem; border-radius:10px; backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,.1); color:#fff; font-size:.85rem; min-width:220px; max-width:320px; pointer-events:auto; opacity:0; transform:translateX(20px); transition:all .25s ease; }
+    .toast.visible { opacity:1; transform:translateX(0); }
+    .toast.success { background:rgba(52,211,153,.2); border-color:rgba(52,211,153,.4); }
+    .toast.error { background:rgba(248,113,113,.2); border-color:rgba(248,113,113,.4); }
+    .toast.info { background:rgba(125,211,252,.2); border-color:rgba(125,211,252,.4); }
 
-        .glass-select{background:rgba(0,0,0,.25);border:1px solid var(--glass-border);color:#fff;padding:.5rem 1rem;border-radius:var(--radius-button,12px);font-family:inherit;font-size:.875rem;outline:none;cursor:pointer;min-width:180px}
-        .glass-select:focus{border-color:var(--accent-cyan,#7dd3fc)}
+    .pill { display:inline-block; padding:.18rem .55rem; border-radius:999px; font-size:.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+    .pill-ok { background:rgba(52,211,153,.15); color:#a7f3d0; border:1px solid rgba(52,211,153,.35); }
+    .pill-off { background:rgba(255,255,255,.05); color:rgba(255,255,255,.55); border:1px solid rgba(255,255,255,.1); }
 
-        .fallback-chain{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
-        .fallback-arrow{color:rgba(255,255,255,.3);font-size:.9rem}
-
-        .radio-group{display:flex;gap:.5rem;flex-wrap:wrap}
-        .radio-group label{display:flex;align-items:center;gap:.4rem;cursor:pointer;padding:.35rem .75rem;border-radius:10px;border:1px solid var(--glass-border);background:rgba(0,0,0,.15);font-size:.85rem;transition:all .2s}
-        .radio-group label:hover{background:rgba(255,255,255,.05)}
-        .radio-group input[type=radio]{accent-color:var(--accent-cyan,#7dd3fc)}
-        .radio-group label.selected{border-color:rgba(125,211,252,.4);background:rgba(125,211,252,.08);color:#bae6fd}
-
-        .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);backdrop-filter:blur(5px);z-index:100;display:none;align-items:center;justify-content:center}
-        .modal-overlay.active{display:flex}
-        .modal-content{max-width:420px;width:90%}
-
-        @media(max-width:768px){
-            .env-key{width:140px}
-            .env-row{flex-direction:column;align-items:flex-start}
-            .env-val{text-align:left}
-        }
-    </style>
+    @media (max-width:768px) {
+        .page-content { padding:1rem; padding-bottom:90px; }
+        .runtime-grid { grid-template-columns:1fr; }
+        .setting-row { flex-direction:column; align-items:flex-start; gap:.5rem; }
+        .setting-control { align-self:flex-end; }
+    }
+</style>
 </head>
 <body>
-
-<div class="toast-container" id="toast-container"></div>
 
 <nav class="glass-nav">
     <div class="nav-logo">Krab AI</div>
     <div class="nav-links">
         <a href="/v4/" class="nav-link">Hub</a>
         <a href="/v4/chat" class="nav-link">Chat</a>
-        <a href="/v4/costs" class="nav-link">Costs</a>
-        <a href="/v4/inbox" class="nav-link">Inbox</a>
-        <a href="/v4/swarm" class="nav-link">Swarm</a>
-        <a href="/v4/translator" class="nav-link">Translator</a>
-        <a href="/v4/ops" class="nav-link">Ops</a>
-        <a href="/v4/settings" class="nav-link active">Settings</a>
-        <a href="/v4/commands" class="nav-link">Commands</a>
+        <a href="/costs" class="nav-link">Costs</a>
+        <a href="/inbox" class="nav-link">Inbox</a>
+        <a href="/swarm" class="nav-link">Swarm</a>
+        <a href="/translator" class="nav-link">Translator</a>
+        <a href="/ops" class="nav-link">Ops</a>
+        <a href="/v4/research" class="nav-link">Research</a>
+        <a href="/settings" class="nav-link active">Settings</a>
+        <a href="/commands" class="nav-link">Commands</a>
         <div class="nav-bell-wrapper">
-            <a href="/v4/inbox" class="nav-bell" title="Notifications">
+            <a href="/inbox" class="nav-bell" title="Notifications">
                 <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
                 </svg>
@@ -137,997 +108,700 @@
             <div class="bell-dropdown hidden" id="bell-dropdown"></div>
         </div>
     </div>
-    <div style="display:flex;align-items:center;gap:.75rem;">
-        <span id="api-status" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent-green);"></span>
-        <span class="text-muted text-sm" id="nav-timer">&#8635; 60s</span>
-    </div>
 </nav>
 
-<main class="container">
-    <div class="flex justify-between items-center mb-4" style="flex-wrap:wrap;gap:1rem;">
-        <div>
-            <h1 class="text-3xl">Settings</h1>
-            <div class="text-muted text-sm mt-1">Runtime configuration &mdash; изменения применяются сразу</div>
-        </div>
-        <div class="flex gap-2 items-center">
-            <span id="last-refresh-label" class="text-muted text-sm"></span>
-            <button class="glass-button" id="btn-refresh">Refresh</button>
-        </div>
+<div class="page-content">
+    <div class="page-header">
+        <h1>Settings</h1>
+        <div class="last-saved" id="last-saved">Loaded —</div>
     </div>
 
-    <!-- 1. Model & Routing -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-4">
-            <h3 class="text-lg text-accent">Model &amp; Routing</h3>
-            <span id="model-status-badge" class="badge-pill badge-blue skeleton" style="min-width:80px;">&nbsp;</span>
-        </div>
+    <div class="section">
+        <div class="glass-card section-card">
+            <h2 class="section-title">
+                <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                </svg>
+                Notifications &amp; Silence
+            </h2>
+            <p class="section-desc">Контроль уведомлений, звуков и режима тишины (silence mode).</p>
 
-        <div class="flex items-center justify-between mb-4" style="flex-wrap:wrap;gap:1rem;">
-            <div>
-                <div class="section-label">Active Model</div>
-                <div class="model-badge skeleton" id="active-model-display" style="min-width:220px;">&nbsp;</div>
-            </div>
-            <div class="flex gap-2 items-center flex-wrap">
-                <select class="glass-select" id="model-select">
-                    <option value="">Loading...</option>
-                </select>
-                <button class="glass-button" id="btn-model-switch">Switch</button>
-            </div>
-        </div>
-
-        <div class="mb-4">
-            <div class="section-label">Fallback Chain</div>
-            <div class="fallback-chain" id="fallback-chain-display">
-                <span class="badge-pill badge-muted skeleton" style="min-width:140px;">&nbsp;</span>
-            </div>
-        </div>
-
-        <div class="grid-2">
-            <div>
-                <div class="section-label">Reasoning Depth</div>
-                <div class="depth-selector" id="depth-selector">
-                    <button data-depth="off">off</button>
-                    <button data-depth="minimal">minimal</button>
-                    <button data-depth="low">low</button>
-                    <button data-depth="medium">medium</button>
-                    <button data-depth="high">high</button>
-                    <button data-depth="xhigh">xhigh</button>
-                    <button data-depth="adaptive">adaptive</button>
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Silence Mode</div>
+                    <div class="setting-sub">Краб не отвечает в чатах, но продолжает собирать сообщения для catchup.</div>
                 </div>
-            </div>
-            <div>
-                <div class="section-label">Extended Thinking</div>
-                <div class="toggle-wrap">
-                    <label class="toggle">
-                        <input type="checkbox" id="thinking-toggle">
-                        <span class="toggle-slider"></span>
-                    </label>
-                    <span class="text-sm" id="thinking-label">off</span>
-                </div>
-                <div class="text-xs text-muted mt-1">Extended reasoning (claude-3-7 only)</div>
-            </div>
-        </div>
-
-        <div class="grid-3 mt-4">
-            <div class="glass-card" style="padding:.75rem;">
-                <div class="text-muted text-xs mb-1">Provider</div>
-                <div class="text-sm skeleton" id="model-provider" style="min-width:80px;">&nbsp;</div>
-            </div>
-            <div class="glass-card" style="padding:.75rem;">
-                <div class="text-muted text-xs mb-1">Active Tier</div>
-                <div class="text-sm skeleton" id="model-tier" style="min-width:80px;">&nbsp;</div>
-            </div>
-            <div class="glass-card" style="padding:.75rem;">
-                <div class="text-muted text-xs mb-1">Route Status</div>
-                <div class="text-xs text-muted skeleton" id="model-route-reason" style="min-width:80px;">&nbsp;</div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 2. Voice Profile -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-4">
-            <h3 class="text-lg text-accent">Voice Profile</h3>
-            <div class="toggle-wrap">
-                <label class="toggle">
-                    <input type="checkbox" id="voice-enabled-toggle">
-                    <span class="toggle-slider"></span>
-                </label>
-                <span class="text-sm" id="voice-enabled-label">loading</span>
-            </div>
-        </div>
-
-        <div class="grid-2">
-            <div>
-                <div class="section-label">TTS Voice</div>
-                <div class="flex gap-2 items-center mb-3">
-                    <select class="glass-select" id="voice-select" style="min-width:220px;">
-                        <option value="ru-RU-DmitryNeural">ru-RU-DmitryNeural</option>
-                        <option value="ru-RU-SvetlanaNeural">ru-RU-SvetlanaNeural</option>
-                        <option value="en-US-GuyNeural">en-US-GuyNeural</option>
-                        <option value="en-US-JennyNeural">en-US-JennyNeural</option>
-                        <option value="uk-UA-OstapNeural">uk-UA-OstapNeural</option>
-                    </select>
-                </div>
-
-                <div class="section-label">Speed <span id="speed-val-label" class="text-accent">1.50&times;</span></div>
-                <div class="speed-track mt-1 mb-1">
-                    <div class="speed-fill" id="speed-fill" style="width:43%;"></div>
-                </div>
-                <input type="range" min="75" max="250" step="5" value="150" id="voice-speed-range"
-                    style="width:100%;margin:0;accent-color:var(--accent-cyan,#7dd3fc);">
-                <div class="flex justify-between text-xs text-muted">
-                    <span>0.75&times;</span><span>1.0&times;</span><span>1.5&times;</span><span>2.0&times;</span><span>2.5&times;</span>
-                </div>
-            </div>
-
-            <div>
-                <div class="section-label">Delivery Mode</div>
-                <div class="radio-group" id="delivery-radio-group">
-                    <label id="delivery-text-voice">
-                        <input type="radio" name="delivery" value="text+voice"> text+voice
-                    </label>
-                    <label id="delivery-voice-only">
-                        <input type="radio" name="delivery" value="voice-only"> voice-only
+                <div class="setting-control">
+                    <label class="switch" id="switch-silence">
+                        <input type="checkbox" id="toggle-silence">
+                        <span class="slider"></span>
                     </label>
                 </div>
-                <div class="text-xs text-muted mt-2">text+voice &mdash; сначала текст, потом аудио</div>
-
-                <div class="mt-4">
-                    <div class="section-label">TTS Readiness</div>
-                    <div class="flex gap-2 flex-wrap">
-                        <span class="badge-pill skeleton" id="badge-tts-out">TTS out</span>
-                        <span class="badge-pill skeleton" id="badge-tts-in">STT in</span>
-                        <span class="badge-pill skeleton" id="badge-tts-live">Live voice</span>
-                    </div>
-                </div>
-
-                <div class="mt-3">
-                    <button class="glass-button w-full" id="btn-voice-save">Save Voice Settings</button>
-                </div>
             </div>
-        </div>
 
-        <div class="mt-4">
-            <div class="section-label">Blocked Chats <span class="text-muted text-xs">(голос отключён)</span></div>
-            <div id="blocked-chats-list" class="flex gap-2 flex-wrap">
-                <span class="text-muted text-sm">Загрузка...</span>
-            </div>
-        </div>
-    </div>
-
-    <!-- 3. Notifications & Silence -->
-    <div class="glass-card mb-4">
-        <h3 class="text-lg text-accent mb-4">Notifications &amp; Silence</h3>
-        <div class="grid-2">
-            <div>
-                <div class="section-label">Notifications</div>
-                <div class="toggle-wrap mb-3">
-                    <label class="toggle">
-                        <input type="checkbox" id="notify-toggle">
-                        <span class="toggle-slider"></span>
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Notifications</div>
+                    <div class="setting-sub">Отправлять proactive push-уведомления об алертах, digest и задачах свёрма.</div>
+                </div>
+                <div class="setting-control">
+                    <label class="switch" id="switch-notify">
+                        <input type="checkbox" id="toggle-notify">
+                        <span class="slider"></span>
                     </label>
-                    <div>
-                        <span class="text-sm" id="notify-label">loading</span>
-                        <div class="text-xs text-muted mt-1">POST /api/notify/toggle</div>
-                    </div>
                 </div>
             </div>
+        </div>
+    </div>
 
-            <div>
-                <div class="section-label">Silence Mode</div>
-                <div class="toggle-wrap mb-2">
-                    <label class="toggle">
-                        <input type="checkbox" id="silence-toggle">
-                        <span class="toggle-slider"></span>
+    <div class="section">
+        <div class="glass-card section-card">
+            <h2 class="section-title">
+                <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                    <line x1="12" y1="19" x2="12" y2="23"></line>
+                    <line x1="8" y1="23" x2="16" y2="23"></line>
+                </svg>
+                Voice
+            </h2>
+            <p class="section-desc">Озвучивание ответов через TTS. Настройки голоса, скорости и режима доставки.</p>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Voice Mode</div>
+                    <div class="setting-sub">Краб автоматически озвучивает ответы в Telegram голосовыми сообщениями.</div>
+                </div>
+                <div class="setting-control">
+                    <label class="switch" id="switch-voice">
+                        <input type="checkbox" id="toggle-voice">
+                        <span class="slider"></span>
                     </label>
-                    <div>
-                        <span class="text-sm" id="silence-label">loading</span>
-                        <div class="text-xs text-muted mt-1">POST /api/silence/toggle</div>
-                    </div>
                 </div>
-                <div id="silence-detail" class="mt-2">
-                    <div class="text-xs text-muted">
-                        Мутированных чатов: <span id="silence-muted-count" class="text-accent">0</span>
-                    </div>
-                    <div class="text-xs text-muted mt-1">
-                        Осталось мин: <span id="silence-remaining" class="text-accent">0</span>
-                    </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Current Voice</div>
+                    <div class="setting-sub">Edge-TTS ID. Настраивается командой <code>!voice voice &lt;id&gt;</code>.</div>
+                </div>
+                <div class="setting-control">
+                    <span class="setting-value" id="voice-id">—</span>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Speed</div>
+                    <div class="setting-sub">Скорость речи (множитель 0.75–2.5).</div>
+                </div>
+                <div class="setting-control">
+                    <span class="setting-value" id="voice-speed">—</span>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Delivery</div>
+                    <div class="setting-sub">Как доставляется ответ: только голос или текст+голос.</div>
+                </div>
+                <div class="setting-control">
+                    <span class="setting-value" id="voice-delivery">—</span>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- 4. ACL & Operator -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-4">
-            <h3 class="text-lg text-accent">ACL &amp; Operator</h3>
-            <span class="badge-pill badge-blue text-xs">Read-only</span>
-        </div>
+    <div class="section">
+        <div class="glass-card section-card">
+            <h2 class="section-title">
+                <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="1" x2="12" y2="23"></line>
+                    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                </svg>
+                Budget &amp; Costs
+            </h2>
+            <p class="section-desc">Месячный бюджет на провайдеры AI. Алерты включаются при превышении 80% и 100%.</p>
 
-        <div class="mb-4 glass-card" style="background:rgba(0,0,0,.18);padding:1rem;">
-            <div class="section-label">Operator Profile</div>
-            <div class="flex gap-3 items-center flex-wrap">
-                <div class="flex-col gap-1">
-                    <div class="text-sm mt-1"><span class="text-muted">ID:&nbsp;</span><span id="op-id" class="text-accent skeleton" style="min-width:60px;">&nbsp;</span></div>
-                    <div class="text-sm mt-1"><span class="text-muted">Name:&nbsp;</span><span id="op-name" class="skeleton" style="min-width:80px;">&nbsp;</span></div>
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Monthly Budget (USD)</div>
+                    <div class="setting-sub">Максимальные расходы за календарный месяц (все cloud-провайдеры).</div>
                 </div>
-                <div class="flex-col gap-1">
-                    <div class="text-sm mt-1"><span class="text-muted">Account:&nbsp;</span><span id="op-account" class="text-xs skeleton" style="min-width:120px;">&nbsp;</span></div>
-                    <div class="text-sm mt-1"><span class="text-muted">Channel:&nbsp;</span><span id="op-channel" class="text-purple skeleton" style="min-width:80px;">&nbsp;</span></div>
+                <div class="setting-control" style="display:flex; gap:.5rem; align-items:center;">
+                    <input type="number" id="budget-input" class="budget-input" placeholder="0.00" min="0" step="0.01">
+                    <button class="glass-button primary" id="btn-save-budget" onclick="saveBudget()">Save</button>
                 </div>
             </div>
-        </div>
 
-        <div style="overflow-x:auto;">
-            <table class="acl-table">
-                <thead>
-                    <tr>
-                        <th>User / ID</th>
-                        <th>Access Level</th>
-                        <th>Status</th>
-                    </tr>
-                </thead>
-                <tbody id="acl-table-body">
-                    <tr>
-                        <td colspan="3" class="text-muted text-sm text-center">Загрузка ACL...</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-        <div id="acl-empty" class="hidden text-center text-muted text-sm p-4">ACL данные недоступны</div>
-    </div>
+            <div class="budget-progress">
+                <div class="budget-bar-bg">
+                    <div class="budget-bar" id="budget-bar" style="width:0%;"></div>
+                </div>
+                <div class="budget-stats">
+                    <span id="budget-spent">$0.00 spent</span>
+                    <span id="budget-pct">0%</span>
+                    <span id="budget-limit">of $0.00</span>
+                </div>
+                <div class="warning-banner" id="budget-warning">
+                    You have used more than 80% of your monthly budget.
+                </div>
+            </div>
 
-    <!-- 5. Environment & Config -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-4">
-            <h3 class="text-lg text-accent">Environment &amp; Config</h3>
-            <span class="badge-pill badge-amber text-xs">Masked</span>
-        </div>
-        <div id="env-vars-list">
-            <div class="env-row">
-                <span class="env-key skeleton" style="width:180px;">&nbsp;</span>
-                <span class="env-val skeleton" style="width:100px;">&nbsp;</span>
-            </div>
-            <div class="env-row">
-                <span class="env-key skeleton" style="width:150px;">&nbsp;</span>
-                <span class="env-val skeleton" style="width:80px;">&nbsp;</span>
-            </div>
+            <a href="/costs" class="link-row">
+                <span>Full cost breakdown by provider &amp; model</span>
+                <span class="link-arrow">→</span>
+            </a>
         </div>
     </div>
 
-    <!-- 6. Runtime Stats -->
-    <div class="glass-card mb-4">
-        <h3 class="text-lg text-accent mb-4">Runtime Stats</h3>
-        <div class="grid-2">
-            <div>
-                <div class="section-label">System</div>
-                <div class="rt-stat">
-                    <span class="text-muted text-sm">Uptime</span>
-                    <span id="rt-uptime" class="text-sm skeleton" style="min-width:60px;">&nbsp;</span>
+    <div class="section">
+        <div class="glass-card section-card">
+            <h2 class="section-title">
+                <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 8l6 6"></path>
+                    <path d="M4 14l6-6 2-3"></path>
+                    <path d="M2 5h12"></path>
+                    <path d="M7 2h1"></path>
+                    <path d="M22 22l-5-10-5 10"></path>
+                    <path d="M14 18h6"></path>
+                </svg>
+                Translator
+            </h2>
+            <p class="section-desc">Режим live-перевода голосовых и субтитров. Управление парой языков и стратегией.</p>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Status</div>
+                    <div class="setting-sub">Текущее состояние сессии live-перевода.</div>
                 </div>
-                <div class="rt-stat">
-                    <span class="text-muted text-sm">Active Chat Windows</span>
-                    <span id="rt-chat-windows" class="text-sm skeleton" style="min-width:40px;">&nbsp;</span>
-                </div>
-                <div class="rt-stat">
-                    <span class="text-muted text-sm">Memory Queue</span>
-                    <span id="rt-indexer-queue" class="text-sm skeleton" style="min-width:40px;">&nbsp;</span>
-                </div>
-            </div>
-            <div>
-                <div class="section-label">Memory Indexer</div>
-                <div class="rt-stat">
-                    <span class="text-muted text-sm">Total Docs</span>
-                    <span id="rt-indexer-docs" class="text-sm skeleton" style="min-width:40px;">&nbsp;</span>
-                </div>
-                <div class="rt-stat">
-                    <span class="text-muted text-sm">Chunks Indexed</span>
-                    <span id="rt-indexer-chunks" class="text-sm skeleton" style="min-width:40px;">&nbsp;</span>
-                </div>
-                <div class="rt-stat">
-                    <span class="text-muted text-sm">Queue Depth</span>
-                    <span id="rt-indexer-depth" class="text-sm skeleton" style="min-width:40px;">&nbsp;</span>
+                <div class="setting-control">
+                    <span class="pill pill-off" id="translator-status">OFF</span>
                 </div>
             </div>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Language Pair</div>
+                    <div class="setting-sub">Направление перевода (исходный → целевой).</div>
+                </div>
+                <div class="setting-control">
+                    <span class="setting-value" id="translator-lang">—</span>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Mode</div>
+                    <div class="setting-sub">bilingual / auto_to_ru / auto_to_en.</div>
+                </div>
+                <div class="setting-control">
+                    <span class="setting-value" id="translator-mode">—</span>
+                </div>
+            </div>
+
+            <a href="/translator" class="link-row">
+                <span>Go to Translator control panel</span>
+                <span class="link-arrow">→</span>
+            </a>
         </div>
     </div>
 
-    <!-- 7. Reset & Recovery -->
-    <div class="glass-card mb-4">
-        <h3 class="text-lg text-error mb-4">Reset &amp; Recovery</h3>
-        <div class="flex flex-col gap-3">
+    <div class="section">
+        <div class="glass-card section-card">
+            <h2 class="section-title">
+                <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+                    <line x1="3" y1="10" x2="21" y2="10"></line>
+                    <line x1="9" y1="4" x2="9" y2="20"></line>
+                </svg>
+                Runtime Info
+            </h2>
+            <p class="section-desc">Readonly данные: активная модель, провайдер, uptime. Обновляется каждые 30 секунд.</p>
 
-            <button class="action-btn" id="btn-reset-session">
-                <div class="action-btn-icon blue">
-                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                    </svg>
+            <div class="runtime-grid">
+                <div class="runtime-item">
+                    <div class="runtime-label">Primary Model</div>
+                    <div class="runtime-value" id="rt-model">—</div>
                 </div>
-                <div class="action-btn-body">
-                    <div class="action-btn-title">Reset Chat Session</div>
-                    <div class="action-btn-desc">Очистить контекст разговора &mdash; POST /api/runtime/chat-session/clear</div>
+                <div class="runtime-item">
+                    <div class="runtime-label">Provider</div>
+                    <div class="runtime-value" id="rt-provider">—</div>
                 </div>
-                <span class="badge-pill badge-blue text-xs">Safe</span>
-            </button>
+                <div class="runtime-item">
+                    <div class="runtime-label">Last Route Time</div>
+                    <div class="runtime-value" id="rt-route-time">—</div>
+                </div>
+                <div class="runtime-item">
+                    <div class="runtime-label">Krab Version</div>
+                    <div class="runtime-value" id="rt-version">—</div>
+                </div>
+                <div class="runtime-item">
+                    <div class="runtime-label">Uptime</div>
+                    <div class="runtime-value" id="rt-uptime">—</div>
+                </div>
+                <div class="runtime-item">
+                    <div class="runtime-label">Status</div>
+                    <div class="runtime-value" id="rt-status">—</div>
+                </div>
+            </div>
 
-            <button class="action-btn" id="btn-repair-perms">
-                <div class="action-btn-icon green">
-                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                    </svg>
-                </div>
-                <div class="action-btn-body">
-                    <div class="action-btn-title">Repair Shared Permissions</div>
-                    <div class="action-btn-desc">Починить права worktree &mdash; POST /api/runtime/repair-active-shared-permissions</div>
-                </div>
-                <span class="badge-pill badge-green text-xs">Auto</span>
-            </button>
-
-            <button class="action-btn danger" id="btn-reset-cloud-tier">
-                <div class="action-btn-icon amber">
-                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/>
-                    </svg>
-                </div>
-                <div class="action-btn-body">
-                    <div class="action-btn-title">Reset Cloud Tier</div>
-                    <div class="action-btn-desc">Сброс активного tier &mdash; POST /api/openclaw/cloud/tier/reset</div>
-                </div>
-                <span class="badge-pill badge-amber text-xs">Caution</span>
-            </button>
-
-            <button class="action-btn danger" id="btn-restart-userbot">
-                <div class="action-btn-icon red">
-                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                    </svg>
-                </div>
-                <div class="action-btn-body">
-                    <div class="action-btn-title">Restart Userbot</div>
-                    <div class="action-btn-desc">Перезапустить userbot процесс &mdash; POST /api/krab/restart_userbot</div>
-                </div>
-                <span class="badge-pill badge-red text-xs">Disruptive</span>
-            </button>
-
-        </div>
-    </div>
-
-</main>
-
-<!-- Confirm Modal -->
-<div class="modal-overlay" id="confirm-modal">
-    <div class="modal-content glass-card">
-        <h3 class="text-lg mb-2" id="modal-title">Подтверждение</h3>
-        <p class="text-sm text-muted mb-4" id="modal-body">Вы уверены?</p>
-        <div class="flex gap-2 justify-center">
-            <button class="glass-button" id="modal-confirm-btn">Подтвердить</button>
-            <button class="glass-button" id="modal-cancel-btn" style="opacity:.7;">Отмена</button>
+            <a href="/ops" class="link-row">
+                <span>Open Operations Center</span>
+                <span class="link-arrow">→</span>
+            </a>
         </div>
     </div>
 </div>
 
-<script>
-var POLL_INTERVAL = 60;
-var timerLeft = POLL_INTERVAL;
-var timerHandle = null;
-var currentDepth = 'off';
+<div class="toast-container" id="toast-container"></div>
 
-var MOCK_MODEL = {
-    active_model: 'codex-cli/gpt-5.4',
-    provider: 'codex-cli',
-    active_tier: 'free',
-    route_reason: 'attempt_started'
-};
-var MOCK_FALLBACKS = ['google/gemini-3-pro-preview', 'gemini-2.5-pro-preview', 'gemini-2.5-flash'];
-var MOCK_ENV = [
-    { key: 'OPENCLAW_AUTO_FAILOVER', val: 'true', badge: 'green' },
-    { key: 'CLOUD_TIER', val: 'free', badge: 'blue' },
-    { key: 'GEMINI_API_KEY', val: '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20223xKp', badge: 'muted' },
-    { key: 'GOOGLE_API_KEY', val: '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022YqTz', badge: 'muted' },
-    { key: 'LM_STUDIO_URL', val: 'http://127.0.0.1:1234', badge: 'blue' },
-    { key: 'LM_STUDIO_AUTH', val: '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022', badge: 'muted' },
-    { key: 'LEAK_THRESHOLD_CRITICAL', val: '2048', badge: 'amber' },
-    { key: 'VOICE_REPLY_BLOCKED_CHATS', val: '2 chats', badge: 'muted' },
-    { key: 'KRAB_SILENCE_MODE', val: 'false', badge: 'green' },
-    { key: 'SWARM_ROLE_MAX_OUTPUT_TOKENS', val: '4096', badge: 'blue' },
-];
+<div class="glass-tab-bar">
+    <a href="/v4/" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+        <span>Hub</span>
+    </a>
+    <a href="/v4/chat" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+        <span>Chat</span>
+    </a>
+    <a href="/costs" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+        <span>Costs</span>
+    </a>
+    <a href="/ops" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>Ops</span>
+    </a>
+    <a href="/settings" class="tab-item active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>Settings</span>
+    </a>
+</div>
+
+<script>
+const API_BASE = '';
+
+function clearChildren(el) {
+    while (el && el.firstChild) el.removeChild(el.firstChild);
+}
+
+async function fetchJSON(path, opts) {
+    try {
+        const r = await window.fetch(API_BASE + path, opts || {});
+        if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+        const ct = r.headers.get('content-type') || '';
+        if (ct.includes('application/json')) return await r.json();
+        return null;
+    } catch (e) {
+        console.warn('fetch fail', path, e);
+        return null;
+    }
+}
+
+async function postJSON(path, body) {
+    const r = await window.fetch(API_BASE + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body === undefined ? null : JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+    const ct = r.headers.get('content-type') || '';
+    return ct.includes('application/json') ? await r.json() : null;
+}
+
+function safeText(val, fallback) {
+    if (val === null || val === undefined || val === '') return fallback || '—';
+    return String(val);
+}
+
+function formatTime(ts) {
+    if (!ts) return 'N/A';
+    const d = new Date(ts);
+    return isNaN(d.getTime()) ? String(ts) : d.toLocaleTimeString();
+}
+
+function formatUptime(seconds) {
+    if (seconds === null || seconds === undefined) return '—';
+    const s = Number(seconds);
+    if (!isFinite(s) || s < 0) return '—';
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const parts = [];
+    if (d) parts.push(d + 'd');
+    if (h || d) parts.push(h + 'h');
+    parts.push(m + 'm');
+    return parts.join(' ');
+}
 
 function showToast(msg, type) {
-    var tc = document.getElementById('toast-container');
-    var t = document.createElement('div');
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    const t = document.createElement('div');
     t.className = 'toast ' + (type || 'info');
     t.textContent = msg;
-    tc.appendChild(t);
-    setTimeout(function() { if (t.parentNode) t.parentNode.removeChild(t); }, 4000);
+    container.appendChild(t);
+    requestAnimationFrame(() => t.classList.add('visible'));
+    setTimeout(() => {
+        t.classList.remove('visible');
+        setTimeout(() => t.remove(), 300);
+    }, 2800);
 }
 
-function tickTimer() {
-    timerLeft--;
-    var el = document.getElementById('nav-timer');
-    if (el) el.textContent = '\u21bb ' + timerLeft + 's';
-    if (timerLeft <= 0) { timerLeft = POLL_INTERVAL; fetchAll(); }
+function markSaved(label) {
+    const el = document.getElementById('last-saved');
+    if (el) el.textContent = (label || 'Updated') + ' ' + new Date().toLocaleTimeString();
 }
 
-function setText(id, val) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    el.textContent = val;
-    el.classList.remove('skeleton');
-}
-
-function apiFetch(url, opts) {
-    return fetch(url, opts || {}).then(function(r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.json();
-    });
-}
-
-// --- 1. Model & Routing ---
-function applyModelStatus(data) {
-    if (!data || !data.ok) return;
-    var r = data.route || {};
-    var model = data.active_model || r.model || '--';
-    setText('active-model-display', model);
-    setText('model-provider', String(r.provider || '--').split(' ')[0]);
-    setText('model-tier', r.active_tier || '--');
-    setText('model-route-reason', r.route_reason || r.status || '--');
-    var sb = document.getElementById('model-status-badge');
-    if (sb) {
-        sb.textContent = r.status || 'ok';
-        sb.classList.remove('skeleton');
-        var cls = (r.status === 'ok' || r.status === 'pending') ? 'badge-blue' : 'badge-amber';
-        sb.className = 'badge-pill ' + cls;
-    }
-}
-
-function applyDepthStatus(data) {
-    if (!data || !data.ok) return;
-    currentDepth = data.depth || 'off';
-    document.querySelectorAll('#depth-selector button').forEach(function(btn) {
-        btn.classList.toggle('active', btn.dataset.depth === currentDepth);
-    });
-}
-
-function applyThinkingStatus(data) {
-    if (!data || !data.ok) return;
-    var enabled = data.enabled === true || data.thinking === 'on' || data.status === 'on';
-    var cb = document.getElementById('thinking-toggle');
-    if (cb) cb.checked = enabled;
-    setText('thinking-label', enabled ? 'on' : 'off');
-}
-
-function applyModelCatalog(data) {
-    var sel = document.getElementById('model-select');
-    if (!sel) return;
-    var models = (data && data.ok && (data.models || data.catalog)) || [];
-    if (!models.length) {
-        models = [
-            {id:'google/gemini-3-pro-preview', label:'Gemini 3 Pro'},
-            {id:'google/gemini-3-flash-preview', label:'Gemini 3 Flash'},
-            {id:'gemini-2.5-pro-preview', label:'Gemini 2.5 Pro Preview'},
-            {id:'gemini-2.5-flash', label:'Gemini 2.5 Flash'},
-            {id:'codex-cli/gpt-5.4', label:'GPT-5.4 (codex-cli)'},
-            {id:'anthropic/claude-opus-4', label:'Claude Opus 4'},
-            {id:'anthropic/claude-sonnet-4', label:'Claude Sonnet 4'},
-        ];
-    }
-    while (sel.firstChild) sel.removeChild(sel.firstChild);
-    models.forEach(function(m) {
-        var o = document.createElement('option');
-        o.value = m.id || String(m);
-        o.textContent = m.label || m.id || String(m);
-        sel.appendChild(o);
-    });
-    var cur = document.getElementById('active-model-display');
-    if (cur) {
-        var curVal = cur.textContent.trim();
-        for (var i = 0; i < sel.options.length; i++) {
-            if (sel.options[i].value === curVal) { sel.selectedIndex = i; break; }
-        }
-    }
-
-    var chain = MOCK_FALLBACKS;
-    if (models.length > 1) {
-        chain = models.slice(0, 4).map(function(m) { return m.id || String(m); });
-    }
-    renderFallbackChain(chain);
-}
-
-function renderFallbackChain(chain) {
-    var el = document.getElementById('fallback-chain-display');
-    if (!el) return;
-    while (el.firstChild) el.removeChild(el.firstChild);
-    chain.forEach(function(m, i) {
-        if (i > 0) {
-            var arr = document.createElement('span');
-            arr.className = 'fallback-arrow';
-            arr.textContent = '\u2192';
-            el.appendChild(arr);
-        }
-        var b = document.createElement('span');
-        b.className = 'badge-pill badge-muted';
-        b.style.fontSize = '.75rem';
-        b.textContent = m;
-        el.appendChild(b);
-    });
-}
-
-// --- 2. Voice ---
-function applyVoiceProfile(data) {
-    if (!data || !data.ok) return;
-    var p = data.profile || data.voice || {};
-
-    var cb = document.getElementById('voice-enabled-toggle');
-    if (cb) cb.checked = !!p.enabled;
-    setText('voice-enabled-label', p.enabled ? 'enabled' : 'disabled');
-
-    var vs = document.getElementById('voice-select');
-    if (vs && p.voice) {
-        var found = false;
-        for (var i = 0; i < vs.options.length; i++) {
-            if (vs.options[i].value === p.voice) { vs.selectedIndex = i; found = true; break; }
-        }
-        if (!found) {
-            var o = document.createElement('option');
-            o.value = p.voice; o.textContent = p.voice;
-            vs.insertBefore(o, vs.firstChild);
-            vs.selectedIndex = 0;
-        }
-    }
-
-    var spd = parseFloat(p.speed) || 1.5;
-    var rangeEl = document.getElementById('voice-speed-range');
-    if (rangeEl) rangeEl.value = Math.round(spd * 100);
-    updateSpeedDisplay(spd);
-
-    var delivery = p.delivery || 'text+voice';
-    document.querySelectorAll('input[name="delivery"]').forEach(function(r) {
-        r.checked = (r.value === delivery);
-        r.closest('label').classList.toggle('selected', r.value === delivery);
-    });
-
-    function setBadge(id, ok, label) {
-        var el = document.getElementById(id);
-        if (!el) return;
-        el.textContent = label + (ok ? ' OK' : ' FAIL');
-        el.className = 'badge-pill ' + (ok ? 'badge-green' : 'badge-red');
-    }
-    setBadge('badge-tts-out', p.output_tts_ready, 'TTS out');
-    setBadge('badge-tts-in', p.input_transcription_ready, 'STT in');
-    setBadge('badge-tts-live', p.live_voice_foundation, 'Live');
-
-    var bl = document.getElementById('blocked-chats-list');
-    if (bl) {
-        while (bl.firstChild) bl.removeChild(bl.firstChild);
-        var chats = p.blocked_chats || [];
-        if (!chats.length) {
-            var none = document.createElement('span');
-            none.className = 'text-muted text-sm';
-            none.textContent = 'Нет заблокированных чатов';
-            bl.appendChild(none);
-        } else {
-            chats.forEach(function(c) {
-                var chip = document.createElement('span');
-                chip.className = 'chip';
-                chip.textContent = c;
-                bl.appendChild(chip);
-            });
-        }
-    }
-}
-
-function updateSpeedDisplay(spd) {
-    var spdNum = parseFloat(spd);
-    var el = document.getElementById('speed-val-label');
-    if (el) { el.textContent = spdNum.toFixed(2) + '\xd7'; el.classList.remove('skeleton'); }
-    var pct = Math.round(((spdNum - 0.75) / (2.5 - 0.75)) * 100);
-    var fill = document.getElementById('speed-fill');
-    if (fill) fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
-}
-
-// --- 3. Notify / Silence ---
-function applyNotifyStatus(data) {
-    if (!data || !data.ok) return;
-    var cb = document.getElementById('notify-toggle');
-    if (cb) cb.checked = !!data.enabled;
-    setText('notify-label', data.enabled ? 'enabled' : 'disabled');
-}
-
-function applySilenceStatus(data) {
-    if (!data || !data.ok) return;
-    var muted = !!data.global_muted;
-    var cb = document.getElementById('silence-toggle');
-    if (cb) cb.checked = muted;
-    setText('silence-label', muted ? 'muted' : 'active');
-    setText('silence-muted-count', String(data.total_muted || 0));
-    setText('silence-remaining', String(data.global_remaining_min || 0) + ' min');
-}
-
-// --- 4. ACL & Operator ---
-function applyACLStatus(data) {
-    if (!data || !data.ok) {
-        var empty = document.getElementById('acl-empty');
-        if (empty) empty.classList.remove('hidden');
-        return;
-    }
-    var tbody = document.getElementById('acl-table-body');
-    if (!tbody) return;
-    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-
-    function addRow(userId, level, isDeprecated) {
-        var tr = document.createElement('tr');
-
-        var tdUser = document.createElement('td');
-        tdUser.style.fontFamily = 'monospace';
-        tdUser.style.fontSize = '.85rem';
-        tdUser.textContent = userId;
-        tr.appendChild(tdUser);
-
-        var tdLevel = document.createElement('td');
-        var badge = document.createElement('span');
-        var cls = level === 'full' ? 'badge-green' : level === 'partial' ? 'badge-blue' : level === 'owner' ? 'badge-amber' : 'badge-muted';
-        badge.className = 'badge-pill ' + cls;
-        badge.textContent = level;
-        tdLevel.appendChild(badge);
-        tr.appendChild(tdLevel);
-
-        var tdStatus = document.createElement('td');
-        var s = document.createElement('span');
-        s.className = isDeprecated ? 'badge-pill badge-deprecated' : 'badge-pill badge-green';
-        s.textContent = isDeprecated ? 'deprecated' : 'active';
-        if (isDeprecated) s.title = 'Используйте FULL_ACCESS_USERS вместо OWNER_USER_IDS';
-        tdStatus.appendChild(s);
-        tr.appendChild(tdStatus);
-
-        tbody.appendChild(tr);
-    }
-
-    var full = data.full_access_users || data.FULL_ACCESS_USERS || [];
-    var partial = data.partial_access_users || data.PARTIAL_ACCESS_USERS || [];
-    var owners = data.owner_user_ids || data.OWNER_USER_IDS || [];
-
-    if (!full.length && !partial.length && !owners.length) {
-        addRow('pablito', 'full', false);
-        addRow('7349191228', 'owner', true);
-    } else {
-        full.forEach(function(u) { addRow(String(u), 'full', false); });
-        partial.forEach(function(u) { addRow(String(u), 'partial', false); });
-        owners.forEach(function(u) { addRow(String(u), 'owner', true); });
-    }
-}
-
-function applyOperatorProfile(data) {
-    if (!data || !data.ok) return;
-    var p = data.profile || data.operator || data;
-    setText('op-id', p.operator_id || p.id || '--');
-    setText('op-name', p.name || p.display_name || p.operator_id || '--');
-    setText('op-account', p.account_id || '--');
-    setText('op-channel', p.channel || '--');
-}
-
-// --- 5. Env vars ---
-function renderEnvVars(items) {
-    var container = document.getElementById('env-vars-list');
-    if (!container) return;
-    while (container.firstChild) container.removeChild(container.firstChild);
-    items.forEach(function(item) {
-        var row = document.createElement('div');
-        row.className = 'env-row';
-        var key = document.createElement('span');
-        key.className = 'env-key';
-        key.textContent = item.key;
-        var valWrap = document.createElement('span');
-        valWrap.className = 'env-val';
-        if (item.badge) {
-            var b = document.createElement('span');
-            b.className = 'badge-pill badge-' + item.badge;
-            b.style.fontSize = '.72rem';
-            b.textContent = item.val;
-            valWrap.appendChild(b);
-        } else {
-            valWrap.textContent = item.val;
-        }
-        row.appendChild(key);
-        row.appendChild(valWrap);
-        container.appendChild(row);
-    });
-}
-
-// --- 6. Runtime stats ---
-function applyUptimeStats(data) {
+async function loadSilence() {
+    const data = await fetchJSON('/api/silence/status');
     if (!data) return;
-    var secs = data.uptime_seconds || data.uptime || 0;
-    if (secs > 0) {
-        var h = Math.floor(secs / 3600);
-        var m = Math.floor((secs % 3600) / 60);
-        setText('rt-uptime', h + 'h ' + m + 'm');
-    } else if (data.uptime_str) {
-        setText('rt-uptime', data.uptime_str);
-    } else {
-        setText('rt-uptime', '--');
+    const active = !!(data.active || data.enabled || data.silent || (data.silence && data.silence.active));
+    const cb = document.getElementById('toggle-silence');
+    if (cb) cb.checked = active;
+}
+
+async function toggleSilence(e) {
+    const cb = e.target;
+    const desired = cb.checked;
+    const wrapper = document.getElementById('switch-silence');
+    wrapper.classList.add('disabled');
+    try {
+        await postJSON('/api/silence/toggle', { active: desired, enabled: desired });
+        showToast('Silence mode ' + (desired ? 'enabled' : 'disabled'), 'success');
+        markSaved('Saved');
+    } catch (err) {
+        cb.checked = !desired;
+        showToast('Failed to toggle silence: ' + err.message, 'error');
+    } finally {
+        wrapper.classList.remove('disabled');
     }
 }
 
-function applyChatWindowStats(data) {
-    if (!data || !data.ok) { setText('rt-chat-windows', '--'); return; }
-    var s = data.stats || data;
-    setText('rt-chat-windows', String(s.active || s.count || s.total || '--'));
+async function loadNotify() {
+    const data = await fetchJSON('/api/notify/status');
+    if (!data) return;
+    const active = !!(data.enabled || data.active || (data.notify && data.notify.enabled));
+    const cb = document.getElementById('toggle-notify');
+    if (cb) cb.checked = active;
 }
 
-function applyMemoryIndexerStats(data) {
-    if (!data || !data.ok) {
-        setText('rt-indexer-queue', '--');
-        setText('rt-indexer-docs', '--');
-        setText('rt-indexer-chunks', '--');
-        setText('rt-indexer-depth', '--');
+async function toggleNotify(e) {
+    const cb = e.target;
+    const desired = cb.checked;
+    const wrapper = document.getElementById('switch-notify');
+    wrapper.classList.add('disabled');
+    try {
+        await postJSON('/api/notify/toggle', { enabled: desired, active: desired });
+        showToast('Notifications ' + (desired ? 'enabled' : 'disabled'), 'success');
+        markSaved('Saved');
+    } catch (err) {
+        cb.checked = !desired;
+        showToast('Failed to toggle notifications: ' + err.message, 'error');
+    } finally {
+        wrapper.classList.remove('disabled');
+    }
+}
+
+async function loadVoice() {
+    const prof = await fetchJSON('/api/voice/profile');
+    if (!prof) return;
+
+    const data = prof.profile || prof.voice || prof;
+    const enabled = !!(data.enabled || data.active || data.voice_enabled || prof.enabled);
+    const cb = document.getElementById('toggle-voice');
+    if (cb) cb.checked = enabled;
+
+    document.getElementById('voice-id').textContent = safeText(data.voice || data.voice_id || data.name);
+    const speed = data.speed !== undefined ? data.speed : data.rate;
+    document.getElementById('voice-speed').textContent = speed !== undefined && speed !== null ? String(speed) + 'x' : '—';
+    document.getElementById('voice-delivery').textContent = safeText(data.delivery || data.delivery_mode);
+}
+
+async function toggleVoice(e) {
+    const cb = e.target;
+    const desired = cb.checked;
+    const wrapper = document.getElementById('switch-voice');
+    wrapper.classList.add('disabled');
+    try {
+        await postJSON('/api/voice/toggle', { enabled: desired, active: desired });
+        showToast('Voice mode ' + (desired ? 'enabled' : 'disabled'), 'success');
+        markSaved('Saved');
+        setTimeout(loadVoice, 250);
+    } catch (err) {
+        cb.checked = !desired;
+        showToast('Failed to toggle voice: ' + err.message, 'error');
+    } finally {
+        wrapper.classList.remove('disabled');
+    }
+}
+
+async function loadBudget() {
+    const data = await fetchJSON('/api/costs/budget');
+    if (!data) return;
+
+    const limit = Number(data.limit || data.budget || data.monthly_budget || data.amount || 0);
+    const spent = Number(data.spent || data.used || data.current || 0);
+
+    const input = document.getElementById('budget-input');
+    if (input && document.activeElement !== input) {
+        input.value = limit > 0 ? limit.toFixed(2) : '';
+    }
+
+    document.getElementById('budget-spent').textContent = '$' + spent.toFixed(2) + ' spent';
+    document.getElementById('budget-limit').textContent = 'of $' + limit.toFixed(2);
+
+    const pct = limit > 0 ? Math.min(100, (spent / limit) * 100) : 0;
+    document.getElementById('budget-pct').textContent = Math.round(pct) + '%';
+
+    const bar = document.getElementById('budget-bar');
+    bar.style.width = pct + '%';
+    bar.classList.remove('warn', 'danger');
+    const warning = document.getElementById('budget-warning');
+    warning.classList.remove('visible', 'danger');
+    if (pct >= 100) {
+        bar.classList.add('danger');
+        warning.classList.add('visible', 'danger');
+        warning.textContent = 'You have exceeded your monthly budget. Cloud AI requests may be throttled.';
+    } else if (pct >= 80) {
+        bar.classList.add('warn');
+        warning.classList.add('visible');
+        warning.textContent = 'You have used more than 80% of your monthly budget.';
+    }
+}
+
+async function saveBudget() {
+    const btn = document.getElementById('btn-save-budget');
+    const input = document.getElementById('budget-input');
+    const val = parseFloat(input.value);
+    if (!isFinite(val) || val < 0) {
+        showToast('Invalid budget value', 'error');
         return;
     }
-    var s = data.stats || data;
-    setText('rt-indexer-queue', String(s.queue_size || s.pending || 0));
-    setText('rt-indexer-docs', String(s.total_documents || s.docs || '--'));
-    setText('rt-indexer-chunks', String(s.total_chunks || s.chunks || '--'));
-    setText('rt-indexer-depth', String(s.queue_depth || s.queue_size || 0));
-}
-
-// --- Actions ---
-function confirmAction(title, body, onConfirm) {
-    document.getElementById('modal-title').textContent = title;
-    document.getElementById('modal-body').textContent = body;
-    var modal = document.getElementById('confirm-modal');
-    modal.classList.add('active');
-    document.getElementById('modal-confirm-btn').onclick = function() {
-        modal.classList.remove('active');
-        onConfirm();
-    };
-}
-
-function postAction(url, successMsg, errorMsg) {
-    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-        .then(function(r) { return r.json(); })
-        .then(function(d) {
-            showToast(d.ok || d.status === 'ok' ? (successMsg || 'Done') : (d.error || d.message || errorMsg || 'Error'),
-                      d.ok || d.status === 'ok' ? 'success' : 'error');
-        })
-        .catch(function(e) { showToast((errorMsg || 'Request failed') + ': ' + e.message, 'error'); });
-}
-
-function switchModel() {
-    var sel = document.getElementById('model-select');
-    var model = sel ? sel.value : '';
-    if (!model) { showToast('Выберите модель', 'error'); return; }
-    fetch('/api/model/switch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: model })
-    }).then(function(r) { return r.json(); })
-      .then(function(d) {
-          showToast(d.ok ? ('Модель переключена: ' + model) : (d.error || 'Ошибка переключения'),
-                    d.ok ? 'success' : 'error');
-          if (d.ok) fetchAll();
-      }).catch(function(e) { showToast('Ошибка: ' + e.message, 'error'); });
-}
-
-function setDepth(depth) {
-    fetch('/api/depth/set', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ depth: depth })
-    }).then(function(r) { return r.json(); })
-      .then(function(d) {
-          if (d.ok) {
-              currentDepth = depth;
-              document.querySelectorAll('#depth-selector button').forEach(function(btn) {
-                  btn.classList.toggle('active', btn.dataset.depth === depth);
-              });
-              showToast('Reasoning depth: ' + depth, 'success');
-          } else {
-              showToast(d.error || 'Ошибка установки depth', 'error');
-          }
-      }).catch(function(e) { showToast('Ошибка: ' + e.message, 'error'); });
-}
-
-function setThinking(enabled) {
-    fetch('/api/thinking/set', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: enabled })
-    }).then(function(r) { return r.json(); })
-      .then(function(d) {
-          setText('thinking-label', enabled ? 'on' : 'off');
-          showToast('Extended thinking: ' + (enabled ? 'on' : 'off'), d.ok ? 'success' : 'error');
-      }).catch(function(e) { showToast('Ошибка: ' + e.message, 'error'); });
-}
-
-function saveVoiceSettings() {
-    var spd = document.getElementById('voice-speed-range');
-    var voice = document.getElementById('voice-select');
-    var delivery = document.querySelector('input[name="delivery"]:checked');
-    fetch('/api/voice/runtime/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            speed: spd ? parseFloat(spd.value) / 100 : 1.5,
-            voice: voice ? voice.value : 'ru-RU-DmitryNeural',
-            delivery: delivery ? delivery.value : 'text+voice'
-        })
-    }).then(function(r) { return r.json(); })
-      .then(function(d) {
-          showToast(d.ok ? 'Голосовые настройки сохранены' : (d.error || 'Ошибка сохранения'),
-                    d.ok ? 'success' : 'error');
-      }).catch(function(e) { showToast('Ошибка: ' + e.message, 'error'); });
-}
-
-// --- Bell ---
-function updateBellCount() {
-    Promise.all([
-        fetch('/api/ops/alerts').then(function(r) { return r.ok ? r.json() : {alerts:[]}; }).catch(function() { return {alerts:[]}; }),
-        fetch('/api/inbox/items').then(function(r) { return r.ok ? r.json() : {items:[]}; }).catch(function() { return {items:[]}; })
-    ]).then(function(results) {
-        var alerts = results[0].alerts || [];
-        var items = (results[1].items || []).filter(function(i) { return i.status !== 'closed'; });
-        var count = alerts.length + items.length;
-        var el = document.getElementById('nav-bell-count');
-        var dot = document.getElementById('api-status');
-        if (el) { el.textContent = String(count); el.classList.toggle('hidden', count === 0); }
-        if (dot) dot.style.background = alerts.length > 0 ? 'var(--accent-amber,#fbbf24)' : 'var(--accent-green,#34d399)';
-    });
-}
-
-// --- Fetch all ---
-function fetchAll() {
-    timerLeft = POLL_INTERVAL;
-    var ts = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    setText('last-refresh-label', 'обновлено ' + ts);
-
-    fetch('/api/model/status').then(function(r){return r.json();}).then(applyModelStatus).catch(function() {
-        applyModelStatus({ ok: true, route: MOCK_MODEL, active_model: MOCK_MODEL.active_model });
-    });
-    fetch('/api/model/catalog').then(function(r){return r.json();}).then(applyModelCatalog).catch(function() {
-        applyModelCatalog({ ok: false });
-    });
-    fetch('/api/depth/status').then(function(r){return r.json();}).then(applyDepthStatus).catch(function() {
-        applyDepthStatus({ ok: true, depth: 'off' });
-    });
-    fetch('/api/thinking/status').then(function(r){return r.json();}).then(applyThinkingStatus).catch(function() {
-        applyThinkingStatus({ ok: true, enabled: false });
-    });
-
-    fetch('/api/voice/runtime').then(function(r){return r.json();}).then(applyVoiceProfile).catch(function() {
-        fetch('/api/voice/profile').then(function(r){return r.json();}).then(applyVoiceProfile).catch(function() {});
-    });
-
-    fetch('/api/notify/status').then(function(r){return r.json();}).then(applyNotifyStatus).catch(function() {
-        applyNotifyStatus({ ok: true, enabled: true });
-    });
-    fetch('/api/silence/status').then(function(r){return r.json();}).then(applySilenceStatus).catch(function() {
-        applySilenceStatus({ ok: true, global_muted: false, total_muted: 0, global_remaining_min: 0 });
-    });
-
-    fetch('/api/userbot/acl/status').then(function(r){return r.json();}).then(applyACLStatus).catch(function() {
-        applyACLStatus({ ok: true, full_access_users: ['pablito'], partial_access_users: [], owner_user_ids: ['7349191228'] });
-    });
-    fetch('/api/runtime/operator-profile').then(function(r){return r.json();}).then(applyOperatorProfile).catch(function() {
-        applyOperatorProfile({ ok: true, operator_id: 'pablito', account_id: '149902cc257e', channel: 'openclaw_cloud' });
-    });
-
-    renderEnvVars(MOCK_ENV);
-
-    fetch('/api/uptime').then(function(r){return r.json();}).then(applyUptimeStats).catch(function() {
-        setText('rt-uptime', '--');
-    });
-    fetch('/api/chat_windows/stats').then(function(r){return r.json();}).then(applyChatWindowStats).catch(function() {
-        setText('rt-chat-windows', '--');
-    });
-    fetch('/api/memory/indexer').then(function(r){return r.json();}).then(applyMemoryIndexerStats).catch(function() {
-        applyMemoryIndexerStats(null);
-    });
-}
-
-// --- Init ---
-document.addEventListener('DOMContentLoaded', function() {
-    fetchAll();
-    timerHandle = setInterval(tickTimer, 1000);
-    setInterval(updateBellCount, 30000);
-    updateBellCount();
-
-    document.getElementById('btn-refresh').addEventListener('click', fetchAll);
-
-    document.getElementById('depth-selector').addEventListener('click', function(e) {
-        var btn = e.target.closest('button');
-        if (!btn || !btn.dataset.depth) return;
-        setDepth(btn.dataset.depth);
-    });
-
-    document.getElementById('thinking-toggle').addEventListener('change', function() {
-        setThinking(this.checked);
-    });
-
-    document.getElementById('voice-enabled-toggle').addEventListener('change', function() {
-        var checked = this.checked;
-        fetch('/api/voice/toggle', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: checked })
-        }).then(function(r){return r.json();})
-          .then(function(d) { showToast('Voice: ' + (checked ? 'on' : 'off'), 'success'); })
-          .catch(function(e) { showToast('Ошибка: ' + e.message, 'error'); });
-    });
-
-    document.getElementById('voice-speed-range').addEventListener('input', function() {
-        updateSpeedDisplay(parseInt(this.value, 10) / 100);
-    });
-
-    document.querySelectorAll('input[name="delivery"]').forEach(function(r) {
-        r.addEventListener('change', function() {
-            document.querySelectorAll('input[name="delivery"]').forEach(function(x) {
-                x.closest('label').classList.toggle('selected', x.checked);
-            });
-        });
-    });
-
-    document.getElementById('btn-voice-save').addEventListener('click', saveVoiceSettings);
-
-    document.getElementById('notify-toggle').addEventListener('change', function() {
-        fetch('/api/notify/toggle', { method: 'POST', body: '{}' })
-            .then(function(r){return r.json();})
-            .then(function(d) { showToast('Notifications: ' + (d.enabled ? 'on' : 'off'), 'success'); })
-            .catch(function() { showToast('Error', 'error'); });
-    });
-
-    document.getElementById('silence-toggle').addEventListener('change', function() {
-        fetch('/api/silence/toggle', { method: 'POST', body: '{}' })
-            .then(function(r){return r.json();})
-            .then(function(d) { showToast('Silence: ' + (d.global_muted ? 'muted' : 'active'), 'success'); })
-            .catch(function() { showToast('Error', 'error'); });
-    });
-
-    document.getElementById('btn-model-switch').addEventListener('click', switchModel);
-
-    document.getElementById('btn-reset-session').addEventListener('click', function() {
-        confirmAction('Reset Chat Session', 'Контекст разговора будет очищен. Продолжить?', function() {
-            postAction('/api/runtime/chat-session/clear', 'Сессия очищена', 'Ошибка очистки');
-        });
-    });
-
-    document.getElementById('btn-repair-perms').addEventListener('click', function() {
-        postAction('/api/runtime/repair-active-shared-permissions', 'Permissions repaired', 'Ошибка repair');
-    });
-
-    document.getElementById('btn-reset-cloud-tier').addEventListener('click', function() {
-        confirmAction('Reset Cloud Tier', 'Сброс активного cloud tier. Продолжить?', function() {
-            postAction('/api/openclaw/cloud/tier/reset', 'Cloud tier сброшен', 'Ошибка сброса');
-        });
-    });
-
-    document.getElementById('btn-restart-userbot').addEventListener('click', function() {
-        confirmAction('Restart Userbot', 'Userbot будет перезапущен. Соединение временно прервётся. Уверены?', function() {
-            postAction('/api/krab/restart_userbot', 'Restart sent', 'Ошибка рестарта');
-        });
-    });
-
-    document.getElementById('modal-cancel-btn').addEventListener('click', function() {
-        document.getElementById('confirm-modal').classList.remove('active');
-    });
-    document.getElementById('confirm-modal').addEventListener('click', function(e) {
-        if (e.target === this) this.classList.remove('active');
-    });
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') document.getElementById('confirm-modal').classList.remove('active');
-    });
-
-    var navBell = document.querySelector('.nav-bell');
-    if (navBell) {
-        var wrapper = navBell.closest('.nav-bell-wrapper');
-        var dd = document.getElementById('bell-dropdown');
-        if (wrapper && dd) {
-            navBell.addEventListener('click', function(e) { e.preventDefault(); dd.classList.toggle('hidden'); });
-            document.addEventListener('click', function(e) { if (!wrapper.contains(e.target)) dd.classList.add('hidden'); });
-            document.addEventListener('keydown', function(e2) { if (e2.key === 'Escape') dd.classList.add('hidden'); });
-        }
+    try {
+        btn.disabled = true;
+        btn.textContent = '...';
+        await postJSON('/api/costs/budget', { limit: val, budget: val, monthly_budget: val, amount: val });
+        showToast('Budget saved: $' + val.toFixed(2), 'success');
+        markSaved('Saved');
+        await loadBudget();
+    } catch (err) {
+        showToast('Failed to save budget: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save';
     }
+}
+
+async function loadTranslator() {
+    const data = await fetchJSON('/api/translator/bootstrap') || await fetchJSON('/api/translator/readiness');
+    if (!data) return;
+
+    const state = data.state || data.session || data.status || data;
+    const active = !!(state.active || state.enabled || state.on || (state.status && state.status !== 'off' && state.status !== 'idle'));
+
+    const statusEl = document.getElementById('translator-status');
+    if (active) {
+        statusEl.textContent = 'ON';
+        statusEl.className = 'pill pill-ok';
+    } else {
+        statusEl.textContent = 'OFF';
+        statusEl.className = 'pill pill-off';
+    }
+
+    const langFrom = state.src_lang || state.from || state.source || (state.pair && state.pair.from);
+    const langTo = state.dst_lang || state.to || state.target || (state.pair && state.pair.to);
+    if (langFrom && langTo) {
+        document.getElementById('translator-lang').textContent = langFrom + ' → ' + langTo;
+    } else if (state.lang || state.language_pair) {
+        document.getElementById('translator-lang').textContent = safeText(state.lang || state.language_pair);
+    } else {
+        document.getElementById('translator-lang').textContent = '—';
+    }
+
+    document.getElementById('translator-mode').textContent = safeText(state.mode);
+}
+
+async function loadRuntime() {
+    const [health, ver, up] = await Promise.all([
+        fetchJSON('/api/health/lite'),
+        fetchJSON('/api/version'),
+        fetchJSON('/api/uptime')
+    ]);
+
+    if (health) {
+        document.getElementById('rt-model').textContent = safeText(health.model);
+        document.getElementById('rt-provider').textContent = safeText(health.provider);
+        document.getElementById('rt-route-time').textContent = formatTime(health.last_runtime_route || health.timestamp);
+        document.getElementById('rt-status').textContent = safeText(health.status);
+    }
+
+    if (ver) {
+        document.getElementById('rt-version').textContent = safeText(ver.version || ver.krab_version || ver.build);
+    }
+
+    if (up) {
+        const secs = up.uptime_seconds !== undefined ? up.uptime_seconds : (up.uptime !== undefined ? up.uptime : up.seconds);
+        document.getElementById('rt-uptime').textContent = formatUptime(secs);
+    }
+}
+
+async function refreshAll() {
+    await Promise.allSettled([
+        loadSilence(),
+        loadNotify(),
+        loadVoice(),
+        loadBudget(),
+        loadTranslator(),
+        loadRuntime()
+    ]);
+    const el = document.getElementById('last-saved');
+    if (el) el.textContent = 'Loaded ' + new Date().toLocaleTimeString();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('toggle-silence').addEventListener('change', toggleSilence);
+    document.getElementById('toggle-notify').addEventListener('change', toggleNotify);
+    document.getElementById('toggle-voice').addEventListener('change', toggleVoice);
+
+    const input = document.getElementById('budget-input');
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') saveBudget();
+    });
+
+    refreshAll();
+    setInterval(refreshAll, 30000);
 });
+
+async function updateBellCount() {
+    try {
+        const [inboxRes, opsRes] = await Promise.all([
+            fetch('/api/inbox/status').catch(() => null),
+            fetch('/api/ops/alerts').catch(() => null)
+        ]);
+
+        const inboxData = (inboxRes && inboxRes.ok) ? await inboxRes.json().catch(() => ({})) : {};
+        const opsData = (opsRes && opsRes.ok) ? await opsRes.json().catch(() => ({})) : {};
+
+        const summary = inboxData.summary || {};
+        const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
+        const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
+
+        let total = 0;
+        if (typeof summary.open_items === 'number' || typeof summary.attention_items === 'number') {
+            total = (summary.open_items || 0) + (summary.attention_items || 0);
+        } else {
+            total = latestItems.length + alerts.length;
+        }
+
+        const countEl = document.getElementById('nav-bell-count');
+        if (countEl) {
+            if (total > 0) {
+                countEl.textContent = total > 99 ? '99+' : String(total);
+                countEl.classList.remove('hidden');
+            } else {
+                countEl.classList.add('hidden');
+            }
+        }
+
+        const dropdown = document.getElementById('bell-dropdown');
+        if (!dropdown) return;
+
+        clearChildren(dropdown);
+
+        if (alerts.length === 0 && latestItems.length === 0) {
+            const emptyDiv = document.createElement('div');
+            emptyDiv.className = 'bell-dropdown-empty';
+            emptyDiv.textContent = 'Нет уведомлений';
+            dropdown.appendChild(emptyDiv);
+        } else {
+            if (alerts.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'ALERTS';
+                dropdown.appendChild(header);
+
+                alerts.forEach(alert => {
+                    const a = document.createElement('a');
+                    a.className = 'bell-dropdown-item';
+                    a.href = '/v4/ops';
+
+                    const dot = document.createElement('span');
+                    dot.className = 'bell-dropdown-severity ' + (alert.severity || 'error');
+
+                    const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+
+                    a.appendChild(dot);
+                    a.appendChild(text);
+                    dropdown.appendChild(a);
+                });
+            }
+
+            if (latestItems.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'INBOX';
+                dropdown.appendChild(header);
+
+                latestItems.forEach(item => {
+                    const a = document.createElement('a');
+                    a.className = 'bell-dropdown-item';
+                    a.href = '/v4/inbox#' + (item.id || item.item_id || '');
+
+                    const dot = document.createElement('span');
+                    dot.className = 'bell-dropdown-severity ' + (item.severity || 'info');
+
+                    const text = document.createTextNode(item.title || 'Notification');
+
+                    a.appendChild(dot);
+                    a.appendChild(text);
+                    dropdown.appendChild(a);
+                });
+            }
+        }
+
+        const footer = document.createElement('a');
+        footer.className = 'bell-dropdown-footer';
+        footer.href = '/v4/inbox';
+        footer.textContent = 'Открыть все →';
+        footer.style.display = 'block';
+        footer.style.textDecoration = 'none';
+        dropdown.appendChild(footer);
+
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+setInterval(updateBellCount, 30000);
+updateBellCount();
+
+const navBell = document.querySelector('.nav-bell');
+if (navBell) {
+    const bellWrapper = navBell.closest('.nav-bell-wrapper');
+    const bellDropdown = document.getElementById('bell-dropdown');
+
+    if (bellWrapper && bellDropdown) {
+        navBell.addEventListener('click', (e) => {
+            e.preventDefault();
+            bellDropdown.classList.toggle('hidden');
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!bellWrapper.contains(e.target)) {
+                bellDropdown.classList.add('hidden');
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                bellDropdown.classList.add('hidden');
+            }
+        });
+    }
+}
 </script>
 </body>
 </html>

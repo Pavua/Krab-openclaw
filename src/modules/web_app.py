@@ -8029,29 +8029,29 @@ class WebApp:
                 headers=_no_store_headers(),
             )
 
-        @self.app.get("/inbox", response_class=HTMLResponse)
-        async def inbox_dashboard():
-            """Inbox items dashboard (Gemini 3.1 Pro generated)."""
+        @self.app.get("/legacy/inbox", response_class=HTMLResponse)
+        async def legacy_inbox_dashboard():
+            """Legacy v3 Inbox items dashboard (Gemini 3.1 Pro generated)."""
             page = config.BASE_DIR / "src" / "web" / "inbox_v2.html"
             if page.exists():
                 return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Inbox page not found</h1>", headers=_no_store_headers())
+            return HTMLResponse("<h1>Legacy Inbox page not found</h1>", headers=_no_store_headers())
 
-        @self.app.get("/costs", response_class=HTMLResponse)
-        async def costs_dashboard():
-            """Cost analytics dashboard (Gemini 3.1 Pro generated)."""
+        @self.app.get("/legacy/costs", response_class=HTMLResponse)
+        async def legacy_costs_dashboard():
+            """Legacy v3 Cost analytics dashboard (Gemini 3.1 Pro generated)."""
             page = config.BASE_DIR / "src" / "web" / "costs_v2.html"
             if page.exists():
                 return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Costs page not found</h1>", headers=_no_store_headers())
+            return HTMLResponse("<h1>Legacy Costs page not found</h1>", headers=_no_store_headers())
 
-        @self.app.get("/swarm", response_class=HTMLResponse)
-        async def swarm_dashboard():
-            """Swarm multi-agent dashboard (Gemini 3.1 Pro generated)."""
+        @self.app.get("/legacy/swarm", response_class=HTMLResponse)
+        async def legacy_swarm_dashboard():
+            """Legacy v3 Swarm multi-agent dashboard (Gemini 3.1 Pro generated)."""
             page = config.BASE_DIR / "src" / "web" / "swarm_v2.html"
             if page.exists():
                 return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Swarm page not found</h1>", headers=_no_store_headers())
+            return HTMLResponse("<h1>Legacy Swarm page not found</h1>", headers=_no_store_headers())
 
         @self.app.get("/prototypes/{page}", response_class=HTMLResponse)
         async def prototype_page(page: str):
@@ -8066,13 +8066,15 @@ class WebApp:
                 return FileResponse(proto_v1, headers=_no_store_headers())
             return HTMLResponse(f"<h1>Prototype '{page}' not found</h1>", status_code=404)
 
-        @self.app.get("/translator", response_class=HTMLResponse)
-        async def translator_dashboard():
-            """Translator dashboard (Gemini 3.1 Pro generated)."""
+        @self.app.get("/legacy/translator", response_class=HTMLResponse)
+        async def legacy_translator_dashboard():
+            """Legacy v3 Translator dashboard (Gemini 3.1 Pro generated)."""
             page = config.BASE_DIR / "src" / "web" / "translator_v2.html"
             if page.exists():
                 return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Translator page not found</h1>", headers=_no_store_headers())
+            return HTMLResponse(
+                "<h1>Legacy Translator page not found</h1>", headers=_no_store_headers()
+            )
 
         # ── V4 Dashboard (Liquid Glass) ────────────────────────────────
 
@@ -8093,45 +8095,122 @@ class WebApp:
                 return FileResponse(page, headers=_no_store_headers())
             return HTMLResponse("<h1>V4 Chat not ready</h1>", headers=_no_store_headers())
 
-        @self.app.get("/v4/costs", response_class=HTMLResponse)
-        async def v4_costs():
-            """V4 Liquid Glass dashboard — Costs."""
+        # ── V4 primary routes (promoted to top-level) ─────────────────
+
+        @self.app.get("/costs", response_class=HTMLResponse)
+        async def costs_dashboard():
+            """V4 Cost analytics dashboard (primary)."""
             page = config.BASE_DIR / "src" / "web" / "v4" / "costs.html"
             if page.exists():
                 return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Costs not ready</h1>", headers=_no_store_headers())
+            return HTMLResponse("<h1>Costs dashboard not ready</h1>", headers=_no_store_headers())
 
-        @self.app.get("/v4/inbox", response_class=HTMLResponse)
-        async def v4_inbox():
-            """V4 Liquid Glass dashboard — Inbox."""
+        @self.app.get("/inbox", response_class=HTMLResponse)
+        async def inbox_dashboard():
+            """V4 Inbox items dashboard (primary)."""
             page = config.BASE_DIR / "src" / "web" / "v4" / "inbox.html"
             if page.exists():
                 return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Inbox not ready</h1>", headers=_no_store_headers())
+            return HTMLResponse("<h1>Inbox dashboard not ready</h1>", headers=_no_store_headers())
 
-        @self.app.get("/v4/swarm", response_class=HTMLResponse)
-        async def v4_swarm():
-            """V4 Liquid Glass dashboard — Swarm."""
+        @self.app.get("/swarm", response_class=HTMLResponse)
+        async def swarm_dashboard():
+            """V4 Swarm multi-agent dashboard (primary)."""
             page = config.BASE_DIR / "src" / "web" / "v4" / "swarm.html"
             if page.exists():
                 return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Swarm not ready</h1>", headers=_no_store_headers())
+            return HTMLResponse("<h1>Swarm dashboard not ready</h1>", headers=_no_store_headers())
 
-        @self.app.get("/v4/translator", response_class=HTMLResponse)
-        async def v4_translator():
-            """V4 Liquid Glass dashboard — Translator."""
+        @self.app.get("/translator", response_class=HTMLResponse)
+        async def translator_dashboard():
+            """V4 Translator dashboard (primary)."""
             page = config.BASE_DIR / "src" / "web" / "v4" / "translator.html"
             if page.exists():
                 return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Translator not ready</h1>", headers=_no_store_headers())
+            return HTMLResponse(
+                "<h1>Translator dashboard not ready</h1>", headers=_no_store_headers()
+            )
 
-        @self.app.get("/v4/ops", response_class=HTMLResponse)
-        async def v4_ops():
-            """V4 Liquid Glass dashboard — Operations Center."""
+        @self.app.get("/ops", response_class=HTMLResponse)
+        async def ops_dashboard():
+            """V4 Operations Center dashboard (primary)."""
             page = config.BASE_DIR / "src" / "web" / "v4" / "ops.html"
             if page.exists():
                 return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Ops not ready</h1>", headers=_no_store_headers())
+            return HTMLResponse("<h1>Ops dashboard not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/settings", response_class=HTMLResponse)
+        async def settings_dashboard():
+            """V4 Settings editor (primary)."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "settings.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse(
+                "<h1>Settings dashboard not ready</h1>", headers=_no_store_headers()
+            )
+
+        @self.app.get("/commands", response_class=HTMLResponse)
+        async def commands_dashboard():
+            """V4 Commands catalog (primary)."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "commands.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse(
+                "<h1>Commands dashboard not ready</h1>", headers=_no_store_headers()
+            )
+
+        # ── /v4/* → 301 redirect to primary routes ────────────────────
+
+        @self.app.get("/v4/costs", response_class=HTMLResponse)
+        async def v4_costs_redirect():
+            """Permanent redirect: /v4/costs → /costs."""
+            from fastapi.responses import RedirectResponse
+
+            return RedirectResponse(url="/costs", status_code=301)
+
+        @self.app.get("/v4/inbox", response_class=HTMLResponse)
+        async def v4_inbox_redirect():
+            """Permanent redirect: /v4/inbox → /inbox."""
+            from fastapi.responses import RedirectResponse
+
+            return RedirectResponse(url="/inbox", status_code=301)
+
+        @self.app.get("/v4/swarm", response_class=HTMLResponse)
+        async def v4_swarm_redirect():
+            """Permanent redirect: /v4/swarm → /swarm."""
+            from fastapi.responses import RedirectResponse
+
+            return RedirectResponse(url="/swarm", status_code=301)
+
+        @self.app.get("/v4/translator", response_class=HTMLResponse)
+        async def v4_translator_redirect():
+            """Permanent redirect: /v4/translator → /translator."""
+            from fastapi.responses import RedirectResponse
+
+            return RedirectResponse(url="/translator", status_code=301)
+
+        @self.app.get("/v4/ops", response_class=HTMLResponse)
+        async def v4_ops_redirect():
+            """Permanent redirect: /v4/ops → /ops."""
+            from fastapi.responses import RedirectResponse
+
+            return RedirectResponse(url="/ops", status_code=301)
+
+        @self.app.get("/v4/settings", response_class=HTMLResponse)
+        async def v4_settings_redirect():
+            """Permanent redirect: /v4/settings → /settings."""
+            from fastapi.responses import RedirectResponse
+
+            return RedirectResponse(url="/settings", status_code=301)
+
+        @self.app.get("/v4/commands", response_class=HTMLResponse)
+        async def v4_commands_redirect():
+            """Permanent redirect: /v4/commands → /commands."""
+            from fastapi.responses import RedirectResponse
+
+            return RedirectResponse(url="/commands", status_code=301)
+
+        # ── /v4/research (no primary equivalent, keep serving directly) ─
 
         @self.app.get("/v4/research", response_class=HTMLResponse)
         async def v4_research():
@@ -8141,21 +8220,31 @@ class WebApp:
                 return FileResponse(page, headers=_no_store_headers())
             return HTMLResponse("<h1>V4 Research not ready</h1>", headers=_no_store_headers())
 
-        @self.app.get("/v4/settings", response_class=HTMLResponse)
-        async def v4_settings():
-            """V4 Liquid Glass dashboard — Settings editor."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "settings.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Settings not ready</h1>", headers=_no_store_headers())
+        # ── Legacy v3 stubs for ops/settings/commands (no v3 html existed) ─
 
-        @self.app.get("/v4/commands", response_class=HTMLResponse)
-        async def v4_commands():
-            """V4 Liquid Glass dashboard — Commands catalog."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "commands.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Commands not ready</h1>", headers=_no_store_headers())
+        @self.app.get("/legacy/ops", response_class=HTMLResponse)
+        async def legacy_ops_dashboard():
+            """Legacy ops placeholder (no v3 page existed for ops)."""
+            return HTMLResponse(
+                "<h1>Legacy Ops</h1><p>No v3 ops page — <a href='/ops'>go to V4 Ops</a></p>",
+                headers=_no_store_headers(),
+            )
+
+        @self.app.get("/legacy/settings", response_class=HTMLResponse)
+        async def legacy_settings_dashboard():
+            """Legacy settings placeholder (no v3 page existed for settings)."""
+            return HTMLResponse(
+                "<h1>Legacy Settings</h1><p>No v3 settings page — <a href='/settings'>go to V4 Settings</a></p>",
+                headers=_no_store_headers(),
+            )
+
+        @self.app.get("/legacy/commands", response_class=HTMLResponse)
+        async def legacy_commands_dashboard():
+            """Legacy commands placeholder (no v3 page existed for commands)."""
+            return HTMLResponse(
+                "<h1>Legacy Commands</h1><p>No v3 commands page — <a href='/commands'>go to V4 Commands</a></p>",
+                headers=_no_store_headers(),
+            )
 
         @self.app.get("/v4/liquid-glass.css")
         async def v4_css():
@@ -8265,6 +8354,102 @@ class WebApp:
                         for r in calls
                     ],
                 }
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        @self.app.get("/api/costs/hourly")
+        async def get_costs_hourly():
+            """Почасовые расходы за последние 24 часа для sparkline-диаграммы."""
+            try:
+                import time as _time
+
+                from ..core.cost_analytics import cost_analytics as _ca
+
+                now = _time.time()
+                cutoff = now - 86400  # 24 часа назад
+
+                # 24 bucket'а по 1 часу, индекс 0 = самый старый, 23 = текущий
+                buckets: list[float] = [0.0] * 24
+                bucket_calls: list[int] = [0] * 24
+
+                for r in _ca._calls:
+                    if r.timestamp < cutoff:
+                        continue
+                    age_sec = now - r.timestamp
+                    hour_idx = 23 - int(age_sec // 3600)
+                    if 0 <= hour_idx < 24:
+                        buckets[hour_idx] += r.cost_usd
+                        bucket_calls[hour_idx] += 1
+
+                # Метки часов (HH:MM UTC)
+                import datetime
+
+                labels = []
+                for i in range(24):
+                    ts = now - (23 - i) * 3600
+                    dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+                    labels.append(dt.strftime("%H:00"))
+
+                today_start = (
+                    datetime.datetime.now(datetime.timezone.utc)
+                    .replace(hour=0, minute=0, second=0, microsecond=0)
+                    .timestamp()
+                )
+                yesterday_start = today_start - 86400
+
+                today_cost = sum(r.cost_usd for r in _ca._calls if r.timestamp >= today_start)
+                yesterday_cost = sum(
+                    r.cost_usd for r in _ca._calls if yesterday_start <= r.timestamp < today_start
+                )
+
+                # 7-day avg: стоимость за последние 7 дней / 7
+                week_start = today_start - 6 * 86400
+                week_cost = sum(r.cost_usd for r in _ca._calls if r.timestamp >= week_start)
+                week_avg = week_cost / 7.0
+
+                return {
+                    "ok": True,
+                    "buckets": [round(v, 6) for v in buckets],
+                    "bucket_calls": bucket_calls,
+                    "labels": labels,
+                    "today_cost": round(today_cost, 6),
+                    "yesterday_cost": round(yesterday_cost, 6),
+                    "week_avg_daily": round(week_avg, 6),
+                }
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        @self.app.get("/api/costs/by_chat")
+        async def get_costs_by_chat(limit: int = 10):
+            """Топ-N чатов по стоимости (из channel-меток в истории вызовов)."""
+            try:
+                from collections import defaultdict
+
+                from ..core.cost_analytics import cost_analytics as _ca
+
+                # channel содержит строку вида "telegram:<chat_id>" или просто "telegram"
+                # Агрегируем по channel как proxy для "чата"
+                by_channel: dict[str, dict] = defaultdict(lambda: {"cost": 0.0, "calls": 0})
+                for r in _ca._calls:
+                    ch = r.channel or "unknown"
+                    by_channel[ch]["cost"] += r.cost_usd
+                    by_channel[ch]["calls"] += 1
+
+                top = sorted(by_channel.items(), key=lambda x: -x[1]["cost"])[:limit]
+                result = []
+                for ch, data in top:
+                    calls = data["calls"]
+                    cost = data["cost"]
+                    result.append(
+                        {
+                            "chat_title": ch,
+                            "cost_usd": round(cost, 6),
+                            "calls": calls,
+                            "avg_cost_per_call": round(cost / calls, 6) if calls else 0.0,
+                        }
+                    )
+
+                return {"ok": True, "top_chats": result}
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
 

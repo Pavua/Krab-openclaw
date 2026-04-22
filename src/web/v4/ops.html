@@ -1,1038 +1,668 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ops Dashboard V4 - Krab AI</title>
-    <link rel="stylesheet" href="/v4/liquid-glass.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
-    <style>
-        body { margin:0; background-color:var(--bg-primary); color:#fff; font-family:system-ui,-apple-system,sans-serif; padding-bottom:80px; }
-        .container { max-width:1200px; margin:0 auto; padding:2rem 1rem; }
-        .flex { display:flex; } .flex-col { flex-direction:column; } .flex-1 { flex:1; }
-        .items-center { align-items:center; } .justify-between { justify-content:space-between; }
-        .justify-center { justify-content:center; }
-        .gap-1{gap:.25rem}.gap-2{gap:.5rem}.gap-3{gap:1rem}.gap-4{gap:1.5rem}
-        .mt-2{margin-top:.5rem}.mt-4{margin-top:1rem}.mb-2{margin-bottom:.5rem}.mb-4{margin-bottom:1rem}
-        .p-4{padding:1rem}.text-center{text-align:center}.text-right{text-align:right}.w-full{width:100%}
-        .text-sm{font-size:.875rem}.text-xs{font-size:.75rem}.text-lg{font-size:1.125rem}
-        .text-xl{font-size:1.25rem;font-weight:600}.text-2xl{font-size:1.5rem;font-weight:700}
-        .text-3xl{font-size:1.875rem;font-weight:700}
-        .text-muted{color:rgba(255,255,255,.72)}.text-success{color:#6ee7b7}
-        .text-error{color:#fca5a5}.text-warning{color:#fde68a}
-        .text-accent{color:#bae6fd}.text-purple{color:#c4b5fd}
-        .grid{display:grid}
-        .grid-2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem}
-        .grid-3{grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1rem}
-        .grid-4{grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem}
-        .grid-2x2{grid-template-columns:1fr 1fr;gap:.75rem}
-        .progress-track{background:rgba(0,0,0,.3);border-radius:999px;height:12px;width:100%;overflow:hidden;border:1px solid var(--glass-border)}
-        .progress-fill{height:100%;width:0%;transition:width .5s ease,background-color .5s ease;border-radius:999px}
-        .table-responsive{overflow-x:auto}
-        table{width:100%;border-collapse:collapse}
-        th,td{padding:.75rem;text-align:left;border-bottom:1px solid var(--glass-border)}
-        th{color:#bae6fd;font-weight:600}
-        tbody tr:hover{background:var(--glass-bg-hover)}
-        @keyframes shimmer{0%{opacity:.3}50%{opacity:.7}100%{opacity:.3}}
-        .skeleton{animation:shimmer 1.5s infinite;background:var(--glass-bg-hover);border-radius:4px;color:transparent!important;min-height:1.2em;display:inline-block}
-        .stat-card{transition:transform .2s ease,box-shadow .2s ease;display:flex;flex-direction:column;align-items:center;justify-content:space-between;min-height:120px}
-        .stat-card:hover{transform:translateY(-4px);box-shadow:0 8px 24px rgba(0,0,0,.4)}
-        .toast-container{position:fixed;top:70px;right:1rem;z-index:999;display:flex;flex-direction:column;gap:.5rem}
-        .toast{background:rgba(20,20,41,.95);border:1px solid var(--glass-border);backdrop-filter:blur(20px);border-radius:12px;padding:.75rem 1.25rem;font-size:.875rem;min-width:260px;max-width:360px;box-shadow:0 4px 20px rgba(0,0,0,.4)}
-        .toast.error{border-color:rgba(248,113,113,.4)}.toast.success{border-color:rgba(52,211,153,.4)}
-        @keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-        .toast{animation:fadeUp .3s ease}
-        .hidden{display:none!important}
-        .status-dot{display:inline-block;width:10px;height:10px;border-radius:50%;flex-shrink:0}
-        .status-dot.ok{background:#34d399}
-        .status-dot.degraded{background:#fbbf24}
-        .status-dot.down{background:#f87171}
-        .status-dot.unknown{background:rgba(255,255,255,.3)}
-        .health-overview{display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;padding:1.25rem}
-        .health-big-status{font-size:2rem;font-weight:800;letter-spacing:-.03em;line-height:1}
-        .health-big-status.ok{color:#34d399}
-        .health-big-status.degraded{color:#fbbf24}
-        .health-big-status.down{color:#f87171}
-        .subsystem-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.6rem;margin-top:1rem}
-        .subsystem-item{display:flex;align-items:center;gap:.6rem;padding:.6rem .85rem;background:rgba(0,0,0,.15);border-radius:10px;border:1px solid var(--glass-border)}
-        .subsystem-name{font-size:.8rem;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .subsystem-latency{font-size:.7rem;color:rgba(255,255,255,.4);font-family:monospace}
-        .sla-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:.75rem}
-        .sla-tile{text-align:center;padding:1rem;background:rgba(0,0,0,.15);border-radius:12px;border:1px solid var(--glass-border)}
-        .sla-value{font-size:1.6rem;font-weight:700;line-height:1;margin-bottom:.3rem}
-        .sla-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;color:rgba(255,255,255,.5)}
-        .alert-row{display:flex;align-items:flex-start;gap:1rem;padding:.9rem 1rem;margin-bottom:.6rem;border-radius:12px;background:rgba(0,0,0,.12);border:1px solid var(--glass-border)}
-        .alert-row.critical{border-left:3px solid #f87171}
-        .alert-row.warning{border-left:3px solid #fbbf24}
-        .alert-row.info{border-left:3px solid #7dd3fc}
-        .alert-info{flex:1;min-width:0}
-        .alert-title-text{font-weight:600;margin-bottom:.2rem;font-size:.9rem}
-        .alert-meta{font-size:.75rem;color:rgba(255,255,255,.45);font-family:monospace}
-        .sev-pill{display:inline-block;padding:.15rem .5rem;border-radius:999px;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-right:.4rem}
-        .sev-pill.critical{background:rgba(248,113,113,.18);color:#fecaca;border:1px solid rgba(248,113,113,.4)}
-        .sev-pill.warning{background:rgba(251,191,36,.15);color:#fef3c7;border:1px solid rgba(251,191,36,.4)}
-        .sev-pill.info{background:rgba(125,211,252,.15);color:#e0f2fe;border:1px solid rgba(125,211,252,.35)}
-        .timeline{padding-left:1.25rem;border-left:2px solid rgba(255,255,255,.07)}
-        .tl-event{position:relative;margin-bottom:1rem;padding-left:.85rem}
-        .tl-event::before{content:'';position:absolute;left:-1.55rem;top:.45rem;width:8px;height:8px;border-radius:50%;background:var(--accent-cyan,#7dd3fc)}
-        .tl-event.critical::before{background:#f87171}
-        .tl-event.warning::before{background:#fbbf24}
-        .tl-event.info::before{background:#7dd3fc}
-        .tl-event.ok::before{background:#34d399}
-        .tl-head{display:flex;align-items:center;gap:.6rem;font-size:.78rem;color:rgba(255,255,255,.6);margin-bottom:.15rem;flex-wrap:wrap}
-        .tl-time{font-family:monospace;color:rgba(255,255,255,.4)}
-        .tl-actor{font-weight:600;color:#fff}
-        .tl-body{font-size:.85rem;color:rgba(255,255,255,.75)}
-        .mini-chart-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.75rem}
-        .mini-chart-tile{padding:1rem;background:rgba(0,0,0,.12);border-radius:12px;border:1px solid var(--glass-border)}
-        .mini-chart-label{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:rgba(255,255,255,.5);margin-bottom:.4rem}
-        .mini-chart-value{font-size:1.3rem;font-weight:700;margin-bottom:.6rem}
-        .mini-chart-canvas{height:50px;width:100%}
-        .runway-compact{display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;padding:.5rem 0}
-        .runway-days{font-size:2.5rem;font-weight:800;letter-spacing:-.03em;line-height:1}
-        .runway-badge{display:inline-flex;align-items:center;gap:.4rem;padding:.3rem .8rem;border-radius:999px;font-size:.75rem;font-weight:700;letter-spacing:.04em}
-        .runway-badge.green{background:rgba(52,211,153,.15);color:#6ee7b7;border:1px solid rgba(52,211,153,.3)}
-        .runway-badge.amber{background:rgba(251,191,36,.15);color:#fde68a;border:1px solid rgba(251,191,36,.3)}
-        .runway-badge.red{background:rgba(248,113,113,.15);color:#fca5a5;border:1px solid rgba(248,113,113,.3)}
-        .runway-sub{display:flex;gap:1rem;flex-wrap:wrap;margin-top:.75rem}
-        .runway-sub-item{text-align:center;padding:.6rem .9rem;background:rgba(0,0,0,.15);border-radius:10px;border:1px solid var(--glass-border);min-width:100px}
-        .actions-bar{display:flex;gap:.75rem;flex-wrap:wrap}
-        .action-btn{display:flex;align-items:center;gap:.5rem;padding:.65rem 1.1rem;border-radius:12px;cursor:pointer;font-family:inherit;font-size:.85rem;font-weight:600;border:1px solid var(--glass-border);background:rgba(255,255,255,.06);color:#fff;backdrop-filter:blur(20px);transition:all .15s;text-decoration:none}
-        .action-btn:hover{background:rgba(255,255,255,.12)}
-        .action-btn:disabled{opacity:.5;cursor:not-allowed}
-        .action-btn.primary{background:rgba(125,211,252,.12);border-color:rgba(125,211,252,.35);color:#7dd3fc}
-        .action-btn.primary:hover{background:rgba(125,211,252,.22)}
-        .exec-summary-meta{font-size:.75rem;color:rgba(255,255,255,.4);margin-bottom:.75rem;font-family:monospace}
-        .rec-item{display:flex;gap:.6rem;align-items:flex-start;padding:.5rem 0;border-bottom:1px solid rgba(255,255,255,.05)}
-        .rec-item:last-child{border-bottom:none}
-        .rec-bullet{color:#fbbf24;font-weight:700;flex-shrink:0;margin-top:.05rem}
-        .rec-text{font-size:.85rem;color:rgba(255,255,255,.8)}
-        .res-bar{height:6px;border-radius:999px;overflow:hidden;background:rgba(0,0,0,.3);margin-top:.3rem}
-        .res-fill{height:100%;border-radius:999px;transition:width .5s}
-        @media(max-width:768px){.subsystem-grid{grid-template-columns:1fr 1fr}.sla-grid{grid-template-columns:1fr 1fr}.mini-chart-grid{grid-template-columns:1fr 1fr}.runway-compact{flex-direction:column;align-items:flex-start}.actions-bar{flex-direction:column}}
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Ops - Krab AI</title>
+<link rel="stylesheet" href="/v4/liquid-glass.css">
+    <script src="/v4/theme-toggle.js" defer></script>
+<style>
+    .stats-grid { display:grid; grid-template-columns: repeat(4,1fr); gap:1rem; margin-bottom:1.5rem; }
+    .stat-card { text-align:center; padding:1.25rem 1rem; }
+    .stat-value { font-size:2rem; font-weight:700; line-height:1; margin-bottom:.25rem; }
+    .stat-label { font-size:.75rem; color:rgba(255,255,255,.5); text-transform:uppercase; letter-spacing:.05em; }
+    .page-content { max-width:1200px; margin:0 auto; padding:2rem; padding-bottom:6rem; }
+    .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.75rem; gap:1rem; }
+    .last-updated { font-size:.75rem; color:rgba(255,255,255,.35); }
+    .section { margin-bottom:2rem; }
+    .section h2 { margin-bottom:1rem; font-size:1.2rem; font-weight:600; }
+    .alert-item { display:flex; align-items:center; gap:1rem; padding:1rem; margin-bottom:.75rem; }
+    .alert-info { flex:1; min-width:0; }
+    .alert-title { font-weight:600; margin-bottom:.2rem; }
+    .alert-code { font-family:monospace; font-size:.75rem; color:rgba(255,255,255,.45); }
+    .alert-ts { font-size:.75rem; color:rgba(255,255,255,.4); margin-top:.2rem; }
+    .alert-actions { display:flex; gap:.5rem; flex-shrink:0; }
+    .pill { display:inline-block; padding:.2rem .6rem; border-radius:999px; font-size:.7rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-right:.5rem; }
+    .pill-critical { background:rgba(248,113,113,.15); color:#fecaca; border:1px solid rgba(248,113,113,.35); }
+    .pill-warning  { background:rgba(251,191,36,.15);  color:#fef3c7; border:1px solid rgba(251,191,36,.35); }
+    .pill-info     { background:rgba(125,211,252,.15); color:#e0f2fe; border:1px solid rgba(125,211,252,.35); }
+    .pill-done     { background:rgba(52,211,153,.15);  color:#a7f3d0; border:1px solid rgba(52,211,153,.35); }
+    .pill-failed   { background:rgba(248,113,113,.15); color:#fecaca; border:1px solid rgba(248,113,113,.35); }
+    .status-ok { text-align:center; padding:2.5rem; font-size:1.2rem; color:var(--accent-green, #a7f3d0); border:1px solid rgba(52,211,153,.3); }
+    .metric-tile { text-align:center; padding:1rem; }
+    .metric-value { font-size:1.4rem; font-weight:700; color:var(--accent-cyan, #7dd3fc); margin-bottom:.2rem; }
+    .metric-label { font-size:.7rem; color:rgba(255,255,255,.5); text-transform:uppercase; letter-spacing:.05em; }
+    .metrics-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:.75rem; }
+    .timeline { padding-left:1.2rem; border-left:2px solid rgba(255,255,255,.08); }
+    .timeline-event { position:relative; margin-bottom:1rem; padding-left:1rem; }
+    .timeline-event::before { content:''; position:absolute; left:-1.5rem; top:.4rem; width:8px; height:8px; border-radius:50%; background:var(--accent-cyan, #7dd3fc); }
+    .timeline-head { display:flex; align-items:center; gap:.6rem; font-size:.8rem; color:rgba(255,255,255,.65); margin-bottom:.15rem; }
+    .timeline-time { font-family:monospace; color:rgba(255,255,255,.45); }
+    .timeline-actor { font-weight:600; color:#fff; }
+    .timeline-action { font-size:.85rem; color:rgba(255,255,255,.75); }
+    .snapshot-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+    .snapshot-card h3 { font-size:.9rem; margin-bottom:.75rem; color:rgba(255,255,255,.6); text-transform:uppercase; letter-spacing:.05em; }
+    .snapshot-row { display:flex; justify-content:space-between; align-items:center; padding:.4rem 0; border-bottom:1px solid rgba(255,255,255,.04); }
+    .snapshot-row:last-child { border-bottom:none; }
+    .snapshot-name { font-size:.85rem; color:rgba(255,255,255,.85); }
+    .empty-state { text-align:center; padding:2rem; color:rgba(255,255,255,.35); font-size:.9rem; }
+    .actions-footer { display:flex; gap:1rem; margin-top:2rem; flex-wrap:wrap; }
+    .glass-button { background:var(--glass-bg, rgba(255,255,255,.06)); border:1px solid var(--glass-border, rgba(255,255,255,.1)); color:#fff; padding:.65rem 1.2rem; border-radius:12px; cursor:pointer; font-family:inherit; font-size:.85rem; backdrop-filter:blur(20px); transition:all .15s; }
+    .glass-button:hover { background:rgba(255,255,255,.1); }
+    .glass-button:disabled { opacity:.5; cursor:not-allowed; }
+    
+    @media (max-width:768px) { 
+        .page-content {padding:1rem; padding-bottom:90px;} 
+        .stats-grid, .metrics-grid {grid-template-columns:repeat(2,1fr);} 
+        .snapshot-grid {grid-template-columns:1fr;} 
+    }
+</style>
 </head>
 <body>
-
-<div class="toast-container" id="toast-container"></div>
 
 <nav class="glass-nav">
     <div class="nav-logo">Krab AI</div>
     <div class="nav-links">
         <a href="/v4/" class="nav-link">Hub</a>
         <a href="/v4/chat" class="nav-link">Chat</a>
-        <a href="/v4/costs" class="nav-link">Costs</a>
-        <a href="/v4/inbox" class="nav-link">Inbox</a>
-        <a href="/v4/swarm" class="nav-link">Swarm</a>
-        <a href="/v4/translator" class="nav-link">Translator</a>
-        <a href="/v4/ops" class="nav-link active">Ops</a>
-        <a href="/v4/settings" class="nav-link">Settings</a>
-        <a href="/v4/commands" class="nav-link">Commands</a>
-        <div class="nav-bell-wrapper">
-            <a href="/v4/inbox" class="nav-bell" title="Notifications">
-                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
-                </svg>
-                <span class="bell-count hidden" id="nav-bell-count">0</span>
-            </a>
-            <div class="bell-dropdown hidden" id="bell-dropdown"></div>
-        </div>
-    </div>
-    <div style="display:flex;align-items:center;gap:.75rem;">
-        <span class="status-dot ok" id="api-status"></span>
-        <span class="text-muted text-sm" id="nav-timer">&#8635; 30s</span>
+        <a href="/costs" class="nav-link">Costs</a>
+        <a href="/inbox" class="nav-link">Inbox</a>
+        <a href="/swarm" class="nav-link">Swarm</a>
+        <a href="/translator" class="nav-link">Translator</a>
+        <a href="/ops" class="nav-link active">Ops</a>
+        <a href="/v4/research" class="nav-link">Research</a>
+        <a href="/settings" class="nav-link">Settings</a>
+        <a href="/commands" class="nav-link">Commands</a>
+            <div class="nav-bell-wrapper">
+                <a href="/inbox" class="nav-bell" title="Notifications">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                    </svg>
+                    <span class="bell-count hidden" id="nav-bell-count">0</span>
+                </a>
+                <div class="bell-dropdown hidden" id="bell-dropdown"></div>
+            </div>
     </div>
 </nav>
 
-<main class="container">
-    <div class="flex justify-between items-center mb-4" style="flex-wrap:wrap;gap:1rem;">
-        <div>
-            <h1 class="text-3xl">Operations Center</h1>
-            <div class="text-muted text-sm mt-2" id="last-updated">Загрузка...</div>
+<div class="page-content">
+    <div class="page-header">
+        <h1 style="font-size:1.5rem; font-weight:600; margin:0;">Operations Center</h1>
+        <div class="last-updated" id="last-updated">Updated —</div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="glass-card stat-card">
+            <div class="stat-value" id="stat-alerts">—</div>
+            <div class="stat-label">Active Alerts</div>
         </div>
-        <div class="actions-bar">
-            <button class="action-btn primary" id="btn-recover">Reload Gateway</button>
-            <button class="action-btn" id="btn-prune">Prune</button>
-            <a class="action-btn" href="/api/ops/bundle/export" id="btn-export-bundle" download>Export Bundle</a>
+        <div class="glass-card stat-card">
+            <div class="stat-value" id="stat-incidents">—</div>
+            <div class="stat-label">Open Incidents</div>
+        </div>
+        <div class="glass-card stat-card">
+            <div class="stat-value" id="stat-sla">—</div>
+            <div class="stat-label">SLA Uptime 24h</div>
+        </div>
+        <div class="glass-card stat-card">
+            <div class="stat-value" id="stat-digest" style="font-size:1.2rem; line-height:1.6;">—</div>
+            <div class="stat-label">Last Digest</div>
         </div>
     </div>
 
-    <!-- Ecosystem Health Card -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-3" style="flex-wrap:wrap;gap:.5rem;">
-            <h3 class="text-lg text-accent">Ecosystem Health</h3>
-            <div class="flex items-center gap-2">
-                <span class="skeleton" id="health-risk-badge" style="padding:.25rem .75rem;border-radius:999px;font-size:.75rem;font-weight:700;border:1px solid;"></span>
-                <span class="text-muted text-xs" id="health-ts"></span>
-            </div>
-        </div>
-        <div class="health-overview">
-            <div>
-                <div class="health-big-status skeleton" id="health-overall">--</div>
-                <div class="text-muted text-xs mt-2" id="health-chain">channel: --</div>
-            </div>
-            <div style="flex:1;">
-                <div style="display:flex;gap:1.5rem;flex-wrap:wrap;max-width:380px;">
-                    <div style="font-size:.8rem;color:rgba(255,255,255,.5)">CPU: <span class="skeleton" id="res-cpu">--</span></div>
-                    <div style="font-size:.8rem;color:rgba(255,255,255,.5)">RAM: <span class="skeleton" id="res-ram">--</span></div>
-                    <div style="font-size:.8rem;color:rgba(255,255,255,.5)">Free: <span id="res-ram-free">--</span></div>
-                    <div style="font-size:.8rem;color:rgba(255,255,255,.5)">Load: <span id="res-load">--</span></div>
-                </div>
-                <div class="res-bar mt-2" style="max-width:320px;"><div class="res-fill" id="res-ram-bar" style="width:0%;background:#7dd3fc;"></div></div>
-            </div>
-        </div>
-        <div class="subsystem-grid" id="subsystems-grid">
-            <div class="subsystem-item skeleton" style="height:38px;"></div>
-            <div class="subsystem-item skeleton" style="height:38px;"></div>
-            <div class="subsystem-item skeleton" style="height:38px;"></div>
-            <div class="subsystem-item skeleton" style="height:38px;"></div>
-        </div>
-        <div id="health-recommendations" class="mt-4" style="display:none;">
-            <div class="text-muted text-xs mb-2" style="text-transform:uppercase;letter-spacing:.05em;">Рекомендации</div>
-            <div id="health-rec-list"></div>
-        </div>
-    </div>
-
-    <!-- SLA + Metrics row -->
-    <div class="grid-2 mb-4">
-        <div class="glass-card">
-            <h3 class="text-lg text-accent mb-3">SLA</h3>
-            <div class="sla-grid">
-                <div class="sla-tile">
-                    <div class="sla-value text-accent skeleton" id="sla-p50">--</div>
-                    <div class="sla-label">Latency p50</div>
-                </div>
-                <div class="sla-tile">
-                    <div class="sla-value text-warning skeleton" id="sla-p95">--</div>
-                    <div class="sla-label">Latency p95</div>
-                </div>
-                <div class="sla-tile">
-                    <div class="sla-value text-success skeleton" id="sla-success">--</div>
-                    <div class="sla-label">Success Rate</div>
-                </div>
-                <div class="sla-tile">
-                    <div class="sla-value skeleton" id="sla-failfast">--</div>
-                    <div class="sla-label">Fail-fast count</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="glass-card">
-            <h3 class="text-lg text-accent mb-3">Runtime Metrics</h3>
-            <div class="mini-chart-grid">
-                <div class="mini-chart-tile">
-                    <div class="mini-chart-label">LLM Calls</div>
-                    <div class="mini-chart-value text-accent" id="mc-calls">--</div>
-                    <canvas class="mini-chart-canvas" id="spark-calls"></canvas>
-                </div>
-                <div class="mini-chart-tile">
-                    <div class="mini-chart-label">Throughput (rps)</div>
-                    <div class="mini-chart-value text-purple" id="mc-tps">--</div>
-                    <canvas class="mini-chart-canvas" id="spark-tps"></canvas>
-                </div>
-                <div class="mini-chart-tile">
-                    <div class="mini-chart-label">Error Rate %</div>
-                    <div class="mini-chart-value text-error" id="mc-error">--</div>
-                    <canvas class="mini-chart-canvas" id="spark-error"></canvas>
-                </div>
-                <div class="mini-chart-tile">
-                    <div class="mini-chart-label">Latency p95 ms</div>
-                    <div class="mini-chart-value text-warning" id="mc-lat">--</div>
-                    <canvas class="mini-chart-canvas" id="spark-lat"></canvas>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Runway Compact -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-3" style="flex-wrap:wrap;gap:.5rem;">
-            <h3 class="text-lg text-accent">Budget Runway</h3>
-            <span class="runway-badge green" id="runway-badge">OK</span>
-        </div>
-        <div class="runway-compact">
-            <div>
-                <div class="runway-days skeleton" id="runway-days" data-val="0">--</div>
-                <div class="text-muted text-sm mt-1" id="runway-label">days remaining</div>
-            </div>
-            <div class="runway-sub">
-                <div class="runway-sub-item">
-                    <div class="text-muted text-xs mb-1">Daily Burn</div>
-                    <div class="text-xl skeleton" id="runway-burn">--</div>
-                </div>
-                <div class="runway-sub-item">
-                    <div class="text-muted text-xs mb-1">Credits</div>
-                    <div class="text-xl skeleton" id="runway-credits">--</div>
-                </div>
-                <div class="runway-sub-item">
-                    <div class="text-muted text-xs mb-1">Spendable</div>
-                    <div class="text-xl skeleton" id="runway-spendable">--</div>
-                </div>
-                <div class="runway-sub-item">
-                    <div class="text-muted text-xs mb-1">Safe calls/day</div>
-                    <div class="text-xl skeleton" id="runway-calls">--</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Active Alerts -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-3">
-            <h3 class="text-lg text-accent">Active Alerts</h3>
-            <span class="text-muted text-sm" id="alert-count-badge"></span>
-        </div>
+    <div class="section">
+        <h2>Active Alerts</h2>
         <div id="alerts-container">
-            <div class="text-center text-muted" style="padding:1.5rem;">Загрузка...</div>
+            <div class="glass-card empty-state">Loading alerts...</div>
         </div>
     </div>
 
-    <!-- Timeline + Executive Summary -->
-    <div class="grid-2 mb-4">
-        <div class="glass-card" style="min-height:300px;">
-            <div class="flex justify-between items-center mb-3">
-                <h3 class="text-lg text-accent">Event Timeline</h3>
-                <span class="text-muted text-xs" id="timeline-count"></span>
+    <div class="section">
+        <h2>Metrics</h2>
+        <div class="metrics-grid" id="metrics-container">
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-p50">—</div><div class="metric-label">Latency p50</div></div>
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-p95">—</div><div class="metric-label">Latency p95</div></div>
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-p99">—</div><div class="metric-label">Latency p99</div></div>
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-error">—</div><div class="metric-label">Error Rate</div></div>
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-tps">—</div><div class="metric-label">Throughput</div></div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Runtime Snapshot</h2>
+        <div class="snapshot-grid">
+            <div class="glass-card snapshot-card">
+                <h3>Providers</h3>
+                <div id="providers-list">
+                    <div class="empty-state" style="padding:1rem;">Loading...</div>
+                </div>
             </div>
+            <div class="glass-card snapshot-card">
+                <h3>Services</h3>
+                <div id="services-list">
+                    <div class="empty-state" style="padding:1rem;">Loading...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Event Timeline</h2>
+        <div class="glass-card" style="padding:1.5rem;">
             <div class="timeline" id="timeline-container">
-                <div class="text-center text-muted" style="padding:1.5rem;">Загрузка...</div>
-            </div>
-        </div>
-
-        <div class="glass-card" style="min-height:300px;">
-            <h3 class="text-lg text-accent mb-3">Executive Summary</h3>
-            <div id="exec-summary-container">
-                <div class="text-center text-muted" style="padding:1.5rem;">Загрузка...</div>
+                <div class="empty-state" style="padding:1rem;">Loading...</div>
             </div>
         </div>
     </div>
 
-    <div class="flex justify-between items-center text-muted text-sm mt-4">
-        <div id="footer-updated">Last updated: --:--:--</div>
-        <div id="footer-timer">Next refresh in 30s</div>
+    <div class="actions-footer">
+        <button class="glass-button" id="btn-report" onclick="generateReport()">Generate Report</button>
+        <button class="glass-button" id="btn-clear-ack" onclick="clearAckedAlerts()">Clear Acked Alerts</button>
     </div>
-</main>
+</div>
 
-<!-- Mobile Tab Bar -->
 <div class="glass-tab-bar">
-    <a href="/v4/" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Hub</a>
-    <a href="/v4/chat" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Chat</a>
-    <a href="/v4/costs" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Costs</a>
-    <a href="/v4/inbox" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>Inbox</a>
-    <a href="/v4/swarm" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Swarm</a>
-    <a href="/v4/ops" class="tab-item active"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>Ops</a>
+    <a href="/v4/" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+        <span>Hub</span>
+    </a>
+    <a href="/v4/chat" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+        <span>Chat</span>
+    </a>
+    <a href="/costs" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+        <span>Costs</span>
+    </a>
+    <a href="/swarm" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
+        <span>Swarm</span>
+    </a>
+    <a href="/ops" class="tab-item active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>Ops</span>
+    </a>
 </div>
 
 <script>
-// ── Mock-данные ────────────────────────────────────────────────────────────
-var MOCK_ECOSYSTEM = {
-    ok: true,
-    report: {
-        generated_at: new Date().toISOString(),
-        status: 'degraded',
-        risk_level: 'medium',
-        checks: {
-            openclaw: { ok: true, status: 'ok', latency_ms: 210 },
-            local_lm: { ok: true, status: 'ok', latency_ms: 150 },
-            voice_gateway: { ok: false, status: 'unavailable', latency_ms: 80 },
-            krab_ear: { ok: false, status: 'unavailable', latency_ms: 1 }
-        },
-        chain: { active_ai_channel: 'cloud', fallback_ready: true, voice_assist_ready: false },
-        resources: { cpu_percent: 40, ram_percent: 66, ram_available_gb: 12.2, load_avg: [13.3, 15.3, 28.0] },
-        recommendations: [
-            'Voice Gateway недоступен: команды !call* ограничены.',
-            'Krab Ear недоступен: desktop call-assist неактивен.'
-        ]
+const API_BASE = '';
+
+async function fetchJSON(path) {
+    try {
+        const r = await window.fetch(API_BASE + path);
+        if (!r.ok) throw new Error(r.status);
+        return await r.json();
+    } catch(e) {
+        console.warn('fetch fail', path, e);
+        return null;
     }
-};
-var MOCK_ALERTS = [
-    { code: 'VOICE_GW_DOWN', severity: 'warning', title: 'Voice Gateway недоступен', timestamp: Date.now() / 1000 - 3600, ack: false },
-    { code: 'KRAB_EAR_DOWN', severity: 'info', title: 'Krab Ear backend недоступен', timestamp: Date.now() / 1000 - 7200, ack: false }
-];
-var MOCK_TIMELINE = (function() {
-    var now = Date.now() / 1000;
-    return [
-        { ts: now - 120, actor: 'krab', action: 'LLM request completed (gemini-3-pro)', severity: 'ok' },
-        { ts: now - 300, actor: 'openclaw', action: 'Model routing switched to cloud', severity: 'info' },
-        { ts: now - 900, actor: 'voice_gateway', action: 'Connection attempt failed', severity: 'warning' },
-        { ts: now - 1800, actor: 'krab', action: 'Startup sequence complete', severity: 'ok' },
-        { ts: now - 3600, actor: 'krab_ear', action: 'Backend health check failed', severity: 'warning' }
-    ];
-})();
-var MOCK_SLA = { ok: true, latency_p50_ms: 212, latency_p95_ms: 420, success_rate_pct: 100, fail_fast_count: 0 };
-var MOCK_RUNWAY = { ok: true, runway: { status: 'no_usage_yet', credits_usd: 300, spendable_budget_usd: 270, daily_burn_usd: 0, runway_days: null, safe_calls_per_day: null, horizon_ok: true } };
-var MOCK_SUMMARY = {
-    ok: true,
-    summary: {
-        status: 'ok',
-        model: 'google/gemini-3-pro-preview',
-        channel: 'cloud',
-        ram: { total_gb: 36, used_gb: 15.8, available_gb: 12.2, percent: 66 },
-        budget: { cost_report_status: 'no_usage_yet', month_usd: 0, runway_status: 'no_usage_yet', runway_days: null },
-        risks: [],
-        recommendations: ['Пока нет cost usage; executive summary построен по runtime policy.']
-    }
-};
-
-// ── Состояние ──────────────────────────────────────────────────────────────
-var timer = 30;
-var isFirstLoad = true;
-var sparkCharts = {};
-
-// ── Форматтеры ─────────────────────────────────────────────────────────────
-function fmtUSD(n) {
-    if (n === null || n === undefined) return '--';
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(n);
-}
-function fmtMs(n) {
-    if (n === null || n === undefined || n === 0) return '0 ms';
-    return Math.round(n) + ' ms';
-}
-function fmtPct(n) {
-    if (n === null || n === undefined) return '--';
-    return n.toFixed(1) + '%';
-}
-function fmtNum(n) {
-    if (n === null || n === undefined) return '--';
-    return new Intl.NumberFormat('en-US').format(Math.round(n));
-}
-function relTime(tsSeconds) {
-    var diff = Math.floor(Date.now() / 1000 - tsSeconds);
-    if (diff < 60) return diff + 's ago';
-    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-    return Math.floor(diff / 86400) + 'd ago';
-}
-function fmtTime(tsSeconds) {
-    if (!tsSeconds) return '--';
-    var d = new Date(tsSeconds * 1000);
-    return d.toLocaleTimeString();
 }
 
-// ── Toast ──────────────────────────────────────────────────────────────────
-function showToast(msg, type) {
-    var tc = document.getElementById('toast-container');
-    var t = document.createElement('div');
-    t.className = 'toast ' + (type || '');
-    t.textContent = msg;
-    tc.appendChild(t);
-    setTimeout(function() {
-        t.style.opacity = '0';
-        t.style.transition = 'opacity 0.4s';
-        setTimeout(function() { t.remove(); }, 400);
-    }, 4000);
+function safeText(val, fallback = '—') {
+    if (val === null || val === undefined || val === '') return fallback;
+    return String(val);
 }
 
-// ── DOM Helpers ────────────────────────────────────────────────────────────
-function setText(id, val) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    el.classList.remove('skeleton');
-    el.textContent = val !== null && val !== undefined ? String(val) : '--';
+function formatDate(ts) {
+    if (!ts) return 'N/A';
+    const d = new Date(ts);
+    return isNaN(d.getTime()) ? ts : d.toLocaleString();
 }
 
-function clearNode(el) {
-    while (el.firstChild) el.removeChild(el.firstChild);
+function formatTime(ts) {
+    if (!ts) return 'N/A';
+    const d = new Date(ts);
+    return isNaN(d.getTime()) ? ts : d.toLocaleTimeString();
 }
 
-// ── Sparkline (Chart.js mini) ──────────────────────────────────────────────
-function generateMockSeries(n) {
-    var arr = [];
-    var v = 50 + Math.random() * 50;
-    for (var i = 0; i < n; i++) {
-        v = Math.max(0, v + (Math.random() - 0.5) * 20);
-        arr.push(Math.round(v));
-    }
-    return arr;
-}
+async function loadSummary() {
+    const alerts = await fetchJSON('/api/ops/alerts');
+    document.getElementById('stat-alerts').textContent = alerts ? alerts.length : '—';
 
-function renderSparkline(canvasId, data, color) {
-    var ctx = document.getElementById(canvasId);
-    if (!ctx) return;
-    if (sparkCharts[canvasId]) { sparkCharts[canvasId].destroy(); delete sparkCharts[canvasId]; }
-    var points = (data && data.length >= 2) ? data : generateMockSeries(8);
-    sparkCharts[canvasId] = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: points.map(function(_, i) { return i; }),
-            datasets: [{
-                data: points,
-                borderColor: color || '#7dd3fc',
-                backgroundColor: (color || '#7dd3fc') + '20',
-                borderWidth: 2,
-                fill: true,
-                tension: 0.4,
-                pointRadius: 0
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: { duration: 400 },
-            plugins: { legend: { display: false }, tooltip: { enabled: false } },
-            scales: { x: { display: false }, y: { display: false } }
+    const history = await fetchJSON('/api/ops/history');
+    if (history && Array.isArray(history)) {
+        const open = history.filter(h => h.status === 'open');
+        document.getElementById('stat-incidents').textContent = open.length;
+        
+        if (history.length > 0) {
+            const last = history[history.length - 1];
+            document.getElementById('stat-digest').textContent = formatDate(last.timestamp || last.ts);
+        } else {
+            document.getElementById('stat-digest').textContent = 'N/A';
         }
-    });
-}
-
-// ── Fetch ──────────────────────────────────────────────────────────────────
-function fetchJSON(path) {
-    return window.fetch(path)
-        .then(function(r) { return r.ok ? r.json() : null; })
-        .catch(function() { return null; });
-}
-
-// ── Ecosystem Health ───────────────────────────────────────────────────────
-var SUBSYSTEM_LABELS = {
-    openclaw: 'OpenClaw Gateway',
-    local_lm: 'LM Studio',
-    voice_gateway: 'Voice Gateway',
-    krab_ear: 'Krab Ear',
-    telegram: 'Telegram MTProto'
-};
-
-function statusClass(ok, status) {
-    if (ok === true) return 'ok';
-    if (ok === false) return 'down';
-    var s = (status || '').toLowerCase();
-    if (s === 'ok') return 'ok';
-    if (s === 'degraded') return 'degraded';
-    if (s === 'unavailable' || s === 'down' || s === 'error') return 'down';
-    return 'unknown';
-}
-
-function renderEcosystemHealth(data) {
-    var report = (data && data.report) ? data.report : MOCK_ECOSYSTEM.report;
-    var status = (report.status || 'unknown').toLowerCase();
-
-    var el = document.getElementById('health-overall');
-    if (el) {
-        el.classList.remove('skeleton');
-        el.className = 'health-big-status ' + (status === 'ok' ? 'ok' : (status === 'degraded' ? 'degraded' : 'down'));
-        el.textContent = status.toUpperCase();
-    }
-
-    var badge = document.getElementById('health-risk-badge');
-    if (badge) {
-        badge.classList.remove('skeleton');
-        var risk = (report.risk_level || '').toLowerCase();
-        var bc = risk === 'low' ? '#6ee7b7' : (risk === 'medium' ? '#fbbf24' : '#f87171');
-        badge.style.background = bc + '22';
-        badge.style.color = bc;
-        badge.style.borderColor = bc + '55';
-        badge.textContent = 'RISK: ' + (risk || 'UNKNOWN').toUpperCase();
-    }
-
-    var tsEl = document.getElementById('health-ts');
-    if (tsEl && report.generated_at) {
-        var d = new Date(report.generated_at);
-        tsEl.textContent = isNaN(d) ? report.generated_at : d.toLocaleTimeString();
-    }
-
-    var chain = report.chain || {};
-    setText('health-chain', 'channel: ' + (chain.active_ai_channel || '--') + '  fallback: ' + (chain.fallback_ready ? 'ready' : 'not ready') + '  voice: ' + (chain.voice_assist_ready ? 'ready' : 'N/A'));
-
-    var res = report.resources || {};
-    setText('res-cpu', res.cpu_percent !== undefined ? res.cpu_percent.toFixed(1) + '%' : '--');
-    setText('res-ram', res.ram_percent !== undefined ? res.ram_percent.toFixed(1) + '%' : '--');
-    setText('res-ram-free', res.ram_available_gb !== undefined ? res.ram_available_gb.toFixed(1) + ' GB' : '--');
-    var load = res.load_avg || [];
-    setText('res-load', load.length ? load.map(function(x) { return x.toFixed(1); }).join(' ') : '--');
-    var ramBar = document.getElementById('res-ram-bar');
-    if (ramBar && res.ram_percent !== undefined) {
-        ramBar.style.width = Math.min(100, res.ram_percent) + '%';
-        ramBar.style.background = res.ram_percent > 85 ? '#f87171' : (res.ram_percent > 65 ? '#fbbf24' : '#7dd3fc');
-    }
-
-    var grid = document.getElementById('subsystems-grid');
-    if (grid) {
-        clearNode(grid);
-        var checks = report.checks || {};
-        var allChecks = Object.assign({}, checks);
-        if (!allChecks.telegram) {
-            allChecks.telegram = { ok: (status !== 'down'), status: (status === 'ok' ? 'ok' : 'degraded'), latency_ms: null };
-        }
-
-        Object.keys(allChecks).forEach(function(key) {
-            var check = allChecks[key];
-            var sc = statusClass(check.ok, check.status);
-            var item = document.createElement('div');
-            item.className = 'subsystem-item';
-            var dot = document.createElement('span');
-            dot.className = 'status-dot ' + sc;
-            var name = document.createElement('span');
-            name.className = 'subsystem-name text-sm';
-            name.textContent = SUBSYSTEM_LABELS[key] || key;
-            item.appendChild(dot);
-            item.appendChild(name);
-            if (check.latency_ms !== null && check.latency_ms !== undefined) {
-                var lat = document.createElement('span');
-                lat.className = 'subsystem-latency';
-                lat.textContent = check.latency_ms + 'ms';
-                item.appendChild(lat);
-            }
-            grid.appendChild(item);
-        });
-    }
-
-    var recs = report.recommendations || [];
-    var recCont = document.getElementById('health-recommendations');
-    var recList = document.getElementById('health-rec-list');
-    if (recCont && recList && recs.length) {
-        recCont.style.display = 'block';
-        clearNode(recList);
-        recs.forEach(function(r) {
-            var row = document.createElement('div');
-            row.className = 'rec-item';
-            var bull = document.createElement('span');
-            bull.className = 'rec-bullet';
-            bull.textContent = '!';
-            var text = document.createElement('span');
-            text.className = 'rec-text';
-            text.textContent = r;
-            row.appendChild(bull);
-            row.appendChild(text);
-            recList.appendChild(row);
-        });
-    } else if (recCont) {
-        recCont.style.display = 'none';
-    }
-}
-
-// ── SLA ────────────────────────────────────────────────────────────────────
-function renderSLA(data) {
-    var d = (data && data.latency_p50_ms !== undefined) ? data : MOCK_SLA;
-    setText('sla-p50', fmtMs(d.latency_p50_ms));
-    setText('sla-p95', fmtMs(d.latency_p95_ms));
-    var sr = d.success_rate_pct !== undefined ? d.success_rate_pct : null;
-    var srEl = document.getElementById('sla-success');
-    if (srEl) {
-        srEl.classList.remove('skeleton');
-        srEl.textContent = sr !== null ? fmtPct(sr) : '--';
-        srEl.className = 'sla-value ' + (sr === null ? 'skeleton' : (sr >= 99 ? 'text-success' : (sr >= 95 ? 'text-warning' : 'text-error')));
-    }
-    setText('sla-failfast', d.fail_fast_count !== undefined ? String(d.fail_fast_count) : '0');
-}
-
-// ── Metrics ────────────────────────────────────────────────────────────────
-function renderMetrics(data) {
-    var m = data || {};
-    var calls = (m.counters && m.counters.llm_calls !== undefined) ? fmtNum(m.counters.llm_calls) : '--';
-    var tps = m.throughput !== undefined ? String(m.throughput) : '--';
-    var errorRate = m.error_rate !== undefined ? m.error_rate + '%' : '--';
-    var lat = m.latency_p95 !== undefined ? fmtMs(m.latency_p95) : (m.latencies && m.latencies.p95_ms !== undefined ? fmtMs(m.latencies.p95_ms) : '--');
-    setText('mc-calls', calls);
-    setText('mc-tps', tps);
-    setText('mc-error', errorRate);
-    setText('mc-lat', lat);
-    renderSparkline('spark-calls', null, '#7dd3fc');
-    renderSparkline('spark-tps', null, '#c4b5fd');
-    renderSparkline('spark-error', null, '#fca5a5');
-    renderSparkline('spark-lat', null, '#fde68a');
-}
-
-// ── Runway ─────────────────────────────────────────────────────────────────
-function renderRunway(data) {
-    var rw = (data && data.runway) ? data.runway : MOCK_RUNWAY.runway;
-    var days = rw.runway_days;
-    var daysEl = document.getElementById('runway-days');
-    if (daysEl) {
-        daysEl.classList.remove('skeleton');
-        daysEl.textContent = (days === null || days === undefined) ? '\u221E' : Math.round(days) + 'd';
-    }
-    setText('runway-label', rw.status === 'no_usage_yet' ? 'no usage yet — full runway' : 'days remaining');
-    setText('runway-burn', (rw.daily_burn_usd !== undefined && rw.daily_burn_usd > 0) ? fmtUSD(rw.daily_burn_usd) + '/day' : '$0.00/day');
-    setText('runway-credits', rw.credits_usd !== undefined ? fmtUSD(rw.credits_usd) : '--');
-    setText('runway-spendable', rw.spendable_budget_usd !== undefined ? fmtUSD(rw.spendable_budget_usd) : '--');
-    setText('runway-calls', (rw.safe_calls_per_day !== null && rw.safe_calls_per_day !== undefined) ? fmtNum(rw.safe_calls_per_day) : '\u221E');
-    var badge = document.getElementById('runway-badge');
-    if (badge) {
-        var ok = rw.horizon_ok !== false;
-        badge.className = 'runway-badge ' + (ok ? 'green' : (days !== null && days < 14 ? 'red' : 'amber'));
-        badge.textContent = ok ? 'OK' : (days !== null && days < 7 ? 'CRITICAL' : 'WARNING');
-    }
-}
-
-// ── Alerts ─────────────────────────────────────────────────────────────────
-function renderAlerts(alertsData) {
-    var container = document.getElementById('alerts-container');
-    var countBadge = document.getElementById('alert-count-badge');
-    if (!container) return;
-    clearNode(container);
-
-    var alerts = [];
-    if (alertsData && Array.isArray(alertsData.alerts)) {
-        alerts = alertsData.alerts;
-    } else if (Array.isArray(alertsData)) {
-        alerts = alertsData;
     } else {
-        alerts = MOCK_ALERTS;
+        document.getElementById('stat-incidents').textContent = '—';
+        document.getElementById('stat-digest').textContent = '—';
     }
 
-    if (countBadge) countBadge.textContent = alerts.length ? alerts.length + ' active' : 'все ОК';
+    const sla = await fetchJSON('/api/sla');
+    if (sla) {
+        const val = sla.uptime_24h !== undefined ? sla.uptime_24h : (sla.uptime ? sla.uptime + '%' : '—');
+        document.getElementById('stat-sla').textContent = val;
+    } else {
+        document.getElementById('stat-sla').textContent = '—';
+    }
+}
 
-    if (!alerts.length) {
-        var ok = document.createElement('div');
-        ok.style.cssText = 'text-align:center;padding:2rem;color:#34d399;font-size:1.1rem;';
-        ok.textContent = 'All systems nominal';
+async function loadAlerts() {
+    const container = document.getElementById('alerts-container');
+    const alerts = await fetchJSON('/api/ops/alerts');
+    
+    container.innerHTML = '';
+
+    if (!alerts) {
+        const err = document.createElement('div');
+        err.className = 'glass-card empty-state';
+        err.textContent = 'Failed to load alerts';
+        container.appendChild(err);
+        return;
+    }
+
+    if (alerts.length === 0) {
+        const ok = document.createElement('div');
+        ok.className = 'glass-card status-ok';
+        ok.textContent = '✓ All systems operational';
         container.appendChild(ok);
         return;
     }
 
-    alerts.forEach(function(a) {
-        var sev = (a.severity || 'info').toLowerCase();
-        var row = document.createElement('div');
-        row.className = 'alert-row ' + sev;
-
-        var info = document.createElement('div');
+    alerts.forEach(a => {
+        const card = document.createElement('div');
+        card.className = 'glass-card alert-item';
+        
+        const info = document.createElement('div');
         info.className = 'alert-info';
-
-        var titleRow = document.createElement('div');
-        var pill = document.createElement('span');
-        pill.className = 'sev-pill ' + sev;
-        pill.textContent = sev.toUpperCase();
+        
+        const titleRow = document.createElement('div');
+        
+        const pill = document.createElement('span');
+        const sev = (a.severity || 'info').toLowerCase();
+        pill.className = 'pill pill-' + (sev === 'critical' ? 'critical' : (sev === 'warning' ? 'warning' : 'info'));
+        pill.textContent = sev;
         titleRow.appendChild(pill);
-        var titleTxt = document.createElement('span');
-        titleTxt.className = 'alert-title-text';
-        titleTxt.textContent = a.title || a.message || a.code || 'Alert';
-        titleRow.appendChild(titleTxt);
+        
+        const title = document.createElement('span');
+        title.className = 'alert-title';
+        title.textContent = safeText(a.title);
+        titleRow.appendChild(title);
+        
         info.appendChild(titleRow);
 
-        var meta = document.createElement('div');
-        meta.className = 'alert-meta';
-        meta.textContent = (a.code ? a.code + '  ' : '') + (a.timestamp ? relTime(a.timestamp) : '--') + (a.ack ? '  [ACKed]' : '');
-        info.appendChild(meta);
-        row.appendChild(info);
+        const codeRow = document.createElement('div');
+        codeRow.className = 'alert-code';
+        codeRow.textContent = safeText(a.code);
+        info.appendChild(codeRow);
 
-        var actions = document.createElement('div');
-        actions.style.cssText = 'display:flex;gap:.5rem;flex-shrink:0;';
-        var btn = document.createElement('button');
-        btn.className = 'action-btn' + (a.ack ? '' : ' primary');
-        btn.textContent = a.ack ? 'Un-Ack' : 'Ack';
-        (function(code, isAcked) {
-            btn.addEventListener('click', function() { ackAlert(code, isAcked); });
-        })(a.code, a.ack);
+        const tsRow = document.createElement('div');
+        tsRow.className = 'alert-ts';
+        tsRow.textContent = formatDate(a.timestamp || a.ts);
+        info.appendChild(tsRow);
+
+        card.appendChild(info);
+
+        const actions = document.createElement('div');
+        actions.className = 'alert-actions';
+        
+        const btn = document.createElement('button');
+        btn.className = 'glass-button';
+        if (a.ack) {
+            btn.textContent = 'Cancel Ack';
+            btn.onclick = () => cancelAck(a.code);
+        } else {
+            btn.textContent = 'Ack';
+            btn.onclick = () => ackAlert(a.code);
+        }
         actions.appendChild(btn);
-        row.appendChild(actions);
-        container.appendChild(row);
+        
+        card.appendChild(actions);
+        container.appendChild(card);
     });
 }
 
-// ── Timeline ──────────────────────────────────────────────────────────────
-function renderTimeline(data) {
-    var container = document.getElementById('timeline-container');
-    var countEl = document.getElementById('timeline-count');
-    if (!container) return;
-    clearNode(container);
-
-    var events = [];
-    if (data && Array.isArray(data.events)) {
-        events = data.events;
-    } else if (Array.isArray(data)) {
-        events = data;
-    } else {
-        events = MOCK_TIMELINE;
-    }
-
-    if (countEl) countEl.textContent = events.length ? events.length + ' events' : '';
-
-    if (!events.length) {
-        var empty = document.createElement('div');
-        empty.style.cssText = 'text-align:center;padding:1.5rem;color:rgba(255,255,255,.4);font-size:.9rem;';
-        empty.textContent = 'No events yet — activity will appear after first LLM request';
-        container.appendChild(empty);
+async function loadMetrics() {
+    const metrics = await fetchJSON('/api/ops/metrics');
+    if (!metrics) {
+        ['p50', 'p95', 'p99', 'error', 'tps'].forEach(id => {
+            document.getElementById('metric-' + id).textContent = '—';
+        });
         return;
     }
 
-    var recent = events.slice(-20).reverse();
-    recent.forEach(function(e) {
-        var sev = (e.severity || 'info').toLowerCase();
-        var ev = document.createElement('div');
-        ev.className = 'tl-event ' + sev;
+    document.getElementById('metric-p50').textContent = metrics.latency_p50 !== undefined ? metrics.latency_p50 + 'ms' : '—';
+    document.getElementById('metric-p95').textContent = metrics.latency_p95 !== undefined ? metrics.latency_p95 + 'ms' : '—';
+    document.getElementById('metric-p99').textContent = metrics.latency_p99 !== undefined ? metrics.latency_p99 + 'ms' : '—';
+    document.getElementById('metric-error').textContent = metrics.error_rate !== undefined ? metrics.error_rate + '%' : '—';
+    document.getElementById('metric-tps').textContent = metrics.throughput !== undefined ? metrics.throughput + 'rps' : '—';
+}
 
-        var head = document.createElement('div');
-        head.className = 'tl-head';
+async function loadSnapshot() {
+    const snap = await fetchJSON('/api/ops/runtime_snapshot');
+    const pList = document.getElementById('providers-list');
+    const sList = document.getElementById('services-list');
+    
+    pList.innerHTML = '';
+    sList.innerHTML = '';
 
-        var timeEl = document.createElement('span');
-        timeEl.className = 'tl-time';
-        timeEl.textContent = e.ts ? fmtTime(e.ts) : '--';
-        head.appendChild(timeEl);
+    if (!snap) {
+        pList.innerHTML = '<div class="empty-state" style="padding:1rem;">Failed to load</div>';
+        sList.innerHTML = '<div class="empty-state" style="padding:1rem;">Failed to load</div>';
+        return;
+    }
 
-        if (e.actor) {
-            var actor = document.createElement('span');
-            actor.className = 'tl-actor';
-            actor.textContent = e.actor;
-            head.appendChild(actor);
-        }
+    if (snap.providers) {
+        const keys = Object.keys(snap.providers);
+        if (keys.length === 0) pList.innerHTML = '<div class="empty-state" style="padding:1rem;">No providers</div>';
+        keys.forEach(k => {
+            const row = document.createElement('div');
+            row.className = 'snapshot-row';
+            const name = document.createElement('span');
+            name.className = 'snapshot-name';
+            name.textContent = k;
+            const pill = document.createElement('span');
+            const ready = snap.providers[k].ready;
+            pill.className = 'pill ' + (ready ? 'pill-done' : 'pill-failed');
+            pill.textContent = ready ? 'READY' : 'NOT READY';
+            row.appendChild(name);
+            row.appendChild(pill);
+            pList.appendChild(row);
+        });
+    }
+
+    if (snap.services) {
+        const keys = Object.keys(snap.services);
+        if (keys.length === 0) sList.innerHTML = '<div class="empty-state" style="padding:1rem;">No services</div>';
+        keys.forEach(k => {
+            const row = document.createElement('div');
+            row.className = 'snapshot-row';
+            const name = document.createElement('span');
+            name.className = 'snapshot-name';
+            name.textContent = k;
+            const pill = document.createElement('span');
+            const status = (snap.services[k].status || '').toLowerCase();
+            pill.className = 'pill ' + (status === 'ok' ? 'pill-done' : (status === 'warning' ? 'pill-warning' : 'pill-failed'));
+            pill.textContent = status || 'UNKNOWN';
+            row.appendChild(name);
+            row.appendChild(pill);
+            sList.appendChild(row);
+        });
+    }
+}
+
+async function loadTimeline() {
+    const container = document.getElementById('timeline-container');
+    const events = await fetchJSON('/api/ops/timeline');
+    
+    container.innerHTML = '';
+
+    if (!events) {
+        container.innerHTML = '<div class="empty-state" style="padding:1rem;">Failed to load events</div>';
+        return;
+    }
+
+    if (events.length === 0) {
+        container.innerHTML = '<div class="empty-state" style="padding:1rem;">No recent events</div>';
+        return;
+    }
+
+    const recent = events.slice(-20).reverse();
+    recent.forEach(e => {
+        const ev = document.createElement('div');
+        ev.className = 'timeline-event';
+        
+        const head = document.createElement('div');
+        head.className = 'timeline-head';
+        
+        const time = document.createElement('span');
+        time.className = 'timeline-time';
+        time.textContent = formatTime(e.ts);
+        head.appendChild(time);
+        
+        const actor = document.createElement('span');
+        actor.className = 'timeline-actor';
+        actor.textContent = safeText(e.actor);
+        head.appendChild(actor);
 
         if (e.severity) {
-            var spill = document.createElement('span');
-            spill.className = 'sev-pill ' + sev;
-            spill.textContent = sev;
-            head.appendChild(spill);
+            const pill = document.createElement('span');
+            const sev = e.severity.toLowerCase();
+            pill.className = 'pill pill-' + (sev === 'critical' ? 'critical' : (sev === 'warning' ? 'warning' : 'info'));
+            pill.style.marginRight = '0';
+            pill.style.fontSize = '0.6rem';
+            pill.textContent = sev;
+            head.appendChild(pill);
         }
 
-        var relEl = document.createElement('span');
-        relEl.className = 'tl-time';
-        relEl.textContent = e.ts ? relTime(e.ts) : '';
-        head.appendChild(relEl);
         ev.appendChild(head);
 
-        var body = document.createElement('div');
-        body.className = 'tl-body';
-        body.textContent = e.action || e.message || e.event || '';
-        ev.appendChild(body);
+        const action = document.createElement('div');
+        action.className = 'timeline-action';
+        action.textContent = safeText(e.action);
+        ev.appendChild(action);
 
         container.appendChild(ev);
     });
 }
 
-// ── Executive Summary ─────────────────────────────────────────────────────
-function renderExecSummary(data) {
-    var container = document.getElementById('exec-summary-container');
-    if (!container) return;
-    clearNode(container);
-
-    var summary = (data && data.summary) ? data.summary : MOCK_SUMMARY.summary;
-    if (!summary) {
-        var empty = document.createElement('div');
-        empty.style.cssText = 'text-align:center;padding:1.5rem;color:rgba(255,255,255,.4);';
-        empty.textContent = 'Нет данных';
-        container.appendChild(empty);
-        return;
-    }
-
-    var meta = document.createElement('div');
-    meta.className = 'exec-summary-meta';
-    meta.textContent = 'model: ' + (summary.model || '--') + '  channel: ' + (summary.channel || '--') + '  status: ' + (summary.status || '--');
-    container.appendChild(meta);
-
-    if (summary.ram) {
-        var ramRow = document.createElement('div');
-        ramRow.style.cssText = 'display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:.75rem;';
-        var ramFields = [
-            ['Total RAM', summary.ram.total_gb !== undefined ? summary.ram.total_gb.toFixed(1) + ' GB' : '--'],
-            ['Used RAM', summary.ram.used_gb !== undefined ? summary.ram.used_gb.toFixed(1) + ' GB' : '--'],
-            ['Free RAM', summary.ram.available_gb !== undefined ? summary.ram.available_gb.toFixed(1) + ' GB' : '--'],
-            ['RAM %', summary.ram.percent !== undefined ? summary.ram.percent.toFixed(0) + '%' : '--']
-        ];
-        ramFields.forEach(function(f) {
-            var box = document.createElement('div');
-            box.style.cssText = 'min-width:80px;';
-            var lbl = document.createElement('div');
-            lbl.className = 'text-muted text-xs';
-            lbl.textContent = f[0];
-            var val = document.createElement('div');
-            val.className = 'text-sm';
-            val.style.fontWeight = '600';
-            val.textContent = f[1];
-            box.appendChild(lbl);
-            box.appendChild(val);
-            ramRow.appendChild(box);
-        });
-        container.appendChild(ramRow);
-    }
-
-    if (summary.budget) {
-        var b = summary.budget;
-        var budgetRow = document.createElement('div');
-        budgetRow.style.cssText = 'font-size:.85rem;color:rgba(255,255,255,.65);margin-bottom:.75rem;padding:.6rem .75rem;background:rgba(0,0,0,.15);border-radius:8px;border:1px solid var(--glass-border);';
-        var bText = 'Budget: ' + (b.cost_report_status || '--');
-        if (b.month_usd !== undefined) bText += '  |  Month: ' + fmtUSD(b.month_usd);
-        if (b.runway_status) bText += '  |  Runway: ' + b.runway_status;
-        budgetRow.textContent = bText;
-        container.appendChild(budgetRow);
-    }
-
-    var recs = summary.recommendations || [];
-    if (recs.length) {
-        var recHeader = document.createElement('div');
-        recHeader.className = 'text-muted text-xs mb-2';
-        recHeader.style.cssText = 'text-transform:uppercase;letter-spacing:.05em;margin-top:.25rem;';
-        recHeader.textContent = 'Рекомендации';
-        container.appendChild(recHeader);
-        recs.forEach(function(r) {
-            var row = document.createElement('div');
-            row.className = 'rec-item';
-            var bull = document.createElement('span');
-            bull.className = 'rec-bullet';
-            bull.textContent = 'i';
-            var text = document.createElement('span');
-            text.className = 'rec-text';
-            text.textContent = r;
-            row.appendChild(bull);
-            row.appendChild(text);
-            container.appendChild(row);
-        });
-    }
-}
-
-// ── Ack Alert ─────────────────────────────────────────────────────────────
-function ackAlert(code, isAcked) {
-    if (!code) return;
-    var method = isAcked ? 'DELETE' : 'POST';
-    window.fetch('/api/ops/ack/' + encodeURIComponent(code), { method: method })
-        .then(function(r) {
-            showToast(isAcked ? 'Ack removed: ' + code : 'Acked: ' + code, r.ok ? 'success' : 'error');
-            loadAlerts();
-        })
-        .catch(function(e) { showToast('Error: ' + e.message, 'error'); });
-}
-
-// ── Quick Actions ─────────────────────────────────────────────────────────
-function setupActions() {
-    var btnRecover = document.getElementById('btn-recover');
-    if (btnRecover) {
-        btnRecover.addEventListener('click', function() {
-            btnRecover.disabled = true;
-            btnRecover.textContent = 'Reloading...';
-            window.fetch('/api/runtime/recover', { method: 'POST' })
-                .then(function(r) { showToast(r.ok ? 'Gateway reload requested' : 'Error: ' + r.status, r.ok ? 'success' : 'error'); })
-                .catch(function(e) { showToast('Error: ' + e.message, 'error'); })
-                .finally(function() { btnRecover.disabled = false; btnRecover.textContent = 'Reload Gateway'; });
-        });
-    }
-
-    var btnPrune = document.getElementById('btn-prune');
-    if (btnPrune) {
-        btnPrune.addEventListener('click', function() {
-            btnPrune.disabled = true;
-            btnPrune.textContent = 'Pruning...';
-            window.fetch('/api/ops/maintenance/prune', { method: 'POST' })
-                .then(function(r) { showToast(r.ok ? 'Prune completed' : 'Error: ' + r.status, r.ok ? 'success' : 'error'); })
-                .catch(function(e) { showToast('Error: ' + e.message, 'error'); })
-                .finally(function() { btnPrune.disabled = false; btnPrune.textContent = 'Prune'; });
-        });
-    }
-}
-
-// ── Loaders ────────────────────────────────────────────────────────────────
-function loadHealth() {
-    return fetchJSON('/api/ecosystem/health').then(function(d) { renderEcosystemHealth(d || MOCK_ECOSYSTEM); });
-}
-function loadSLA() {
-    return fetchJSON('/api/sla').then(function(d) { renderSLA(d || MOCK_SLA); });
-}
-function loadMetricsData() {
-    return fetchJSON('/api/ops/metrics').then(function(d) { renderMetrics(d || {}); });
-}
-function loadRunway() {
-    return fetchJSON('/api/ops/runway').then(function(d) { renderRunway(d || MOCK_RUNWAY); });
-}
-function loadAlerts() {
-    return fetchJSON('/api/ops/alerts').then(function(d) { renderAlerts(d || { alerts: MOCK_ALERTS }); });
-}
-function loadTimeline() {
-    return fetchJSON('/api/ops/timeline').then(function(d) { renderTimeline(d || { events: MOCK_TIMELINE }); });
-}
-function loadExecSummary() {
-    return fetchJSON('/api/ops/executive-summary').then(function(d) { renderExecSummary(d || MOCK_SUMMARY); });
-}
-
-// ── Bell ───────────────────────────────────────────────────────────────────
-function updateBellCount() {
+function refreshAll() {
     Promise.allSettled([
-        fetch('/api/inbox/status').catch(function() { return null; }),
-        fetch('/api/ops/alerts').catch(function() { return null; })
-    ]).then(function(results) {
-        var p1 = results[0], p2 = results[1];
-        var inboxP = (p1.status === 'fulfilled' && p1.value && p1.value.ok) ? p1.value.json().catch(function() { return {}; }) : Promise.resolve({});
-        var alertP = (p2.status === 'fulfilled' && p2.value && p2.value.ok) ? p2.value.json().catch(function() { return {}; }) : Promise.resolve({});
-        return Promise.all([inboxP, alertP]);
-    }).then(function(data) {
-        var inboxData = data[0] || {};
-        var opsData = data[1] || {};
-        var summary = inboxData.summary || {};
-        var alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
-        var latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
-        var total = (summary.open_items || 0) + (summary.attention_items || 0) || latestItems.length + alerts.length;
-        var countEl = document.getElementById('nav-bell-count');
-        if (countEl) {
-            if (total > 0) { countEl.textContent = total > 99 ? '99+' : String(total); countEl.classList.remove('hidden'); }
-            else countEl.classList.add('hidden');
-        }
-        var dd = document.getElementById('bell-dropdown');
-        if (!dd) return;
-        clearNode(dd);
-
-        function addHeader(text) {
-            var h = document.createElement('div'); h.className = 'bell-dropdown-header'; h.textContent = text; dd.appendChild(h);
-        }
-        function addItem(href, severity, text) {
-            var a = document.createElement('a'); a.className = 'bell-dropdown-item'; a.href = href;
-            var dot = document.createElement('span'); dot.className = 'bell-dropdown-severity ' + (severity || 'info');
-            a.appendChild(dot); a.appendChild(document.createTextNode(text)); dd.appendChild(a);
-        }
-
-        if (!alerts.length && !latestItems.length) {
-            var empty = document.createElement('div'); empty.className = 'bell-dropdown-empty'; empty.textContent = 'Нет уведомлений'; dd.appendChild(empty);
-        } else {
-            if (alerts.length) {
-                addHeader('ALERTS');
-                alerts.forEach(function(al) { addItem('/v4/ops', al.severity || 'error', al.title || al.message || al.code || 'Alert'); });
-            }
-            if (latestItems.length) {
-                addHeader('INBOX');
-                latestItems.forEach(function(item) { addItem('/v4/inbox#' + (item.id || ''), item.severity || 'info', item.title || 'Notification'); });
-            }
-        }
-        var footer = document.createElement('a'); footer.className = 'bell-dropdown-footer';
-        footer.href = '/v4/inbox'; footer.textContent = 'Открыть все \u2192';
-        footer.style.cssText = 'display:block;text-decoration:none;';
-        dd.appendChild(footer);
-    }).catch(function(err) { console.error(err); });
-}
-
-// ── Polling ────────────────────────────────────────────────────────────────
-function fetchData() {
-    var apiStatus = document.getElementById('api-status');
-    Promise.allSettled([
-        loadHealth(),
-        loadSLA(),
-        loadMetricsData(),
-        loadRunway(),
+        loadSummary(),
         loadAlerts(),
-        loadTimeline(),
-        loadExecSummary()
-    ]).then(function() {
-        var now = new Date().toLocaleTimeString();
-        setText('last-updated', 'Last updated: ' + now);
-        setText('footer-updated', 'Last updated: ' + now);
-        if (apiStatus) { apiStatus.style.background = 'var(--accent-green)'; apiStatus.title = 'API online'; }
-        isFirstLoad = false;
-    }).catch(function() {
-        if (apiStatus) { apiStatus.style.background = '#f87171'; apiStatus.title = 'API error'; }
+        loadMetrics(),
+        loadSnapshot(),
+        loadTimeline()
+    ]).then(() => {
+        document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
     });
 }
 
-function tickTimer() {
-    timer--;
-    if (timer <= 0) { timer = 30; fetchData(); }
-    var el = document.getElementById('nav-timer');
-    var fe = document.getElementById('footer-timer');
-    if (el) el.textContent = '\u21BB ' + timer + 's';
-    if (fe) fe.textContent = 'Next refresh in ' + timer + 's';
+async function ackAlert(code) {
+    if (!code) return;
+    try {
+        await window.fetch(API_BASE + '/api/ops/ack/' + encodeURIComponent(code), { method: 'POST' });
+        refreshAll();
+    } catch (e) {
+        console.error(e);
+    }
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', function() {
-    setupActions();
-    fetchData();
-    setInterval(tickTimer, 1000);
-    setInterval(updateBellCount, 30000);
-    updateBellCount();
-
-    var navBell = document.querySelector('.nav-bell');
-    if (navBell) {
-        var wrapper = navBell.closest('.nav-bell-wrapper');
-        var dd = document.getElementById('bell-dropdown');
-        if (wrapper && dd) {
-            navBell.addEventListener('click', function(e) { e.preventDefault(); dd.classList.toggle('hidden'); });
-            document.addEventListener('click', function(e) { if (!wrapper.contains(e.target)) dd.classList.add('hidden'); });
-            document.addEventListener('keydown', function(e) { if (e.key === 'Escape') dd.classList.add('hidden'); });
-        }
+async function cancelAck(code) {
+    if (!code) return;
+    try {
+        await window.fetch(API_BASE + '/api/ops/ack/' + encodeURIComponent(code), { method: 'DELETE' });
+        refreshAll();
+    } catch (e) {
+        console.error(e);
     }
+}
+
+async function generateReport() {
+    const btn = document.getElementById('btn-report');
+    try {
+        btn.disabled = true;
+        btn.textContent = 'Generating...';
+        const r = await window.fetch(API_BASE + '/api/ops/report/export', { method: 'POST' });
+        if (!r.ok) throw new Error('Export failed');
+        
+        const contentType = r.headers.get('content-type');
+        let blob;
+        if (contentType && contentType.includes('application/json')) {
+            const data = await r.json();
+            blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        } else {
+            blob = await r.blob();
+        }
+        
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'ops-report.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('Failed to generate report: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Generate Report';
+    }
+}
+
+async function clearAckedAlerts() {
+    const btn = document.getElementById('btn-clear-ack');
+    try {
+        btn.disabled = true;
+        btn.textContent = 'Clearing...';
+        const alerts = await fetchJSON('/api/ops/alerts');
+        if (alerts && Array.isArray(alerts)) {
+            const acked = alerts.filter(a => a.ack);
+            for (const a of acked) {
+                if (a.code) {
+                    await window.fetch(API_BASE + '/api/ops/ack/' + encodeURIComponent(a.code), { method: 'DELETE' });
+                }
+            }
+        }
+        await refreshAll();
+    } catch (e) {
+        alert('Failed to clear alerts: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Clear Acked Alerts';
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    refreshAll();
+    setInterval(refreshAll, 15000);
 });
+
+        async function updateBellCount() {
+          try {
+            const [inboxRes, opsRes] = await Promise.all([
+              fetch('/api/inbox/status').catch(() => null),
+              fetch('/api/ops/alerts').catch(() => null)
+            ]);
+
+            const inboxData = (inboxRes && inboxRes.ok) ? await inboxRes.json().catch(() => ({})) : {};
+            const opsData = (opsRes && opsRes.ok) ? await opsRes.json().catch(() => ({})) : {};
+
+            const summary = inboxData.summary || {};
+            const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
+            const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
+
+            let total = 0;
+            if (typeof summary.open_items === 'number' || typeof summary.attention_items === 'number') {
+              total = (summary.open_items || 0) + (summary.attention_items || 0);
+            } else {
+              total = latestItems.length + alerts.length;
+            }
+
+            const countEl = document.getElementById('nav-bell-count');
+            if (countEl) {
+              if (total > 0) {
+                countEl.textContent = total > 99 ? '99+' : String(total);
+                countEl.classList.remove('hidden');
+              } else {
+                countEl.classList.add('hidden');
+              }
+            }
+
+            const dropdown = document.getElementById('bell-dropdown');
+            if (!dropdown) return;
+
+            dropdown.innerHTML = '';
+
+            if (alerts.length === 0 && latestItems.length === 0) {
+              const emptyDiv = document.createElement('div');
+              emptyDiv.className = 'bell-dropdown-empty';
+              emptyDiv.textContent = 'Нет уведомлений';
+              dropdown.appendChild(emptyDiv);
+            } else {
+              if (alerts.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'ALERTS';
+                dropdown.appendChild(header);
+
+                alerts.forEach(alert => {
+                  const a = document.createElement('a');
+                  a.className = 'bell-dropdown-item';
+                  a.href = '/v4/ops';
+          
+                  const dot = document.createElement('span');
+                  dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
+          
+                  const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+          
+                  a.appendChild(dot);
+                  a.appendChild(text);
+                  dropdown.appendChild(a);
+                });
+              }
+
+              if (latestItems.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'INBOX';
+                dropdown.appendChild(header);
+
+                latestItems.forEach(item => {
+                  const a = document.createElement('a');
+                  a.className = 'bell-dropdown-item';
+                  a.href = `/v4/inbox#${item.id || item.item_id || ''}`;
+          
+                  const dot = document.createElement('span');
+                  dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
+          
+                  const text = document.createTextNode(item.title || 'Notification');
+          
+                  a.appendChild(dot);
+                  a.appendChild(text);
+                  dropdown.appendChild(a);
+                });
+              }
+            }
+
+            const footer = document.createElement('a');
+            footer.className = 'bell-dropdown-footer';
+            footer.href = '/v4/inbox';
+            footer.textContent = 'Открыть все →';
+            footer.style.display = 'block';
+            footer.style.textDecoration = 'none';
+            dropdown.appendChild(footer);
+
+          } catch (err) {
+            console.error(err);
+          }
+        }
+
+        setInterval(updateBellCount, 30000);
+        updateBellCount();
+
+        const navBell = document.querySelector('.nav-bell');
+        if (navBell) {
+          const bellWrapper = navBell.closest('.nav-bell-wrapper');
+          const bellDropdown = document.getElementById('bell-dropdown');
+  
+          if (bellWrapper && bellDropdown) {
+            navBell.addEventListener('click', (e) => {
+              e.preventDefault();
+              bellDropdown.classList.toggle('hidden');
+            });
+
+            document.addEventListener('click', (e) => {
+              if (!bellWrapper.contains(e.target)) {
+                bellDropdown.classList.add('hidden');
+              }
+            });
+
+            document.addEventListener('keydown', (e) => {
+              if (e.key === 'Escape') {
+                bellDropdown.classList.add('hidden');
+              }
+            });
+          }
+        }
 </script>
 </body>
 </html>

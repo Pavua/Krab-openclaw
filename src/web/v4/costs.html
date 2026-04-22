@@ -3,1191 +3,928 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Costs Dashboard V4 - Krab AI</title>
+    <title>Costs Dashboard - Krab AI</title>
     <link rel="stylesheet" href="/v4/liquid-glass.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
     <style>
-        body { margin:0; background-color:var(--bg-primary); color:#fff; font-family:system-ui,-apple-system,sans-serif; padding-bottom:80px; }
-        .container { max-width:1200px; margin:0 auto; padding:2rem 1rem; }
-        .flex { display:flex; } .flex-col { flex-direction:column; } .flex-1 { flex:1; }
-        .items-center { align-items:center; } .justify-between { justify-content:space-between; }
-        .justify-center { justify-content:center; }
-        .gap-1{gap:.25rem}.gap-2{gap:.5rem}.gap-3{gap:1rem}.gap-4{gap:1.5rem}
-        .mt-2{margin-top:.5rem}.mt-4{margin-top:1rem}.mb-2{margin-bottom:.5rem}.mb-4{margin-bottom:1rem}
-        .p-4{padding:1rem}.text-center{text-align:center}.text-right{text-align:right}.w-full{width:100%}
-        .text-sm{font-size:.875rem}.text-xs{font-size:.75rem}.text-lg{font-size:1.125rem}
-        .text-xl{font-size:1.25rem;font-weight:600}.text-2xl{font-size:1.5rem;font-weight:700}
-        .text-3xl{font-size:1.875rem;font-weight:700}
-        .text-muted{color:rgba(255,255,255,.72)}.text-success{color:#6ee7b7}
-        .text-error{color:#fca5a5}.text-warning{color:#fde68a}
-        .text-accent{color:#bae6fd}.text-purple{color:#c4b5fd}
-        .grid{display:grid}
-        .grid-2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem}
-        .grid-3{grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1rem}
-        .grid-2x2{grid-template-columns:1fr 1fr;gap:.75rem}
-        .progress-track{background:rgba(0,0,0,.3);border-radius:999px;height:12px;width:100%;overflow:hidden;border:1px solid var(--glass-border)}
-        .progress-fill{height:100%;width:0%;transition:width .5s ease,background-color .5s ease;border-radius:999px}
-        .table-responsive{overflow-x:auto}
-        table{width:100%;border-collapse:collapse}
-        th,td{padding:.75rem;text-align:left;border-bottom:1px solid var(--glass-border)}
-        th{color:#bae6fd;font-weight:600}
-        tbody tr:hover{background:var(--glass-bg-hover)}
-        .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);backdrop-filter:blur(5px);z-index:100;display:none;align-items:center;justify-content:center}
-        .modal-overlay.active{display:flex}
-        .modal-content{max-width:400px;width:90%}
-        @keyframes shimmer{0%{opacity:.3}50%{opacity:.7}100%{opacity:.3}}
-        .skeleton{animation:shimmer 1.5s infinite;background:var(--glass-bg-hover);border-radius:4px;color:transparent!important;min-height:1.2em;display:inline-block}
-        .stat-card{transition:transform .2s ease,box-shadow .2s ease;display:flex;flex-direction:column;align-items:center;justify-content:space-between;min-height:140px}
-        .stat-card:hover{transform:translateY(-4px);box-shadow:0 8px 24px rgba(0,0,0,.4)}
-        .trend-indicator{font-size:.75rem;font-weight:600;padding:.125rem .375rem;border-radius:4px;background:rgba(255,255,255,.1);display:none;align-items:center;gap:4px}
-        .sparkline-wrapper{height:36px;width:100%;max-width:120px;opacity:.8;margin-top:.5rem;display:flex;justify-content:center;align-items:flex-end}
-        .bar-row{display:grid;grid-template-columns:100px 1fr 70px;gap:.75rem;align-items:center;margin-bottom:.75rem}
-        .bar-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .bar-container{background:rgba(0,0,0,.3);border-radius:999px;height:8px;width:100%;overflow:hidden}
-        .bar-fill{height:100%;border-radius:999px;transition:width .5s ease}
-        .runway-big{font-size:3rem;font-weight:800;letter-spacing:-.03em;line-height:1}
-        .runway-sub{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-top:1.25rem}
-        .runway-sub-item{text-align:center;padding:.75rem;background:rgba(0,0,0,.15);border-radius:12px;border:1px solid var(--glass-border)}
-        .runway-badge{display:inline-flex;align-items:center;gap:.4rem;padding:.3rem .8rem;border-radius:999px;font-size:.75rem;font-weight:700;letter-spacing:.04em}
-        .runway-badge.green{background:rgba(52,211,153,.15);color:#6ee7b7;border:1px solid rgba(52,211,153,.3)}
-        .runway-badge.amber{background:rgba(251,191,36,.15);color:#fde68a;border:1px solid rgba(251,191,36,.3)}
-        .runway-badge.red{background:rgba(248,113,113,.15);color:#fca5a5;border:1px solid rgba(248,113,113,.3)}
-        .runway-alert-banner{display:none;padding:.875rem 1.25rem;border-radius:14px;border:1px solid;margin-bottom:1rem;align-items:center;justify-content:space-between;gap:1rem}
-        .runway-alert-banner.red{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.4);color:#fca5a5}
-        .runway-alert-banner.amber{background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.35);color:#fde68a}
-        .runway-alert-banner.visible{display:flex}
-        .banner-close{background:none;border:none;color:inherit;cursor:pointer;font-size:1.1rem;opacity:.7;padding:0;line-height:1}
-        .banner-close:hover{opacity:1}
-        .toast-container{position:fixed;top:70px;right:1rem;z-index:999;display:flex;flex-direction:column;gap:.5rem}
-        .toast{background:rgba(20,20,41,.95);border:1px solid var(--glass-border);backdrop-filter:blur(20px);border-radius:12px;padding:.75rem 1.25rem;font-size:.875rem;min-width:260px;max-width:360px;box-shadow:0 4px 20px rgba(0,0,0,.4)}
-        .toast.error{border-color:rgba(248,113,113,.4)}.toast.success{border-color:rgba(52,211,153,.4)}
-        @keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-        .toast{animation:fadeUp .3s ease}
-        .donut-wrapper{display:flex;align-items:center;gap:1.5rem}
-        .donut-canvas-wrap{flex-shrink:0;width:180px;height:180px}
-        .donut-legend{flex:1;display:flex;flex-direction:column;gap:.5rem}
-        .legend-item{display:flex;align-items:center;gap:.6rem;cursor:pointer;padding:.3rem .5rem;border-radius:8px;transition:background .15s;font-size:.875rem}
-        .legend-item:hover{background:rgba(255,255,255,.05)}.legend-item.active{background:rgba(255,255,255,.08)}
-        .legend-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-        .legend-name{flex:1}.legend-cost{color:rgba(255,255,255,.6);font-size:.8rem}
-        .filter-badge{display:inline-flex;align-items:center;gap:.4rem;background:rgba(125,211,252,.12);border:1px solid rgba(125,211,252,.3);color:#7dd3fc;padding:.2rem .65rem;border-radius:999px;font-size:.75rem;font-weight:600}
-        .filter-badge-x{cursor:pointer;opacity:.7}.filter-badge-x:hover{opacity:1}
-        .hidden{display:none!important}
-        .trend-toggle{display:inline-flex;background:rgba(0,0,0,.25);border-radius:20px;padding:3px;border:1px solid var(--glass-border);gap:2px}
-        .trend-toggle button{background:none;border:none;color:rgba(255,255,255,.5);font-size:.8rem;font-weight:600;padding:.3rem .85rem;border-radius:16px;cursor:pointer;transition:all .2s}
-        .trend-toggle button.active{background:var(--glass-bg-hover);color:#fff}
-        .trend-chart-wrap{position:relative;height:180px;margin-top:1rem}
-        .date-filter{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
-        input[type="date"]{background:rgba(0,0,0,.2);border:1px solid var(--glass-border);color:#fff;padding:.4rem .75rem;border-radius:10px;font-family:inherit;font-size:.8rem;outline:none}
-        input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(1) opacity(.5)}
-        input[type="date"]:focus{border-color:var(--accent-cyan)}
-        .export-btn{font-size:.78rem;padding:.35rem .9rem}
-        .glass-input{background:rgba(0,0,0,.2);border:1px solid var(--glass-border);color:#fff;padding:.5rem 1rem;border-radius:var(--radius-button);width:100%;box-sizing:border-box}
-        .badge-pill{padding:.25rem .75rem;border-radius:999px;font-size:.75rem;font-weight:600;background:var(--glass-bg);border:1px solid var(--glass-border);display:inline-block}
-        @media(max-width:768px){.runway-sub{grid-template-columns:1fr 1fr}.donut-wrapper{flex-direction:column}.donut-canvas-wrap{width:150px;height:150px}.grid-2x2{grid-template-columns:1fr}}
+        body {
+            margin: 0;
+            background-color: var(--bg-primary);
+            color: #ffffff;
+            font-family: system-ui, -apple-system, sans-serif;
+            padding-bottom: 80px; /* For mobile tab bar */
+        }
+
+        /* Layout Utilities */
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem 1rem; }
+        .flex { display: flex; }
+        .flex-col { flex-direction: column; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
+        .justify-center { justify-content: center; }
+        .gap-1 { gap: 0.25rem; } .gap-2 { gap: 0.5rem; } .gap-3 { gap: 1rem; } .gap-4 { gap: 1.5rem; }
+        .mt-1 { margin-top: 0.25rem; } .mt-2 { margin-top: 0.5rem; } .mt-4 { margin-top: 1rem; }
+        .mb-2 { margin-bottom: 0.5rem; } .mb-4 { margin-bottom: 1rem; }
+        .p-2 { padding: 0.5rem; } .p-4 { padding: 1rem; }
+        .text-center { text-align: center; }
+        .text-right { text-align: right; }
+        .w-full { width: 100%; }
+        .relative { position: relative; }
+        
+        /* Typography */
+        .text-sm { font-size: 0.875rem; }
+        .text-lg { font-size: 1.125rem; }
+        .text-xl { font-size: 1.25rem; font-weight: 600; }
+        .text-2xl { font-size: 1.5rem; font-weight: 700; }
+        .text-3xl { font-size: 1.875rem; font-weight: 700; }
+        .text-muted { color: rgba(255, 255, 255, 0.72); }
+        .text-accent { color: #bae6fd; }
+        .text-success { color: #6ee7b7; }
+        .text-error { color: #fca5a5; }
+        .text-warning { color: #fde68a; }
+        .text-purple { color: #c4b5fd; }
+
+        /* Grids */
+        .grid { display: grid; }
+        .grid-2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; }
+        .grid-3 { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; }
+        .grid-2x2 { grid-template-columns: 1fr 1fr; gap: 1rem; }
+
+        .glass-input {
+            background: rgba(0,0,0,0.2);
+            border: 1px solid var(--glass-border);
+            color: #fff;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-button);
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            display: inline-block;
+        }
+
+        /* Progress Bar */
+        .progress-track {
+            background: rgba(0,0,0,0.3);
+            border-radius: 999px;
+            height: 12px;
+            width: 100%;
+            overflow: hidden;
+            border: 1px solid var(--glass-border);
+        }
+        .progress-fill {
+            height: 100%;
+            width: 0%;
+            transition: width 0.5s ease, background-color 0.5s ease;
+            border-radius: 999px;
+        }
+
+        /* Table */
+        .table-responsive { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--glass-border); }
+        th { color: #bae6fd; font-weight: 600; }
+        tbody tr:hover { background: var(--glass-bg-hover); }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.6); backdrop-filter: blur(5px);
+            z-index: 100; display: none; align-items: center; justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-content { max-width: 400px; width: 90%; }
+
+        /* Skeleton */
+        @keyframes shimmer {
+            0% { opacity: 0.3; } 50% { opacity: 0.7; } 100% { opacity: 0.3; }
+        }
+        .skeleton {
+            animation: shimmer 1.5s infinite;
+            background: var(--glass-bg-hover);
+            border-radius: 4px;
+            color: transparent !important;
+            min-height: 1.2em;
+            display: inline-block;
+        }
+
+        /* Stat Cards & Trends */
+        .stat-card {
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            min-height: 140px;
+        }
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        }
+        .trend-indicator {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.125rem 0.375rem;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.1);
+            display: none; /* shown via JS */
+            align-items: center;
+            gap: 4px;
+        }
+        .sparkline-wrapper {
+            height: 36px;
+            width: 100%;
+            max-width: 120px;
+            opacity: 0.8;
+            margin-top: 0.5rem;
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+        }
+
+        /* Bar Charts */
+        .bar-row {
+            display: grid;
+            grid-template-columns: 100px 1fr 70px;
+            gap: 0.75rem;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+        .bar-label {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .bar-container {
+            background: rgba(0,0,0,0.3);
+            border-radius: 999px;
+            height: 8px;
+            width: 100%;
+            overflow: hidden;
+        }
+        .bar-fill {
+            height: 100%;
+            border-radius: 999px;
+            transition: width 0.5s ease;
+        }
     </style>
 </head>
 <body>
 
-<div class="toast-container" id="toast-container"></div>
-
-<!-- Desktop Nav -->
-<nav class="glass-nav">
-    <div class="nav-logo">Krab AI</div>
-    <div class="nav-links">
-        <a href="/v4/" class="nav-link">Hub</a>
-        <a href="/v4/chat" class="nav-link">Chat</a>
-        <a href="/v4/costs" class="nav-link active">Costs</a>
-        <a href="/v4/inbox" class="nav-link">Inbox</a>
-        <a href="/v4/swarm" class="nav-link">Swarm</a>
-        <a href="/v4/translator" class="nav-link">Translator</a>
-        <a href="/v4/ops" class="nav-link">Ops</a>
-        <a href="/v4/settings" class="nav-link">Settings</a>
-        <a href="/v4/commands" class="nav-link">Commands</a>
-        <div class="nav-bell-wrapper">
-            <a href="/v4/inbox" class="nav-bell" title="Notifications">
-                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
-                </svg>
-                <span class="bell-count hidden" id="nav-bell-count">0</span>
-            </a>
-            <div class="bell-dropdown hidden" id="bell-dropdown"></div>
-        </div>
-    </div>
-    <div style="display:flex;align-items:center;gap:.75rem;">
-        <span class="status-dot ok" id="api-status" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent-green);"></span>
-        <span class="text-muted text-sm" id="nav-timer">↻ 30s</span>
-    </div>
-</nav>
-
-<main class="container">
-    <div class="flex justify-between items-center mb-4" style="flex-wrap:wrap;gap:1rem;">
-        <h1 class="text-3xl">Costs Dashboard</h1>
-        <div class="flex gap-2 items-center">
-            <button class="glass-button export-btn" id="btn-export-csv">Export CSV</button>
-            <button class="glass-button export-btn" id="btn-export-json">Export JSON</button>
-        </div>
-    </div>
-
-    <!-- Runway Alert Banner -->
-    <div class="runway-alert-banner" id="runway-banner">
-        <span id="runway-banner-text"></span>
-        <button class="banner-close" id="runway-banner-close" title="Закрыть">×</button>
-    </div>
-
-    <!-- Budget Card -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-2">
-            <h3 class="text-lg">Monthly Budget</h3>
-            <button class="glass-button" id="btn-open-modal">Set Budget</button>
-        </div>
-        <div id="budget-not-set" class="text-muted text-sm mb-2" style="display:none;">Бюджет не установлен — используется кредит провайдера</div>
-        <div class="progress-track mt-4">
-            <div class="progress-fill" id="budget-fill" style="width:0%;"></div>
-        </div>
-        <div class="flex justify-between mt-2 text-sm">
-            <div class="flex-col">
-                <span class="text-muted">Потрачено</span>
-                <span class="text-xl skeleton" id="budget-spent">$0.00</span>
-            </div>
-            <div class="flex-col text-right">
-                <span class="text-muted">Остаток (<span id="budget-limit" class="skeleton">--</span>)</span>
-                <span class="text-xl skeleton" id="budget-remaining">--</span>
+    <!-- Desktop Nav -->
+    <nav class="glass-nav">
+        <div class="nav-logo">Krab AI</div>
+        <div class="nav-links">
+            <a href="/v4/" class="nav-link">Hub</a>
+            <a href="/v4/chat" class="nav-link">Chat</a>
+            <a href="/costs" class="nav-link active">Costs</a>
+            <a href="/inbox" class="nav-link">Inbox</a>
+            <a href="/swarm" class="nav-link">Swarm</a>
+            <a href="/translator" class="nav-link">Translator</a>
+            <a href="/ops" class="nav-link">Ops</a>
+            <a href="/v4/research" class="nav-link">Research</a>
+            <a href="/settings" class="nav-link">Settings</a>
+            <a href="/commands" class="nav-link">Commands</a>
+            <div class="nav-bell-wrapper">
+                <a href="/inbox" class="nav-bell" title="Notifications">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                    </svg>
+                    <span class="bell-count hidden" id="nav-bell-count">0</span>
+                </a>
+                <div class="bell-dropdown hidden" id="bell-dropdown"></div>
             </div>
         </div>
-    </div>
+        <div class="badge text-muted" id="nav-timer">↻ 10s</div>
+    </nav>
 
-    <!-- Stats Row -->
-    <div class="grid-3 mb-4">
-        <div class="glass-card stat-card">
-            <div class="flex justify-between items-center w-full mb-1">
-                <span class="text-muted text-sm">Total Cost</span>
-                <span id="trend-cost" class="trend-indicator"></span>
-            </div>
-            <div class="text-3xl text-success skeleton my-2" id="total-cost" data-val="0">$0.00</div>
-            <div id="sparkline-cost" class="sparkline-wrapper"></div>
-        </div>
-        <div class="glass-card stat-card">
-            <div class="flex justify-between items-center w-full mb-1">
-                <span class="text-muted text-sm">Total Calls</span>
-                <span id="trend-calls" class="trend-indicator"></span>
-            </div>
-            <div class="text-3xl text-accent skeleton my-2" id="total-calls" data-val="0">0</div>
-            <div id="sparkline-calls" class="sparkline-wrapper"></div>
-        </div>
-        <div class="glass-card stat-card">
-            <div class="flex justify-between items-center w-full mb-1">
-                <span class="text-muted text-sm">Total Tokens</span>
-                <span id="trend-tokens" class="trend-indicator"></span>
-            </div>
-            <div class="text-3xl text-purple skeleton my-2" id="total-tokens" data-val="0">0</div>
-            <div id="sparkline-tokens" class="sparkline-wrapper"></div>
-        </div>
-    </div>
-
-    <!-- Runway Card -->
-    <div class="glass-card mb-4">
+    <!-- Main Content -->
+    <main class="container">
         <div class="flex justify-between items-center mb-4">
-            <h3 class="text-lg text-accent">Runway Estimate</h3>
-            <span id="runway-badge" class="runway-badge green">OK</span>
+            <h1 class="text-3xl">Costs Dashboard</h1>
+            <span class="status-dot ok" id="api-status" style="display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--accent-green);"></span>
         </div>
-        <div class="flex items-center gap-4" style="flex-wrap:wrap;">
-            <div>
-                <div class="runway-big skeleton" id="runway-days" data-val="0">--</div>
-                <div class="text-muted text-sm mt-2" id="runway-label">days remaining</div>
-            </div>
-        </div>
-        <div class="runway-sub">
-            <div class="runway-sub-item">
-                <div class="text-muted text-xs mb-1">Daily Burn</div>
-                <div class="text-xl skeleton" id="runway-burn">--</div>
-            </div>
-            <div class="runway-sub-item">
-                <div class="text-muted text-xs mb-1">Credits</div>
-                <div class="text-xl skeleton" id="runway-credits">--</div>
-            </div>
-            <div class="runway-sub-item">
-                <div class="text-muted text-xs mb-1">Safe calls/day</div>
-                <div class="text-xl skeleton" id="runway-safe-calls">--</div>
-            </div>
-        </div>
-    </div>
 
-    <!-- Provider + FinOps -->
-    <div class="grid-2 mb-4">
-        <!-- Donut Provider -->
-        <div class="glass-card">
-            <div class="flex justify-between items-center mb-4" style="flex-wrap:wrap;gap:.5rem;">
-                <h3 class="text-lg text-accent">Provider Breakdown</h3>
-                <span id="provider-filter-badge" class="filter-badge hidden">
-                    Showing: <span id="provider-filter-name"></span>
-                    <span class="filter-badge-x" id="clear-provider-filter">×</span>
-                </span>
+        <!-- Budget Section -->
+        <div class="glass-card mb-4">
+            <div class="flex justify-between items-center mb-2">
+                <h3 class="text-lg">Monthly Budget</h3>
+                <button class="glass-button" onclick="openModal()">Set Budget</button>
             </div>
-            <div class="donut-wrapper">
-                <div class="donut-canvas-wrap">
-                    <canvas id="donut-chart"></canvas>
+            <div class="progress-track mt-4">
+                <div class="progress-fill" id="budget-fill" style="width: 0%;"></div>
+            </div>
+            <div class="flex justify-between mt-2 text-sm">
+                <div class="flex-col">
+                    <span class="text-muted">Spent</span>
+                    <span class="text-xl skeleton" id="budget-spent">$0.00</span>
                 </div>
-                <div class="donut-legend" id="donut-legend">
-                    <div class="skeleton" style="height:1em;width:80%;margin-bottom:.5rem;"></div>
-                    <div class="skeleton" style="height:1em;width:60%;margin-bottom:.5rem;"></div>
-                    <div class="skeleton" style="height:1em;width:70%;"></div>
+                <div class="flex-col text-right">
+                    <span class="text-muted">Remaining (<span id="budget-limit" class="skeleton">$0</span>)</span>
+                    <span class="text-xl skeleton" id="budget-remaining">$0.00</span>
                 </div>
             </div>
         </div>
 
-        <!-- FinOps + By Channel -->
-        <div class="flex-col gap-3" style="display:flex;">
-            <div class="glass-card flex-1">
-                <h3 class="text-lg mb-3 text-accent">FinOps</h3>
-                <div class="grid grid-2x2">
-                    <div class="glass-card text-center" style="padding:.75rem;">
-                        <div class="text-muted text-xs mb-1">Tool Calls</div>
+        <!-- Summary Cards -->
+        <div class="grid-3 mb-4">
+            <div class="glass-card stat-card">
+                <div class="flex justify-between items-center w-full mb-1">
+                    <span class="text-muted text-sm">Total Cost</span>
+                    <span id="trend-cost" class="trend-indicator"></span>
+                </div>
+                <div class="text-3xl text-success skeleton my-2" id="total-cost" data-val="0">$0.00</div>
+                <div id="sparkline-cost" class="sparkline-wrapper"></div>
+            </div>
+            <div class="glass-card stat-card">
+                <div class="flex justify-between items-center w-full mb-1">
+                    <span class="text-muted text-sm">Total Calls</span>
+                    <span id="trend-calls" class="trend-indicator"></span>
+                </div>
+                <div class="text-3xl text-accent skeleton my-2" id="total-calls" data-val="0">0</div>
+                <div id="sparkline-calls" class="sparkline-wrapper"></div>
+            </div>
+            <div class="glass-card stat-card">
+                <div class="flex justify-between items-center w-full mb-1">
+                    <span class="text-muted text-sm">Total Tokens</span>
+                    <span id="trend-tokens" class="trend-indicator"></span>
+                </div>
+                <div class="text-3xl text-purple skeleton my-2" id="total-tokens" data-val="0">0</div>
+                <div id="sparkline-tokens" class="sparkline-wrapper"></div>
+            </div>
+        </div>
+
+        <!-- FinOps & Efficiency Grid -->
+        <div class="grid-2 mb-4">
+            <div class="glass-card">
+                <h3 class="text-lg mb-4 text-accent">FinOps Breakdown</h3>
+                <div class="grid grid-2x2 gap-3">
+                    <div class="glass-card p-4 text-center">
+                        <div class="text-muted text-sm mb-1">Tool Calls</div>
                         <div class="text-xl skeleton" id="tool-calls">0</div>
                     </div>
-                    <div class="glass-card text-center" style="padding:.75rem;">
-                        <div class="text-muted text-xs mb-1">Fallbacks</div>
+                    <div class="glass-card p-4 text-center">
+                        <div class="text-muted text-sm mb-1">Fallbacks</div>
                         <div class="text-xl text-warning skeleton" id="fallbacks">0</div>
                     </div>
-                    <div class="glass-card text-center" style="padding:.75rem;">
-                        <div class="text-muted text-xs mb-1">Avg Context</div>
+                    <div class="glass-card p-4 text-center">
+                        <div class="text-muted text-sm mb-1">Context Tokens</div>
+                        <div class="text-xl skeleton" id="context-tokens">0</div>
+                    </div>
+                    <div class="glass-card p-4 text-center">
+                        <div class="text-muted text-sm mb-1">Avg Context</div>
                         <div class="text-xl skeleton" id="avg-context">0</div>
                     </div>
-                    <div class="glass-card text-center" style="padding:.75rem;">
-                        <div class="text-muted text-xs mb-1">Cost/Request</div>
-                        <div class="text-xl skeleton" id="cost-per-req">--</div>
+                </div>
+            </div>
+
+            <div class="flex-col gap-4">
+                <div class="glass-card flex-1">
+                    <h3 class="text-lg mb-2 text-accent">Cost Efficiency</h3>
+                    <div class="flex justify-between items-center mt-4 border-b pb-2" style="border-color: var(--glass-border);">
+                        <span class="text-muted">Cost per Request</span>
+                        <span class="text-xl skeleton" id="cost-per-req">$0.0000</span>
+                    </div>
+                    <div class="flex justify-between items-center mt-4">
+                        <span class="text-muted">Tokens per $1</span>
+                        <span class="text-xl skeleton" id="tokens-per-dollar">0</span>
+                    </div>
+                </div>
+                
+                <div class="glass-card flex-1">
+                    <h3 class="text-lg mb-4 text-accent">By Channel</h3>
+                    <div id="channels-container">
+                        <div class="bar-row"><div class="skeleton" style="height:1em; width:100%; grid-column: 1 / -1;"></div></div>
+                        <div class="bar-row"><div class="skeleton" style="height:1em; width:100%; grid-column: 1 / -1;"></div></div>
+                        <div class="bar-row"><div class="skeleton" style="height:1em; width:100%; grid-column: 1 / -1;"></div></div>
                     </div>
                 </div>
             </div>
-            <div class="glass-card flex-1">
-                <h3 class="text-lg mb-3 text-accent">By Channel</h3>
-                <div id="channels-container">
-                    <div class="bar-row"><div class="skeleton" style="height:1em;width:100%;grid-column:1/-1;"></div></div>
-                    <div class="bar-row"><div class="skeleton" style="height:1em;width:80%;grid-column:1/-1;"></div></div>
+        </div>
+
+        <!-- By Model Table -->
+        <div class="glass-card mb-4">
+            <h3 class="text-lg mb-4 text-accent">Usage by Model</h3>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Model</th>
+                            <th class="text-right">Cost (USD)</th>
+                            <th class="text-right">Calls</th>
+                            <th class="text-right">Tokens</th>
+                            <th class="text-right">Avg Cost/Call</th>
+                        </tr>
+                    </thead>
+                    <tbody id="model-tbody">
+                        <tr>
+                            <td class="skeleton">gpt-4-turbo</td>
+                            <td class="skeleton text-right">$0.00</td>
+                            <td class="skeleton text-right">0</td>
+                            <td class="skeleton text-right">0</td>
+                            <td class="skeleton text-right">$0.00</td>
+                        </tr>
+                        <tr>
+                            <td class="skeleton">claude-3-opus</td>
+                            <td class="skeleton text-right">$0.00</td>
+                            <td class="skeleton text-right">0</td>
+                            <td class="skeleton text-right">0</td>
+                            <td class="skeleton text-right">$0.00</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="flex justify-between items-center text-muted text-sm mt-4">
+            <div id="last-updated">Last updated: --:--:--</div>
+            <div id="footer-timer">Next refresh in 10s</div>
+        </div>
+    </main>
+
+    <!-- Mobile Tab Bar -->
+    <div class="glass-tab-bar">
+        <a href="/v4/" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            Hub
+        </a>
+        <a href="/v4/chat" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Chat
+        </a>
+        <a href="/costs" class="tab-item active">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            Costs
+        </a>
+        <a href="/inbox" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+            Inbox
+        </a>
+        <a href="/swarm" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Swarm
+        </a>
+        <a href="/translator" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>
+            Trans
+        </a>
+    </div>
+
+    <!-- Set Budget Modal -->
+    <div class="modal-overlay" id="budget-modal">
+        <div class="glass-card modal-content">
+            <h3 class="text-xl mb-4 text-accent">Set Monthly Budget</h3>
+            <form id="budget-form" onsubmit="submitBudget(event)">
+                <div class="mb-4">
+                    <label class="text-muted text-sm block mb-2">Monthly Limit (USD)</label>
+                    <input type="number" step="0.01" min="0" id="budget-input" class="glass-input" required placeholder="e.g. 50.00">
                 </div>
-            </div>
+                <div class="flex justify-between gap-2 mt-4">
+                    <button type="button" class="glass-button flex-1" onclick="closeModal()">Cancel</button>
+                    <button type="submit" class="glass-button glass-button-primary flex-1">Save</button>
+                </div>
+            </form>
         </div>
     </div>
 
-    <!-- Model Table -->
-    <div class="glass-card mb-4">
-        <h3 class="text-lg mb-4 text-accent">Usage by Model</h3>
-        <div class="table-responsive">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Model</th>
-                        <th class="text-right">Cost (USD)</th>
-                        <th class="text-right">Calls</th>
-                        <th class="text-right">Tokens</th>
-                        <th class="text-right">Avg Cost/Call</th>
-                    </tr>
-                </thead>
-                <tbody id="model-tbody">
-                    <tr>
-                        <td class="skeleton">loading...</td>
-                        <td class="skeleton text-right">$0.00</td>
-                        <td class="skeleton text-right">0</td>
-                        <td class="skeleton text-right">0</td>
-                        <td class="skeleton text-right">--</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
+    <script>
+        // State
+        let timer = 10;
+        let isFirstLoad = true;
+        let refreshInterval;
 
-    <!-- Trend Chart -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-2" style="flex-wrap:wrap;gap:.5rem;">
-            <h3 class="text-lg text-accent">Trend</h3>
-            <div class="trend-toggle" id="trend-toggle">
-                <button class="active" data-metric="cost">Cost</button>
-                <button data-metric="calls">Calls</button>
-                <button data-metric="tokens">Tokens</button>
-            </div>
-        </div>
-        <div class="trend-chart-wrap">
-            <canvas id="trend-chart"></canvas>
-        </div>
-    </div>
-
-    <!-- History Table -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-3" style="flex-wrap:wrap;gap:.75rem;">
-            <h3 class="text-lg text-accent">History</h3>
-            <div class="date-filter">
-                <label class="text-muted text-xs">From</label>
-                <input type="date" id="date-from">
-                <label class="text-muted text-xs">To</label>
-                <input type="date" id="date-to">
-                <button class="glass-button export-btn" id="btn-reset-date">Reset</button>
-            </div>
-        </div>
-        <div class="table-responsive">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Timestamp</th>
-                        <th>Model</th>
-                        <th>Channel</th>
-                        <th class="text-right">Cost</th>
-                        <th class="text-right">Tokens</th>
-                        <th>Fallback</th>
-                    </tr>
-                </thead>
-                <tbody id="history-tbody">
-                    <tr><td colspan="6" class="text-center text-muted">Загрузка...</td></tr>
-                </tbody>
-            </table>
-        </div>
-        <div id="hist-pagination" class="flex justify-between items-center mt-3 text-sm text-muted">
-            <span id="history-info"></span>
-            <div class="flex gap-2">
-                <button class="glass-button export-btn" id="hist-prev">Prev</button>
-                <button class="glass-button export-btn" id="hist-next">Next</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Footer -->
-    <div class="flex justify-between items-center text-muted text-sm mt-4">
-        <div id="last-updated">Last updated: --:--:--</div>
-        <div id="footer-timer">Next refresh in 30s</div>
-    </div>
-</main>
-
-<!-- Mobile Tab Bar -->
-<div class="glass-tab-bar">
-    <a href="/v4/" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Hub</a>
-    <a href="/v4/chat" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Chat</a>
-    <a href="/v4/costs" class="tab-item active"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Costs</a>
-    <a href="/v4/inbox" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>Inbox</a>
-    <a href="/v4/swarm" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Swarm</a>
-    <a href="/v4/translator" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>Trans</a>
-</div>
-
-<!-- Budget Modal -->
-<div class="modal-overlay" id="budget-modal">
-    <div class="glass-card modal-content">
-        <h3 class="text-xl mb-4 text-accent">Set Monthly Budget</h3>
-        <form id="budget-form">
-            <div class="mb-4">
-                <label class="text-muted text-sm block mb-2">Monthly Limit (USD)</label>
-                <input type="number" step="0.01" min="0" id="budget-input" class="glass-input" required placeholder="e.g. 50.00">
-            </div>
-            <div class="flex justify-between gap-2 mt-4">
-                <button type="button" class="glass-button flex-1" id="btn-close-modal">Cancel</button>
-                <button type="submit" class="glass-button glass-button-primary flex-1">Save</button>
-            </div>
-        </form>
-    </div>
-</div>
-
-<script>
-// ── Mock данные (из brief) ──────────────────────────────────────────────────
-const MOCK_REPORT = {
-    total_cost_usd:42.15, total_calls:1254,
-    input_tokens:850000, output_tokens:210000,
-    total_tool_calls:342, total_fallbacks:12,
-    total_context_tokens:1060000, avg_context_tokens:845,
-    by_model:{
-        "gpt-4o":{cost_usd:28.50,calls:800,input_tokens:400000,output_tokens:200000},
-        "claude-3-5-sonnet":{cost_usd:12.20,calls:350,input_tokens:300000,output_tokens:100000},
-        "llama-3-70b":{cost_usd:1.45,calls:104,input_tokens:50000,output_tokens:10000}
-    },
-    by_channel:{"telegram":850,"translator":200,"swarm":154,"api":50}
-};
-const MOCK_BUDGET = {monthly_limit_usd:50.0,spent_usd:42.15,remaining_usd:7.85,budget_ok:true,used_pct:84.3};
-const MOCK_RUNWAY = {credits_usd:300.0,daily_burn_usd:1.40,runway_days:192,safe_calls_per_day:754,spendable_budget_usd:270.0};
-const MOCK_HISTORY_RAW = [
-    {model_id:"gpt-4o",cost_usd:5.5,calls:150,input_tokens:60000,output_tokens:15000,channel:"telegram",is_fallback:false,date:"2026-04-13"},
-    {model_id:"claude-3-5-sonnet",cost_usd:6.2,calls:180,input_tokens:70000,output_tokens:18000,channel:"translator",is_fallback:false,date:"2026-04-14"},
-    {model_id:"gpt-4o",cost_usd:4.8,calls:140,input_tokens:55000,output_tokens:14000,channel:"swarm",is_fallback:true,date:"2026-04-15"},
-    {model_id:"llama-3-70b",cost_usd:7.1,calls:210,input_tokens:80000,output_tokens:22000,channel:"telegram",is_fallback:false,date:"2026-04-16"},
-    {model_id:"gpt-4o",cost_usd:6.5,calls:190,input_tokens:65000,output_tokens:17000,channel:"api",is_fallback:false,date:"2026-04-17"},
-    {model_id:"claude-3-5-sonnet",cost_usd:8.4,calls:240,input_tokens:90000,output_tokens:25000,channel:"telegram",is_fallback:false,date:"2026-04-18"},
-    {model_id:"gpt-4o",cost_usd:3.7,calls:144,input_tokens:50000,output_tokens:12000,channel:"swarm",is_fallback:false,date:"2026-04-19"}
-];
-
-// ── Состояние ──────────────────────────────────────────────────────────────
-let timer = 30;
-let isFirstLoad = true;
-let activeProviderFilter = null;
-let trendMetric = 'cost';
-let historyAll = [];
-let historyFiltered = [];
-let currentHistPage = 0;
-const HIST_PAGE_SIZE = 20;
-let donutChart = null;
-let trendChartInst = null;
-let rawReport = null;
-let rawRunway = null;
-let rawHistory = [];
-
-// ── Форматтеры ─────────────────────────────────────────────────────────────
-const fmtUSD = n => new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2}).format(n||0);
-const fmtNum = n => new Intl.NumberFormat('en-US').format(Math.round(n||0));
-function fmtUSD6(n) {
-    if (n === null || n === undefined) return '--';
-    if (n >= 1) return fmtUSD(n);
-    if (n >= 0.001) return '$' + n.toFixed(4);
-    return '$' + n.toFixed(6);
-}
-
-// ── Toast ──────────────────────────────────────────────────────────────────
-function showToast(msg, type) {
-    const tc = document.getElementById('toast-container');
-    const t = document.createElement('div');
-    t.className = 'toast ' + (type||'');
-    t.textContent = msg;
-    tc.appendChild(t);
-    setTimeout(function() {
-        t.style.opacity = '0';
-        t.style.transition = 'opacity 0.4s';
-        setTimeout(function() { t.remove(); }, 400);
-    }, 4000);
-}
-
-// ── DOM Helpers ────────────────────────────────────────────────────────────
-function setText(id, val) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.remove('skeleton');
-    el.textContent = val;
-}
-
-function animateValue(el, start, end, duration, formatter) {
-    let t0 = null;
-    const step = function(ts) {
-        if (!t0) t0 = ts;
-        const p = Math.min((ts - t0) / duration, 1);
-        const ease = 1 - Math.pow(1 - p, 4);
-        el.textContent = formatter(start + ease * (end - start));
-        if (p < 1) requestAnimationFrame(step);
-        else { el.textContent = formatter(end); el.dataset.val = end; }
-    };
-    requestAnimationFrame(step);
-}
-
-function updateEl(id, value, formatter, animate) {
-    if (!formatter) formatter = fmtNum;
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.remove('skeleton');
-    if (animate && isFirstLoad) {
-        animateValue(el, parseFloat(el.dataset.val||0), value, 1200, formatter);
-    } else {
-        el.textContent = formatter(value);
-        el.dataset.val = value;
-    }
-}
-
-// ── Sparklines ─────────────────────────────────────────────────────────────
-function createSparkline(data, color) {
-    if (!data || data.length < 2) return null;
-    const max = Math.max.apply(null, data);
-    const min = Math.min.apply(null, data);
-    const range = max - min || 1;
-    const W = 120, H = 36;
-    const pts = data.map(function(v, i) {
-        return ((i / (data.length - 1)) * W) + ',' + (H - ((v - min) / range) * H);
-    }).join(' ');
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('width', '100%'); svg.setAttribute('height', '100%');
-    svg.setAttribute('viewBox', '0 -2 ' + W + ' ' + (H + 4));
-    svg.setAttribute('preserveAspectRatio', 'none');
-    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-    poly.setAttribute('fill', 'none'); poly.setAttribute('stroke', color);
-    poly.setAttribute('stroke-width', '2'); poly.setAttribute('stroke-linecap', 'round');
-    poly.setAttribute('points', pts);
-    svg.appendChild(poly);
-    return svg;
-}
-
-function renderSparkline(id, data, color) {
-    const c = document.getElementById(id);
-    if (!c) return;
-    while (c.firstChild) c.removeChild(c.firstChild);
-    const s = createSparkline(data, color);
-    if (s) c.appendChild(s);
-}
-
-function updateTrend(id, data, isCost) {
-    const el = document.getElementById(id);
-    if (!el || !data || data.length < 2) { if(el) el.style.display='none'; return; }
-    const cur = data[data.length-1], prev = data[data.length-2];
-    if (!prev) { el.style.display='none'; return; }
-    const pct = ((cur - prev) / prev) * 100;
-    el.style.display = 'inline-flex';
-    el.textContent = (pct > 0 ? '\u2191 ' : '\u2193 ') + Math.abs(pct).toFixed(1) + '%';
-    el.style.color = pct > 0 ? (isCost ? '#fca5a5' : '#6ee7b7') : (isCost ? '#6ee7b7' : '#fca5a5');
-}
-
-// ── Bar Chart ──────────────────────────────────────────────────────────────
-function renderBarChart(containerId, dataObj) {
-    const c = document.getElementById(containerId);
-    if (!c || !dataObj) return;
-    while (c.firstChild) c.removeChild(c.firstChild);
-    const entries = Object.entries(dataObj).sort(function(a,b){return b[1]-a[1];}).slice(0, 8);
-    if (!entries.length) {
-        const empty = document.createElement('div');
-        empty.style.cssText = 'text-align:center;color:var(--text-muted);padding:2rem;';
-        empty.textContent = 'Нет данных по каналам';
-        c.appendChild(empty);
-        return;
-    }
-    const maxVal = entries[0][1] || 1;
-    const palette = ['#bae6fd','#c4b5fd','#6ee7b7','#fde68a','#fca5a5'];
-    entries.forEach(function(entry, i) {
-        const key = entry[0], val = entry[1];
-        const color = palette[i % palette.length];
-        const row = document.createElement('div'); row.className = 'bar-row';
-        const label = document.createElement('span'); label.className = 'bar-label text-sm text-muted';
-        label.textContent = key; label.title = key;
-        const bc = document.createElement('div'); bc.className = 'bar-container';
-        const bf = document.createElement('div'); bf.className = 'bar-fill';
-        bf.style.width = ((val / maxVal) * 100) + '%'; bf.style.backgroundColor = color;
-        bc.appendChild(bf);
-        const vs = document.createElement('span'); vs.className = 'text-sm text-right';
-        vs.textContent = Number.isInteger(val) ? fmtNum(val) : fmtUSD(val);
-        row.appendChild(label); row.appendChild(bc); row.appendChild(vs);
-        c.appendChild(row);
-    });
-}
-
-// ── Donut Provider ─────────────────────────────────────────────────────────
-function providerColor(name) {
-    const n = (name||'').toLowerCase();
-    if (n.includes('gpt') || n.includes('openai') || n.includes('codex')) return '#7dd3fc';
-    if (n.includes('claude') || n.includes('anthropic') || n.includes('sonnet') || n.includes('opus')) return '#a78bfa';
-    if (n.includes('llama') || n.includes('local') || n.includes('mistral') || n.includes('lm-studio')) return '#34d399';
-    if (n.includes('gemini') || n.includes('google')) return '#fbbf24';
-    return '#fb923c';
-}
-
-function renderDonut(byModel) {
-    if (!byModel || !Object.keys(byModel).length) {
-        // empty state — скрыть canvas+legend, показать заглушку
-        const wrapper = document.querySelector('.donut-wrapper');
-        if (wrapper) {
-            while (wrapper.firstChild) wrapper.removeChild(wrapper.firstChild);
-            const empty = document.createElement('div');
-            empty.style.cssText = 'text-align:center;color:var(--text-muted);padding:2rem;width:100%;';
-            empty.textContent = '\uD83D\uDCCA Нет данных — сделай первый AI-запрос в Telegram';
-            wrapper.appendChild(empty);
-        }
-        return;
-    }
-    const labels = Object.keys(byModel);
-    const costs = labels.map(function(k){return byModel[k].cost_usd||0;});
-    const colors = labels.map(function(k){return providerColor(k);});
-    const ctx = document.getElementById('donut-chart');
-    if (!ctx) return;
-    if (donutChart) { donutChart.destroy(); donutChart = null; }
-    donutChart = new Chart(ctx, {
-        type: 'doughnut',
-        data: {
-            labels: labels,
-            datasets: [{data:costs, backgroundColor:colors, borderColor:'rgba(0,0,0,0.3)', borderWidth:2, hoverOffset:6}]
-        },
-        options: {
-            responsive:true, maintainAspectRatio:false, cutout:'68%',
-            plugins: {
-                legend:{display:false},
-                tooltip:{callbacks:{label:function(c){return ' ' + c.label + ': ' + fmtUSD(c.parsed);}}}
-            }
-        }
-    });
-    // Легенда через createElement
-    const legendEl = document.getElementById('donut-legend');
-    while (legendEl.firstChild) legendEl.removeChild(legendEl.firstChild);
-    labels.forEach(function(name, i) {
-        const item = document.createElement('div');
-        item.className = 'legend-item' + (activeProviderFilter === name ? ' active' : '');
-        item.dataset.provider = name;
-        item.addEventListener('click', function() { toggleProviderFilter(name); });
-        const dot = document.createElement('span'); dot.className = 'legend-dot'; dot.style.background = colors[i];
-        const nm = document.createElement('span'); nm.className = 'legend-name text-sm'; nm.textContent = name;
-        const cost = document.createElement('span'); cost.className = 'legend-cost'; cost.textContent = fmtUSD(costs[i]);
-        item.appendChild(dot); item.appendChild(nm); item.appendChild(cost);
-        legendEl.appendChild(item);
-    });
-}
-
-// ── Provider Filter ────────────────────────────────────────────────────────
-function toggleProviderFilter(name) {
-    activeProviderFilter = (activeProviderFilter === name) ? null : name;
-    updateProviderFilterBadge();
-    renderHistoryTable();
-    document.querySelectorAll('.legend-item').forEach(function(el) {
-        el.classList.toggle('active', el.dataset.provider === activeProviderFilter);
-    });
-}
-
-function clearProviderFilter() {
-    activeProviderFilter = null;
-    updateProviderFilterBadge();
-    renderHistoryTable();
-    document.querySelectorAll('.legend-item').forEach(function(el) { el.classList.remove('active'); });
-}
-
-function updateProviderFilterBadge() {
-    const badge = document.getElementById('provider-filter-badge');
-    const nameEl = document.getElementById('provider-filter-name');
-    if (activeProviderFilter) {
-        badge.classList.remove('hidden');
-        nameEl.textContent = activeProviderFilter;
-    } else {
-        badge.classList.add('hidden');
-        nameEl.textContent = '';
-    }
-}
-
-// ── Trend Chart ────────────────────────────────────────────────────────────
-function groupByDate(histArr) {
-    const byDate = {};
-    histArr.forEach(function(row) {
-        let ts;
-        if (row.timestamp) ts = new Date(row.timestamp * 1000);
-        else ts = new Date(row.date || 0);
-        const date = ts.toISOString().slice(0, 10);
-        if (!byDate[date]) byDate[date] = {cost_usd:0, calls:0, tokens:0};
-        byDate[date].cost_usd += row.cost_usd || 0;
-        byDate[date].calls += row.calls || 1;
-        byDate[date].tokens += (row.input_tokens||0) + (row.output_tokens||0) + (row.tokens||0);
-    });
-    return Object.entries(byDate).sort(function(a,b){return a[0]<b[0]?-1:1;});
-}
-
-const TREND_COLORS = {cost:'#6ee7b7', calls:'#7dd3fc', tokens:'#a78bfa'};
-const TREND_LABELS = {cost:'Cost (USD)', calls:'Calls', tokens:'Tokens'};
-
-function renderTrendChart(historyArr) {
-    const source = (historyArr && historyArr.length) ? historyArr : MOCK_HISTORY_RAW;
-    const grouped = groupByDate(source);
-    const labels = grouped.map(function(e){return e[0];});
-    const values = grouped.map(function(e) {
-        if (trendMetric === 'cost') return e[1].cost_usd;
-        if (trendMetric === 'calls') return e[1].calls;
-        return e[1].tokens;
-    });
-    const ctx = document.getElementById('trend-chart');
-    if (!ctx) return;
-    if (trendChartInst) { trendChartInst.destroy(); trendChartInst = null; }
-    const col = TREND_COLORS[trendMetric];
-    trendChartInst = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: labels,
-            datasets: [{
-                label: TREND_LABELS[trendMetric], data: values,
-                borderColor: col, backgroundColor: col + '20',
-                borderWidth: 2, fill: true, tension: 0.4,
-                pointRadius: 3, pointBackgroundColor: col
-            }]
-        },
-        options: {
-            responsive:true, maintainAspectRatio:false,
-            plugins: {
-                legend:{display:false},
-                tooltip:{callbacks:{label:function(c){
-                    const v = c.parsed.y;
-                    return trendMetric === 'cost' ? ' ' + fmtUSD(v) : ' ' + fmtNum(v);
-                }}}
+        // Mock Data Fallbacks
+        const mockReport = {
+            total_cost_usd: 42.15,
+            total_calls: 1254,
+            input_tokens: 850000,
+            output_tokens: 210000,
+            total_tool_calls: 342,
+            total_fallbacks: 12,
+            total_context_tokens: 1060000,
+            avg_context_tokens: 845,
+            by_model: {
+                "gpt-4o": { cost_usd: 28.50, calls: 800, tokens: 600000 },
+                "claude-3-5-sonnet": { cost_usd: 12.20, calls: 350, tokens: 400000 },
+                "llama-3-70b": { cost_usd: 1.45, calls: 104, tokens: 60000 }
             },
-            scales: {
-                x:{grid:{color:'rgba(255,255,255,0.05)'}, ticks:{color:'rgba(255,255,255,0.5)',maxTicksLimit:7,font:{size:11}}},
-                y:{grid:{color:'rgba(255,255,255,0.05)'}, ticks:{color:'rgba(255,255,255,0.5)',font:{size:11},callback:function(v){return trendMetric==='cost'?'$'+v.toFixed(2):fmtNum(v);}}}
+            by_channel: {
+                "telegram": 850,
+                "translator": 200,
+                "swarm": 154,
+                "api": 50
+            },
+            history: [
+                { date: '2023-10-01', cost_usd: 5.5, calls: 150, tokens: 75000 },
+                { date: '2023-10-02', cost_usd: 6.2, calls: 180, tokens: 82000 },
+                { date: '2023-10-03', cost_usd: 4.8, calls: 140, tokens: 65000 },
+                { date: '2023-10-04', cost_usd: 7.1, calls: 210, tokens: 95000 },
+                { date: '2023-10-05', cost_usd: 6.5, calls: 190, tokens: 88000 },
+                { date: '2023-10-06', cost_usd: 8.4, calls: 240, tokens: 110000 },
+                { date: '2023-10-07', cost_usd: 7.9, calls: 220, tokens: 105000 }
+            ]
+        };
+
+        const mockBudget = {
+            monthly_limit_usd: 50.00,
+            spent_usd: 42.15,
+            remaining_usd: 7.85,
+            budget_ok: true,
+            used_pct: 84.3
+        };
+
+        // Formatters
+        const fmtUSD = (num) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(num || 0);
+        const fmtNum = (num) => new Intl.NumberFormat('en-US').format(num || 0);
+        const fmtUSD4 = (num) => '$' + (num || 0).toFixed(4);
+
+        // Animation for numbers
+        function animateValue(obj, start, end, duration, formatter) {
+            let startTimestamp = null;
+            const step = (timestamp) => {
+                if (!startTimestamp) startTimestamp = timestamp;
+                const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+                const easeProgress = 1 - Math.pow(1 - progress, 4);
+                const currentVal = start + easeProgress * (end - start);
+                obj.textContent = formatter(currentVal);
+                if (progress < 1) {
+                    window.requestAnimationFrame(step);
+                } else {
+                    obj.textContent = formatter(end);
+                    obj.dataset.val = end;
+                }
+            };
+            window.requestAnimationFrame(step);
+        }
+
+        function updateElement(id, value, formatter = fmtNum, animate = false) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.remove('skeleton');
+            if (animate && isFirstLoad) {
+                const start = parseFloat(el.dataset.val || 0);
+                animateValue(el, start, value, 1500, formatter);
+            } else {
+                el.textContent = formatter(value);
+                el.dataset.val = value;
             }
         }
-    });
-}
 
-// ── History Table ──────────────────────────────────────────────────────────
-function getFilteredHistory() {
-    let rows = historyFiltered;
-    if (activeProviderFilter) {
-        const filter = activeProviderFilter.toLowerCase();
-        rows = rows.filter(function(r) {
-            const mid = (r.model_id||'').toLowerCase();
-            return mid.includes(filter) || providerColor(r.model_id||'') === providerColor(activeProviderFilter);
+        // Sparkline & Trend Generators
+        function createSparkline(data, color) {
+            if (!data || data.length < 2) return null;
+            const max = Math.max(...data);
+            const min = Math.min(...data);
+            const range = max - min || 1;
+            const width = 120;
+            const height = 36;
+            
+            const points = data.map((val, i) => {
+                const x = (i / (data.length - 1)) * width;
+                const y = height - ((val - min) / range) * height;
+                return `${x},${y}`;
+            }).join(' ');
+
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('width', '100%');
+            svg.setAttribute('height', '100%');
+            svg.setAttribute('viewBox', `0 -2 ${width} ${height + 4}`);
+            svg.setAttribute('preserveAspectRatio', 'none');
+            svg.style.overflow = 'visible';
+
+            const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+            polyline.setAttribute('fill', 'none');
+            polyline.setAttribute('stroke', color);
+            polyline.setAttribute('stroke-width', '2');
+            polyline.setAttribute('stroke-linecap', 'round');
+            polyline.setAttribute('stroke-linejoin', 'round');
+            polyline.setAttribute('points', points);
+
+            svg.appendChild(polyline);
+            return svg;
+        }
+
+        function renderSparkline(containerId, data, color) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            container.innerHTML = ''; 
+            const svg = createSparkline(data, color);
+            if (svg) container.appendChild(svg);
+        }
+
+        function updateTrend(elementId, data, isCost = false) {
+            const el = document.getElementById(elementId);
+            if (!el) return;
+            if (!data || data.length < 2) {
+                el.style.display = 'none';
+                return;
+            }
+            const current = data[data.length - 1];
+            const prev = data[data.length - 2];
+            if (prev === 0) {
+                el.style.display = 'none';
+                return;
+            }
+            const pct = ((current - prev) / prev) * 100;
+            const absPct = Math.abs(pct).toFixed(1);
+            
+            el.style.display = 'inline-flex';
+            
+            if (pct > 0) {
+                el.textContent = `↑ ${absPct}%`;
+                el.style.color = isCost ? '#fca5a5' : '#6ee7b7'; 
+            } else {
+                el.textContent = `↓ ${absPct}%`;
+                el.style.color = isCost ? '#6ee7b7' : '#fca5a5'; 
+            }
+        }
+
+        function renderBarChart(containerId, dataObj) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            container.innerHTML = ''; 
+            
+            if (!dataObj) return;
+            
+            const entries = Object.entries(dataObj)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 8);
+                
+            if (entries.length === 0) return;
+            
+            const maxVal = entries[0][1] || 1;
+            const palette = ['#bae6fd', '#c4b5fd', '#6ee7b7', '#fde68a', '#fca5a5'];
+            
+            entries.forEach(([key, val], index) => {
+                const color = palette[index % palette.length];
+                const pct = (val / maxVal) * 100;
+                
+                const row = document.createElement('div');
+                row.className = 'bar-row';
+                
+                const label = document.createElement('span');
+                label.className = 'bar-label text-sm text-muted';
+                label.textContent = key;
+                label.title = key;
+                
+                const barContainer = document.createElement('div');
+                barContainer.className = 'bar-container';
+                
+                const barFill = document.createElement('div');
+                barFill.className = 'bar-fill';
+                barFill.style.width = `${pct}%`;
+                barFill.style.backgroundColor = color;
+                
+                barContainer.appendChild(barFill);
+                
+                const value = document.createElement('span');
+                value.className = 'bar-value text-sm text-right';
+                value.textContent = Number.isInteger(val) ? fmtNum(val) : fmtUSD(val);
+                
+                row.appendChild(label);
+                row.appendChild(barContainer);
+                row.appendChild(value);
+                
+                container.appendChild(row);
+            });
+        }
+
+        // Render Functions
+        function renderBudget(budget) {
+            updateElement('budget-spent', budget.spent_usd, fmtUSD);
+            updateElement('budget-remaining', budget.remaining_usd, fmtUSD);
+            
+            const limitEl = document.getElementById('budget-limit');
+            if (limitEl) {
+                limitEl.classList.remove('skeleton');
+                limitEl.textContent = fmtUSD(budget.monthly_limit_usd);
+            }
+
+            const fill = document.getElementById('budget-fill');
+            if (fill) {
+                const pct = Math.min(Math.max(budget.used_pct, 0), 100);
+                fill.style.width = pct + '%';
+
+                if (pct < 50) {
+                    fill.style.backgroundColor = 'var(--accent-green)';
+                } else if (pct < 80) {
+                    fill.style.backgroundColor = 'var(--accent-yellow)';
+                } else {
+                    fill.style.backgroundColor = 'var(--accent-red)';
+                }
+            }
+        }
+
+        function renderReport(report) {
+            // Summary
+            updateElement('total-cost', report.total_cost_usd, fmtUSD, true);
+            updateElement('total-calls', report.total_calls, fmtNum, true);
+            const totalTokens = (report.input_tokens || 0) + (report.output_tokens || 0);
+            updateElement('total-tokens', totalTokens, fmtNum, true);
+
+            // Trends & Sparklines
+            if (report.history && report.history.length > 0) {
+                const costs = report.history.map(h => h.cost_usd || 0);
+                const calls = report.history.map(h => h.calls || 0);
+                const tokens = report.history.map(h => h.tokens || 0);
+
+                updateTrend('trend-cost', costs, true);
+                updateTrend('trend-calls', calls, false);
+                updateTrend('trend-tokens', tokens, false);
+
+                renderSparkline('sparkline-cost', costs, '#6ee7b7');
+                renderSparkline('sparkline-calls', calls, '#bae6fd');
+                renderSparkline('sparkline-tokens', tokens, '#c4b5fd');
+            }
+
+            // FinOps
+            updateElement('tool-calls', report.total_tool_calls);
+            updateElement('fallbacks', report.total_fallbacks);
+            updateElement('context-tokens', report.total_context_tokens);
+            updateElement('avg-context', report.avg_context_tokens);
+
+            // Efficiency
+            const costPerReq = report.total_calls > 0 ? report.total_cost_usd / report.total_calls : 0;
+            const tokensPerDollar = report.total_cost_usd > 0 ? totalTokens / report.total_cost_usd : 0;
+            updateElement('cost-per-req', costPerReq, fmtUSD4);
+            updateElement('tokens-per-dollar', Math.round(tokensPerDollar));
+
+            // Channels Bar Chart
+            renderBarChart('channels-container', report.by_channel);
+
+            // Table
+            const tbody = document.getElementById('model-tbody');
+            if (tbody) {
+                tbody.innerHTML = ''; 
+                const models = Object.entries(report.by_model || {}).map(([name, data]) => ({ name, ...data }));
+                models.sort((a, b) => b.cost_usd - a.cost_usd);
+
+                models.forEach(m => {
+                    const tr = document.createElement('tr');
+                    const avgCost = m.calls > 0 ? m.cost_usd / m.calls : 0;
+                    
+                    const tdName = document.createElement('td');
+                    tdName.style.color = '#fff';
+                    tdName.textContent = m.name;
+                    
+                    const tdCost = document.createElement('td');
+                    tdCost.className = 'text-right text-success';
+                    tdCost.textContent = fmtUSD(m.cost_usd);
+                    
+                    const tdCalls = document.createElement('td');
+                    tdCalls.className = 'text-right';
+                    tdCalls.textContent = fmtNum(m.calls);
+                    
+                    const tdTokens = document.createElement('td');
+                    tdTokens.className = 'text-right text-muted';
+                    tdTokens.textContent = fmtNum(m.tokens);
+                    
+                    const tdAvg = document.createElement('td');
+                    tdAvg.className = 'text-right text-muted';
+                    tdAvg.textContent = fmtUSD4(avgCost);
+                    
+                    tr.appendChild(tdName);
+                    tr.appendChild(tdCost);
+                    tr.appendChild(tdCalls);
+                    tr.appendChild(tdTokens);
+                    tr.appendChild(tdAvg);
+                    
+                    tbody.appendChild(tr);
+                });
+            }
+        }
+
+        // API Calls
+        async function fetchData() {
+            let reportData = mockReport;
+            let budgetData = mockBudget;
+            const statusDot = document.getElementById('api-status');
+
+            try {
+                const [resReport, resBudget] = await Promise.all([
+                    fetch('/api/costs/report').catch(() => null),
+                    fetch('/api/costs/budget').catch(() => null)
+                ]);
+
+                if (resReport && resReport.ok) {
+                    const json = await resReport.json();
+                    if (json.report) reportData = json.report;
+                }
+                if (resBudget && resBudget.ok) {
+                    const json = await resBudget.json();
+                    if (json.budget) budgetData = json.budget;
+                }
+                if (statusDot) statusDot.style.background = 'var(--accent-green)';
+            } catch (err) {
+                console.warn("API unavailable, using mock data", err);
+                if (statusDot) statusDot.style.background = 'var(--accent-red)';
+            }
+
+            renderReport(reportData);
+            renderBudget(budgetData);
+            
+            isFirstLoad = false;
+            
+            const now = new Date();
+            const lastUpdated = document.getElementById('last-updated');
+            if (lastUpdated) lastUpdated.textContent = `Last updated: ${now.toLocaleTimeString()}`;
+        }
+
+        async function submitBudget(e) {
+            e.preventDefault();
+            const input = document.getElementById('budget-input').value;
+            const val = parseFloat(input);
+            if (isNaN(val)) return;
+
+            try {
+                await fetch('/api/costs/budget', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ monthly_limit_usd: val })
+                });
+                mockBudget.monthly_limit_usd = val;
+                mockBudget.remaining_usd = val - mockBudget.spent_usd;
+                mockBudget.used_pct = (mockBudget.spent_usd / val) * 100;
+            } catch (err) {
+                console.error(err);
+            }
+            
+            closeModal();
+            fetchData();
+        }
+
+        // Modal Controls
+        function openModal() {
+            const modal = document.getElementById('budget-modal');
+            if (modal) {
+                modal.classList.add('active');
+                document.getElementById('budget-input').focus();
+            }
+        }
+        function closeModal() {
+            const modal = document.getElementById('budget-modal');
+            if (modal) modal.classList.remove('active');
+        }
+
+        // Timer Logic
+        function tickTimer() {
+            timer--;
+            if (timer <= 0) {
+                timer = 10;
+                fetchData();
+            }
+            const navTimer = document.getElementById('nav-timer');
+            const footerTimer = document.getElementById('footer-timer');
+            if (navTimer) navTimer.textContent = `↻ ${timer}s`;
+            if (footerTimer) footerTimer.textContent = `Next refresh in ${timer}s`;
+        }
+
+        // Init
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchData();
+            refreshInterval = setInterval(tickTimer, 1000);
+            
+            const modal = document.getElementById('budget-modal');
+            if (modal) {
+                modal.addEventListener('click', function(e) {
+                    if (e.target === this) closeModal();
+                });
+            }
         });
-    }
-    return rows;
-}
 
-function renderHistoryTable() {
-    const tbody = document.getElementById('history-tbody');
-    const info = document.getElementById('history-info');
-    if (!tbody) return;
-    const rows = getFilteredHistory();
-    const total = rows.length;
-    const start = currentHistPage * HIST_PAGE_SIZE;
-    const pageRows = rows.slice(start, start + HIST_PAGE_SIZE);
-    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-    if (!pageRows.length) {
-        const tr = document.createElement('tr');
-        const td = document.createElement('td');
-        td.colSpan = 6; td.className = 'text-center text-muted'; td.textContent = 'Нет данных';
-        tr.appendChild(td); tbody.appendChild(tr);
-    } else {
-        pageRows.forEach(function(row) {
-            let ts;
-            if (row.timestamp) ts = new Date(row.timestamp * 1000);
-            else ts = new Date(row.date || 0);
-            const tr = document.createElement('tr');
+        async function updateBellCount() {
+          try {
+            const [inboxRes, opsRes] = await Promise.all([
+              fetch('/api/inbox/status').catch(() => null),
+              fetch('/api/ops/alerts').catch(() => null)
+            ]);
 
-            function td(txt, cls) {
-                const el = document.createElement('td');
-                if (cls) el.className = cls;
-                el.textContent = txt;
-                return el;
+            const inboxData = (inboxRes && inboxRes.ok) ? await inboxRes.json().catch(() => ({})) : {};
+            const opsData = (opsRes && opsRes.ok) ? await opsRes.json().catch(() => ({})) : {};
+
+            const summary = inboxData.summary || {};
+            const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
+            const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
+
+            let total = 0;
+            if (typeof summary.open_items === 'number' || typeof summary.attention_items === 'number') {
+              total = (summary.open_items || 0) + (summary.attention_items || 0);
+            } else {
+              total = latestItems.length + alerts.length;
             }
 
-            tr.appendChild(td(ts.toLocaleString(), 'text-sm text-muted'));
-            tr.appendChild(td(row.model_id||'--', 'text-sm'));
-            tr.appendChild(td(row.channel||'--', 'text-sm'));
-            const costTd = document.createElement('td'); costTd.className = 'text-right text-success text-sm';
-            costTd.textContent = fmtUSD6(row.cost_usd); tr.appendChild(costTd);
-            const tokTd = document.createElement('td'); tokTd.className = 'text-right text-muted text-sm';
-            tokTd.textContent = fmtNum((row.input_tokens||0)+(row.output_tokens||0)); tr.appendChild(tokTd);
-            const fbTd = document.createElement('td');
-            if (row.is_fallback) { fbTd.textContent = 'FALLBACK'; fbTd.style.color = '#fde68a'; fbTd.style.fontSize = '0.75rem'; }
-            else { fbTd.textContent = '\u2014'; fbTd.className = 'text-muted text-sm'; }
-            tr.appendChild(fbTd);
-            tbody.appendChild(tr);
-        });
-    }
-    const pagination = document.getElementById('hist-pagination');
-    if (pagination) pagination.style.display = total === 0 ? 'none' : '';
-    if (info) info.textContent = total + ' записей, стр. ' + (currentHistPage+1) + '/' + Math.max(1,Math.ceil(total/HIST_PAGE_SIZE));
-    document.getElementById('hist-prev').disabled = currentHistPage === 0;
-    document.getElementById('hist-next').disabled = start + HIST_PAGE_SIZE >= total;
-}
-
-function applyDateFilter() {
-    const from = document.getElementById('date-from').value;
-    const to = document.getElementById('date-to').value;
-    historyFiltered = historyAll.filter(function(row) {
-        let ts;
-        if (row.timestamp) ts = new Date(row.timestamp * 1000);
-        else ts = new Date(row.date || 0);
-        const d = ts.toISOString().slice(0, 10);
-        if (from && d < from) return false;
-        if (to && d > to) return false;
-        return true;
-    });
-    currentHistPage = 0;
-    renderHistoryTable();
-}
-
-function resetDateFilter() {
-    document.getElementById('date-from').value = '';
-    document.getElementById('date-to').value = '';
-    historyFiltered = historyAll.slice();
-    currentHistPage = 0;
-    renderHistoryTable();
-}
-
-// ── Runway ─────────────────────────────────────────────────────────────────
-function renderRunway(runway) {
-    if (!runway) return;
-    const badge = document.getElementById('runway-badge');
-    const banner = document.getElementById('runway-banner');
-    const bannerText = document.getElementById('runway-banner-text');
-    const daysEl = document.getElementById('runway-days');
-
-    // Явно различаем три случая:
-    //   a) runway_days отсутствует / null → "Не рассчитано" (neutral)
-    //   b) runway_days == 0 И monthly_cost_usd == 0 → "∞" (нет расходов, safe)
-    //   c) runway_days > 3650 → "∞ (safe)" (недосягаемо)
-    //   d) нормальное число → считаем по порогам
-    const rawDays = runway.runway_days;
-    const monthlyCost = Number(runway.monthly_cost_usd || 0);
-    const hasNoSpend = monthlyCost === 0;
-    const isValidNumber = typeof rawDays === 'number' && isFinite(rawDays) && !isNaN(rawDays);
-
-    let displayText, displayColor, badgeClass, badgeText;
-    let bannerVisible = false, bannerLevel = null;
-
-    if (!isValidNumber || rawDays === null) {
-        displayText = '—';
-        displayColor = 'var(--text-muted)';
-        badgeClass = 'runway-badge green';
-        badgeText = 'N/A';
-    } else if (rawDays === 0 && hasNoSpend) {
-        displayText = '\u221e';
-        displayColor = '#34d399';
-        badgeClass = 'runway-badge green';
-        badgeText = 'БЕЗ РАСХОДОВ';
-    } else if (rawDays > 3650) {
-        displayText = '\u221e (safe)';
-        displayColor = '#34d399';
-        badgeClass = 'runway-badge green';
-        badgeText = 'OK';
-    } else {
-        displayText = Math.round(rawDays).toLocaleString();
-        if (rawDays >= 90) {
-            displayColor = '#34d399';
-            badgeClass = 'runway-badge green'; badgeText = 'OK';
-        } else if (rawDays >= 30) {
-            displayColor = '#fbbf24';
-            badgeClass = 'runway-badge amber'; badgeText = 'ВНИМАНИЕ';
-            bannerVisible = true; bannerLevel = 'amber';
-        } else {
-            displayColor = '#f87171';
-            badgeClass = 'runway-badge red'; badgeText = 'КРИТИЧНО';
-            bannerVisible = true; bannerLevel = 'red';
-        }
-    }
-
-    if (daysEl) {
-        daysEl.classList.remove('skeleton');
-        daysEl.textContent = displayText;
-        daysEl.style.color = displayColor;
-    }
-    const labelEl = document.getElementById('runway-label');
-    if (labelEl) labelEl.style.display = (!isValidNumber || rawDays === null) ? 'none' : '';
-    if (badge) { badge.className = badgeClass; badge.textContent = badgeText; }
-    if (banner && bannerText) {
-        if (bannerVisible) {
-            banner.className = 'runway-alert-banner ' + bannerLevel + ' visible';
-            bannerText.textContent = (bannerLevel === 'red' ? 'Критично' : 'Внимание') +
-                ': до исчерпания кредитов ' + Math.round(rawDays) + ' дней.' +
-                (bannerLevel === 'red' ? ' Пополните баланс.' : '');
-        } else {
-            banner.className = 'runway-alert-banner';
-        }
-    }
-    setText('runway-burn', fmtUSD6(runway.daily_burn_usd));
-    setText('runway-credits', fmtUSD(runway.credits_usd || runway.spendable_budget_usd));
-    setText('runway-safe-calls', fmtNum(runway.safe_calls_per_day));
-}
-
-// ── Budget ─────────────────────────────────────────────────────────────────
-function renderBudget(budget) {
-    const notSetEl = document.getElementById('budget-not-set');
-    const limitEl = document.getElementById('budget-limit');
-    const fill = document.getElementById('budget-fill');
-    updateEl('budget-spent', budget.spent_usd, fmtUSD, false);
-    if (budget.monthly_limit_usd === null || budget.monthly_limit_usd === undefined) {
-        if (notSetEl) notSetEl.style.display = 'block';
-        if (limitEl) { limitEl.classList.remove('skeleton'); limitEl.textContent = 'Не установлен'; }
-        setText('budget-remaining', '--');
-        if (fill) { fill.style.width = '0%'; fill.style.backgroundColor = 'rgba(255,255,255,0.2)'; }
-    } else {
-        if (notSetEl) notSetEl.style.display = 'none';
-        if (limitEl) { limitEl.classList.remove('skeleton'); limitEl.textContent = fmtUSD(budget.monthly_limit_usd); }
-        updateEl('budget-remaining', budget.remaining_usd, fmtUSD, false);
-        if (fill) {
-            const pct = Math.min(Math.max(budget.used_pct||0, 0), 100);
-            fill.style.width = pct + '%';
-            fill.style.backgroundColor = pct < 50 ? 'var(--accent-green)' : pct < 80 ? 'var(--accent-yellow)' : 'var(--accent-red)';
-        }
-    }
-}
-
-// ── Report ─────────────────────────────────────────────────────────────────
-function renderReport(report) {
-    updateEl('total-cost', report.total_cost_usd, fmtUSD, true);
-    updateEl('total-calls', report.total_calls, fmtNum, true);
-    const totalTokens = (report.input_tokens||0) + (report.output_tokens||0);
-    updateEl('total-tokens', totalTokens, fmtNum, true);
-
-    // Sparklines из grouped history
-    const src = (rawHistory && rawHistory.length) ? rawHistory : MOCK_HISTORY_RAW;
-    const grouped = groupByDate(src);
-    const costs = grouped.map(function(g){return g[1].cost_usd;});
-    const callsArr = grouped.map(function(g){return g[1].calls;});
-    const toks = grouped.map(function(g){return g[1].tokens;});
-    updateTrend('trend-cost', costs, true);
-    updateTrend('trend-calls', callsArr, false);
-    updateTrend('trend-tokens', toks, false);
-    renderSparkline('sparkline-cost', costs, '#6ee7b7');
-    renderSparkline('sparkline-calls', callsArr, '#bae6fd');
-    renderSparkline('sparkline-tokens', toks, '#c4b5fd');
-
-    // FinOps
-    updateEl('tool-calls', report.total_tool_calls, fmtNum, false);
-    const fbEl = document.getElementById('fallbacks');
-    if (fbEl) {
-        fbEl.classList.remove('skeleton');
-        fbEl.textContent = fmtNum(report.total_fallbacks);
-        if ((report.total_fallbacks||0) > 0) fbEl.style.color = '#fde68a';
-    }
-    updateEl('avg-context', report.avg_context_tokens, fmtNum, false);
-    const cpr = (report.total_calls||0) > 0 ? report.total_cost_usd / report.total_calls : 0;
-    setText('cost-per-req', fmtUSD6(cpr));
-
-    // Channels + Donut
-    renderBarChart('channels-container', report.by_channel);
-    renderDonut(report.by_model);
-
-    // Model table
-    const tbody = document.getElementById('model-tbody');
-    if (tbody) {
-        while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-        if (!report.by_model || !Object.keys(report.by_model).length) {
-            const tr = document.createElement('tr');
-            const td = document.createElement('td');
-            td.colSpan = 5; td.className = 'text-center text-muted'; td.textContent = 'Нет данных';
-            tr.appendChild(td); tbody.appendChild(tr);
-        }
-    }
-    if (tbody && report.by_model && Object.keys(report.by_model).length) {
-        Object.entries(report.by_model).sort(function(a,b){return b[1].cost_usd-a[1].cost_usd;}).forEach(function(entry) {
-            const name = entry[0], m = entry[1];
-            const tokens = (m.input_tokens||0) + (m.output_tokens||0);
-            const avg = (m.calls||0) > 0 ? m.cost_usd / m.calls : 0;
-            const tr = document.createElement('tr');
-            function td(txt, cls) {
-                const el = document.createElement('td'); if(cls) el.className = cls; el.textContent = txt; return el;
+            const countEl = document.getElementById('nav-bell-count');
+            if (countEl) {
+              if (total > 0) {
+                countEl.textContent = total > 99 ? '99+' : String(total);
+                countEl.classList.remove('hidden');
+              } else {
+                countEl.classList.add('hidden');
+              }
             }
-            tr.appendChild(td(name, ''));
-            tr.appendChild(td(fmtUSD(m.cost_usd), 'text-right text-success'));
-            tr.appendChild(td(fmtNum(m.calls), 'text-right'));
-            tr.appendChild(td(fmtNum(tokens), 'text-right text-muted'));
-            tr.appendChild(td(fmtUSD6(avg), 'text-right text-muted'));
-            tbody.appendChild(tr);
-        });
-    }
-}
 
-// ── Fetch All Data ─────────────────────────────────────────────────────────
-async function fetchData() {
-    let report = MOCK_REPORT;
-    let budget = MOCK_BUDGET;
-    let runway = MOCK_RUNWAY;
-    let history = MOCK_HISTORY_RAW;
-    const statusDot = document.getElementById('api-status');
-    let anyOk = false;
+            const dropdown = document.getElementById('bell-dropdown');
+            if (!dropdown) return;
 
-    try {
-        const results = await Promise.allSettled([
-            fetch('/api/costs/report').catch(function(){return null;}),
-            fetch('/api/costs/budget').catch(function(){return null;}),
-            fetch('/api/ops/runway').catch(function(){return null;}),
-            fetch('/api/costs/history').catch(function(){return null;})
-        ]);
+            dropdown.innerHTML = '';
 
-        if (results[0].status==='fulfilled' && results[0].value && results[0].value.ok) {
-            const j = await results[0].value.json().catch(function(){return null;});
-            if (j && j.report) { report = j.report; anyOk = true; }
-        }
-        if (results[1].status==='fulfilled' && results[1].value && results[1].value.ok) {
-            const j = await results[1].value.json().catch(function(){return null;});
-            if (j && j.budget) budget = j.budget;
-        }
-        if (results[2].status==='fulfilled' && results[2].value && results[2].value.ok) {
-            const j = await results[2].value.json().catch(function(){return null;});
-            if (j && j.runway) runway = j.runway;
-        }
-        if (results[3].status==='fulfilled' && results[3].value && results[3].value.ok) {
-            const j = await results[3].value.json().catch(function(){return null;});
-            if (j && Array.isArray(j.history)) history = j.history;
-        }
+            if (alerts.length === 0 && latestItems.length === 0) {
+              const emptyDiv = document.createElement('div');
+              emptyDiv.className = 'bell-dropdown-empty';
+              emptyDiv.textContent = 'Нет уведомлений';
+              dropdown.appendChild(emptyDiv);
+            } else {
+              if (alerts.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'ALERTS';
+                dropdown.appendChild(header);
 
-        if (!anyOk) showToast('API недоступен — показаны кэшированные данные', 'error');
-    } catch(err) {
-        showToast('API недоступен — показаны кэшированные данные', 'error');
-    }
+                alerts.forEach(alert => {
+                  const a = document.createElement('a');
+                  a.className = 'bell-dropdown-item';
+                  a.href = '/v4/ops';
+          
+                  const dot = document.createElement('span');
+                  dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
+          
+                  const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+          
+                  a.appendChild(dot);
+                  a.appendChild(text);
+                  dropdown.appendChild(a);
+                });
+              }
 
-    if (statusDot) statusDot.style.background = anyOk ? 'var(--accent-green)' : 'var(--accent-red)';
+              if (latestItems.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'INBOX';
+                dropdown.appendChild(header);
 
-    rawReport = report;
-    rawRunway = runway;
-    rawHistory = Array.isArray(history) ? history : MOCK_HISTORY_RAW;
-
-    renderReport(report);
-    renderBudget(budget);
-    renderRunway(runway);
-
-    historyAll = rawHistory;
-    historyFiltered = rawHistory.slice();
-    currentHistPage = 0;
-    renderHistoryTable();
-    renderTrendChart(rawHistory);
-
-    isFirstLoad = false;
-    const lastEl = document.getElementById('last-updated');
-    if (lastEl) lastEl.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
-}
-
-// ── Budget Submit ──────────────────────────────────────────────────────────
-async function submitBudget(e) {
-    e.preventDefault();
-    const val = parseFloat(document.getElementById('budget-input').value);
-    if (isNaN(val)) return;
-    try {
-        const res = await fetch('/api/costs/budget', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({monthly_limit_usd: val})
-        });
-        if (res.ok) showToast('Бюджет сохранён', 'success');
-        else showToast('Ошибка сохранения', 'error');
-    } catch(err) { showToast('Ошибка сети', 'error'); }
-    closeModal();
-    fetchData();
-}
-
-function openModal() {
-    const m = document.getElementById('budget-modal');
-    if (m) { m.classList.add('active'); document.getElementById('budget-input').focus(); }
-}
-function closeModal() {
-    const m = document.getElementById('budget-modal');
-    if (m) m.classList.remove('active');
-}
-
-// ── Export ─────────────────────────────────────────────────────────────────
-function exportCSV() {
-    const rows = historyAll;
-    if (!rows.length) { showToast('Нет данных для экспорта', 'error'); return; }
-    const header = 'timestamp,model_id,channel,cost_usd,input_tokens,output_tokens,is_fallback';
-    const lines = rows.map(function(r) {
-        let ts;
-        if (r.timestamp) ts = new Date(r.timestamp * 1000).toISOString();
-        else ts = r.date || '';
-        return [ts, r.model_id||'', r.channel||'', r.cost_usd||0, r.input_tokens||0, r.output_tokens||0, r.is_fallback ? 'true' : 'false'].join(',');
-    });
-    downloadBlob([header].concat(lines).join('\n'), 'krab_costs_' + new Date().toISOString().slice(0,10) + '.csv', 'text/csv');
-    showToast('CSV экспортирован', 'success');
-}
-
-function exportJSON() {
-    const snapshot = {report: rawReport, runway: rawRunway, history: rawHistory, exported_at: new Date().toISOString()};
-    downloadBlob(JSON.stringify(snapshot, null, 2), 'krab_costs_' + new Date().toISOString().slice(0,10) + '.json', 'application/json');
-    showToast('JSON экспортирован', 'success');
-}
-
-function downloadBlob(content, filename, type) {
-    const blob = new Blob([content], {type: type});
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(a.href);
-}
-
-// ── Timer ──────────────────────────────────────────────────────────────────
-function tickTimer() {
-    timer--;
-    if (timer <= 0) { timer = 30; fetchData(); }
-    setText('nav-timer', '\u21bb ' + timer + 's');
-    setText('footer-timer', 'Next refresh in ' + timer + 's');
-}
-
-// ── Bell ───────────────────────────────────────────────────────────────────
-async function updateBellCount() {
-    try {
-        const results = await Promise.allSettled([
-            fetch('/api/inbox/status').catch(function(){return null;}),
-            fetch('/api/ops/alerts').catch(function(){return null;})
-        ]);
-        const inboxData = (results[0].status==='fulfilled' && results[0].value && results[0].value.ok) ? await results[0].value.json().catch(function(){return {};}) : {};
-        const opsData = (results[1].status==='fulfilled' && results[1].value && results[1].value.ok) ? await results[1].value.json().catch(function(){return {};}) : {};
-        const summary = inboxData.summary || {};
-        const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
-        const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
-        const total = (summary.open_items||0) + (summary.attention_items||0) || latestItems.length + alerts.length;
-        const countEl = document.getElementById('nav-bell-count');
-        if (countEl) {
-            if (total > 0) { countEl.textContent = total > 99 ? '99+' : String(total); countEl.classList.remove('hidden'); }
-            else countEl.classList.add('hidden');
-        }
-        const dd = document.getElementById('bell-dropdown');
-        if (!dd) return;
-        while (dd.firstChild) dd.removeChild(dd.firstChild);
-        if (!alerts.length && !latestItems.length) {
-            const e = document.createElement('div'); e.className = 'bell-dropdown-empty'; e.textContent = 'Нет уведомлений'; dd.appendChild(e);
-        } else {
-            function addHeader(text) {
-                const h = document.createElement('div'); h.className = 'bell-dropdown-header'; h.textContent = text; dd.appendChild(h);
+                latestItems.forEach(item => {
+                  const a = document.createElement('a');
+                  a.className = 'bell-dropdown-item';
+                  a.href = `/v4/inbox#${item.id || item.item_id || ''}`;
+          
+                  const dot = document.createElement('span');
+                  dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
+          
+                  const text = document.createTextNode(item.title || 'Notification');
+          
+                  a.appendChild(dot);
+                  a.appendChild(text);
+                  dropdown.appendChild(a);
+                });
+              }
             }
-            function addItem(href, severity, text) {
-                const a = document.createElement('a'); a.className = 'bell-dropdown-item'; a.href = href;
-                const dot = document.createElement('span'); dot.className = 'bell-dropdown-severity ' + (severity||'info');
-                a.appendChild(dot); a.appendChild(document.createTextNode(text)); dd.appendChild(a);
-            }
-            if (alerts.length) {
-                addHeader('ALERTS');
-                alerts.forEach(function(al) { addItem('/v4/ops', al.severity||'error', al.title||al.message||al.code||'Alert'); });
-            }
-            if (latestItems.length) {
-                addHeader('INBOX');
-                latestItems.forEach(function(item) { addItem('/v4/inbox#'+(item.id||''), item.severity||'info', item.title||'Notification'); });
-            }
+
+            const footer = document.createElement('a');
+            footer.className = 'bell-dropdown-footer';
+            footer.href = '/v4/inbox';
+            footer.textContent = 'Открыть все →';
+            footer.style.display = 'block';
+            footer.style.textDecoration = 'none';
+            dropdown.appendChild(footer);
+
+          } catch (err) {
+            console.error(err);
+          }
         }
-        const footer = document.createElement('a'); footer.className = 'bell-dropdown-footer';
-        footer.href = '/v4/inbox'; footer.textContent = 'Открыть все \u2192';
-        footer.style.display = 'block'; footer.style.textDecoration = 'none';
-        dd.appendChild(footer);
-    } catch(err) { console.error(err); }
-}
 
-// ── Init ───────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', function() {
-    fetchData();
-    setInterval(tickTimer, 1000);
-    setInterval(updateBellCount, 30000);
-    updateBellCount();
+        setInterval(updateBellCount, 30000);
+        updateBellCount();
 
-    // Кнопки (без innerHTML assignment)
-    document.getElementById('btn-export-csv').addEventListener('click', exportCSV);
-    document.getElementById('btn-export-json').addEventListener('click', exportJSON);
-    document.getElementById('btn-open-modal').addEventListener('click', openModal);
-    document.getElementById('btn-close-modal').addEventListener('click', closeModal);
-    document.getElementById('runway-banner-close').addEventListener('click', function() {
-        const b = document.getElementById('runway-banner');
-        if (b) b.className = 'runway-alert-banner';
-    });
-    document.getElementById('clear-provider-filter').addEventListener('click', clearProviderFilter);
-    document.getElementById('btn-reset-date').addEventListener('click', resetDateFilter);
-    document.getElementById('date-from').addEventListener('change', applyDateFilter);
-    document.getElementById('date-to').addEventListener('change', applyDateFilter);
+        const navBell = document.querySelector('.nav-bell');
+        if (navBell) {
+          const bellWrapper = navBell.closest('.nav-bell-wrapper');
+          const bellDropdown = document.getElementById('bell-dropdown');
+  
+          if (bellWrapper && bellDropdown) {
+            navBell.addEventListener('click', (e) => {
+              e.preventDefault();
+              bellDropdown.classList.toggle('hidden');
+            });
 
-    document.getElementById('hist-prev').addEventListener('click', function() {
-        currentHistPage = Math.max(0, currentHistPage - 1);
-        renderHistoryTable();
-    });
-    document.getElementById('hist-next').addEventListener('click', function() {
-        const rows = getFilteredHistory();
-        const maxPage = Math.max(0, Math.ceil(rows.length / HIST_PAGE_SIZE) - 1);
-        currentHistPage = Math.min(maxPage, currentHistPage + 1);
-        renderHistoryTable();
-    });
+            document.addEventListener('click', (e) => {
+              if (!bellWrapper.contains(e.target)) {
+                bellDropdown.classList.add('hidden');
+              }
+            });
 
-    // Trend toggle
-    document.getElementById('trend-toggle').addEventListener('click', function(e) {
-        const btn = e.target.closest('button');
-        if (!btn || !btn.dataset.metric) return;
-        trendMetric = btn.dataset.metric;
-        document.querySelectorAll('#trend-toggle button').forEach(function(b) { b.classList.remove('active'); });
-        btn.classList.add('active');
-        renderTrendChart(rawHistory);
-    });
-
-    // Budget form
-    document.getElementById('budget-form').addEventListener('submit', submitBudget);
-
-    // Modal close on backdrop
-    document.getElementById('budget-modal').addEventListener('click', function(e) {
-        if (e.target === this) closeModal();
-    });
-
-    // Bell dropdown
-    const navBell = document.querySelector('.nav-bell');
-    if (navBell) {
-        const wrapper = navBell.closest('.nav-bell-wrapper');
-        const dd = document.getElementById('bell-dropdown');
-        if (wrapper && dd) {
-            navBell.addEventListener('click', function(e) { e.preventDefault(); dd.classList.toggle('hidden'); });
-            document.addEventListener('click', function(e) { if (!wrapper.contains(e.target)) dd.classList.add('hidden'); });
-            document.addEventListener('keydown', function(e) { if (e.key === 'Escape') dd.classList.add('hidden'); });
+            document.addEventListener('keydown', (e) => {
+              if (e.key === 'Escape') {
+                bellDropdown.classList.add('hidden');
+              }
+            });
+          }
         }
-    }
-});
-</script>
+    </script>
 </body>
 </html>

@@ -1,1277 +1,822 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Translator Dashboard V4 - Krab AI</title>
-    <link rel="stylesheet" href="/v4/liquid-glass.css">
-    <style>
-        body { margin:0; background-color:var(--bg-primary); color:#fff; font-family:system-ui,-apple-system,sans-serif; padding-bottom:80px; }
-        .container { max-width:1200px; margin:0 auto; padding:2rem 1rem; }
-        .flex { display:flex; } .flex-col { flex-direction:column; } .flex-1 { flex:1; }
-        .items-center { align-items:center; } .justify-between { justify-content:space-between; }
-        .justify-center { justify-content:center; }
-        .gap-1{gap:.25rem}.gap-2{gap:.5rem}.gap-3{gap:1rem}.gap-4{gap:1.5rem}
-        .mt-2{margin-top:.5rem}.mt-4{margin-top:1rem}.mb-2{margin-bottom:.5rem}.mb-4{margin-bottom:1rem}
-        .p-4{padding:1rem}.text-center{text-align:center}.text-right{text-align:right}.w-full{width:100%}
-        .text-sm{font-size:.875rem}.text-xs{font-size:.75rem}.text-lg{font-size:1.125rem}
-        .text-xl{font-size:1.25rem;font-weight:600}.text-2xl{font-size:1.5rem;font-weight:700}
-        .text-3xl{font-size:1.875rem;font-weight:700}
-        .text-muted{color:rgba(255,255,255,.72)}.text-success{color:#6ee7b7}
-        .text-error{color:#fca5a5}.text-warning{color:#fde68a}
-        .text-accent{color:#bae6fd}.text-purple{color:#c4b5fd}
-        .grid{display:grid}
-        .grid-2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem}
-        .grid-3{grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1rem}
-        .grid-2x2{grid-template-columns:1fr 1fr;gap:.75rem}
-        .grid-4{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.75rem}
-        .table-responsive{overflow-x:auto}
-        table{width:100%;border-collapse:collapse}
-        th,td{padding:.75rem;text-align:left;border-bottom:1px solid var(--glass-border)}
-        th{color:#bae6fd;font-weight:600}
-        tbody tr:hover{background:var(--glass-bg-hover)}
-        .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);backdrop-filter:blur(5px);z-index:100;display:none;align-items:center;justify-content:center}
-        .modal-overlay.active{display:flex}
-        .modal-content{max-width:480px;width:90%}
-        @keyframes shimmer{0%{opacity:.3}50%{opacity:.7}100%{opacity:.3}}
-        .skeleton{animation:shimmer 1.5s infinite;background:var(--glass-bg-hover);border-radius:4px;color:transparent!important;min-height:1.2em;display:inline-block}
-        .stat-card{transition:transform .2s ease,box-shadow .2s ease;display:flex;flex-direction:column;align-items:center;justify-content:space-between;min-height:120px}
-        .stat-card:hover{transform:translateY(-4px);box-shadow:0 8px 24px rgba(0,0,0,.4)}
-        .toast-container{position:fixed;top:70px;right:1rem;z-index:999;display:flex;flex-direction:column;gap:.5rem}
-        .toast{background:rgba(20,20,41,.95);border:1px solid var(--glass-border);backdrop-filter:blur(20px);border-radius:12px;padding:.75rem 1.25rem;font-size:.875rem;min-width:260px;max-width:360px;box-shadow:0 4px 20px rgba(0,0,0,.4)}
-        .toast.error{border-color:rgba(248,113,113,.4)}.toast.success{border-color:rgba(52,211,153,.4)}
-        @keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-        .toast{animation:fadeUp .3s ease}
-        .hidden{display:none!important}
-        .glass-input{background:rgba(0,0,0,.2);border:1px solid var(--glass-border);color:#fff;padding:.5rem 1rem;border-radius:var(--radius-button);width:100%;box-sizing:border-box;font-family:inherit;font-size:.9rem}
-        .glass-input:focus{outline:none;border-color:var(--accent-cyan)}
-        .glass-textarea{background:rgba(0,0,0,.2);border:1px solid var(--glass-border);color:#fff;padding:.75rem 1rem;border-radius:12px;width:100%;box-sizing:border-box;font-family:inherit;font-size:.9rem;resize:vertical;min-height:80px}
-        .glass-textarea:focus{outline:none;border-color:var(--accent-cyan)}
-        .badge-pill{padding:.25rem .75rem;border-radius:999px;font-size:.75rem;font-weight:600;background:var(--glass-bg);border:1px solid var(--glass-border);display:inline-block}
-        .badge-on{background:rgba(52,211,153,.15);color:#6ee7b7;border:1px solid rgba(52,211,153,.3)}
-        .badge-off{background:rgba(248,113,113,.12);color:#fca5a5;border:1px solid rgba(248,113,113,.3)}
-        .badge-warn{background:rgba(251,191,36,.12);color:#fde68a;border:1px solid rgba(251,191,36,.3)}
-        /* Toggle switch */
-        .toggle-switch{position:relative;display:inline-block;width:48px;height:26px;flex-shrink:0}
-        .toggle-switch input{opacity:0;width:0;height:0}
-        .toggle-slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);border:1px solid var(--glass-border);border-radius:26px;transition:.3s}
-        .toggle-slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:rgba(255,255,255,.7);border-radius:50%;transition:.3s}
-        input:checked + .toggle-slider{background:rgba(52,211,153,.3);border-color:rgba(52,211,153,.5)}
-        input:checked + .toggle-slider:before{transform:translateX(22px);background:#6ee7b7}
-        /* Lang pair card */
-        .lang-card{padding:.75rem 1rem;border-radius:14px;border:2px solid var(--glass-border);cursor:pointer;transition:all .2s;background:rgba(0,0,0,.15);text-align:center}
-        .lang-card:hover{border-color:rgba(125,211,252,.4);background:rgba(125,211,252,.05)}
-        .lang-card.active{border-color:rgba(125,211,252,.7);background:rgba(125,211,252,.1);box-shadow:0 0 12px rgba(125,211,252,.15)}
-        .lang-flag{font-size:1.5rem;line-height:1;margin-bottom:.25rem}
-        .lang-label{font-size:.75rem;font-weight:600;color:rgba(255,255,255,.8)}
-        .lang-code{font-size:.65rem;color:rgba(255,255,255,.45)}
-        /* Action buttons */
-        .action-btn-row{display:flex;flex-wrap:wrap;gap:.5rem}
-        .action-btn{padding:.45rem 1rem;border-radius:999px;font-size:.8rem;font-weight:600;cursor:pointer;border:1px solid var(--glass-border);background:rgba(255,255,255,.06);color:#fff;transition:all .15s}
-        .action-btn:hover{background:rgba(255,255,255,.12)}
-        .action-btn.primary{background:rgba(52,211,153,.15);border-color:rgba(52,211,153,.4);color:#6ee7b7}
-        .action-btn.primary:hover{background:rgba(52,211,153,.25)}
-        .action-btn.danger{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.35);color:#fca5a5}
-        .action-btn.danger:hover{background:rgba(248,113,113,.22)}
-        .action-btn.accent{background:rgba(125,211,252,.12);border-color:rgba(125,211,252,.35);color:#7dd3fc}
-        .action-btn.accent:hover{background:rgba(125,211,252,.22)}
-        /* Delivery matrix */
-        .delivery-row{display:flex;align-items:center;justify-content:space-between;padding:.6rem 0;border-bottom:1px solid var(--glass-border)}
-        .delivery-row:last-child{border-bottom:none}
-        .delivery-label{font-size:.875rem;font-weight:500}
-        .delivery-desc{font-size:.72rem;color:rgba(255,255,255,.45);margin-top:.1rem}
-        /* Quick test */
-        .test-result-box{background:rgba(0,0,0,.25);border:1px solid var(--glass-border);border-radius:12px;padding:1rem;min-height:60px;font-size:.9rem;color:rgba(255,255,255,.85);word-break:break-word;white-space:pre-wrap}
-        /* Readiness checks */
-        .check-row{display:flex;align-items:center;gap:.75rem;padding:.5rem 0;border-bottom:1px solid rgba(255,255,255,.06)}
-        .check-row:last-child{border-bottom:none}
-        .check-icon{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.75rem;flex-shrink:0}
-        .check-icon.ok{background:rgba(52,211,153,.2);color:#6ee7b7}
-        .check-icon.warn{background:rgba(251,191,36,.2);color:#fde68a}
-        .check-icon.fail{background:rgba(248,113,113,.2);color:#fca5a5}
-        .check-info{flex:1}
-        .check-title{font-size:.875rem;font-weight:500}
-        .check-desc{font-size:.72rem;color:rgba(255,255,255,.45);margin-top:.1rem}
-        /* Mobile readiness */
-        .mobile-status-pill{display:inline-flex;align-items:center;gap:.5rem;padding:.4rem 1rem;border-radius:999px;font-size:.8rem;font-weight:600}
-        .mobile-status-pill.ready{background:rgba(52,211,153,.15);border:1px solid rgba(52,211,153,.35);color:#6ee7b7}
-        .mobile-status-pill.not-ready{background:rgba(248,113,113,.12);border:1px solid rgba(248,113,113,.3);color:#fca5a5}
-        /* Phrase list */
-        .phrase-item{display:flex;align-items:center;justify-content:space-between;padding:.5rem .75rem;background:rgba(0,0,0,.15);border-radius:10px;margin-bottom:.4rem;gap:.75rem}
-        .phrase-text{font-size:.85rem;flex:1;word-break:break-word}
-        .phrase-del{background:none;border:none;color:rgba(248,113,113,.7);cursor:pointer;font-size:1rem;padding:0;line-height:1;flex-shrink:0}
-        .phrase-del:hover{color:#fca5a5}
-        /* History */
-        .truncate-cell{max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        /* Mode tabs */
-        .mode-tabs{display:inline-flex;background:rgba(0,0,0,.25);border-radius:20px;padding:3px;border:1px solid var(--glass-border);gap:2px}
-        .mode-tabs button{background:none;border:none;color:rgba(255,255,255,.5);font-size:.8rem;font-weight:600;padding:.3rem .9rem;border-radius:16px;cursor:pointer;transition:all .2s}
-        .mode-tabs button.active{background:var(--glass-bg-hover);color:#fff}
-        /* Live session indicator */
-        @keyframes pulse-dot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
-        .live-dot{width:8px;height:8px;border-radius:50%;background:#6ee7b7;animation:pulse-dot 1.4s ease-in-out infinite;display:inline-block}
-        .session-header{display:flex;align-items:center;gap:.6rem;margin-bottom:1rem}
-        /* Inline stat card */
-        .mini-stat{text-align:center;padding:.6rem;background:var(--glass-bg);border-radius:12px;border:1px solid var(--glass-border)}
-        .mini-stat-label{font-size:.7rem;color:rgba(255,255,255,.55);margin-bottom:.2rem}
-        .mini-stat-val{font-size:1.1rem;font-weight:600}
-        @media(max-width:768px){.grid-2x2{grid-template-columns:1fr}.grid-4{grid-template-columns:1fr 1fr}}
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Krab AI - Translator</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="/v4/liquid-glass.css" rel="stylesheet">
+  <style>
+    /* New Custom Styles for Translator Dashboard */
+    
+    /* Pulse Animation for Live Indicator */
+    @keyframes pulse-green {
+      0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5); }
+      70% { box-shadow: 0 0 0 20px rgba(34, 197, 94, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+    }
+
+    /* Live Indicator Card */
+    .live-indicator-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1.5rem;
+      padding: 2rem;
+      background: rgba(0, 0, 0, 0.15);
+      border-radius: 16px;
+      border: 1px solid var(--glass-border, rgba(255,255,255,0.1));
+    }
+    .live-circle {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--text-muted, #9ca3af);
+      transition: all 0.3s ease;
+    }
+    .live-circle.active {
+      background: var(--accent-green, #22c55e);
+      animation: pulse-green 2s infinite;
+    }
+    .live-circle.paused {
+      background: var(--accent-yellow, #eab308);
+    }
+    .live-circle.error {
+      background: var(--accent-red, #f87171);
+    }
+    
+    /* Segmented Control (Language Switcher) */
+    .segmented-control {
+      display: flex;
+      gap: 0.5rem;
+      background: rgba(0, 0, 0, 0.2);
+      padding: 0.5rem;
+      border-radius: 12px;
+      overflow-x: auto;
+      border: 1px solid var(--glass-border, rgba(255,255,255,0.05));
+      scrollbar-width: none; /* Firefox */
+    }
+    .segmented-control::-webkit-scrollbar {
+      display: none; /* Chrome/Safari */
+    }
+    .segmented-btn {
+      padding: 0.5rem 1.25rem;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-muted, #9ca3af);
+      font-family: inherit;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+    .segmented-btn:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: #ffffff;
+    }
+    .segmented-btn.active {
+      background: rgba(167, 139, 250, 0.15);
+      color: var(--accent-purple, #a78bfa);
+      border-color: rgba(167, 139, 250, 0.3);
+    }
+
+    /* Latency Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 1rem;
+    }
+    .stat-mini-card {
+      background: rgba(0, 0, 0, 0.2);
+      padding: 1.25rem 1rem;
+      border-radius: 12px;
+      border: 1px solid var(--glass-border, rgba(255,255,255,0.05));
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      align-items: center;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #ffffff;
+    }
+    .stat-label {
+      font-size: 0.75rem;
+      color: var(--text-muted, #9ca3af);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 600;
+    }
+
+    /* Test Translation Box */
+    .test-input {
+      width: 100%;
+      height: 100px;
+      resize: none;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--glass-border, rgba(255,255,255,0.1));
+      border-radius: 12px;
+      padding: 1rem;
+      color: #ffffff;
+      font-family: inherit;
+      font-size: 0.95rem;
+      transition: border-color 0.2s;
+    }
+    .test-input:focus {
+      outline: none;
+      border-color: var(--accent-purple, #a78bfa);
+    }
+    .test-output-box {
+      flex: 1;
+      min-width: 250px;
+      background: rgba(125, 211, 252, 0.05);
+      border: 1px solid rgba(125, 211, 252, 0.15);
+      border-radius: 12px;
+      padding: 1rem;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100px;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      word-break: break-word;
+      text-align: center;
+    }
+  </style>
 </head>
 <body>
 
-<div class="toast-container" id="toast-container"></div>
+  <nav class="glass-nav">
+      <div class="nav-logo">Krab AI</div>
+      <div class="nav-links">
+          <a href="/v4/" class="nav-link">Hub</a>
+          <a href="/v4/chat" class="nav-link">Chat</a>
+          <a href="/costs" class="nav-link">Costs</a>
+          <a href="/inbox" class="nav-link">Inbox</a>
+          <a href="/swarm" class="nav-link">Swarm</a>
+          <a href="/translator" class="nav-link active">Translator</a>
+          <a href="/ops" class="nav-link">Ops</a>
+          <a href="/v4/research" class="nav-link">Research</a>
+          <a href="/settings" class="nav-link">Settings</a>
+          <a href="/commands" class="nav-link">Commands</a>
+          <div class="nav-bell-wrapper">
+              <a href="/inbox" class="nav-bell" title="Notifications">
+                  <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                  </svg>
+                  <span class="bell-count hidden" id="nav-bell-count">0</span>
+              </a>
+              <div class="bell-dropdown hidden" id="bell-dropdown"></div>
+          </div>
+      </div>
+  </nav>
 
-<!-- Desktop Nav -->
-<nav class="glass-nav">
-    <div class="nav-logo">Krab AI</div>
-    <div class="nav-links">
-        <a href="/v4/" class="nav-link">Hub</a>
-        <a href="/v4/chat" class="nav-link">Chat</a>
-        <a href="/v4/costs" class="nav-link">Costs</a>
-        <a href="/v4/inbox" class="nav-link">Inbox</a>
-        <a href="/v4/swarm" class="nav-link">Swarm</a>
-        <a href="/v4/translator" class="nav-link active">Translator</a>
-        <a href="/v4/ops" class="nav-link">Ops</a>
-        <a href="/v4/settings" class="nav-link">Settings</a>
-        <a href="/v4/commands" class="nav-link">Commands</a>
-        <div class="nav-bell-wrapper">
-            <a href="/v4/inbox" class="nav-bell" title="Notifications">
-                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
-                </svg>
-                <span class="bell-count hidden" id="nav-bell-count">0</span>
-            </a>
-        </div>
-    </div>
-    <div style="display:flex;align-items:center;gap:.75rem;">
-        <span id="api-status" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent-green);"></span>
-        <span class="text-muted text-sm" id="nav-timer">↻ 30s</span>
-    </div>
-</nav>
+  <div class="glass-tab-bar">
+      <a href="/v4/" class="tab-item">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          Hub
+      </a>
+      <a href="/v4/chat" class="tab-item">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          Chat
+      </a>
+      <a href="/costs" class="tab-item">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          Costs
+      </a>
+      <a href="/swarm" class="tab-item">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Swarm
+      </a>
+      <a href="/translator" class="tab-item active">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>
+          Trans
+      </a>
+  </div>
 
-<main class="container">
+  <!-- Main Content -->
+  <main style="max-width: 1100px; margin: 0 auto; padding: 2rem; display: flex; flex-direction: column; gap: 1.5rem; padding-bottom: 100px;">
 
-    <!-- Page header -->
-    <div class="flex justify-between items-center mb-4" style="flex-wrap:wrap;gap:1rem;">
-        <div>
-            <h1 class="text-3xl" style="margin-bottom:.25rem;">Translator</h1>
-            <div class="text-muted text-sm">Real-time RU↔ES · voice-first · bilingual / auto mode</div>
-        </div>
-        <div class="flex gap-2 items-center">
-            <span id="global-status-badge" class="badge-pill badge-off skeleton">loading...</span>
-            <button class="glass-button" id="btn-toggle-voice">Toggle Voice</button>
-        </div>
-    </div>
+    <!-- Header -->
+    <header class="flex items-center justify-between" style="animation: fadeUp 0.4s ease-out backwards;">
+      <div class="flex items-center gap-3">
+        <div id="statusDot" class="status-dot warning"></div>
+        <h1 class="flex items-center gap-2">
+          Translator
+          <span id="langBadge" class="skeleton" style="display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; min-width: 80px; letter-spacing: 0.03em;">Loading</span>
+        </h1>
+      </div>
+      <div id="statusText" class="text-sm text-muted" style="font-weight: 600; letter-spacing: 0.08em;">INITIALIZING</div>
+    </header>
 
-    <!-- 1. Status Card -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-3" style="flex-wrap:wrap;gap:.75rem;">
-            <h3 class="text-lg text-accent">Status</h3>
-            <span id="voice-runtime-badge" class="badge-pill skeleton">--</span>
-        </div>
-        <!-- Four stat boxes -->
-        <div class="grid grid-4 mb-4" id="status-boxes">
-            <div class="mini-stat">
-                <div class="mini-stat-label">Mode</div>
-                <div class="mini-stat-val skeleton" id="status-mode">--</div>
-            </div>
-            <div class="mini-stat">
-                <div class="mini-stat-label">Language pair</div>
-                <div class="mini-stat-val skeleton" id="status-pair">--</div>
-            </div>
-            <div class="mini-stat">
-                <div class="mini-stat-label">Strategy</div>
-                <div class="mini-stat-val skeleton" id="status-strategy">--</div>
-            </div>
-            <div class="mini-stat">
-                <div class="mini-stat-label">Target device</div>
-                <div class="mini-stat-val skeleton" id="status-device">--</div>
-            </div>
-        </div>
-        <!-- Quick switches -->
-        <div class="flex justify-between items-center" style="flex-wrap:wrap;gap:1rem;">
-            <div>
-                <div class="text-muted text-xs mb-2">Translation mode</div>
-                <div class="mode-tabs" id="mode-tabs">
-                    <button data-mode="bilingual">Bilingual</button>
-                    <button data-mode="auto_to_ru">to RU</button>
-                    <button data-mode="auto_to_en">to EN</button>
-                </div>
-            </div>
-            <div>
-                <div class="text-muted text-xs mb-2">Strategy</div>
-                <div class="mode-tabs" id="strategy-tabs">
-                    <button data-strategy="voice-first">Voice-first</button>
-                    <button data-strategy="subtitles-first">Subtitles-first</button>
-                </div>
-            </div>
-        </div>
+    <!-- Session Controls -->
+    <div class="flex items-center gap-3" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.1s;">
+      <button id="btnStart" class="glass-button glass-button-primary" onclick="handleAction('start')" style="display: none;">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        Start
+      </button>
+      <button id="btnPause" class="glass-button" onclick="handleAction('pause')" style="display: none;">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        Pause
+      </button>
+      <button id="btnResume" class="glass-button glass-button-primary" onclick="handleAction('resume')" style="display: none;">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        Resume
+      </button>
+      <button id="btnStop" class="glass-button" onclick="handleAction('stop')" style="display: none; color: var(--accent-red); border-color: rgba(248,113,113,0.3);">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M9 10h6v4H9z"></path></svg>
+        Stop
+      </button>
     </div>
 
-    <!-- 2. Live Session Panel -->
-    <div class="glass-card mb-4">
-        <div class="session-header">
-            <span class="live-dot" id="live-dot" style="display:none;"></span>
-            <h3 class="text-lg text-accent">Live Session</h3>
-            <span id="session-status-badge" class="badge-pill skeleton">--</span>
+    <!-- BIG Live Trial Indicator -->
+    <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.15s; padding: 0; overflow: hidden;">
+      <div class="live-indicator-wrapper">
+        <div id="bigLiveCircle" class="live-circle"></div>
+        <div style="display: flex; flex-direction: column; align-items: flex-start;">
+          <h2 id="bigLiveText" style="margin: 0; font-size: 2.5rem; font-weight: 700; letter-spacing: 0.05em; line-height: 1; color: var(--text-muted);">OFFLINE</h2>
+          <span id="bigLiveSubtext" class="text-muted" style="font-size: 1rem; margin-top: 0.25rem;">System is currently idle</span>
         </div>
-        <!-- Active block -->
-        <div id="session-active-block" class="hidden">
-            <div class="grid grid-4 mb-3">
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Translations</div>
-                    <div class="mini-stat-val" id="sess-total">0</div>
-                </div>
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Avg latency</div>
-                    <div class="mini-stat-val" id="sess-avg-latency">--</div>
-                </div>
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Active chats</div>
-                    <div class="mini-stat-val" id="sess-chats">0</div>
-                </div>
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Muted</div>
-                    <div class="mini-stat-val" id="sess-muted">No</div>
-                </div>
-            </div>
-            <div class="mb-3">
-                <div class="text-muted text-xs mb-1">Last original</div>
-                <div class="test-result-box" id="sess-last-orig" style="min-height:36px;font-size:.82rem;"></div>
-            </div>
-            <div class="mb-3">
-                <div class="text-muted text-xs mb-1">Last translation</div>
-                <div class="test-result-box" id="sess-last-trans" style="min-height:36px;font-size:.82rem;"></div>
-            </div>
-            <div class="action-btn-row">
-                <button class="action-btn primary" id="btn-sess-resume">Resume</button>
-                <button class="action-btn" id="btn-sess-pause">Pause</button>
-                <button class="action-btn accent" id="btn-sess-mute">Mute</button>
-                <button class="action-btn accent" id="btn-sess-unmute">Unmute</button>
-                <button class="action-btn accent" id="btn-sess-replay">Replay</button>
-                <button class="action-btn" id="btn-sess-summary">Summary</button>
-                <button class="action-btn danger" id="btn-sess-stop">Stop session</button>
-            </div>
-        </div>
-        <!-- Empty block -->
-        <div id="session-empty-block" class="text-center text-muted" style="padding:2rem 0;">
-            <div style="font-size:1.5rem;margin-bottom:.5rem;">Нет активной сессии</div>
-            <div class="text-sm">Используй <code>!translator session start</code> в Telegram для запуска</div>
-        </div>
+      </div>
     </div>
 
-    <!-- 3. Language Matrix -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-3">
-            <h3 class="text-lg text-accent">Language Matrix</h3>
-            <span class="text-muted text-sm">Активная пара: <span id="current-pair-label" class="text-accent">--</span></span>
-        </div>
-        <div class="grid" id="lang-grid" style="grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:.75rem;">
-            <div class="lang-card skeleton" style="min-height:70px;"></div>
-            <div class="lang-card skeleton" style="min-height:70px;"></div>
-            <div class="lang-card skeleton" style="min-height:70px;"></div>
-        </div>
+    <!-- Language Pair Switcher UI -->
+    <div style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.18s;">
+      <div id="langSwitcher" class="segmented-control">
+        <!-- Buttons injected dynamically -->
+      </div>
     </div>
 
-    <!-- 4. Delivery Matrix + Readiness -->
-    <div class="grid-2 mb-4">
+    <!-- Cards Grid: Profile + Session -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem;">
 
-        <!-- Delivery Matrix -->
-        <div class="glass-card">
-            <h3 class="text-lg text-accent mb-3">Delivery Matrix</h3>
-            <div id="delivery-rows">
-
-                <div class="delivery-row">
-                    <div>
-                        <div class="delivery-label">Voice runtime</div>
-                        <div class="delivery-desc">TTS-ответы переводчика</div>
-                    </div>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="tog-voice-runtime" data-field="voice_runtime_enabled">
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-
-                <div class="delivery-row">
-                    <div>
-                        <div class="delivery-label">Subtitles</div>
-                        <div class="delivery-desc">Текстовые субтитры</div>
-                    </div>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="tog-subtitles" data-field="subtitles_enabled">
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-
-                <div class="delivery-row">
-                    <div>
-                        <div class="delivery-label">Timeline</div>
-                        <div class="delivery-desc">Лента событий сессии</div>
-                    </div>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="tog-timeline" data-field="timeline_enabled">
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-
-                <div class="delivery-row">
-                    <div>
-                        <div class="delivery-label">Summary</div>
-                        <div class="delivery-desc">Auto-summary по завершении</div>
-                    </div>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="tog-summary" data-field="summary_enabled">
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-
-                <div class="delivery-row">
-                    <div>
-                        <div class="delivery-label">Diagnostics</div>
-                        <div class="delivery-desc">Debug-события</div>
-                    </div>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="tog-diagnostics" data-field="diagnostics_enabled">
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-
-                <div class="delivery-row">
-                    <div>
-                        <div class="delivery-label">Internet context</div>
-                        <div class="delivery-desc">Web-поиск для терминов</div>
-                    </div>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="tog-internet" data-field="internet_calls_enabled">
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-
-                <div class="delivery-row">
-                    <div>
-                        <div class="delivery-label">Ordinary calls</div>
-                        <div class="delivery-desc">Обычные сообщения</div>
-                    </div>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="tog-ordinary" data-field="ordinary_calls_enabled">
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-            </div>
+      <!-- Profile Card -->
+      <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.2s;">
+        <h2 class="mb-3">Profile Settings</h2>
+        <div class="flex flex-col gap-3 text-sm">
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Language Pair</span>
+            <span id="profLang" class="skeleton" style="min-width: 70px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Mode</span>
+            <span id="profMode" class="skeleton" style="min-width: 90px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Voice Strategy</span>
+            <span id="profVoice" class="skeleton" style="min-width: 110px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center" style="padding-top: 0.75rem; border-top: 1px solid var(--glass-border);">
+            <span class="text-muted">Ordinary Calls</span>
+            <div id="profOrd" class="status-dot" style="animation: none;"></div>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Internet Calls</span>
+            <div id="profInt" class="status-dot" style="animation: none;"></div>
+          </div>
         </div>
+      </div>
 
-        <!-- Readiness Card -->
-        <div class="glass-card">
-            <div class="flex justify-between items-center mb-3">
-                <h3 class="text-lg text-accent">Readiness</h3>
-                <span id="readiness-overall" class="badge-pill skeleton">--</span>
-            </div>
-            <div id="readiness-checks">
-                <div class="check-row"><div class="skeleton" style="height:1.2em;width:100%;"></div></div>
-                <div class="check-row"><div class="skeleton" style="height:1.2em;width:85%;"></div></div>
-                <div class="check-row"><div class="skeleton" style="height:1.2em;width:90%;"></div></div>
-                <div class="check-row"><div class="skeleton" style="height:1.2em;width:70%;"></div></div>
-                <div class="check-row"><div class="skeleton" style="height:1.2em;width:80%;"></div></div>
-            </div>
+      <!-- Session Card -->
+      <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.3s;">
+        <h2 class="mb-3">Live Session</h2>
+        <div class="flex flex-col gap-3 text-sm">
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Active Chats</span>
+            <span id="sessChats" class="text-accent skeleton" style="font-weight: 700; min-width: 30px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Total Translations</span>
+            <span id="sessTotal" class="skeleton" style="min-width: 40px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Avg Latency</span>
+            <span id="sessLatency" class="skeleton" style="min-width: 60px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center" style="padding-top: 0.75rem; border-top: 1px solid var(--glass-border);">
+            <span class="text-muted">Muted</span>
+            <span id="sessMuted" class="skeleton" style="min-width: 40px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
         </div>
+      </div>
+
     </div>
 
-    <!-- 5. Quick Test -->
-    <div class="glass-card mb-4">
-        <h3 class="text-lg text-accent mb-3">Quick Test</h3>
-        <div class="mb-3">
-            <textarea class="glass-textarea" id="test-input" placeholder="Введи текст для перевода... (Ctrl+Enter для отправки)" rows="3"></textarea>
+    <!-- Latency Stats Dashboard -->
+    <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.35s;">
+      <h2 class="mb-3">Latency & Performance</h2>
+      <div class="stats-grid">
+        <div class="stat-mini-card">
+          <span class="stat-label">Current Latency</span>
+          <span id="statCurLat" class="stat-value skeleton" style="min-width: 60px; border-radius: 6px;">&nbsp;</span>
         </div>
-        <div class="flex gap-2 items-center mb-3" style="flex-wrap:wrap;">
-            <select class="glass-input" id="test-pair-sel" style="width:auto;flex:0 0 auto;">
-                <option value="es-ru">ES to RU</option>
-                <option value="ru-es">RU to ES</option>
-                <option value="en-ru">EN to RU</option>
-                <option value="es-en">ES to EN</option>
-                <option value="auto-detect">Auto-detect</option>
-            </select>
-            <button class="glass-button glass-button-primary" id="btn-test-go">Translate</button>
-            <span id="test-latency-label" class="text-muted text-xs hidden"></span>
+        <div class="stat-mini-card">
+          <span class="stat-label">Avg Latency</span>
+          <span id="statAvgLat" class="stat-value skeleton" style="min-width: 60px; border-radius: 6px;">&nbsp;</span>
         </div>
-        <div>
-            <div class="text-muted text-xs mb-1">Result</div>
-            <div class="test-result-box" id="test-result">Результат появится здесь...</div>
+        <div class="stat-mini-card">
+          <span class="stat-label">Max Latency</span>
+          <span id="statMaxLat" class="stat-value skeleton" style="min-width: 60px; border-radius: 6px;">&nbsp;</span>
         </div>
+        <div class="stat-mini-card">
+          <span class="stat-label">Success Rate</span>
+          <span id="statSuccess" class="stat-value skeleton" style="min-width: 60px; border-radius: 6px;">&nbsp;</span>
+        </div>
+      </div>
     </div>
 
-    <!-- 6 + 7. Mobile Readiness + Statistics -->
-    <div class="grid-2 mb-4">
-
-        <!-- Mobile Readiness -->
-        <div class="glass-card">
-            <h3 class="text-lg text-accent mb-3">Mobile Readiness</h3>
-            <div class="text-center mb-3">
-                <span id="mobile-badge" class="mobile-status-pill not-ready skeleton">--</span>
-            </div>
-            <div class="grid grid-2x2" style="gap:.5rem;">
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Target device</div>
-                    <div class="mini-stat-val" id="mob-device">--</div>
-                </div>
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Voice foundation</div>
-                    <div class="mini-stat-val" id="mob-voice-foundation">--</div>
-                </div>
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Subtitles</div>
-                    <div class="mini-stat-val" id="mob-subtitles">--</div>
-                </div>
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Timeline</div>
-                    <div class="mini-stat-val" id="mob-timeline">--</div>
-                </div>
-            </div>
-            <div class="mt-3 text-center">
-                <a href="/api/translator/mobile/onboarding" target="_blank"
-                   class="action-btn accent"
-                   style="text-decoration:none;display:inline-block;padding:.45rem 1rem;">Mobile onboarding</a>
-            </div>
+    <!-- Test Translation Quick Box -->
+    <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.38s;">
+      <h2 class="mb-3">Test Translation</h2>
+      <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 250px; display: flex; flex-direction: column; gap: 0.75rem;">
+          <textarea id="testInput" class="test-input" placeholder="Type something to translate..."></textarea>
+          <button onclick="handleTestTranslation()" class="glass-button glass-button-primary" style="align-self: flex-start;">
+            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"></path></svg>
+            Translate
+          </button>
         </div>
-
-        <!-- Statistics -->
-        <div class="glass-card">
-            <h3 class="text-lg text-accent mb-3">Statistics</h3>
-            <div class="grid grid-2x2" style="gap:.5rem;margin-bottom:.75rem;">
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Total translations</div>
-                    <div class="mini-stat-val skeleton" id="stat-total">0</div>
-                </div>
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Avg latency</div>
-                    <div class="mini-stat-val skeleton" id="stat-avg-lat">--</div>
-                </div>
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Last pair</div>
-                    <div class="mini-stat-val skeleton" id="stat-last-pair">--</div>
-                </div>
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Phrases</div>
-                    <div class="mini-stat-val skeleton" id="stat-phrases">0</div>
-                </div>
-            </div>
-            <div>
-                <div class="text-muted text-xs mb-1">Last original (preview)</div>
-                <div class="text-sm" id="stat-last-orig" style="color:rgba(255,255,255,.65);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">--</div>
-            </div>
+        <div class="test-output-box">
+          <span id="testOutput" class="text-muted">Result will appear here...</span>
         </div>
+      </div>
     </div>
 
-    <!-- 8. Phrase Overrides -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-3">
-            <h3 class="text-lg text-accent">Phrase Overrides</h3>
-            <span class="text-muted text-xs" id="phrase-count-label">0 phrases</span>
+    <!-- Last Translation -->
+    <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.4s;">
+      <h2 class="mb-3">Last Translation</h2>
+      <div style="display: flex; gap: 1rem; align-items: stretch;">
+        <div id="lastOrig" class="skeleton text-muted" style="flex: 1; padding: 1rem; background: rgba(0,0,0,0.2); border-radius: 12px; min-height: 70px; font-size: 0.95rem; line-height: 1.5; word-break: break-word;">&nbsp;</div>
+        <div class="flex items-center justify-center text-muted" style="padding: 0 0.5rem; flex-shrink: 0;">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
         </div>
-        <div id="phrase-list" style="margin-bottom:.75rem;">
-            <div class="text-muted text-center text-sm" id="phrase-empty" style="padding:1rem 0;">Нет настраиваемых фраз</div>
-        </div>
-        <div class="flex gap-2 items-center" style="flex-wrap:wrap;">
-            <input type="text" class="glass-input" id="phrase-input"
-                   placeholder="Введи фразу для замены..."
-                   style="flex:1;min-width:180px;">
-            <button class="glass-button glass-button-primary" id="btn-add-phrase" style="flex-shrink:0;">Add phrase</button>
-        </div>
-        <div class="text-muted text-xs mt-2">Подставляются перед LLM. Удобно для имён, терминов, сленга.</div>
+        <div id="lastTrans" class="skeleton" style="flex: 1; padding: 1rem; background: rgba(125,211,252,0.05); border: 1px solid rgba(125,211,252,0.15); border-radius: 12px; min-height: 70px; font-size: 0.95rem; line-height: 1.5; word-break: break-word; color: #ffffff;">&nbsp;</div>
+      </div>
     </div>
 
-    <!-- 9. Translation History -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-3" style="flex-wrap:wrap;gap:.5rem;">
-            <h3 class="text-lg text-accent">History</h3>
-            <span class="text-muted text-xs" id="history-count-label">0 записей</span>
-        </div>
-        <div class="table-responsive">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Time</th>
-                        <th>Pair</th>
-                        <th>Original</th>
-                        <th>Translation</th>
-                        <th class="text-right">Latency</th>
-                    </tr>
-                </thead>
-                <tbody id="history-tbody">
-                    <tr>
-                        <td colspan="5" class="text-center text-muted">Загрузка...</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-        <div class="text-muted text-xs mt-2" id="history-footer">Последние переводы из текущей сессии</div>
+    <!-- History Card -->
+    <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.5s;">
+      <div class="flex justify-between items-center mb-3">
+        <h2>Recent History</h2>
+        <span class="text-xs text-muted">Last 10</span>
+      </div>
+      <div id="historyContainer" class="flex flex-col gap-2">
+        <div class="skeleton" style="height: 64px; border-radius: 12px;"></div>
+        <div class="skeleton" style="height: 64px; border-radius: 12px;"></div>
+        <div class="skeleton" style="height: 64px; border-radius: 12px;"></div>
+      </div>
     </div>
 
-    <!-- Footer -->
-    <div class="flex justify-between items-center text-muted text-sm mt-4">
-        <div id="last-updated">Last updated: --:--:--</div>
-        <div id="footer-timer">Next refresh in 30s</div>
-    </div>
-</main>
+  </main>
 
-<!-- Mobile Tab Bar -->
-<div class="glass-tab-bar">
-    <a href="/v4/" class="tab-item">
-        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-        </svg>Hub</a>
-    <a href="/v4/chat" class="tab-item">
-        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-        </svg>Chat</a>
-    <a href="/v4/costs" class="tab-item">
-        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
-        </svg>Costs</a>
-    <a href="/v4/inbox" class="tab-item">
-        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M22 12h-6l-2 3h-4l-2-3H2"/>
-            <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
-        </svg>Inbox</a>
-    <a href="/v4/translator" class="tab-item active">
-        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/>
-        </svg>Trans</a>
-    <a href="/v4/swarm" class="tab-item">
-        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="3"/>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>Swarm</a>
-</div>
+  <script>
+    const API = '/api/translator';
 
-<script>
-// ── Mock данные (fallback если API недоступен) ─────────────────────────────────
-var MOCK_STATUS = {
-    ok: true,
-    profile: {
-        language_pair: 'es-ru',
-        translation_mode: 'bilingual',
-        voice_strategy: 'voice-first',
-        target_device: 'iphone_companion',
-        ordinary_calls_enabled: true,
-        internet_calls_enabled: true,
-        subtitles_enabled: true,
-        timeline_enabled: true,
-        summary_enabled: true,
-        diagnostics_enabled: false,
-        quick_phrases: [],
-        quick_phrase_count: 0,
-        voice_foundation_ready: true,
-        voice_runtime_enabled: true
-    },
-    session: {
-        session_status: 'active',
-        translation_muted: false,
-        active_chats: ['312322764'],
-        last_language_pair: 'ru-es',
-        last_translated_original: 'Привет! Как дела? Я бы хотел записаться в ваш спортзал.',
-        last_translated_translation: 'Hola! Como estas? Me gustaria inscribirme en su gimnasio.',
-        last_event: 'translation_completed',
-        updated_at: '2026-04-21T10:00:00Z',
-        stats: { total_translations: 1, total_latency_ms: 17576 }
-    }
-};
-var MOCK_HISTORY = {
-    ok: true, total_translations: 1, total_latency_ms: 17576, avg_latency_ms: 17576,
-    last_pair: 'ru-es',
-    last_original: 'Привет! Как дела? Я бы хотел записаться в ваш спортзал.',
-    last_translation: 'Hola! Como estas? Me gustaria inscribirme en su gimnasio.',
-    history: [], history_count: 0
-};
-var MOCK_LANGS = { ok: true, current: 'es-ru', available: ['auto-detect', 'en-ru', 'es-en', 'es-ru'] };
-var MOCK_READINESS = {
-    ok: true,
-    readiness: 'degraded',
-    foundation_ready: false,
-    live_voice_ready: false,
-    foundation_checks: {
-        perceptor: { ready: true, label: 'Perceptor / STT', status: 'ready' },
-        voice_gateway: { ready: false, label: 'Krab Voice Gateway', status: 'timeout' },
-        krab_ear: { ready: false, label: 'Krab Ear', status: 'timeout' },
-        voice_replies: { ready: true, label: 'Voice replies', status: 'enabled' },
-        voice_ingress: { ready: true, label: 'Voice ingress', status: 'ready' }
-    }
-};
-
-// ── Состояние ─────────────────────────────────────────────────────────────────
-var timer = 30;
-var isFirstLoad = true;
-var currentProfile = {};
-var currentPhrases = [];
-
-// ── Toast ─────────────────────────────────────────────────────────────────────
-function showToast(msg, type) {
-    var tc = document.getElementById('toast-container');
-    var t = document.createElement('div');
-    t.className = 'toast ' + (type || '');
-    t.textContent = msg;
-    tc.appendChild(t);
-    setTimeout(function() {
-        t.style.opacity = '0';
-        t.style.transition = 'opacity 0.4s';
-        setTimeout(function() { t.remove(); }, 400);
-    }, 4000);
-}
-
-// ── DOM helpers ───────────────────────────────────────────────────────────────
-function setText(id, val) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    el.classList.remove('skeleton');
-    el.textContent = val;
-}
-
-function clearEl(id) {
-    var el = document.getElementById(id);
-    if (el) { while (el.firstChild) el.removeChild(el.firstChild); }
-    return el;
-}
-
-function showEl(id) { var el = document.getElementById(id); if (el) el.classList.remove('hidden'); }
-function hideEl(id) { var el = document.getElementById(id); if (el) el.classList.add('hidden'); }
-
-function fmtMs(ms) {
-    if (ms === null || ms === undefined) return '--';
-    if (ms < 1000) return ms + 'ms';
-    return (ms / 1000).toFixed(1) + 's';
-}
-
-function fmtTime(iso) {
-    if (!iso) return '--';
-    try { return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
-    catch(e) { return iso; }
-}
-
-function pairLabel(pair) {
-    var map = { 'es-ru': 'ES → RU', 'ru-es': 'RU → ES', 'en-ru': 'EN → RU', 'es-en': 'ES → EN', 'auto-detect': 'Auto-detect' };
-    return map[pair] || pair || '--';
-}
-
-function pairFlagText(pair) {
-    var map = { 'es-ru': 'ES/RU', 'ru-es': 'RU/ES', 'en-ru': 'EN/RU', 'es-en': 'ES/EN', 'auto-detect': 'AUTO' };
-    return map[pair] || pair || '??';
-}
-
-function humanField(s) {
-    return (s || '').replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
-}
-
-// ── makeBadgePill: создаёт span.badge-pill без innerHTML ─────────────────────
-function makeBadgePill(text, cls) {
-    var s = document.createElement('span');
-    s.className = 'badge-pill ' + (cls || '');
-    s.textContent = text;
-    return s;
-}
-
-// ── Render Status ─────────────────────────────────────────────────────────────
-function renderStatus(data) {
-    var p = data.profile || {};
-    currentProfile = p;
-
-    // Global badge
-    var gb = document.getElementById('global-status-badge');
-    if (gb) {
-        gb.classList.remove('skeleton', 'badge-on', 'badge-off');
-        var on = p.voice_runtime_enabled;
-        gb.classList.add(on ? 'badge-on' : 'badge-off');
-        gb.textContent = on ? 'Translator ON' : 'Translator OFF';
+    // XSS-safe helpers using DOM methods
+    function createTextNode(text) {
+      return document.createTextNode(text == null ? '' : String(text));
     }
 
-    // Voice runtime badge
-    var vrb = document.getElementById('voice-runtime-badge');
-    if (vrb) {
-        vrb.classList.remove('skeleton', 'badge-on', 'badge-off');
-        vrb.classList.add(p.voice_runtime_enabled ? 'badge-on' : 'badge-off');
-        vrb.textContent = p.voice_runtime_enabled ? 'Voice ON' : 'Voice OFF';
+    function setTextContent(id, text) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = text == null ? '' : String(text);
+      el.classList.remove('skeleton');
     }
 
-    setText('status-mode', humanField(p.translation_mode) || '--');
-    setText('status-pair', pairLabel(p.language_pair));
-    setText('status-strategy', humanField(p.voice_strategy) || '--');
-    setText('status-device', humanField(p.target_device) || '--');
-
-    // Mode tabs
-    document.querySelectorAll('#mode-tabs button').forEach(function(btn) {
-        btn.classList.toggle('active', btn.dataset.mode === p.translation_mode);
-    });
-
-    // Strategy tabs
-    document.querySelectorAll('#strategy-tabs button').forEach(function(btn) {
-        btn.classList.toggle('active', btn.dataset.strategy === p.voice_strategy);
-    });
-
-    // Delivery toggles
-    var toggleMap = [
-        ['tog-voice-runtime', 'voice_runtime_enabled'],
-        ['tog-subtitles',     'subtitles_enabled'],
-        ['tog-timeline',      'timeline_enabled'],
-        ['tog-summary',       'summary_enabled'],
-        ['tog-diagnostics',   'diagnostics_enabled'],
-        ['tog-internet',      'internet_calls_enabled'],
-        ['tog-ordinary',      'ordinary_calls_enabled']
-    ];
-    toggleMap.forEach(function(pair) {
-        var el = document.getElementById(pair[0]);
-        if (el) el.checked = !!p[pair[1]];
-    });
-
-    // Phrases
-    currentPhrases = p.quick_phrases || [];
-    renderPhrases(currentPhrases);
-    setText('stat-phrases', p.quick_phrase_count || 0);
-}
-
-// ── Render Session ────────────────────────────────────────────────────────────
-function renderSession(data) {
-    var s = data.session || {};
-    var stats = s.stats || {};
-    var isActive = s.session_status === 'active';
-
-    var dot = document.getElementById('live-dot');
-    if (dot) dot.style.display = isActive ? 'inline-block' : 'none';
-
-    var badge = document.getElementById('session-status-badge');
-    if (badge) {
-        badge.classList.remove('skeleton', 'badge-on', 'badge-off', 'badge-warn');
-        badge.classList.add(isActive ? 'badge-on' : 'badge-off');
-        badge.textContent = isActive ? 'Active' : (s.session_status || 'Inactive');
+    function setTextEl(el, text) {
+      if (!el) return;
+      el.textContent = text == null ? '' : String(text);
+      el.classList.remove('skeleton');
     }
 
-    if (isActive) {
-        showEl('session-active-block');
-        hideEl('session-empty-block');
-        setText('sess-total', stats.total_translations || 0);
-        var avgMs = (stats.total_translations && stats.total_latency_ms)
-            ? Math.round(stats.total_latency_ms / stats.total_translations) : null;
-        setText('sess-avg-latency', fmtMs(avgMs));
-        setText('sess-chats', (s.active_chats || []).length);
-        setText('sess-muted', s.translation_muted ? 'Yes' : 'No');
-
-        var origEl = document.getElementById('sess-last-orig');
-        if (origEl) origEl.textContent = s.last_translated_original || '—';
-        var transEl = document.getElementById('sess-last-trans');
-        if (transEl) transEl.textContent = s.last_translated_translation || '—';
-    } else {
-        hideEl('session-active-block');
-        showEl('session-empty-block');
-    }
-}
-
-// ── Render Language Matrix ────────────────────────────────────────────────────
-function renderLangMatrix(langsData, activePair) {
-    var available = (langsData && langsData.available) ? langsData.available : MOCK_LANGS.available;
-    var current = activePair || (langsData && langsData.current) || 'es-ru';
-
-    setText('current-pair-label', pairLabel(current));
-
-    var grid = clearEl('lang-grid');
-    if (!grid) return;
-
-    available.forEach(function(pair) {
-        var card = document.createElement('div');
-        card.className = 'lang-card' + (pair === current ? ' active' : '');
-        card.dataset.pair = pair;
-
-        var flagDiv = document.createElement('div');
-        flagDiv.className = 'lang-flag';
-        flagDiv.textContent = pairFlagText(pair);
-
-        var labelDiv = document.createElement('div');
-        labelDiv.className = 'lang-label';
-        labelDiv.textContent = pairLabel(pair);
-
-        var codeDiv = document.createElement('div');
-        codeDiv.className = 'lang-code';
-        codeDiv.textContent = pair;
-
-        card.appendChild(flagDiv);
-        card.appendChild(labelDiv);
-        card.appendChild(codeDiv);
-
-        card.addEventListener('click', function() { switchLangPair(pair); });
-        grid.appendChild(card);
-    });
-}
-
-// ── Render Readiness ──────────────────────────────────────────────────────────
-function renderReadiness(readinessData, profile) {
-    var container = clearEl('readiness-checks');
-    if (!container) return;
-
-    var checks = [];
-
-    // Из реального API readiness если есть
-    if (readinessData && readinessData.foundation_checks) {
-        var fc = readinessData.foundation_checks;
-        Object.keys(fc).forEach(function(key) {
-            var chk = fc[key];
-            checks.push({ label: chk.label || humanField(key), ok: !!chk.ready, desc: chk.status || '' });
-        });
-    } else if (profile) {
-        // Синтетические из профиля
-        checks = [
-            { label: 'Voice foundation', ok: !!profile.voice_foundation_ready, desc: 'TTS/STT pipeline' },
-            { label: 'Voice runtime',    ok: !!profile.voice_runtime_enabled,  desc: 'Runtime активен' },
-            { label: 'Internet context', ok: !!profile.internet_calls_enabled, desc: 'Web lookup' },
-            { label: 'Subtitles channel',ok: !!profile.subtitles_enabled,      desc: 'Текстовый канал' },
-            { label: 'LLM chain',        ok: true,                             desc: 'Translation model' }
-        ];
+    function makeSpan(text, cls) {
+      const span = document.createElement('span');
+      span.className = cls || '';
+      span.textContent = String(text);
+      return span;
     }
 
-    var allOk = checks.every(function(c) { return c.ok; });
+    let currentStatus = 'idle';
+    let availableLangs = ['es-ru', 'en-ru', 'ru-en', 'auto-ru', 'auto-en'];
 
-    checks.forEach(function(chk) {
-        var row = document.createElement('div');
-        row.className = 'check-row';
-
-        var icon = document.createElement('div');
-        icon.className = 'check-icon ' + (chk.ok ? 'ok' : 'warn');
-        icon.textContent = chk.ok ? '\u2713' : '!';
-
-        var info = document.createElement('div');
-        info.className = 'check-info';
-
-        var title = document.createElement('div');
-        title.className = 'check-title';
-        title.textContent = chk.label;
-
-        var desc = document.createElement('div');
-        desc.className = 'check-desc';
-        desc.textContent = chk.desc;
-
-        info.appendChild(title);
-        info.appendChild(desc);
-        row.appendChild(icon);
-        row.appendChild(info);
-        container.appendChild(row);
-    });
-
-    var overall = document.getElementById('readiness-overall');
-    if (overall) {
-        overall.classList.remove('skeleton', 'badge-on', 'badge-off', 'badge-warn');
-        var readinessStr = (readinessData && readinessData.readiness) || '';
-        if (readinessStr === 'ready' || (allOk && !readinessStr)) {
-            overall.classList.add('badge-on');
-            overall.textContent = 'Ready';
-        } else if (readinessStr === 'degraded' || !allOk) {
-            overall.classList.add('badge-warn');
-            overall.textContent = 'Degraded';
-        } else {
-            overall.classList.add('badge-warn');
-            overall.textContent = 'Partial';
+    async function fetchLanguages() {
+      try {
+        const res = await fetch(API + '/languages');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.languages) && data.languages.length > 0) {
+            availableLangs = data.languages;
+          }
         }
-    }
-}
-
-// ── Render Mobile Readiness ────────────────────────────────────────────────────
-function renderMobile(profile) {
-    var ready = !!(profile.voice_foundation_ready && profile.voice_runtime_enabled && profile.subtitles_enabled);
-    var badge = document.getElementById('mobile-badge');
-    if (badge) {
-        badge.classList.remove('skeleton', 'ready', 'not-ready');
-        badge.classList.add(ready ? 'ready' : 'not-ready');
-        badge.textContent = ready ? 'Mobile Ready' : 'Not Ready';
-    }
-    setText('mob-device',           humanField(profile.target_device) || '--');
-    setText('mob-voice-foundation', profile.voice_foundation_ready ? 'OK' : 'Not ready');
-    setText('mob-subtitles',        profile.subtitles_enabled ? 'ON' : 'OFF');
-    setText('mob-timeline',         profile.timeline_enabled ? 'ON' : 'OFF');
-}
-
-// ── Render Statistics ─────────────────────────────────────────────────────────
-function renderStats(hist) {
-    setText('stat-total',     hist.total_translations || 0);
-    setText('stat-avg-lat',   fmtMs(hist.avg_latency_ms));
-    setText('stat-last-pair', pairLabel(hist.last_pair));
-
-    var origEl = document.getElementById('stat-last-orig');
-    if (origEl) origEl.textContent = hist.last_original || '—';
-}
-
-// ── Render History ────────────────────────────────────────────────────────────
-function renderHistory(hist) {
-    var tbody = clearEl('history-tbody');
-    if (!tbody) return;
-
-    var total = hist.total_translations || 0;
-    setText('history-count-label', total + ' всего');
-
-    var history = hist.history || [];
-
-    if (!history.length) {
-        // Показать последний перевод из статуса
-        var lastOrig  = hist.last_original || '';
-        var lastTrans = hist.last_translation || '';
-        var lastPair  = hist.last_pair || '';
-
-        if (lastOrig) {
-            var tr = document.createElement('tr');
-
-            var tdTime = document.createElement('td');
-            tdTime.className = 'text-muted text-xs';
-            tdTime.textContent = 'last';
-
-            var tdPair = document.createElement('td');
-            tdPair.appendChild(makeBadgePill(lastPair || '--', ''));
-            tdPair.querySelector('span').style.fontSize = '.7rem';
-
-            var tdOrig = document.createElement('td');
-            tdOrig.className = 'truncate-cell text-sm';
-            tdOrig.textContent = lastOrig;
-
-            var tdTrans = document.createElement('td');
-            tdTrans.className = 'truncate-cell text-sm';
-            tdTrans.textContent = lastTrans;
-
-            var tdLat = document.createElement('td');
-            tdLat.className = 'text-right text-muted text-xs';
-            tdLat.textContent = fmtMs(hist.avg_latency_ms);
-
-            tr.appendChild(tdTime);
-            tr.appendChild(tdPair);
-            tr.appendChild(tdOrig);
-            tr.appendChild(tdTrans);
-            tr.appendChild(tdLat);
-            tbody.appendChild(tr);
-        } else {
-            var emptyTr = document.createElement('tr');
-            var emptyTd = document.createElement('td');
-            emptyTd.colSpan = 5;
-            emptyTd.className = 'text-center text-muted';
-            emptyTd.style.padding = '2rem';
-            emptyTd.textContent = 'Нет истории переводов в этой сессии';
-            emptyTr.appendChild(emptyTd);
-            tbody.appendChild(emptyTr);
-        }
-
-        var footer = document.getElementById('history-footer');
-        if (footer) footer.textContent = 'История очищается при перезапуске сессии';
-        return;
+      } catch (err) {
+        console.warn('Failed to fetch languages, using defaults', err);
+      }
+      renderLangSwitcher();
     }
 
-    history.slice(0, 20).forEach(function(item) {
-        var tr = document.createElement('tr');
-
-        var tdTime = document.createElement('td');
-        tdTime.className = 'text-xs text-muted';
-        tdTime.textContent = fmtTime(item.timestamp || item.updated_at);
-
-        var tdPair = document.createElement('td');
-        var pBadge = makeBadgePill(item.language_pair || '--', '');
-        pBadge.style.fontSize = '.7rem';
-        tdPair.appendChild(pBadge);
-
-        var tdOrig = document.createElement('td');
-        tdOrig.className = 'truncate-cell text-sm';
-        tdOrig.textContent = item.original || '';
-
-        var tdTrans = document.createElement('td');
-        tdTrans.className = 'truncate-cell text-sm';
-        tdTrans.textContent = item.translation || '';
-
-        var tdLat = document.createElement('td');
-        tdLat.className = 'text-right text-xs text-muted';
-        tdLat.textContent = fmtMs(item.latency_ms);
-
-        tr.appendChild(tdTime);
-        tr.appendChild(tdPair);
-        tr.appendChild(tdOrig);
-        tr.appendChild(tdTrans);
-        tr.appendChild(tdLat);
-        tbody.appendChild(tr);
-    });
-
-    var footer = document.getElementById('history-footer');
-    if (footer) footer.textContent = 'Показаны последние ' + Math.min(history.length, 20) + ' записей';
-}
-
-// ── Render Phrases ─────────────────────────────────────────────────────────────
-function renderPhrases(phrases) {
-    var list = document.getElementById('phrase-list');
-    var empty = document.getElementById('phrase-empty');
-    var countLabel = document.getElementById('phrase-count-label');
-    if (!list) return;
-
-    if (countLabel) countLabel.textContent = (phrases.length || 0) + ' phrases';
-
-    // Убрать все элементы кроме #phrase-empty
-    var children = Array.prototype.slice.call(list.children);
-    children.forEach(function(child) {
-        if (child.id !== 'phrase-empty') child.remove();
-    });
-
-    if (!phrases || !phrases.length) {
-        if (empty) empty.style.display = '';
-        return;
-    }
-
-    if (empty) empty.style.display = 'none';
-
-    phrases.forEach(function(phrase, i) {
-        var phraseText = typeof phrase === 'string' ? phrase : (phrase.text || phrase.phrase || String(phrase));
-        var item = document.createElement('div');
-        item.className = 'phrase-item';
-
-        var span = document.createElement('span');
-        span.className = 'phrase-text';
-        span.textContent = phraseText;
-
-        var del = document.createElement('button');
-        del.className = 'phrase-del';
-        del.textContent = '\u00d7';
-        del.title = 'Удалить фразу';
-        del.dataset.idx = i;
-        del.addEventListener('click', function() { deletePhrase(i); });
-
-        item.appendChild(span);
-        item.appendChild(del);
-        list.insertBefore(item, empty);
-    });
-}
-
-// ── API helpers ───────────────────────────────────────────────────────────────
-function apiFetch(url, opts) {
-    return fetch(url, opts || {}).then(function(r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.json();
-    });
-}
-
-// ── Main refresh ──────────────────────────────────────────────────────────────
-function refreshAll() {
-    var statusEl = document.getElementById('api-status');
-
-    Promise.all([
-        apiFetch('/api/translator/status').catch(function() { return MOCK_STATUS; }),
-        apiFetch('/api/translator/history').catch(function() { return MOCK_HISTORY; }),
-        apiFetch('/api/translator/languages').catch(function() { return MOCK_LANGS; }),
-        apiFetch('/api/translator/readiness').catch(function() { return MOCK_READINESS; })
-    ]).then(function(results) {
-        var statusData   = results[0];
-        var histData     = results[1];
-        var langsData    = results[2];
-        var readinessData = results[3];
-
-        if (statusEl) statusEl.style.background = 'var(--accent-green)';
-
-        if (statusData && statusData.ok) {
-            renderStatus(statusData);
-            renderSession(statusData);
-            renderMobile(statusData.profile || {});
-        }
-
-        if (histData && histData.ok) {
-            renderStats(histData);
-            renderHistory(histData);
-        }
-
-        if (langsData && langsData.ok) {
-            var activePair = statusData && statusData.profile ? statusData.profile.language_pair : null;
-            renderLangMatrix(langsData, activePair);
-        }
-
-        renderReadiness(
-            (readinessData && readinessData.ok) ? readinessData : null,
-            (statusData && statusData.profile) ? statusData.profile : {}
-        );
-
-        var nowStr = new Date().toLocaleTimeString('ru-RU');
-        setText('last-updated', 'Last updated: ' + nowStr);
-        isFirstLoad = false;
-    }).catch(function(err) {
-        if (statusEl) statusEl.style.background = '#fca5a5';
-        showToast('API error: ' + err.message, 'error');
-    });
-}
-
-// ── Toggle voice ──────────────────────────────────────────────────────────────
-document.getElementById('btn-toggle-voice').addEventListener('click', function() {
-    apiFetch('/api/voice/toggle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-        .then(function() { showToast('Voice toggled', 'success'); refreshAll(); })
-        .catch(function(e) { showToast('Toggle error: ' + e.message, 'error'); });
-});
-
-// ── Mode tabs ─────────────────────────────────────────────────────────────────
-document.querySelectorAll('#mode-tabs button').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-        var mode = btn.dataset.mode;
-        document.querySelectorAll('#mode-tabs button').forEach(function(b) {
-            b.classList.toggle('active', b.dataset.mode === mode);
-        });
-        apiFetch('/api/translator/status', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ translation_mode: mode })
-        }).then(function() { showToast('Mode: ' + mode, 'success'); refreshAll(); })
-          .catch(function() { showToast('Mode: ' + mode + ' (local only)', 'success'); });
-    });
-});
-
-// ── Strategy tabs ─────────────────────────────────────────────────────────────
-document.querySelectorAll('#strategy-tabs button').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-        var strat = btn.dataset.strategy;
-        document.querySelectorAll('#strategy-tabs button').forEach(function(b) {
-            b.classList.toggle('active', b.dataset.strategy === strat);
-        });
-        showToast('Strategy: ' + strat, 'success');
-    });
-});
-
-// ── Lang pair switch ──────────────────────────────────────────────────────────
-function switchLangPair(pair) {
-    apiFetch('/api/translator/lang', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pair: pair, language_pair: pair })
-    }).then(function() { showToast('Pair: ' + pairLabel(pair), 'success'); refreshAll(); })
-      .catch(function() {
-          // Оптимистичное обновление UI
-          document.querySelectorAll('#lang-grid .lang-card').forEach(function(card) {
-              card.classList.toggle('active', card.dataset.pair === pair);
-          });
-          setText('current-pair-label', pairLabel(pair));
-          showToast('Pair: ' + pairLabel(pair) + ' (local)', 'success');
+    function renderLangSwitcher(currentLang) {
+      const container = document.getElementById('langSwitcher');
+      container.innerHTML = ''; // Safe: only appending created elements
+      
+      availableLangs.forEach(lang => {
+        const btn = document.createElement('button');
+        btn.className = 'segmented-btn' + (lang === currentLang ? ' active' : '');
+        btn.textContent = lang;
+        btn.onclick = () => setLanguage(lang);
+        container.appendChild(btn);
       });
-}
-
-// ── Delivery matrix toggles ────────────────────────────────────────────────────
-document.querySelectorAll('#delivery-rows input[type="checkbox"]').forEach(function(chk) {
-    chk.addEventListener('change', function() {
-        var field = chk.dataset.field;
-        var val = chk.checked;
-        var body = {};
-        body[field] = val;
-        apiFetch('/api/translator/status', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        }).then(function() { showToast(humanField(field) + ': ' + (val ? 'ON' : 'OFF'), 'success'); })
-          .catch(function() { showToast(humanField(field) + ': ' + (val ? 'ON' : 'OFF') + ' (local)', 'success'); });
-    });
-});
-
-// ── Session actions ────────────────────────────────────────────────────────────
-function sessAction(action, label) {
-    apiFetch('/api/translator/session/toggle', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: action })
-    }).then(function() { showToast('Session: ' + label, 'success'); refreshAll(); })
-      .catch(function(e) { showToast('Error: ' + e.message, 'error'); });
-}
-
-document.getElementById('btn-sess-resume').addEventListener('click', function() { sessAction('resume', 'resumed'); });
-document.getElementById('btn-sess-pause').addEventListener('click',  function() { sessAction('pause', 'paused'); });
-document.getElementById('btn-sess-mute').addEventListener('click',   function() { sessAction('mute', 'muted'); });
-document.getElementById('btn-sess-unmute').addEventListener('click', function() { sessAction('unmute', 'unmuted'); });
-document.getElementById('btn-sess-stop').addEventListener('click',   function() { sessAction('stop', 'stopped'); });
-
-document.getElementById('btn-sess-replay').addEventListener('click', function() {
-    apiFetch('/api/translator/session/action', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: '{"action":"replay"}'
-    }).then(function() { showToast('Replay запущен', 'success'); })
-      .catch(function() { showToast('Replay (offline)', 'success'); });
-});
-
-document.getElementById('btn-sess-summary').addEventListener('click', function() {
-    apiFetch('/api/translator/session/summary', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
-    }).then(function() { showToast('Summary отправлен в Telegram', 'success'); })
-      .catch(function() { showToast('Summary (offline)', 'success'); });
-});
-
-// ── Quick test translate ───────────────────────────────────────────────────────
-document.getElementById('btn-test-go').addEventListener('click', function() {
-    var text = (document.getElementById('test-input').value || '').trim();
-    if (!text) { showToast('Введи текст для перевода', 'error'); return; }
-    var pair = document.getElementById('test-pair-sel').value;
-    var resultEl = document.getElementById('test-result');
-    var latEl = document.getElementById('test-latency-label');
-
-    if (resultEl) resultEl.textContent = 'Переводим...';
-    if (latEl) { latEl.textContent = ''; latEl.classList.add('hidden'); }
-
-    var t0 = Date.now();
-    apiFetch('/api/translator/translate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: text, language_pair: pair, pair: pair })
-    }).then(function(r) {
-        var elapsed = Date.now() - t0;
-        if (resultEl) resultEl.textContent = r.translation || r.result || r.translated || JSON.stringify(r);
-        if (latEl) { latEl.textContent = fmtMs(elapsed); latEl.classList.remove('hidden'); }
-        refreshAll();
-    }).catch(function(e) {
-        if (resultEl) resultEl.textContent = 'Ошибка: ' + e.message + '\n(активен ли переводчик?)';
-    });
-});
-
-document.getElementById('test-input').addEventListener('keydown', function(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        document.getElementById('btn-test-go').click();
     }
-});
 
-// ── Add phrase ────────────────────────────────────────────────────────────────
-document.getElementById('btn-add-phrase').addEventListener('click', function() {
-    var input = document.getElementById('phrase-input');
-    var text = (input.value || '').trim();
-    if (!text) { showToast('Введи фразу', 'error'); return; }
+    async function setLanguage(lang) {
+      try {
+        const res = await fetch(API + '/lang', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lang_pair: lang })
+        });
+        if (res.ok) {
+          fetchStatus();
+        } else {
+          console.error('Failed to set language: HTTP ' + res.status);
+        }
+      } catch (err) {
+        console.error('Language switch error:', err);
+      }
+    }
 
-    apiFetch('/api/translator/session/quick-phrase', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'add', phrase: text })
-    }).then(function() {
-        input.value = '';
-        showToast('Фраза добавлена', 'success');
-        refreshAll();
-    }).catch(function() {
-        currentPhrases.push(text);
-        renderPhrases(currentPhrases);
-        input.value = '';
-        showToast('Фраза добавлена (local)', 'success');
-    });
-});
+    async function handleTestTranslation() {
+      const inputEl = document.getElementById('testInput');
+      const outputEl = document.getElementById('testOutput');
+      const text = inputEl.value.trim();
+      
+      if (!text) return;
+      
+      outputEl.textContent = 'Translating...';
+      outputEl.className = 'text-muted';
+      
+      try {
+        const res = await fetch(API + '/test?text=' + encodeURIComponent(text));
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        
+        outputEl.textContent = data.translation || data.result || 'No translation returned';
+        outputEl.className = '';
+        outputEl.style.color = '#ffffff';
+      } catch (err) {
+        outputEl.textContent = 'Error: ' + err.message;
+        outputEl.className = 'text-error';
+        outputEl.style.color = 'var(--accent-red, #f87171)';
+      }
+    }
 
-document.getElementById('phrase-input').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') document.getElementById('btn-add-phrase').click();
-});
+    async function fetchStatus() {
+      try {
+        const res = await fetch(API + '/status');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        renderStatus(data);
+      } catch (err) {
+        console.error('Status fetch failed:', err);
+        renderOffline();
+      }
+    }
 
-// ── Delete phrase ─────────────────────────────────────────────────────────────
-function deletePhrase(idx) {
-    var phrase = currentPhrases[idx];
-    if (phrase === undefined) return;
-    var phraseText = typeof phrase === 'string' ? phrase : (phrase.text || phrase.phrase || String(phrase));
+    async function fetchHistory() {
+      try {
+        const res = await fetch(API + '/history?n=10');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        renderHistory(Array.isArray(data) ? data : (data.items || []));
+      } catch (err) {
+        console.error('History fetch failed:', err);
+      }
+    }
 
-    apiFetch('/api/translator/session/quick-phrase', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'remove', phrase: phraseText })
-    }).then(function() { showToast('Фраза удалена', 'success'); refreshAll(); })
-      .catch(function() {
-          currentPhrases.splice(idx, 1);
-          renderPhrases(currentPhrases);
-          showToast('Фраза удалена (local)', 'success');
+    function renderStatus(data) {
+      if (!data) return;
+      const profile = data.profile || {};
+      const session = data.session || {};
+      currentStatus = (session.session_status || 'idle').toLowerCase();
+
+      // Update Language Switcher UI
+      renderLangSwitcher(profile.language_pair);
+
+      // Status dot (Header)
+      const dot = document.getElementById('statusDot');
+      dot.className = 'status-dot ' + (currentStatus === 'active' ? 'ok' : currentStatus === 'paused' ? 'warning' : 'error');
+
+      // Status text (Header)
+      setTextContent('statusText', currentStatus.toUpperCase());
+
+      // BIG Live Trial Indicator
+      const bigCircle = document.getElementById('bigLiveCircle');
+      const bigText = document.getElementById('bigLiveText');
+      const bigSubtext = document.getElementById('bigLiveSubtext');
+      
+      bigCircle.className = 'live-circle ' + (currentStatus === 'active' ? 'active' : currentStatus === 'paused' ? 'paused' : '');
+      
+      if (currentStatus === 'active') {
+        bigText.textContent = 'LIVE';
+        bigText.style.color = 'var(--accent-green, #22c55e)';
+        bigSubtext.textContent = (session.active_chats != null ? session.active_chats : 0) + ' active chats';
+      } else if (currentStatus === 'paused') {
+        bigText.textContent = 'PAUSED';
+        bigText.style.color = 'var(--accent-yellow, #eab308)';
+        bigSubtext.textContent = 'Session is paused';
+      } else {
+        bigText.textContent = 'OFFLINE';
+        bigText.style.color = 'var(--text-muted, #9ca3af)';
+        bigSubtext.textContent = 'System is currently idle';
+      }
+
+      // Language badge
+      const badge = document.getElementById('langBadge');
+      badge.textContent = profile.language_pair || '-- -- --';
+      badge.classList.remove('skeleton');
+      badge.style.background = 'rgba(167,139,250,0.15)';
+      badge.style.color = 'var(--accent-purple)';
+      badge.style.border = '1px solid rgba(167,139,250,0.25)';
+
+      // Buttons visibility
+      const isIdle = currentStatus === 'idle' || currentStatus === 'stopped';
+      document.getElementById('btnStart').style.display = isIdle ? 'inline-flex' : 'none';
+      document.getElementById('btnPause').style.display = currentStatus === 'active' ? 'inline-flex' : 'none';
+      document.getElementById('btnResume').style.display = currentStatus === 'paused' ? 'inline-flex' : 'none';
+      document.getElementById('btnStop').style.display = (currentStatus === 'active' || currentStatus === 'paused') ? 'inline-flex' : 'none';
+
+      // Profile card
+      setTextContent('profLang', profile.language_pair || '--');
+      setTextContent('profMode', profile.translation_mode || '--');
+      setTextContent('profVoice', profile.voice_strategy || '--');
+      document.getElementById('profOrd').className = 'status-dot ' + (profile.ordinary_calls_enabled ? 'ok' : 'error');
+      document.getElementById('profInt').className = 'status-dot ' + (profile.internet_calls_enabled ? 'ok' : 'error');
+
+      // Session stats
+      const stats = session.stats || {};
+      const total = stats.total_translations || 0;
+      const avgMs = total > 0 ? Math.round((stats.total_latency_ms || 0) / total) : 0;
+      setTextContent('sessChats', session.active_chats != null ? session.active_chats : 0);
+      setTextContent('sessTotal', total);
+      setTextContent('sessLatency', avgMs + ' ms');
+
+      const mutedEl = document.getElementById('sessMuted');
+      mutedEl.textContent = '';
+      mutedEl.classList.remove('skeleton');
+      mutedEl.appendChild(makeSpan(session.translation_muted ? 'Yes' : 'No', session.translation_muted ? 'text-error' : 'text-success'));
+
+      // Latency Stats Dashboard
+      const curMs = stats.last_latency_ms || stats.current_latency_ms || stats.translation_ms || 0;
+      const maxMs = stats.max_latency_ms || 0;
+      const successCount = stats.success_count != null ? stats.success_count : total;
+      const successRate = total > 0 ? Math.round((successCount / total) * 100) : 100;
+
+      setTextContent('statCurLat', curMs > 0 ? curMs + ' ms' : '--');
+      setTextContent('statAvgLat', avgMs > 0 ? avgMs + ' ms' : '--');
+      setTextContent('statMaxLat', maxMs > 0 ? maxMs + ' ms' : '--');
+      setTextContent('statSuccess', total > 0 ? successRate + '%' : '--');
+
+      // Last translation
+      const origEl = document.getElementById('lastOrig');
+      origEl.textContent = session.last_translated_original || 'No recent translation.';
+      origEl.classList.remove('skeleton');
+      origEl.style.opacity = session.last_translated_original ? '1' : '0.5';
+
+      const transEl = document.getElementById('lastTrans');
+      transEl.textContent = session.last_translated_translation || 'Waiting for input...';
+      transEl.classList.remove('skeleton');
+    }
+
+    function renderOffline() {
+      document.getElementById('statusDot').className = 'status-dot error';
+      setTextContent('statusText', 'OFFLINE');
+      
+      const bigCircle = document.getElementById('bigLiveCircle');
+      const bigText = document.getElementById('bigLiveText');
+      const bigSubtext = document.getElementById('bigLiveSubtext');
+      
+      if(bigCircle) bigCircle.className = 'live-circle error';
+      if(bigText) {
+        bigText.textContent = 'ERROR';
+        bigText.style.color = 'var(--accent-red, #f87171)';
+      }
+      if(bigSubtext) bigSubtext.textContent = 'Cannot connect to API';
+
+      document.getElementById('btnStart').style.display = 'inline-flex';
+      ['btnPause','btnResume','btnStop'].forEach(id => {
+        document.getElementById(id).style.display = 'none';
       });
-}
+    }
 
-// ── Timer ─────────────────────────────────────────────────────────────────────
-function tickTimer() {
-    timer -= 1;
-    if (timer <= 0) { timer = 30; refreshAll(); }
-    var navTimer = document.getElementById('nav-timer');
-    var footTimer = document.getElementById('footer-timer');
-    if (navTimer) navTimer.textContent = '\u21bb ' + timer + 's';
-    if (footTimer) footTimer.textContent = 'Next refresh in ' + timer + 's';
-}
+    function renderHistory(items) {
+      const container = document.getElementById('historyContainer');
+      container.textContent = '';
 
-// ── Init ──────────────────────────────────────────────────────────────────────
-refreshAll();
-setInterval(tickTimer, 1000);
-</script>
+      if (!items || items.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'text-muted text-sm';
+        empty.style.cssText = 'text-align:center; padding: 1.5rem;';
+        empty.textContent = 'No translation history yet.';
+        container.appendChild(empty);
+        return;
+      }
+
+      items.forEach(item => {
+        const pill = document.createElement('div');
+        pill.className = 'tool-pill';
+        pill.style.cssText = 'margin:0; border-radius: 12px;';
+
+        const header = document.createElement('div');
+        header.className = 'tool-pill-header';
+
+        const col = document.createElement('div');
+        col.style.cssText = 'display:flex; flex-direction:column; gap:0.35rem; width:100%;';
+
+        const meta = document.createElement('div');
+        meta.style.cssText = 'display:flex; justify-content:space-between; align-items:center;';
+
+        const langSpan = document.createElement('span');
+        langSpan.className = 'text-xs';
+        langSpan.style.color = 'var(--accent-purple)';
+        langSpan.textContent = item.language_pair || '';
+
+        const tsSpan = document.createElement('span');
+        tsSpan.className = 'text-xs text-muted';
+        if (item.timestamp) {
+          const d = new Date(typeof item.timestamp === 'number' && item.timestamp < 1e12 ? item.timestamp * 1000 : item.timestamp);
+          tsSpan.textContent = d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+        }
+
+        meta.appendChild(langSpan);
+        meta.appendChild(tsSpan);
+
+        const origDiv = document.createElement('div');
+        origDiv.className = 'text-muted text-sm';
+        origDiv.textContent = item.original || '';
+
+        const transDiv = document.createElement('div');
+        transDiv.className = 'text-sm';
+        transDiv.style.color = '#ffffff';
+        transDiv.textContent = item.translation || '';
+
+        col.appendChild(meta);
+        col.appendChild(origDiv);
+        col.appendChild(transDiv);
+        header.appendChild(col);
+        pill.appendChild(header);
+        container.appendChild(pill);
+      });
+    }
+
+    async function handleAction(action) {
+      try {
+        const res = await fetch(API + '/session/' + action, { method: 'POST' });
+        if (res.ok) fetchStatus();
+        else console.error('Action failed: HTTP ' + res.status);
+      } catch (err) {
+        console.error('Action error:', err);
+      }
+    }
+
+    // Init + auto-refresh every 10s
+    fetchLanguages().then(() => {
+      fetchStatus();
+      fetchHistory();
+    });
+    setInterval(function() { fetchStatus(); fetchHistory(); }, 10000);
+
+    async function updateBellCount() {
+      try {
+        const [inboxRes, opsRes] = await Promise.all([
+          fetch('/api/inbox/status').catch(() => null),
+          fetch('/api/ops/alerts').catch(() => null)
+        ]);
+
+        const inboxData = (inboxRes && inboxRes.ok) ? await inboxRes.json().catch(() => ({})) : {};
+        const opsData = (opsRes && opsRes.ok) ? await opsRes.json().catch(() => ({})) : {};
+
+        const summary = inboxData.summary || {};
+        const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
+        const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
+
+        let total = 0;
+        if (typeof summary.open_items === 'number' || typeof summary.attention_items === 'number') {
+          total = (summary.open_items || 0) + (summary.attention_items || 0);
+        } else {
+          total = latestItems.length + alerts.length;
+        }
+
+        const countEl = document.getElementById('nav-bell-count');
+        if (countEl) {
+          if (total > 0) {
+            countEl.textContent = total > 99 ? '99+' : String(total);
+            countEl.classList.remove('hidden');
+          } else {
+            countEl.classList.add('hidden');
+          }
+        }
+
+        const dropdown = document.getElementById('bell-dropdown');
+        if (!dropdown) return;
+
+        dropdown.innerHTML = '';
+
+        if (alerts.length === 0 && latestItems.length === 0) {
+          const emptyDiv = document.createElement('div');
+          emptyDiv.className = 'bell-dropdown-empty';
+          emptyDiv.textContent = 'Нет уведомлений';
+          dropdown.appendChild(emptyDiv);
+        } else {
+          if (alerts.length > 0) {
+            const header = document.createElement('div');
+            header.className = 'bell-dropdown-header';
+            header.textContent = 'ALERTS';
+            dropdown.appendChild(header);
+
+            alerts.forEach(alert => {
+              const a = document.createElement('a');
+              a.className = 'bell-dropdown-item';
+              a.href = '/v4/ops';
+          
+              const dot = document.createElement('span');
+              dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
+          
+              const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+          
+              a.appendChild(dot);
+              a.appendChild(text);
+              dropdown.appendChild(a);
+            });
+          }
+
+          if (latestItems.length > 0) {
+            const header = document.createElement('div');
+            header.className = 'bell-dropdown-header';
+            header.textContent = 'INBOX';
+            dropdown.appendChild(header);
+
+            latestItems.forEach(item => {
+              const a = document.createElement('a');
+              a.className = 'bell-dropdown-item';
+              a.href = `/v4/inbox#${item.id || item.item_id || ''}`;
+          
+              const dot = document.createElement('span');
+              dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
+          
+              const text = document.createTextNode(item.title || 'Notification');
+          
+              a.appendChild(dot);
+              a.appendChild(text);
+              dropdown.appendChild(a);
+            });
+          }
+        }
+
+        const footer = document.createElement('a');
+        footer.className = 'bell-dropdown-footer';
+        footer.href = '/v4/inbox';
+        footer.textContent = 'Открыть все →';
+        footer.style.display = 'block';
+        footer.style.textDecoration = 'none';
+        dropdown.appendChild(footer);
+
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    setInterval(updateBellCount, 30000);
+    updateBellCount();
+
+    const navBell = document.querySelector('.nav-bell');
+    if (navBell) {
+      const bellWrapper = navBell.closest('.nav-bell-wrapper');
+      const bellDropdown = document.getElementById('bell-dropdown');
+  
+      if (bellWrapper && bellDropdown) {
+        navBell.addEventListener('click', (e) => {
+          e.preventDefault();
+          bellDropdown.classList.toggle('hidden');
+        });
+
+        document.addEventListener('click', (e) => {
+          if (!bellWrapper.contains(e.target)) {
+            bellDropdown.classList.add('hidden');
+          }
+        });
+
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') {
+            bellDropdown.classList.add('hidden');
+          }
+        });
+      }
+    }
+  </script>
 </body>
 </html>
