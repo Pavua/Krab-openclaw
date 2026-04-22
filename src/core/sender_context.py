@@ -48,6 +48,17 @@ def build_context_block(message: Any, *, is_owner: bool) -> str:
     Параметры:
     - message: pyrogram Message (или любой объект с from_user/chat атрибутами)
     - is_owner: True если отправитель является owner'ом userbot'а
+    - own_user_id: user_id самого Краба (для определения krab_mentioned)
+    - own_username: username Краба (для определения krab_mentioned)
+
+    Включает:
+    - sender identity (user_id, username, first_name)
+    - chat_type, chat_title
+    - is_owner
+    - forward info (is_forwarded, original_author_*)
+    - reply info (is_reply, reply_to_*)
+    - mentioned_users list, krab_mentioned flag
+    - [policy] блок: persona-правила обращения (override gateway/session cache)
 
     Возвращает multiline строку для prepend к system prompt.
     Никогда не выбрасывает исключений — при отсутствии данных возвращает безопасный fallback.
@@ -76,6 +87,17 @@ def build_context_block(message: Any, *, is_owner: bool) -> str:
             lines.append(f"chat_title: {chat_title}")
         lines.append(f"is_owner: {is_owner_str}")
         lines.append("[/context]")
+
+        # --- Persona policy (override gateway/session cache) ---
+        # Инжектируется при каждом запросе чтобы не зависеть от кэша сессии.
+        # Обращение "Мой Господин" — редкая шутливая форма, не default.
+        lines += [
+            "[policy]",
+            "- Обращение по умолчанию: нейтральный тон без личных обращений.",
+            '- "Мой Господин" — только если owner явно попросил в этом turn (шутливый режим).',
+            "- Стандартные нейтральные ответы: «Готов», «Ок», «Проверил», «Выполнено».",
+            "[/policy]",
+        ]
 
         return "\n".join(lines)
     except Exception:  # noqa: BLE001
