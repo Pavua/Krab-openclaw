@@ -2219,7 +2219,12 @@ class OpenClawClient:
         current_model: str,
         has_photo: bool,
     ) -> str:
-        """Возвращает облачный retry-кандидат (или пустую строку, если кандидата нет)."""
+        """Возвращает облачный retry-кандидат (или пустую строку, если кандидата нет).
+
+        ФИКС W16: при has_photo=True кандидат ОБЯЗАН поддерживать vision.
+        CLI-провайдеры (codex-cli, gemini-cli, opencode) не умеют multimodal —
+        возвращать их при photo-запросе значит гарантированно потерять вложение.
+        """
         runtime_chain: list[str] = []
         runtime_primary = str(get_runtime_primary_model() or "").strip()
         if runtime_primary:
@@ -2229,12 +2234,28 @@ class OpenClawClient:
             normalized = str(candidate or "").strip()
             if not normalized or normalized == str(current_model or "").strip():
                 continue
+            # Если запрос с фото — пропускаем модели без vision-поддержки.
+            if has_photo and not _supports_vision(normalized):
+                logger.debug(
+                    "photo_retry_skip_non_vision_candidate",
+                    candidate=normalized,
+                    current_model=current_model,
+                )
+                continue
             if self._is_cloud_candidate_usable(normalized, model_manager):
                 return normalized
         if not hasattr(model_manager, "get_best_cloud_model"):
             return ""
         candidate = str(await model_manager.get_best_cloud_model(has_photo=has_photo) or "").strip()
         if not candidate or candidate == str(current_model or "").strip():
+            return ""
+        # Финальная проверка: get_best_cloud_model тоже может вернуть non-vision кандидата.
+        if has_photo and not _supports_vision(candidate):
+            logger.warning(
+                "photo_retry_best_cloud_candidate_not_vision_capable",
+                candidate=candidate,
+                current_model=current_model,
+            )
             return ""
         if not self._is_cloud_candidate_usable(candidate, model_manager):
             return ""
