@@ -6,6 +6,9 @@ Perceptor — STT-модуль через Krab Voice Gateway с fallback на ml
   1. Voice Gateway /stt (http://127.0.0.1:8090) — если жив
   2. mlx_whisper локально — если Gateway недоступен
 
+При недоступности Voice Gateway — fallback на mlx_whisper (если установлен).
+Если оба backend провалились → возвращает error markup `[transcription_failed: ...]`.
+
 Ожидаемый интерфейс bootstrap/runtime.py:
     perceptor = Perceptor(config={})
     perceptor.whisper_model      # str | None — для логирования
@@ -26,6 +29,9 @@ logger = structlog.get_logger(__name__)
 # mlx_whisper model для fallback. Tiny = быстрый, small = лучше качество.
 # Переопределить через env MLX_WHISPER_MODEL.
 _MLX_WHISPER_MODEL_DEFAULT = "mlx-community/whisper-small-mlx"
+
+# Префикс error markup — детектируется downstream
+TRANSCRIPTION_FAILED_PREFIX = "[transcription_failed:"
 
 
 class Perceptor:
@@ -112,13 +118,37 @@ class Perceptor:
             logger.warning("perceptor_transcribe_failed", error=str(exc), backend="gateway")
             return ""
 
+    async def _transcribe_mlx_whisper(self, audio_path: str) -> str:
+        """
+        Fallback транскрипция через mlx_whisper (локальный Apple Silicon).
+
+        Возвращает транскрипт или "" при недоступности/ошибке.
+        """
+        try:
+            import mlx_whisper  # type: ignore[import-untyped]
+
+            result = mlx_whisper.transcribe(
+                audio_path, path_or_hf_repo="mlx-community/whisper-turbo"
+            )
+            text = str(result.get("text") or "").strip()
+            logger.info("perceptor_mlx_whisper_ok", chars=len(text))
+            return text
+        except ImportError:
+            logger.debug("perceptor_mlx_whisper_not_installed")
+            return ""
+        except Exception as exc:
+            logger.warning("perceptor_mlx_whisper_failed", error=str(exc))
+            return ""
+
     async def transcribe(self, audio_path: str, model_manager: object = None) -> str:
         """
-        Транскрипция аудио файла с fallback цепочкой:
-          1. Voice Gateway /stt (если жив)
-          2. mlx_whisper локально (если Gateway мёртв)
+        Транскрипция с fallback: Voice Gateway → mlx_whisper.
 
-        Логирует какой backend использован и причину fallback.
+        Если оба backend провалились → возвращает error markup:
+            "[transcription_failed: voice_gateway=<err>; mlx_whisper=<err>]"
+
+        Вызывающий код (userbot/voice_profile.py) детектирует этот markup
+        и сообщает пользователю честную причину сбоя.
         model_manager не используется (транскрипция не через LLM).
         """
         import pathlib
@@ -126,50 +156,50 @@ class Perceptor:
         path = pathlib.Path(audio_path)
         if not path.exists():
             logger.warning("perceptor_transcribe_file_not_found", path=str(path))
-            return "Ошибка транскрибации: файл не найден"
-
-        # Пробуем Voice Gateway первым
-        gateway_ok = await self._gateway_alive()
-        if gateway_ok:
-            try:
-                audio_bytes = path.read_bytes()
-                result = await self._transcribe_via_gateway(audio_bytes)
-                if result:
-                    logger.info("perceptor_transcribe_ok", backend="voice_gateway", path=str(path))
-                    return result
-                logger.warning(
-                    "perceptor_transcribe_empty", backend="voice_gateway", path=str(path)
-                )
-            except Exception as exc:
-                logger.warning(
-                    "perceptor_transcribe_failed",
-                    backend="voice_gateway",
-                    error=str(exc),
-                    fallback="mlx_whisper",
-                )
-        else:
-            logger.warning(
-                "perceptor_gateway_dead",
-                gateway_url=self._gateway_url,
-                fallback="mlx_whisper",
+            return (
+                f"{TRANSCRIPTION_FAILED_PREFIX} voice_gateway=file_not_found; mlx_whisper=skipped]"
             )
-
-        # Fallback: mlx_whisper локально
         try:
-            result = await self._transcribe_via_mlx(str(path))
-            if result:
-                logger.info("perceptor_transcribe_ok", backend="mlx_whisper", path=str(path))
-                return result
-            logger.warning("perceptor_transcribe_empty", backend="mlx_whisper", path=str(path))
-            return ""
+            audio_bytes = path.read_bytes()
         except Exception as exc:
-            logger.error(
-                "perceptor_transcribe_failed",
-                backend="mlx_whisper",
-                error=str(exc),
-                path=str(path),
-            )
-            return ""
+            logger.warning("perceptor_transcribe_read_failed", path=str(path), error=str(exc))
+            return f"{TRANSCRIPTION_FAILED_PREFIX} voice_gateway=read_error:{exc}; mlx_whisper=skipped]"
+
+        # Backend 1: Voice Gateway
+        gw_error: str = ""
+        gw_text: str = ""
+        try:
+            gw_text = await self.transcribe_audio(audio_bytes)
+        except Exception as exc:
+            gw_error = str(exc)
+        if not gw_text and not gw_error:
+            gw_error = "empty_response"
+
+        if gw_text:
+            return gw_text
+
+        # Backend 2: mlx_whisper fallback
+        mlx_error: str = ""
+        mlx_text: str = ""
+        try:
+            mlx_text = await self._transcribe_mlx_whisper(str(path))
+        except Exception as exc:
+            mlx_error = str(exc)
+        if not mlx_text and not mlx_error:
+            mlx_error = "empty_response"
+
+        if mlx_text:
+            logger.info("perceptor_mlx_fallback_used", gw_error=gw_error)
+            return mlx_text
+
+        # Оба backend провалились → error markup
+        markup = (
+            f"{TRANSCRIPTION_FAILED_PREFIX} "
+            f"voice_gateway={gw_error or 'empty'}; "
+            f"mlx_whisper={mlx_error or 'empty'}]"
+        )
+        logger.error("perceptor_both_backends_failed", markup=markup)
+        return markup
 
     async def speak(self, text: str, voice_id: str | None = None) -> str:
         """

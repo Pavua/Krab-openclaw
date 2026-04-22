@@ -501,6 +501,15 @@ class Config:
     # Voice Gateway POSTает сюда транскрипты → ответ LLM стримится как SSE.
     KRAB_VOICE_PORT: int = int(os.getenv("KRAB_VOICE_PORT", "8081"))
 
+    # Strict mode для транскрипции голосовых сообщений.
+    # 0 (default): при сбое оба backend → LLM получает честный промпт с описанием ошибки.
+    # 1: при сбое — немедленный reply "Не удалось распознать, напиши текстом" без LLM call.
+    KRAB_VOICE_STRICT_MODE: bool = os.getenv("KRAB_VOICE_STRICT_MODE", "0").strip() in (
+        "1",
+        "true",
+        "yes",
+    )
+
     @classmethod
     def validate(cls) -> list[str]:
         """Проверяет обязательные настройки и возвращает список ошибок"""

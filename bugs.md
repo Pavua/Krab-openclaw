@@ -45,3 +45,37 @@ Voice Gateway (`http://127.0.0.1:8090`) мёртв — Connection refused.
 ### Долгосрочное решение
 Поднять Voice Gateway как LaunchAgent (сейчас нет plist для него).
 Добавить в `scripts/launchagents/` plist для `ai.krab.voice-gateway`.
+
+---
+
+## [W16.4] Voice transcription failure — silent fallback to context memory
+
+**Date:** 2026-04-22
+**Severity:** UX / Medium
+**Commit:** fix(voice): honest transcription failure messaging + strict mode
+
+### Symptom
+When both Voice Gateway and mlx_whisper fail to transcribe a voice message,
+Krab silently returned `""` from `perceptor.transcribe()`. Downstream LLM
+received a request with no transcript text and responded based on conversation
+context, giving the user the impression the voice was understood.
+
+User report: "в прошлый раз гс до меня не дошло нормально"
+
+### Root cause
+`perceptor.transcribe_audio()` caught all exceptions and returned `""`.
+`perceptor.transcribe()` had no fallback backend and propagated the empty string.
+`_transcribe_audio_message()` in `voice_profile.py` treated `""` as generic failure
+without distinguishing "both backends dead" from "empty audio".
+
+### Fix
+1. `perceptor.py`: added `_transcribe_mlx_whisper()` as fallback backend.
+   When both backends fail → returns error markup `[transcription_failed: ...]`.
+2. `voice_profile.py`: detects error markup → in non-strict mode passes an honest
+   LLM prompt explaining the failure; in strict mode replies immediately without LLM.
+3. `config.py`: added `KRAB_VOICE_STRICT_MODE` (default 0).
+
+### Config
+```
+KRAB_VOICE_STRICT_MODE=0  # 0=LLM told to be honest, 1=immediate reply without LLM
+```
