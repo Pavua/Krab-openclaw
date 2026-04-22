@@ -1752,7 +1752,11 @@ class KraabUserbot(
     # ------------------------------------------------------------------
 
     def _is_translator_active_for_chat(self, chat_id: int | str) -> bool:
-        """Проверяет, активна ли translator сессия для данного чата."""
+        """Проверяет, активна ли translator сессия для данного чата.
+
+        Translator — строго opt-in: активируется только явным !translator on / !translator session start.
+        active_chats должен содержать chat_id чтобы pipeline сработал — пустой список = inactive.
+        """
         state = self.get_translator_session_state()
         if state.get("session_status") != "active":
             return False
@@ -1760,8 +1764,9 @@ class KraabUserbot(
             return False
         active_chats = state.get("active_chats") or []
         if not active_chats:
-            # Если active_chats пуст — translator активен для ВСЕХ чатов owner'а
-            return True
+            # Пустой active_chats → сессия не привязана ни к одному чату (не активна).
+            # Ранее здесь был fallback "активен для всех" — это нарушало opt-in семантику.
+            return False
         return str(chat_id) in [str(c) for c in active_chats]
 
     async def _handle_translator_voice(

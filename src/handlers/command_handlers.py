@@ -3048,12 +3048,22 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
         return
 
     if sub == "on":
-        # !translator on → !translator session start
+        # !translator on → !translator session start (per-chat, opt-in)
         profile = bot.get_translator_runtime_profile()
         label = str(args[2] or "").strip() or None
         current_state = bot.get_translator_session_state()
+        # Добавляем текущий чат в active_chats — translator строго per-chat opt-in
+        current_chat_id = str(message.chat.id)
+        active_chats = list(current_state.get("active_chats") or [])
+        if current_chat_id not in active_chats:
+            active_chats.append(current_chat_id)
         state = bot.update_translator_session_state(
-            session_status="active", label=label, persist=True
+            session_status="active",
+            active_chats=active_chats,
+            active_session_label=label,
+            last_language_pair=profile.get("language_pair"),
+            last_event="session_started",
+            persist=True,
         )
         await message.reply(_render_translator_session_state(state))
         return
