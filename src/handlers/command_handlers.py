@@ -11312,40 +11312,69 @@ async def handle_todo(bot: "KraabUserbot", message: Message) -> None:
 
 
 # ---------------------------------------------------------------------------
-# !weather — погода через OpenClaw + web_search
+# !weather — погода через wttr.in (fast, no API key) с LLM fallback
 # ---------------------------------------------------------------------------
+
+_WTTR_URL = "https://wttr.in/{city}?format=4&lang=ru"
+_WTTR_TIMEOUT = 8.0
+
+
+async def _fetch_wttr(city: str) -> str | None:
+    """Получает погоду через wttr.in format=4 (compact one-liner).
+
+    Returns:
+        Строка погоды или None при ошибке.
+    """
+    url = _WTTR_URL.format(city=city.replace(" ", "+"))
+    try:
+        async with httpx.AsyncClient(timeout=_WTTR_TIMEOUT) as client:
+            resp = await client.get(url, follow_redirects=True)
+        if resp.status_code == 200:
+            text = resp.text.strip()
+            # wttr.in возвращает "City: ☀️ +22°C ↗20km/h …" или похожее
+            if text and len(text) > 5:
+                return text
+    except (httpx.TimeoutException, httpx.RequestError):
+        pass
+    return None
 
 
 async def handle_weather(bot: "KraabUserbot", message: Message) -> None:
     """
-    Показывает текущую погоду для города через LLM + web_search.
+    Показывает текущую погоду для города.
 
     Форматы:
     - !weather          — погода в городе по умолчанию (DEFAULT_WEATHER_CITY)
     - !weather <город>  — погода в указанном городе
+
+    Приоритет: wttr.in (быстро, без API-ключа) → LLM web_search (fallback).
     """
-    # Определяем город: из аргументов или из конфига
     city = bot._get_command_args(message).strip()
     if not city:
         city = config.DEFAULT_WEATHER_CITY
 
-    # Изолированная сессия, чтобы не загрязнять основной контекст чата
-    session_id = f"weather_{message.chat.id}"
+    msg = await message.reply(f"🌤 Смотрю погоду в **{city}**...")
 
+    # Быстрый путь: wttr.in
+    wttr_result = await _fetch_wttr(city)
+    if wttr_result:
+        await msg.edit(f"🌤 {wttr_result}")
+        return
+
+    # Fallback: LLM + web_search (медленнее, но надёжнее для экзотических городов)
+    session_id = f"weather_{message.chat.id}"
     prompt = (
         f"Какая сейчас погода в {city}? "
         "Дай краткий ответ: температура, облачность, осадки. "
         "Используй актуальные данные из веб-поиска."
     )
 
-    msg = await message.reply(f"🌤 Смотрю погоду в **{city}**...")
-
     try:
         chunks: list[str] = []
         async for chunk in openclaw_client.send_message_stream(
             message=prompt,
             chat_id=session_id,
-            disable_tools=False,  # LLM должен использовать web_search
+            disable_tools=False,
         ):
             chunks.append(str(chunk))
 
@@ -11354,7 +11383,6 @@ async def handle_weather(bot: "KraabUserbot", message: Message) -> None:
             await msg.edit("❌ Не удалось получить данные о погоде.")
             return
 
-        # Разбиваем длинный ответ если нужно
         parts = _split_text_for_telegram(result)
         await msg.edit(parts[0])
         for part in parts[1:]:
