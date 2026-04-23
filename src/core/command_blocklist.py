@@ -56,20 +56,38 @@ class CommandBlocklist:
     # ------------------------------------------------------------------
 
     def _load(self) -> None:
-        """Загрузить с диска; при отсутствии файла — записать defaults."""
+        """Загрузить с диска; при отсутствии файла — записать defaults.
+
+        Важно: defaults применяются как baseline — если для конкретного чата
+        нет записи в файле, она берётся из _DEFAULT_CONFIG. Это гарантирует,
+        что даже при пустом {} файле How2AI-блок сохраняется.
+        """
+        loaded: dict[str, list[str]] = {}
         if self._blocklist_file.exists():
             try:
                 raw = self._blocklist_file.read_text(encoding="utf-8")
                 parsed = json.loads(raw)
                 if isinstance(parsed, dict):
-                    self._data = {k: list(v) for k, v in parsed.items()}
-                    logger.debug("command_blocklist_loaded", entries=len(self._data))
-                    return
+                    loaded = {k: list(v) for k, v in parsed.items()}
+                    logger.debug("command_blocklist_loaded", entries=len(loaded))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("command_blocklist_load_error", error=str(exc))
-        # Файл отсутствует или повреждён → defaults
-        self._data = {k: list(v) for k, v in _DEFAULT_CONFIG.items()}
-        self._persist()
+
+        # Мёржим defaults: для ключей, которых нет в сохранённом файле,
+        # берём значения из _DEFAULT_CONFIG. Уже существующие ключи — не трогаем.
+        merged = {k: list(v) for k, v in _DEFAULT_CONFIG.items()}
+        merged.update(loaded)  # loaded перекрывает defaults только для своих ключей
+        self._data = merged
+
+        # Если файл отсутствовал или не содержал defaults — персистируем
+        needs_persist = not self._blocklist_file.exists()
+        if not needs_persist:
+            for key, cmds in _DEFAULT_CONFIG.items():
+                if key not in loaded:
+                    needs_persist = True
+                    break
+        if needs_persist:
+            self._persist()
 
     def _persist(self) -> None:
         """Записать текущее состояние на диск."""
