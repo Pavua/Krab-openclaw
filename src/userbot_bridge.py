@@ -3224,6 +3224,10 @@ class KraabUserbot(
         _text = target_text  # захват для lambda
         try:
             sent = await _telegram_send_queue.run(chat_id, lambda: msg.reply(_text))
+            # Фиксируем момент ответа Краба для follow-up детектора
+            from .core.trigger_detector import last_krab_msg  # noqa: PLC0415
+
+            last_krab_msg.record(chat_id)
             return sent or msg
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -3232,9 +3236,13 @@ class KraabUserbot(
                 message_id=str(getattr(msg, "id", "") or ""),
                 error=str(exc),
             )
-            return await _telegram_send_queue.run(
+            sent = await _telegram_send_queue.run(
                 chat_id, lambda: self.client.send_message(chat_id, _text)
             )
+            from .core.trigger_detector import last_krab_msg  # noqa: PLC0415
+
+            last_krab_msg.record(chat_id)
+            return sent
 
     # _get_chat_processing_lock -> BackgroundTasksMixin (src/userbot/background_tasks.py)
 
@@ -3340,8 +3348,48 @@ class KraabUserbot(
             and message.reply_to_message.from_user.id == self.me.id
         )
 
+        # Семантический детектор неявных триггеров (implicit questions, follow-ups, AI aliases).
+        # Только для групп (DM и так обрабатываются без gate).
+        # Guest XOR сохраняется — implicit trigger не обходит его.
+        has_implicit_trigger = False
+        if not has_trigger and not is_reply_to_me and not is_self:
+            _chat_type_impl = getattr(getattr(message, "chat", None), "type", None)
+            _is_group_impl = _chat_type_impl in (
+                enums.ChatType.GROUP,
+                enums.ChatType.SUPERGROUP,
+            )
+            if _is_group_impl:
+                from .core.trigger_detector import (
+                    TriggerType as ImplicitTriggerType,
+                )
+                from .core.trigger_detector import (  # noqa: PLC0415
+                    detect_implicit_mention,
+                )
+
+                _is_reply_to_other = bool(
+                    message.reply_to_message
+                    and message.reply_to_message.from_user
+                    and message.reply_to_message.from_user.id != self.me.id
+                )
+                _impl_result = detect_implicit_mention(
+                    text or "",
+                    chat_id,
+                    is_reply_to_explicit_msg=_is_reply_to_other,
+                )
+                if _impl_result.trigger_type != ImplicitTriggerType.NONE:
+                    has_implicit_trigger = True
+                    logger.info(
+                        "implicit_trigger_fired",
+                        chat_id=chat_id,
+                        trigger_type=_impl_result.trigger_type.value,
+                        score=_impl_result.score,
+                        matched=_impl_result.matched,
+                    )
+
+        # Forward batch: уже прошли фильтрацию в _process_message — trigger-gate пропускаем
         if not (
             has_trigger
+            or has_implicit_trigger
             or message.chat.type == enums.ChatType.PRIVATE
             or is_reply_to_me
             or has_group_audio_fallback
