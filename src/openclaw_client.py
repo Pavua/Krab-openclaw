@@ -2630,6 +2630,31 @@ class OpenClawClient:
 
         self._sanitize_session_and_cache(chat_id)
 
+        # DEBUG: логируем hash + превью system prompt для диагностики policy injection.
+        # Помогает поймать регрессии типа «Мой Господин» без логирования полного prompt.
+        if system_prompt:
+            import hashlib as _hashlib  # noqa: PLC0415
+
+            _sp_hash = _hashlib.md5(system_prompt.encode("utf-8", errors="ignore")).hexdigest()[:8]  # noqa: S324
+            _sp_preview = system_prompt[:200].replace("\n", " ")
+            _has_policy = "[policy]" in system_prompt
+            _has_gospodin = "Господин" in system_prompt
+            logger.info(
+                "system_prompt_debug",
+                chat_id=chat_id,
+                sp_hash=_sp_hash,
+                has_policy_block=_has_policy,
+                has_gospodin_text=_has_gospodin,
+                preview=_sp_preview,
+            )
+            if _has_gospodin:
+                logger.warning(
+                    "system_prompt_contains_gospodin",
+                    chat_id=chat_id,
+                    sp_hash=_sp_hash,
+                    hint="SOUL.md or USER.md contains 'Господин' instruction — review required",
+                )
+
         if images:
             content_parts = [{"type": "text", "text": message}]
             for img_b64 in images:
