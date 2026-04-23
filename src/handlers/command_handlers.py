@@ -19115,3 +19115,73 @@ async def handle_e2e_smoke(bot: "KraabUserbot", message: Message) -> None:
         logger.warning("e2e-smoke: save report failed: %s", exc)
 
     await message.reply("\n".join(lines))
+
+
+async def handle_setpanelauth(bot: "KraabUserbot", message: Message) -> None:
+    """Установить bcrypt-пароль для Krab Panel (owner-only).
+
+    !setpanelauth <user> <pass>  — сгенерировать хэш и вывести env-переменные
+    !setpanelauth status         — текущий статус KRAB_PANEL_AUTH
+    !setpanelauth off            — показать команду для отключения
+
+    Применение: добавить в .env и перезапустить Краба.
+    """
+    from ..core.access_control import is_owner  # noqa: PLC0415
+
+    if not is_owner(message):
+        return
+
+    args = bot._get_command_args(message).strip()
+
+    if args == "status":
+        auth_enabled = os.getenv("KRAB_PANEL_AUTH", "") == "1"
+        username = os.getenv("KRAB_PANEL_USERNAME", "krab")
+        has_hash = bool(os.getenv("KRAB_PANEL_PASSWORD_HASH", ""))
+        status = "включён" if auth_enabled else "выключен"
+        hash_status = "задан" if has_hash else "НЕ задан"
+        await message.reply(
+            f"**Panel bcrypt auth:** {status}\nUsername: `{username}`\nPassword hash: {hash_status}"
+        )
+        return
+
+    if args == "off":
+        await message.reply(
+            "Чтобы выключить auth — удалите из `.env`:\n"
+            "```\nKRAB_PANEL_AUTH=1\n"
+            "KRAB_PANEL_USERNAME=...\n"
+            "KRAB_PANEL_PASSWORD_HASH=...\n```\n"
+            "Затем перезапустите Краба."
+        )
+        return
+
+    parts = args.split(None, 1)
+    if len(parts) < 2:
+        await message.reply(
+            "Использование: `!setpanelauth <username> <password>`\n"
+            "Пример: `!setpanelauth pablito myS3cr3t`"
+        )
+        return
+
+    username, password = parts[0], parts[1]
+
+    try:
+        import bcrypt  # noqa: PLC0415
+
+        hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+    except ImportError:
+        await message.reply("bcrypt не установлен в окружении Краба")
+        return
+
+    env_block = (
+        f"KRAB_PANEL_AUTH=1\nKRAB_PANEL_USERNAME={username}\nKRAB_PANEL_PASSWORD_HASH={hashed}"
+    )
+    await message.reply(
+        f"Добавьте в `.env` и перезапустите Краба:\n\n```\n{env_block}\n```\n\n"
+        "После перезапуска панель потребует Basic Auth с bcrypt-проверкой.\n"
+        "_Сообщение с паролем будет автоматически удалено..._"
+    )
+    # Удалить исходное сообщение с паролем из истории чата
+    try:
+        await message.delete()
+    except Exception:
+        pass

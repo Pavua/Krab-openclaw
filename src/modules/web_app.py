@@ -154,6 +154,7 @@ class WebApp:
         self._model_catalog_cache: tuple[float, dict[str, Any]] | None = None
         self._vg_subscriber: VoiceGatewayEventSubscriber | None = None
         self._setup_basic_auth_middleware()
+        self._setup_bcrypt_auth_middleware()
         self._setup_routes()
 
     @property
@@ -203,6 +204,69 @@ class WebApp:
                 )
 
         self.app.add_middleware(BasicAuthMiddleware)
+
+    def _setup_bcrypt_auth_middleware(self) -> None:
+        """
+        Опциональный bcrypt-based HTTP Basic Auth middleware.
+
+        Активируется переменной окружения KRAB_PANEL_AUTH=1.
+        Дополнительно требует:
+            KRAB_PANEL_USERNAME  — логин (по умолчанию "krab")
+            KRAB_PANEL_PASSWORD_HASH — bcrypt-хэш пароля ($2b$...)
+
+        Генерация хэша:
+            python -c "import bcrypt; print(bcrypt.hashpw(b'pass', bcrypt.gensalt()).decode())"
+
+        Или через Telegram-команду (owner-only): !setpanelauth <user> <pass>
+
+        Исключения из auth (мониторинг):
+            /api/health/lite, /api/v1/health
+        """
+        if os.getenv("KRAB_PANEL_AUTH", "").strip() != "1":
+            return
+
+        _username = os.getenv("KRAB_PANEL_USERNAME", "krab").strip()
+        _password_hash = os.getenv("KRAB_PANEL_PASSWORD_HASH", "").strip()
+
+        if not _password_hash:
+            logger.warning(
+                "KRAB_PANEL_AUTH=1 но KRAB_PANEL_PASSWORD_HASH не задан — bcrypt auth пропущен"
+            )
+            return
+
+        try:
+            import bcrypt as _bcrypt
+        except ImportError:
+            logger.warning("KRAB_PANEL_AUTH=1 но bcrypt не установлен — auth пропущен")
+            return
+
+        _hash_bytes = _password_hash.encode()
+        _NO_AUTH_PATHS = frozenset({"/api/health/lite", "/api/v1/health"})  # noqa: N806
+
+        class BcryptAuthMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+                if request.url.path in _NO_AUTH_PATHS:
+                    return await call_next(request)
+                auth_header = request.headers.get("Authorization", "")
+                if auth_header.startswith("Basic "):
+                    try:
+                        decoded = base64.b64decode(auth_header[len("Basic ") :]).decode(
+                            "utf-8", errors="replace"
+                        )
+                        provided_user, _, provided_pass = decoded.partition(":")
+                        if provided_user == _username and provided_pass:
+                            if _bcrypt.checkpw(provided_pass.encode(), _hash_bytes):
+                                return await call_next(request)
+                    except Exception:
+                        pass
+                return Response(
+                    content="Unauthorized",
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="Krab Panel"'},
+                )
+
+        self.app.add_middleware(BcryptAuthMiddleware)
+        logger.info("Bcrypt auth middleware активирован", username=_username)
 
     def _public_base_url(self) -> str:
         """Возвращает внешний base URL панели."""
