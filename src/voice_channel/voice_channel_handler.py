@@ -26,8 +26,8 @@ from ..config import config
 from .voice_state import VoiceSession
 
 if TYPE_CHECKING:
-    from ..memory_engine import MemoryManager
     from ..mcp_client import MCPClientManager
+    from ..memory_engine import MemoryManager
     from ..model_manager import ModelManager
     from ..openclaw_client import OpenClawClient
 
