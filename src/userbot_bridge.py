@@ -35,6 +35,7 @@ from .core.chat_ban_cache import chat_ban_cache
 from .core.chat_capability_cache import chat_capability_cache
 from .core.chat_filter_config import chat_filter_config
 from .core.chat_window_manager import chat_window_manager
+from .core.command_blocklist import command_blocklist
 from .core.cron_native_scheduler import cron_native_scheduler
 from .core.exceptions import KrabError, UserInputError
 from .core.inbox_service import inbox_service
@@ -73,6 +74,7 @@ from .handlers import (
     handle_autodel,
     handle_backup,
     handle_bench,
+    handle_blocklist,
     handle_bookmark,
     handle_browser,
     handle_budget,
@@ -81,6 +83,8 @@ from .handlers import (
     handle_chatban,
     handle_claude_cli,
     handle_clear,
+    handle_cmdblock,
+    handle_cmdunblock,
     handle_codex,
     handle_collect,
     handle_config,
@@ -119,6 +123,7 @@ from .handlers import (
     handle_panel,
     handle_pin,
     handle_poll,
+    handle_proactivity,
     handle_purge,
     handle_qr,
     handle_quiz,
@@ -153,6 +158,7 @@ from .handlers import (
     handle_todo,
     handle_translate,
     handle_translator,
+    handle_trust,
     handle_unarchive,
     handle_unpin,
     handle_uptime,
@@ -541,6 +547,14 @@ class KraabUserbot(
             def check_access(_, __, m):
                 if not m.from_user:
                     return False
+                # Per-chat blocklist — silent skip (не логировать как ошибку)
+                if command_blocklist.is_blocked(m.chat.id, command_name):
+                    logger.debug(
+                        "command_blocklist_skip",
+                        command=command_name,
+                        chat=m.chat.id,
+                    )
+                    return False
                 result = self._has_command_access(m.from_user, command_name)
                 if not result:
                     access_profile = self._get_access_profile(m.from_user)
@@ -660,6 +674,26 @@ class KraabUserbot(
         )
         async def wrap_chatban(c, m):
             await run_cmd(handle_chatban, m)
+
+        @self.client.on_message(
+            filters.command("block", prefixes=prefixes) & _make_command_filter("block"), group=-1
+        )
+        async def wrap_block(c, m):
+            await run_cmd(handle_cmdblock, m)
+
+        @self.client.on_message(
+            filters.command("unblock", prefixes=prefixes) & _make_command_filter("unblock"),
+            group=-1,
+        )
+        async def wrap_unblock(c, m):
+            await run_cmd(handle_cmdunblock, m)
+
+        @self.client.on_message(
+            filters.command("blocklist", prefixes=prefixes) & _make_command_filter("blocklist"),
+            group=-1,
+        )
+        async def wrap_blocklist(c, m):
+            await run_cmd(handle_blocklist, m)
 
         @self.client.on_message(
             filters.command("translator", prefixes=prefixes) & _make_command_filter("translator"),
@@ -895,6 +929,19 @@ class KraabUserbot(
         )
         async def wrap_todo(c, m):
             await run_cmd(handle_todo, m)
+
+        @self.client.on_message(
+            filters.command("proactivity", prefixes=prefixes) & _make_command_filter("proactivity"),
+            group=-1,
+        )
+        async def wrap_proactivity(c, m):
+            await run_cmd(handle_proactivity, m)
+
+        @self.client.on_message(
+            filters.command("trust", prefixes=prefixes) & _make_command_filter("trust"), group=-1
+        )
+        async def wrap_trust(c, m):
+            await run_cmd(handle_trust, m)
 
         @self.client.on_message(
             filters.command("ls", prefixes=prefixes) & _make_command_filter("ls"), group=-1

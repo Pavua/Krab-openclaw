@@ -36,6 +36,7 @@ from ..core.access_control import (
 )
 from ..core.chat_ban_cache import chat_ban_cache
 from ..core.command_aliases import alias_service
+from ..core.command_blocklist import command_blocklist
 from ..core.cost_analytics import cost_analytics
 from ..core.exceptions import UserInputError
 from ..core.inbox_service import inbox_service
@@ -3017,6 +3018,91 @@ async def handle_chatban(bot: "KraabUserbot", message: Message) -> None:
     raise UserInputError(
         user_message="❌ Неизвестная подкоманда chatban. Используй `!chatban status` или `!chatban clear <chat_id>`."
     )
+
+
+async def handle_cmdblock(bot: "KraabUserbot", message: Message) -> None:
+    """!block <cmd> — заблокировать команду в текущем чате (owner-only).
+
+    Краб будет молча игнорировать команду в этом чате (silent skip, без ошибки).
+    Полезно когда в чате есть другой бот с тем же триггером.
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="❌ Только owner.")
+
+    args = str(message.text or "").split()
+    if len(args) < 2 or not args[1].strip():
+        raise UserInputError(user_message="❌ Укажи команду: `!block <cmd>` (без префикса)")
+
+    cmd = args[1].strip()
+    chat_id = message.chat.id
+    added = command_blocklist.add_block(chat_id, cmd)
+    if added:
+        await message.reply(
+            f"✅ Команда `!{cmd}` заблокирована в этом чате. "
+            f"Краб будет молча её игнорировать.\n"
+            f"`!blocklist` — посмотреть все блоки."
+        )
+    else:
+        await message.reply(f"ℹ️ `!{cmd}` уже была в blocklist для этого чата.")
+
+
+async def handle_cmdunblock(bot: "KraabUserbot", message: Message) -> None:
+    """!unblock <cmd> — убрать команду из blocklist текущего чата (owner-only)."""
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="❌ Только owner.")
+
+    args = str(message.text or "").split()
+    if len(args) < 2 or not args[1].strip():
+        raise UserInputError(user_message="❌ Укажи команду: `!unblock <cmd>`")
+
+    cmd = args[1].strip()
+    chat_id = message.chat.id
+    removed = command_blocklist.remove_block(chat_id, cmd)
+    if removed:
+        await message.reply(f"✅ `!{cmd}` убрана из blocklist. Краб снова будет обрабатывать её.")
+    else:
+        await message.reply(f"ℹ️ `!{cmd}` не была в blocklist для этого чата.")
+
+
+async def handle_blocklist(bot: "KraabUserbot", message: Message) -> None:
+    """!blocklist [<chat_id>] — показать per-chat command blocklist (owner-only).
+
+    Без аргументов — все блоки текущего чата.
+    С аргументом `all` — все чаты.
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="❌ Только owner.")
+
+    args = str(message.text or "").split()
+    show_all = len(args) >= 2 and args[1].strip().lower() == "all"
+
+    if show_all:
+        all_blocks = command_blocklist.list_blocks()
+        if not all_blocks:
+            await message.reply("ℹ️ Command blocklist пуст.")
+            return
+        lines = ["**Command Blocklist (все чаты):**"]
+        for key, cmds in all_blocks.items():
+            label = "global (*)" if key == "*" else f"chat `{key}`"
+            lines.append(f"  {label}: `{'`, `'.join(cmds)}`")
+        await message.reply("\n".join(lines))
+    else:
+        chat_id = message.chat.id
+        blocks = command_blocklist.list_blocks(chat_id)
+        global_blocks = command_blocklist.list_blocks("*")
+        if not blocks and not global_blocks:
+            await message.reply(f"ℹ️ Blocklist для чата `{chat_id}` пуст.\nДобавить: `!block <cmd>`")
+            return
+        lines = [f"**Command Blocklist** (чат `{chat_id}`):"]
+        if global_blocks:
+            lines.append(f"  global (*): `{'`, `'.join(global_blocks)}`")
+        if blocks:
+            lines.append(f"  этот чат: `{'`, `'.join(blocks)}`")
+        lines.append("\nУбрать: `!unblock <cmd>`")
+        await message.reply("\n".join(lines))
 
 
 async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
@@ -6319,40 +6405,93 @@ async def handle_screenshot(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(f"📄 **OCR{lang_label}:**\n```\n{text_result[:4000]}\n```")
         return
 
-    # Проверяем доступность перед снимком
+    # Проверяем доступность перед снимком; при необходимости — auto-start Chrome
     probe = await _bb.health_check(timeout_sec=4.0)
     if not probe.get("ok"):
+        # Auto-start: пробуем запустить dedicated Chrome и повторить probe
+        try:
+            from ..integrations.dedicated_chrome import launch_dedicated_chrome
+
+            ok_launch, _reason = await asyncio.to_thread(launch_dedicated_chrome)
+            if ok_launch:
+                logger.info("screenshot_auto_started_chrome")
+                probe = await _bb.health_check(timeout_sec=6.0)
+        except Exception as _ce:
+            logger.warning("screenshot_chrome_autostart_failed", error=repr(_ce))
+
+    png_bytes: bytes | None = None
+    cdp_ok = probe.get("ok", False)
+
+    if cdp_ok:
+        await message.reply("📸 Делаю снимок…")
+        try:
+            png_bytes = await asyncio.wait_for(_bb.screenshot(), timeout=15.0)
+        except asyncio.TimeoutError:
+            await message.reply("⏱ Таймаут снимка (15 с). Попробуй позже.")
+            return
+        except Exception as exc:
+            logger.warning("screenshot_cdp_failed", error=repr(exc))
+            png_bytes = None
+
+    if not png_bytes:
+        # Fallback на macOS screencapture (работает всегда без Chrome)
+        try:
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as _sc_tmp:
+                _sc_path = _sc_tmp.name
+            _sc_proc = await asyncio.create_subprocess_exec(
+                "screencapture",
+                "-x",
+                "-t",
+                "png",
+                _sc_path,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(_sc_proc.wait(), timeout=10.0)
+            import pathlib
+
+            _sc_file = pathlib.Path(_sc_path)
+            if _sc_file.exists() and _sc_file.stat().st_size > 0:
+                png_bytes = _sc_file.read_bytes()
+                _sc_file.unlink(missing_ok=True)
+                logger.info("screenshot_screencapture_fallback_ok")
+            else:
+                _sc_file.unlink(missing_ok=True)
+                png_bytes = None
+        except Exception as _sc_exc:
+            logger.warning("screenshot_screencapture_fallback_failed", error=repr(_sc_exc))
+            png_bytes = None
+
+    if not png_bytes:
         err_detail = probe.get("error") or (
             "Chrome не запущен или CDP недоступен" if probe.get("blocked") else "неизвестная ошибка"
         )
-        await message.reply(f"📡 **!screenshot**: браузер недоступен\n`{err_detail[:300]}`")
-        return
-
-    await message.reply("📸 Делаю снимок…")
-    try:
-        png_bytes = await asyncio.wait_for(_bb.screenshot(), timeout=15.0)
-    except asyncio.TimeoutError:
-        await message.reply("⏱ Таймаут снимка (15 с). Попробуй позже.")
-        return
-    except Exception as exc:
-        await message.reply(f"❌ Ошибка: `{str(exc)[:300]}`")
-        return
-
-    if not png_bytes:
-        await message.reply("❌ Снимок пустой — возможно вкладок нет или CDP не отвечает.")
+        await message.reply(
+            f"❌ **!screenshot**: снимок не удался\n"
+            f"• CDP: {err_detail[:200]}\n"
+            f"• macOS screencapture тоже не сработал\n"
+            f"Запусти Chrome: `./scripts/start_dedicated_chrome.command`"
+        )
         return
 
     import tempfile
+
+    if not cdp_ok:
+        caption = "📸 Screenshot (macOS screencapture — Chrome CDP недоступен)"
+    else:
+        caption = "📸 Screenshot"
 
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as _tmp:
         _tmp.write(png_bytes)
         _tmp_path = _tmp.name
     try:
-        await message.reply_photo(_tmp_path, caption="📸 Screenshot")
+        await message.reply_photo(_tmp_path, caption=caption)
     except Exception as _photo_err:
         logger.warning("reply_photo_failed", error=str(_photo_err))
         try:
-            await message.reply_document(_tmp_path, caption="📸 Screenshot (fallback)")
+            await message.reply_document(_tmp_path, caption=caption + " (doc)")
         except Exception as _doc_err:
             logger.error("reply_document_failed", error=str(_doc_err))
             await message.reply(f"❌ Не удалось отправить скриншот: `{str(_photo_err)[:200]}`")
@@ -18381,3 +18520,452 @@ async def _handle_chado_digest(message: Message) -> None:
         preview = f"❌ Ошибка dry-run: {exc}"
 
     await message.reply(f"📋 **Chado Digest (dry-run)**\n\n{preview}")
+
+
+# ---------------------------------------------------------------------------
+# !mem — быстрый доступ к Memory Layer (hybrid search + stats + count + summary)
+# ---------------------------------------------------------------------------
+
+_MEM_SNIPPET_LEN = 200
+_MEM_HELP_TEXT = (
+    "🧠 **!mem** — быстрый поиск в Memory Layer\n\n"
+    "`!mem <запрос>` — гибридный поиск, топ-5 результатов\n"
+    "`!mem stats` — статистика архива (total/encoded/size/чаты)\n"
+    "`!mem count [chat_id]` — количество сообщений (опционально по чату)\n"
+    "`!mem summary <chat_id>` — первое/последнее сообщение + счётчик\n"
+    "`!mem help` — эта справка"
+)
+
+
+def _mem_truncate(text: str, max_len: int = _MEM_SNIPPET_LEN) -> str:
+    """Обрезает сниппет до max_len символов."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rstrip() + "…"
+
+
+async def handle_mem(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !mem — быстрый доступ к Memory Layer.
+
+    Субкоманды:
+      !mem <запрос>         — hybrid search (HybridRetriever), топ-5
+      !mem stats            — статистика archive.db
+      !mem count [chat_id]  — количество сообщений
+      !mem summary <chat_id>— первое/последнее + count через LLM или plain stats
+      !mem help             — справка
+    """
+    from ..core.command_registry import bump_command
+
+    bump_command("mem")
+
+    raw = str(message.text or "").strip()
+    parts = raw.split(maxsplit=2)
+    # parts[0] == "!mem" (или "mem"), parts[1] == subcommand/query, parts[2] == rest
+    sub = parts[1].strip() if len(parts) > 1 else ""
+    rest = parts[2].strip() if len(parts) > 2 else ""
+
+    if not sub or sub.lower() == "help":
+        del bot
+        await message.reply(_MEM_HELP_TEXT)
+        return
+
+    if sub.lower() == "stats":
+        del bot
+        await _mem_stats(message)
+        return
+
+    if sub.lower() == "count":
+        del bot
+        chat_id_arg = rest or None
+        await _mem_count(message, chat_id_arg)
+        return
+
+    if sub.lower() == "summary":
+        if not rest:
+            await message.reply("❌ Укажите chat_id: `!mem summary <chat_id>`")
+            return
+        await _mem_summary(bot, message, rest)
+        return
+
+    # Всё остальное — поисковый запрос (sub + rest).
+    del bot
+    query = (sub + (" " + rest if rest else "")).strip()
+    await _mem_search(message, query)
+
+
+async def _mem_stats(message: Message) -> None:
+    """Форматирует статистику archive.db и отправляет reply."""
+    from ..core.memory_stats import collect_memory_stats
+
+    stats = collect_memory_stats()
+    if not stats.get("exists"):
+        await message.reply(f"📭 Memory Layer: архив не найден.\n`{stats.get('path', '—')}`")
+        return
+
+    total_msgs = stats.get("total_messages", 0)
+    total_chunks = stats.get("total_chunks", 0)
+    encoded = stats.get("encoded_chunks", 0)
+    size_mb = stats.get("db_size_mb", 0.0)
+    coverage = stats.get("encoding_coverage_pct", 0.0)
+    oldest = stats.get("oldest_message_ts") or "—"
+    newest = stats.get("newest_message_ts") or "—"
+    top_chats = stats.get("top_chats") or []
+
+    lines = [
+        "🧠 **Memory Layer — статистика**",
+        "",
+        f"📨 Сообщений: **{total_msgs:,}**",
+        f"🗂 Чанков: **{total_chunks:,}** (закодировано: {encoded:,}, {coverage}%)",
+        f"💾 Размер: **{size_mb} МБ**",
+        f"🕐 Диапазон: {str(oldest)[:19]} → {str(newest)[:19]}",
+    ]
+    if top_chats:
+        lines.append("")
+        lines.append("**Топ чатов:**")
+        for c in top_chats[:5]:
+            lines.append(f"  `{c['chat_id']}` — {c['count']:,} сообщений")
+
+    reply = "\n".join(lines)
+    if len(reply) > 4000:
+        reply = reply[:3997] + "…"
+    await message.reply(reply)
+
+
+async def _mem_count(message: Message, chat_id_arg: str | None) -> None:
+    """Считает сообщения в archive.db (опционально — по chat_id)."""
+    import sqlite3
+
+    from ..core.memory_stats import default_archive_db_path
+
+    db_path = default_archive_db_path()
+    if not db_path.exists():
+        await message.reply("📭 Memory Layer: архив не найден.")
+        return
+
+    # Валидация chat_id
+    if chat_id_arg is not None:
+        try:
+            int(chat_id_arg)
+        except ValueError:
+            await message.reply(f"❌ Некорректный chat_id: `{chat_id_arg}`. Ожидается число.")
+            return
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            if chat_id_arg is None:
+                row = conn.execute("SELECT COUNT(*) FROM messages").fetchone()
+                count = int(row[0]) if row else 0
+                await message.reply(f"🧠 Memory Layer: **{count:,}** сообщений всего.")
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE chat_id = ?",
+                    (chat_id_arg,),
+                ).fetchone()
+                count = int(row[0]) if row else 0
+                await message.reply(
+                    f"🧠 Memory Layer: **{count:,}** сообщений в чате `{chat_id_arg}`."
+                )
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        await message.reply(f"❌ Ошибка чтения архива: {exc}")
+
+
+async def _mem_summary(bot: "KraabUserbot", message: Message, chat_id_arg: str) -> None:
+    """
+    Краткая сводка по чату в archive.db:
+    первое/последнее сообщение, счётчик, + LLM-резюме если доступен.
+    """
+    import sqlite3
+
+    from ..core.memory_stats import default_archive_db_path
+
+    # Валидация chat_id
+    try:
+        int(chat_id_arg)
+    except ValueError:
+        await message.reply(f"❌ Некорректный chat_id: `{chat_id_arg}`. Ожидается число.")
+        return
+
+    db_path = default_archive_db_path()
+    if not db_path.exists():
+        await message.reply("📭 Memory Layer: архив не найден.")
+        return
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) AS cnt, MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts "
+                "FROM messages WHERE chat_id = ?",
+                (chat_id_arg,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        await message.reply(f"❌ Ошибка чтения архива: {exc}")
+        return
+
+    if row is None or (row["cnt"] or 0) == 0:
+        await message.reply(f"📭 Чат `{chat_id_arg}` не найден в Memory Layer.")
+        return
+
+    count = int(row["cnt"])
+    first_ts = str(row["first_ts"] or "—")[:19]
+    last_ts = str(row["last_ts"] or "—")[:19]
+
+    lines = [
+        f"🧠 **Memory summary** — чат `{chat_id_arg}`",
+        "",
+        f"📨 Сообщений: **{count:,}**",
+        f"🕐 Первое: `{first_ts}`",
+        f"🕑 Последнее: `{last_ts}`",
+    ]
+
+    # Пробуем LLM-резюме (best-effort, не обязательно).
+    try:
+        from ..openclaw_client import openclaw_client as _oc
+
+        if _oc is not None:
+            llm_prompt = (
+                f"Дай краткое резюме (2-3 предложения) для архивного чата {chat_id_arg}: "
+                f"{count:,} сообщений с {first_ts} по {last_ts}. "
+                "Опиши вероятную активность и временной диапазон."
+            )
+            llm_reply = await _oc.ask(llm_prompt, max_tokens=200)
+            if llm_reply and llm_reply.strip():
+                lines.append("")
+                lines.append("**Резюме (AI):**")
+                lines.append(_mem_truncate(llm_reply.strip(), 500))
+    except Exception:  # noqa: BLE001
+        pass  # LLM не обязателен
+
+    del bot
+    reply = "\n".join(lines)
+    if len(reply) > 4000:
+        reply = reply[:3997] + "…"
+    await message.reply(reply)
+
+
+async def _mem_search(message: Message, query: str) -> None:
+    """Гибридный поиск через HybridRetriever, возвращает топ-5."""
+    import asyncio
+
+    from ..core.memory_retrieval import HybridRetriever
+
+    retriever = HybridRetriever()
+    try:
+        results = await asyncio.to_thread(retriever.search, query, top_k=5)
+    except Exception as exc:  # noqa: BLE001
+        await message.reply(f"❌ Ошибка поиска: {exc}")
+        return
+    finally:
+        retriever.close()
+
+    if not results:
+        await message.reply(f"🔍 По запросу «{query}» ничего не найдено в Memory Layer.")
+        return
+
+    lines = [f"🧠 **!mem** — топ результатов для «{_mem_truncate(query, 60)}»", ""]
+    for i, r in enumerate(results, 1):
+        ts_str = r.timestamp.strftime("%Y-%m-%d %H:%M") if r.timestamp else "—"
+        snippet = _mem_truncate(r.text_redacted or "", _MEM_SNIPPET_LEN)
+        score_pct = int(r.score * 100)
+        lines.append(f"**{i}.** `{r.chat_id}` · {ts_str} · {score_pct}%\n> {snippet}")
+        lines.append("")
+
+    reply = "\n".join(lines).rstrip()
+    if len(reply) > 4000:
+        reply = reply[:3997] + "…"
+    await message.reply(reply)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# !trust — управление trusted guests allowlist (W10.1 bypass)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_TRUST_HELP = """\
+🔐 **!trust** — управление allowlist доверенных гостей (W10.1 bypass)
+
+Команды (owner-only):
+  `!trust add @username [user_id]` — добавить в текущем чате
+  `!trust remove @username`        — удалить из текущего чата
+  `!trust list`                    — список для текущего чата
+  `!trust list all`                — список всех чатов
+
+По умолчанию: `@dodik_ggt` разрешена в YMB FAMILY FOREVER и How2AI.
+Trusted guest получает LLM-ответ даже без @mention Краба в группе.
+"""
+
+
+async def handle_trust(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !trust add|remove|list — управление trusted_guests allowlist.
+
+    Owner-only. Позволяет legit friends (Дашка @dodik_ggt и др.) получать
+    LLM-ответы в группах, минуя W10.1 guest XOR gate.
+    """
+    from ..core.trusted_guests import trusted_guests  # noqa: PLC0415
+
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        await message.reply("🔒 `!trust` доступен только владельцу.")
+        return
+
+    raw = str(message.text or "").strip()
+    parts = raw.split(maxsplit=3)
+    # parts[0] = "!trust", parts[1] = subcommand, parts[2] = @username, parts[3] = user_id
+    sub = parts[1].strip().lower() if len(parts) > 1 else ""
+
+    if not sub or sub == "help":
+        await message.reply(_TRUST_HELP)
+        return
+
+    chat_id = message.chat.id
+
+    # ── !trust list [all] ──────────────────────────────────────────────
+    if sub == "list":
+        scope = parts[2].strip().lower() if len(parts) > 2 else ""
+        if scope == "all":
+            all_data = trusted_guests.all_chats()
+            if not all_data:
+                await message.reply("📋 Trusted guests: пусто.")
+                return
+            lines = ["📋 **Trusted guests (все чаты):**", ""]
+            for cid, entry in all_data.items():
+                uids = entry.get("user_ids", [])
+                unames = entry.get("usernames", [])
+                lines.append(f"**Chat** `{cid}`:")
+                for uid in uids:
+                    lines.append(f"  • user_id={uid}")
+                for uname in unames:
+                    lines.append(f"  • {uname}")
+                lines.append("")
+            await message.reply("\n".join(lines).rstrip())
+            return
+
+        entries = trusted_guests.list_trusted(chat_id)
+        if not entries:
+            await message.reply(f"📋 Trusted guests в `{chat_id}`: пусто.")
+            return
+        lines = [f"📋 **Trusted guests в чате `{chat_id}`:**", ""]
+        for e in entries:
+            uid = e.get("user_id")
+            uname = e.get("username") or "—"
+            uid_str = f"user_id={uid}" if uid else "user_id=?"
+            lines.append(f"  • {uname} ({uid_str})")
+        await message.reply("\n".join(lines))
+        return
+
+    # ── !trust add @username [user_id] ────────────────────────────────
+    if sub == "add":
+        username_arg = parts[2].strip() if len(parts) > 2 else ""
+        if not username_arg:
+            await message.reply("❌ Формат: `!trust add @username [user_id]`")
+            return
+        user_id_arg = 0
+        if len(parts) > 3:
+            try:
+                user_id_arg = int(parts[3].strip())
+            except ValueError:
+                await message.reply("❌ user_id должен быть числом.")
+                return
+        norm_uname = username_arg.lstrip("@").strip()
+        trusted_guests.add_trusted(chat_id, user_id_arg, f"@{norm_uname}")
+        uid_info = f", user_id={user_id_arg}" if user_id_arg else ""
+        await message.reply(
+            f"✅ `@{norm_uname}`{uid_info} добавлен в trusted guests чата `{chat_id}`.\n"
+            f"Теперь получает LLM-ответы без @mention Краба."
+        )
+        return
+
+    # ── !trust remove @username ────────────────────────────────────────
+    if sub == "remove":
+        username_arg = parts[2].strip() if len(parts) > 2 else ""
+        if not username_arg:
+            await message.reply("❌ Формат: `!trust remove @username`")
+            return
+        norm_uname = username_arg.lstrip("@").strip()
+        trusted_guests.remove_trusted(chat_id, 0, f"@{norm_uname}")
+        await message.reply(f"🗑️ `@{norm_uname}` удалён из trusted guests чата `{chat_id}`.")
+        return
+
+
+async def handle_proactivity(bot: "KraabUserbot", message: Message) -> None:
+    """!proactivity — управление уровнем проактивности Краба.
+
+    Синтаксис:
+      !proactivity                   — показать текущий уровень и настройки
+      !proactivity <level>           — переключить уровень
+      !proactivity help              — справка по уровням
+
+    Уровни:
+      silent    (0) — только explicit @mention; reactions off
+      reactive  (1) — mention + reply-to-krab; contextual reactions
+      attentive (2) — DEFAULT: implicit triggers threshold 0.7, normal autonomy
+      engaged   (3) — threshold 0.5, chatty autonomy, follow-up 5 мин
+      proactive (4) — threshold 0.3, unsolicited thoughts
+    """
+    from ..core.proactivity import (  # noqa: PLC0415
+        ProactivityLevel,
+        allows_unsolicited,
+        get_autonomy_mode,
+        get_level,
+        get_reactions_mode,
+        get_trigger_threshold,
+        set_level,
+    )
+
+    raw = (message.text or "").strip()
+    parts = raw.split(maxsplit=1)
+    arg = parts[1].strip().lower() if len(parts) > 1 else ""
+
+    # Без аргументов — показать статус
+    if not arg or arg == "status" or arg == "статус":
+        lv = get_level()
+        lines = [
+            f"⚡ **Proactivity Level**: `{lv.value}` ({lv.name.lower()})",
+            f"🤖 Autonomy mode: `{get_autonomy_mode()}`",
+            f"📊 Trigger threshold: `{get_trigger_threshold()}`",
+            f"💬 Reactions mode: `{get_reactions_mode()}`",
+            f"💡 Unsolicited thoughts: `{'on' if allows_unsolicited() else 'off'}`",
+            "",
+            "Уровни: `silent` `reactive` `attentive` `engaged` `proactive`",
+        ]
+        await message.reply("\n".join(lines))
+        return
+
+    # Справка
+    if arg in ("help", "помощь", "?"):
+        help_text = (
+            "**!proactivity — уровни активности Краба:**\n\n"
+            "`silent` (0) — только explicit @mention; reactions off\n"
+            "`reactive` (1) — mention + reply-to-krab; contextual reactions\n"
+            "`attentive` (2) — **DEFAULT**: implicit 0.7, normal autonomy\n"
+            "`engaged` (3) — implicit 0.5, chatty autonomy, follow-up 5 мин\n"
+            "`proactive` (4) — implicit 0.3, unsolicited thoughts\n\n"
+            "Пример: `!proactivity engaged`"
+        )
+        await message.reply(help_text)
+        return
+
+    # Переключение уровня
+    valid = {lv.name.lower() for lv in ProactivityLevel} | {
+        str(lv.value) for lv in ProactivityLevel
+    }
+    if arg not in valid:
+        await message.reply(
+            f"❌ Неизвестный уровень `{arg}`.\n"
+            "Доступные: `silent`, `reactive`, `attentive`, `engaged`, `proactive` (или 0–4)"
+        )
+        return
+
+    set_level(arg)
+    lv = get_level()
+    await message.reply(
+        f"✅ Proactivity переключён: **{lv.name.lower()}** ({lv.value})\n"
+        f"Autonomy: `{get_autonomy_mode()}` | Threshold: `{get_trigger_threshold()}`"
+    )
