@@ -160,8 +160,11 @@ class OpenClawClient:
         # doctor --fix при каждом старте Краба может ротировать gateway token,
         # поэтому .env может устареть — runtime openclaw.json всегда актуальнее.
         self._sync_token_from_runtime_on_init()
-        # W24: авто-починка models.json — добавляем image в input для vision-моделей.
+        # W24/W26: авто-починка models.json — добавляем image в input для vision-моделей.
         # OpenClaw gateway стриппит image_url из payload если 'image' не заявлен в input[].
+        # Вызывается при старте Краба; дополнительно — перед каждым photo-запросом
+        # с async reload_openclaw_secrets (см. ниже), т.к. gateway может перезаписать
+        # models.json при своём старте (race condition при одновременном запуске).
         self.ensure_vision_input_in_models_json()
         self._openclaw_sessions_index_path = (
             Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json"
@@ -1203,7 +1206,14 @@ class OpenClawClient:
             )
             return False
 
-    # Паттерны ID моделей, которые умеют vision/multimodal
+    def _set_google_key_in_models(self, key_value: str) -> bool:
+        data = self._read_models_json()
+        providers = data.setdefault("providers", {})
+        google = providers.setdefault("google", {})
+        google["apiKey"] = key_value
+        return self._write_models_json(data)
+
+    # Паттерны ID моделей, поддерживающих vision/multimodal.
     _VISION_MODEL_PATTERNS: tuple[str, ...] = (
         "gemini-1.5",
         "gemini-2",
@@ -1220,9 +1230,13 @@ class OpenClawClient:
     def _is_model_declared_vision_in_config(self, model_id: str) -> bool:
         """Проверяет что models.json объявляет image в input для модели model_id.
 
-        W24: OpenClaw gateway читает input[] для маршрутизации multimodal запросов.
+        W24/W26: OpenClaw gateway читает input[] для маршрутизации multimodal запросов.
         Если image отсутствует — gateway стриппит image_url из payload перед
         передачей в Gemini/OpenAI, даже если bytes были переданы корректно.
+
+        ВАЖНО: НЕ делаем early-return на первом матче — у одной модели могут быть
+        записи в нескольких провайдерах (google/google-antigravity). Возвращаем True
+        если хотя бы одна запись имеет image в input[].
         """
         data = self._read_models_json()
         norm = str(model_id or "").strip().lower()
@@ -1231,13 +1245,17 @@ class OpenClawClient:
                 mid = str(m.get("id", "") or "").lower()
                 if mid == norm or norm.endswith(f"/{mid}") or mid.endswith(f"/{norm}"):
                     inp = m.get("input", [])
-                    return isinstance(inp, list) and "image" in inp
+                    if isinstance(inp, list) and "image" in inp:
+                        return True
         return False
 
     def ensure_vision_input_in_models_json(self) -> int:
         """Добавляет 'image' в input[] для всех vision-capable моделей в models.json.
 
-        W24 fix: при старте Краба авто-починяет models.json если gateway стриппит image.
+        W24/W26 fix: при старте Краба авто-починяет models.json если gateway стриппит image.
+        Gateway может перезаписать models.json при собственном старте (race condition),
+        поэтому дополнительно вызывается перед каждым photo-запросом
+        (с последующим reload_openclaw_secrets).
         Возвращает количество исправленных моделей (0 = ничего не изменилось).
         """
         data = self._read_models_json()
@@ -1265,13 +1283,6 @@ class OpenClawClient:
                 patched_count=updated,
             )
         return updated
-
-    def _set_google_key_in_models(self, key_value: str) -> bool:
-        data = self._read_models_json()
-        providers = data.setdefault("providers", {})
-        google = providers.setdefault("google", {})
-        google["apiKey"] = key_value
-        return self._write_models_json(data)
 
     def _detect_semantic_error(self, text: str) -> dict[str, str] | None:
         """Детектор ложных успехов, когда backend вернул 200 с текстом ошибки."""
@@ -2082,6 +2093,17 @@ class OpenClawClient:
                 user_message="Таймаут провайдера",
                 retryable=True,
             )
+        except (httpx.ConnectError, httpx.RequestError) as exc:
+            # Gateway был down → ConnectError. Оборачиваем в ProviderError(retryable=True)
+            # чтобы 4-attempt retry loop поймал его и попробовал local fallback / cloud retry.
+            # До этого фикса ConnectError вылетал из loop напрямую — retry не происходил.
+            metrics.inc("llm_error")
+            logger.warning("openclaw_connect_error_retryable", model=model_id, error=str(exc))
+            raise ProviderError(
+                message=f"connect error for {model_id}: {exc}",
+                user_message="Провайдер временно недоступен",
+                retryable=True,
+            )
         logger.info("openclaw_response_status", status=response.status_code, model=model_id)
 
         if response.status_code != 200:
@@ -2210,16 +2232,6 @@ class OpenClawClient:
         _elapsed_ms = (time.monotonic() - _t0) * 1000
         metrics.add_latency(_elapsed_ms)
         metrics.inc("llm_success")
-        # Записываем latency в Prometheus histogram
-        try:
-            from src.core.llm_latency_tracker import llm_latency_tracker as _llt
-
-            _parts = str(model_id).split("/", 1)
-            _provider_tag = _parts[0] if len(_parts) == 2 else "unknown"
-            _model_tag = _parts[1] if len(_parts) == 2 else str(model_id)
-            _llt.observe(provider=_provider_tag, model=_model_tag, duration_s=_elapsed_ms / 1000.0)
-        except Exception:  # noqa: BLE001
-            pass
         return full_response.strip()
 
     async def _resolve_local_model_for_retry(
@@ -2661,68 +2673,35 @@ class OpenClawClient:
                 self._sessions[chat_id].insert(
                     0, {"role": "system", "content": effective_system_prompt}
                 )
-            elif effective_system_prompt and self._sessions[chat_id][0].get("role") == "system":
-                # ФИКС регрессии «Мой Господин»: обновляем system message при каждом запросе,
-                # чтобы sender context (is_owner: true/false) отражал текущего отправителя,
-                # а не того кто инициализировал сессию. Без этого гость получал is_owner=true
-                # если owner первым открыл чат.
-                self._sessions[chat_id][0]["content"] = effective_system_prompt
 
             # Nonce consumed при первом применении к новой/пустой сессии.
             if _nonce:
                 clear_gemini_nonce(chat_id)
         else:
             # Сессия уже загружена в памяти (например, !reset --layer=gemini не чистил её).
-            # ФИКС регрессии «Мой Господин»: всегда обновляем system message из system_prompt,
-            # чтобы sender context (is_owner) всегда соответствовал текущему отправителю.
+            # Проверяем, есть ли pending nonce: если да — обновляем content первого
+            # system-message, чтобы на следующем request Gemini получил отличающийся
+            # system_prompt и cache инвалидировался.
             from .core.gemini_cache_nonce import clear_gemini_nonce, get_gemini_nonce
 
             _nonce = get_gemini_nonce(chat_id)
-            if system_prompt and self._sessions[chat_id]:
+            if _nonce and system_prompt and self._sessions[chat_id]:
                 first_msg = self._sessions[chat_id][0]
-                effective_sp = (
-                    f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
-                    if _nonce
-                    else system_prompt
-                )
                 if isinstance(first_msg, dict) and first_msg.get("role") == "system":
-                    first_msg["content"] = effective_sp
+                    first_msg["content"] = f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"
                 else:
-                    # Нет system-сообщения — вставим его.
+                    # Нет system-сообщения — вставим его с nonce.
                     self._sessions[chat_id].insert(
                         0,
-                        {"role": "system", "content": effective_sp},
+                        {
+                            "role": "system",
+                            "content": (f"{system_prompt}\n\n<!-- cache_nonce: {_nonce} -->"),
+                        },
                     )
-                # Consume nonce после применения.
-                if _nonce:
-                    clear_gemini_nonce(chat_id)
+                # Consume nonce после применения: чтобы не обновлять system при каждом запросе.
+                clear_gemini_nonce(chat_id)
 
         self._sanitize_session_and_cache(chat_id)
-
-        # DEBUG: логируем hash + превью system prompt для диагностики policy injection.
-        # Помогает поймать регрессии типа «Мой Господин» без логирования полного prompt.
-        if system_prompt:
-            import hashlib as _hashlib  # noqa: PLC0415
-
-            _sp_hash = _hashlib.md5(system_prompt.encode("utf-8", errors="ignore")).hexdigest()[:8]  # noqa: S324
-            _sp_preview = system_prompt[:200].replace("\n", " ")
-            _has_policy = "[policy]" in system_prompt
-            _has_gospodin = "Господин" in system_prompt
-            logger.info(
-                "system_prompt_debug",
-                chat_id=chat_id,
-                sp_hash=_sp_hash,
-                has_policy_block=_has_policy,
-                has_gospodin_text=_has_gospodin,
-                preview=_sp_preview,
-            )
-            if _has_gospodin:
-                logger.warning(
-                    "system_prompt_contains_gospodin",
-                    chat_id=chat_id,
-                    sp_hash=_sp_hash,
-                    hint="SOUL.md or USER.md contains 'Господин' instruction — review required",
-                )
 
         # Если запрос помечен как memory-query — очищаем накопленную session history
         # (кроме system prompt), чтобы старые stale-ответы не отравляли атрибуцию.
@@ -2892,8 +2871,9 @@ class OpenClawClient:
                     trim_reason="local_primary_route",
                 )
 
-            # W24: проверяем что выбранная модель объявлена как vision-capable в models.json.
-            # Если нет — gateway стрипнет image_url, Gemini получит только текст.
+            # W24/W26: перед photo-запросом убеждаемся что models.json объявляет
+            # image в input[] для выбранной модели. Gateway кэширует capability config
+            # при старте и перезаписывает models.json — патч + reload решают race condition.
             if has_photo and not self._is_model_declared_vision_in_config(selected_model):
                 patched = self.ensure_vision_input_in_models_json()
                 logger.warning(
@@ -2901,6 +2881,25 @@ class OpenClawClient:
                     model=selected_model,
                     patched_count=patched,
                 )
+                if patched:
+                    # Нужен reload чтобы gateway подхватил обновлённый input[].
+                    # Без этого gateway продолжает стрипать image_url в текущем запросе
+                    # (использует in-memory capability cache, не перечитывает models.json).
+                    try:
+                        from .core.openclaw_secrets_runtime import reload_openclaw_secrets
+
+                        reload_result = await reload_openclaw_secrets()
+                        logger.info(
+                            "photo_vision_patch_reload_done",
+                            ok=reload_result.get("ok"),
+                            model=selected_model,
+                        )
+                    except Exception as _reload_exc:  # noqa: BLE001
+                        logger.warning(
+                            "photo_vision_patch_reload_failed",
+                            error=str(_reload_exc),
+                        )
+
             logger.info(
                 "openclaw_stream_start",
                 chat_id=chat_id,
