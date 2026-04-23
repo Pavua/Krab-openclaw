@@ -7,6 +7,7 @@ Web App Module (Phase 15+).
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import hashlib
 import io
@@ -28,7 +29,8 @@ import httpx
 import structlog
 import uvicorn
 from fastapi import Body, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.config import config  # noqa: E402
 from src.core.access_control import (  # noqa: E402
@@ -151,12 +153,56 @@ class WebApp:
         # поэтому write-path панели использует отдельный короткий cache.
         self._model_catalog_cache: tuple[float, dict[str, Any]] | None = None
         self._vg_subscriber: VoiceGatewayEventSubscriber | None = None
+        self._setup_basic_auth_middleware()
         self._setup_routes()
 
     @property
     def kraab(self):
         """Быстрый доступ к kraab_userbot через deps."""
         return self.deps.get("kraab_userbot")
+
+    def _setup_basic_auth_middleware(self) -> None:
+        """
+        Опциональный HTTP Basic Auth middleware для всей панели.
+
+        Активируется переменной окружения:
+            PANEL_BASIC_AUTH=username:password
+
+        Если переменная не задана — middleware пропускается (поведение без изменений).
+        Исключение: /api/health/lite всегда доступен без auth (для watchdog/мониторинга).
+
+        Пример использования через VPN reverse proxy:
+            Установите PANEL_BASIC_AUTH в env Краба, тогда даже при проксировании
+            через nginx без htpasswd панель не будет открыта без пароля.
+        """
+        raw = os.getenv("PANEL_BASIC_AUTH", "").strip()
+        if not raw or ":" not in raw:
+            return
+
+        username, _, password = raw.partition(":")
+        if not username or not password:
+            return
+
+        expected = base64.b64encode(f"{username}:{password}".encode()).decode()
+        # Пути, доступные без auth (мониторинг / healthcheck)
+        _NO_AUTH_PATHS = frozenset({"/api/health/lite", "/api/v1/health"})  # noqa: N806
+
+        class BasicAuthMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+                if request.url.path in _NO_AUTH_PATHS:
+                    return await call_next(request)
+                auth_header = request.headers.get("Authorization", "")
+                if auth_header.startswith("Basic "):
+                    provided = auth_header[len("Basic ") :]
+                    if provided == expected:
+                        return await call_next(request)
+                return Response(
+                    content="Unauthorized",
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="Krab Panel"'},
+                )
+
+        self.app.add_middleware(BasicAuthMiddleware)
 
     def _public_base_url(self) -> str:
         """Возвращает внешний base URL панели."""
@@ -8350,6 +8396,18 @@ class WebApp:
 
                 quota = await fetch_quota()
                 return {"ok": True, "quota": quota, "cached": False}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        @self.app.get("/api/costs/by-tier")
+        async def get_costs_by_tier(hours: float = 24.0):
+            """Агрегация расходов по тирам моделей (opus/sonnet/haiku/gpt5/gemini/…)."""
+            try:
+                from ..core.cost_analytics import cost_analytics as _ca
+                from ..core.model_tier_tracker import get_tier_summary
+
+                summary = get_tier_summary(list(_ca._calls), since_hours=hours)
+                return {"ok": True, "summary": summary}
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
 

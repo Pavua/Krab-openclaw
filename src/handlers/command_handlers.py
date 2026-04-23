@@ -7639,6 +7639,34 @@ async def handle_costs(bot: "KraabUserbot", message: Message) -> None:
     await message.reply("\n".join(lines), reply_markup=build_costs_detail_buttons())
 
 
+async def handle_models(bot: "KraabUserbot", message: Message) -> None:
+    """!models — распределение вызовов по тирам моделей (owner-only)."""
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
+
+    from ..core.model_tier_tracker import format_tier_summary_text, get_tier_summary
+
+    args = (bot._get_command_args(message) or "").strip().lower()
+    # Поддерживаем !models 48 (часов) и !models week
+    hours = 24.0
+    if args == "week":
+        hours = 168.0
+    elif args == "month":
+        hours = 720.0
+    else:
+        try:
+            hours = float(args)
+        except ValueError:
+            pass
+
+    calls = getattr(cost_analytics, "_calls", [])
+    summary = get_tier_summary(calls, since_hours=hours)
+    period_label = {24.0: "24ч", 168.0: "неделя", 720.0: "месяц"}.get(hours, f"{hours:.0f}ч")
+    text = format_tier_summary_text(summary).replace("за 24ч", f"за {period_label}")
+    await message.reply(text)
+
+
 async def handle_budget(bot: "KraabUserbot", message: Message) -> None:
     """!budget [сумма] — показать или установить месячный бюджет (owner-only)."""
     # Проверка: только владелец

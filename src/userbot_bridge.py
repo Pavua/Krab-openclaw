@@ -116,6 +116,7 @@ from .handlers import (
     handle_memo,
     handle_memory,
     handle_model,
+    handle_models,
     handle_monitor,
     handle_news,
     handle_note,
@@ -618,6 +619,12 @@ class KraabUserbot(
         )
         async def wrap_model(c, m):
             await run_cmd(handle_model, m)
+
+        @self.client.on_message(
+            filters.command("models", prefixes=prefixes) & _make_command_filter("models"), group=-1
+        )
+        async def wrap_models(c, m):
+            await run_cmd(handle_models, m)
 
         @self.client.on_message(
             filters.command("clear", prefixes=prefixes) & _make_command_filter("clear"), group=-1
