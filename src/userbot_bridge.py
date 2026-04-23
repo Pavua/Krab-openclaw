@@ -610,6 +610,13 @@ class KraabUserbot(
             await run_cmd(handle_clear, m)
 
         @self.client.on_message(
+            filters.command("forget", prefixes=prefixes) & _make_command_filter("forget"), group=-1
+        )
+        async def wrap_forget(c, m):
+            # !forget — alias for !clear (drop session history, cure history poisoning)
+            await run_cmd(handle_clear, m)
+
+        @self.client.on_message(
             filters.command("config", prefixes=prefixes) & _make_command_filter("config"), group=-1
         )
         async def wrap_config(c, m):
@@ -3809,23 +3816,45 @@ class KraabUserbot(
             access_level=access_profile.level,
         )
 
-        # SENDER CONTEXT: Инъектируем identity отправителя в system prompt.
-        # Защита от identity confusion — LLM видит is_owner явно и не может
-        # перепутать гостя с владельцем на основе текста сообщения.
+        # SENDER CONTEXT: инжектируем метаданные отправителя + текст reply-parent в prompt.
+        # Это даёт LLM информацию «на чьё сообщение отвечают» (fix «не вижу reply»).
         try:
-            from .core.access_control import AccessLevel as _AccessLevel  # noqa: PLC0415
             from .core.sender_context import (  # noqa: PLC0415
                 attach_to_system_prompt,
-                build_context_block,
+                build_sender_context_from_message,
             )
 
-            _sender_is_owner = (
-                hasattr(access_profile, "level") and access_profile.level == _AccessLevel.OWNER
+            _me_uid = getattr(self.me, "id", None) if self.me else None
+            _me_uname = getattr(self.me, "username", None) if self.me else None
+            _sender_ctx = build_sender_context_from_message(
+                message,
+                self_user_id=_me_uid,
+                is_owner=is_allowed_sender,
+                own_username=_me_uname,
             )
-            _sender_ctx = build_context_block(message, is_owner=_sender_is_owner)
             system_prompt = attach_to_system_prompt(system_prompt, _sender_ctx)
-        except Exception:  # noqa: BLE001
-            pass  # Никогда не ломаем LLM flow из-за context injection
+        except Exception as _sc_exc:  # noqa: BLE001
+            logger.warning("sender_context_inject_failed", error=str(_sc_exc))
+
+        # MEMORY ATTRIBUTION: если MEMORY_AUTO_CONTEXT_ENABLED=true — prepend [MEMORY] блоки
+        # с явной атрибуцией (chat_title + timestamp) в system_prompt.
+        # Это предотвращает приписывание LLM чужих сообщений (history poisoning).
+        # force_enable=True только если env явно включён; иначе — не мешаем.
+        try:
+            from .core.memory_context_augmenter import augment_query_with_memory as _aug_mem
+
+            _mem_aug = await _aug_mem(
+                query, force_enable=None
+            )  # уважает MEMORY_AUTO_CONTEXT_ENABLED
+            if _mem_aug.enabled and _mem_aug.chunks_used:
+                system_prompt = _mem_aug.augmented_prompt + "\n\n" + system_prompt
+                logger.debug(
+                    "memory_attribution_injected_to_system_prompt",
+                    chunks=len(_mem_aug.chunks_used),
+                    chat_id=chat_id,
+                )
+        except Exception as _mem_exc:  # noqa: BLE001
+            logger.debug("memory_attribution_inject_failed", error=str(_mem_exc))
 
         # CONTEXT: Добавляем контекст чата для групп (сэндвич-защита от инъекций)
         if is_allowed_sender and message.chat.type != enums.ChatType.PRIVATE:
