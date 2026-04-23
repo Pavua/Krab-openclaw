@@ -3266,8 +3266,13 @@ class KraabUserbot(
         access_profile: AccessProfile,
         is_allowed_sender: bool,
         chat_id: str,
+        _forward_batch_prompt: str | None = None,
     ) -> None:
-        """Обрабатывает одно входящее сообщение под эксклюзивным lock чата."""
+        """Обрабатывает одно входящее сообщение под эксклюзивным lock чата.
+
+        _forward_batch_prompt: если передан — используется вместо message.text
+        (результат batching пачки пересланных сообщений).
+        """
         from .core.command_aliases import alias_service as _alias_svc  # noqa: PLC0415
 
         text = message.text or message.caption or ""
@@ -3292,7 +3297,13 @@ class KraabUserbot(
                 return
 
         has_document = bool(getattr(message, "document", None))
-        if not text and not message.photo and not has_audio_message and not has_document:
+        if (
+            not text
+            and not message.photo
+            and not has_audio_message
+            and not has_document
+            and not _forward_batch_prompt
+        ):
             return
 
         # Счётчик обработанных сообщений за сессию (для !stats).
@@ -3334,6 +3345,7 @@ class KraabUserbot(
             or message.chat.type == enums.ChatType.PRIVATE
             or is_reply_to_me
             or has_group_audio_fallback
+            or bool(_forward_batch_prompt)
         ):
             return
 
@@ -3343,8 +3355,12 @@ class KraabUserbot(
             logger.info("silence_mode_skip", chat_id=chat_id)
             return
 
-        query = self._get_clean_text(text)
-        if not query and has_audio_message:
+        # Forward batch override: используем batched prompt вместо исходного текста
+        if _forward_batch_prompt:
+            query = _forward_batch_prompt
+        else:
+            query = self._get_clean_text(text)
+        if not _forward_batch_prompt and not query and has_audio_message:
             query, voice_error = await self._transcribe_audio_message(message)
             if not query:
                 await self._safe_reply_or_send_new(
@@ -3357,7 +3373,7 @@ class KraabUserbot(
                 handled = await self._handle_translator_voice(message, query, chat_id)
                 if handled:
                     return
-        elif query and not message.photo and not has_audio_message:
+        elif query and not message.photo and not has_audio_message and not _forward_batch_prompt:
             message, query = await self._coalesce_text_burst(
                 message=message,
                 user=user,
