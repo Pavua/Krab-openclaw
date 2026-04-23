@@ -1,47 +1,50 @@
-# Session 18 — Starter Prompt (post Session 17 mega wave)
+# Session 19 — Final Handoff (2026-04-22)
 
-## Quick status (as of end Session 17, 2026-04-21)
-- 48 commits in main Session 17 (43 чисто S17 + 5 carryover S16), range 7b32ce8..fd657c3
-- Memory Phase 2 live: 752k msgs / 72k chunks / 100% embedded (archive.db 472 MB)
-- Security hardening complete: guest XOR, operator PII guard, sender context
-- Architecture v2: 3 artifacts (Hero/Engineering/Ops) published, Design System v1.0 locked
-- Krab restarted, 238 endpoints live, ~154 commands + beta !mem/!chado/!filter
-- Killer fix: dead code `classify_priority()` (0 call-sites) → P0_INSTANT bypass wired (51ee5ad)
-- Dashboard V4 complete: 7/7 pages (/v4/ops, /v4/costs, /v4/inbox, /v4/stats, /v4/settings, /v4/translator, /v4/commands)
-- 24 новых тест-файла, +6750 / −226 строк; ruff clean
+## Quick status (as of end Session 19)
+- **35+ commits shipped** in Session 19 (branch `fix/daily-review-20260421`)
+- **26 commits** locally ahead of origin before final push
+- Infrastructure: Krab live, archive.db ~506 MB, 752k+ msgs, realtime memory indexer active
+- Dashboard V4: 7/7 pages complete, hourly sparkline costs, auto-refresh live
+- Security: trusted_guests allowlist wired, reaction understanding live
 
-## Known issues carried forward
-- pytest full-suite failures (exact count unknown) → check before starting, may need conftest fix
-- YMB chat (8 msgs) + 599 other under-indexed chats need Telegram bootstrap
-- MCP stats "embedded: 0" display bug (may be already fixed — verify)
-- patchright feasibility POC (§1 P2) — not started
-- (Ear issues outside scope — leave alone)
+## Live features shipped in Session 19
+- **Proactivity levels** — unified level control: silent → reactive → proactive
+- **Implicit triggers** — semantic trigger detection (implicit questions, Krab follow-ups, AI aliases)
+- **Phantom action guard** — strict prompt + real forward tool + post-processor (no "передал владельцу" phantom)
+- **Command blocklist** — per-chat command blocklist (`!cmdblock` / `!cmdunblock`)
+- **Memory attribution** — `chat_id` / `timestamp` / `chat_title` fields in `_Adapted` model
+- **reply_to passthrough** — parent message text included in LLM prompt (fixes "не вижу reply" bug)
+- **Forward batch** — `_process_message_serialized` + `_forward_batch_prompt` wired
+- **Image vision (models.json)** — `input[] = ['image']` restored; Gemini now receives photos
+- **Reasoning autoscale** — per-request reasoning scaling in model routing
+- **Per-account persona** — `[policy]` block injected per-request; neutral tone enforced
+- **Swarm loop guard** — prevents runaway swarm iteration
+- **Trusted guests allowlist** — `@dodik_ggt` bypass guest XOR, expandable via config
+- **Incoming reactions** — who reacted what is understood and logged
+- **!forget command** — clear session history on demand; auto-clear on memory queries
+- **Daily log rotation** — gzip >50 MB, delete >30d, truncate live if >500 MB
+- **Dashboard V4 costs** — hourly sparkline + day-compare + chat-breakdown + auto-refresh
 
-## Next session priorities (from CHADO_INSIGHTS deferred ⏳)
+## Known issues / in-flight as of session end
+- **!status cmd blocklist regression (W26.1)** — command blocklist may affect !status; verify after push
+- **Image DM regression (W26.2)** — photo in owner DM may regress after persona fix; e2e verify needed
+- Unstaged changes in `IMPROVEMENTS.md` + 6 `/src/web/v4/*.html` files (not committed — dashboard tweaks)
 
-### P2 deferred from Session 17
-1. **patchright POC** (§1 P2) — drop-in замена Playwright в `src/skills/mercadona.py` для anti-bot
-2. **asyncio.Event reread_chat** (§2 P2) — явный event в `src/userbot/background_tasks.py` (код есть, нужна доводка)
-3. **Architecture swimlane "async primitives"** (§2 P3) — `docs/ARCHITECTURE_V2_SKELETON.md` → Artifact 2 Engineering
-4. **MMR diversity penalty** (§6 P2) — λ=0.7 relevance / 0.3 diversity в `src/memory_engine.py`
-5. **Query expansion** (§6 P2) — для queries <3 слов: 3 rephrase через Gemini flash, OR merge RRF
-6. **Publish Design System v1.0** (§8 P2) — `docs/DESIGN_SYSTEM.md`, Chado как co-author
+## Next session priorities (Session 20)
+1. **OpenClaw tools expansion** — extend tool manifest in `mcp_client.py` with missing tools
+2. **Swarm team tool-per-team** — each swarm team gets a dedicated tool subset (traders: crypto, analysts: search+archive, coders: run+read, creative: img+tts)
+3. **Routines profit audit** — benchmark cost vs value of 12 active cron routines; disable dead-weight
+4. **Verify W26.1 / W26.2** — !status cmd blocklist + image DM regression e2e tests
+5. **MMR diversity penalty** (P2 carry-over) — λ=0.7 relevance / 0.3 diversity in `src/memory_engine.py`
+6. **Query expansion** (P2 carry-over) — for queries <3 words: 3 rephrase via Gemini flash, OR merge RRF
 
-### P3 deferred from Session 17
-7. **Skill self-test on startup** (§4 P3) — `check_all_skills_discovered()` в init
-8. **Residential proxies env** (§1 P3) — `KRAB_RESIDENTIAL_PROXY_URL`
-9. **CAPTCHA audio fallback** (§1 P3) — через KrabEar STT
-10. **Temporal re-ranking** (§6 P3) — "recent wins" + per-chat memory scoping
-11. **Weekly digest → ecosystem comparison in How2AI Forum Topic** (§7 P2)
-
-## First commands for Session 18
+## First commands for Session 20
 ```bash
 cat .remember/next_session.md        # you're reading it
-git log --oneline -20                # recent commits
-pytest tests/ -q --tb=no 2>&1 | tail -5  # test suite state
+git log --oneline -10                # recent commits
+git status                           # check any unstaged changes
+pytest tests/ -q --tb=no 2>&1 | tail -10  # test suite state
 curl -s http://127.0.0.1:8080/api/ecosystem/health | python3 -m json.tool | head -30
-cat docs/SESSION_17_SUMMARY.md
-cat docs/CHADO_INSIGHTS.md
 ```
 
 ## Restart notes
@@ -51,16 +54,11 @@ cat docs/CHADO_INSIGHTS.md
 - OpenClaw gateway: `openclaw gateway` (NOT SIGHUP)
 - Memory Doctor: `./scripts/memory_doctor.command --fix` if stale chunks
 
-## Infrastructure state
-- archive.db: 472 MB / 752,712 msgs / 72,258 chunks
+## Infrastructure state (end Session 19)
+- archive.db: ~506 MB / 752k+ msgs / realtime indexer live
 - MCP ports: 8011 (yung-nagato), 8012 (p0lrd) LISTEN; 8013 (hammerspoon) stdio
-- Owner Panel :8080 UP (238 endpoints)
+- Owner Panel :8080 UP (238+ endpoints)
 - OpenClaw Gateway :18789 UP
-
-## Architecture artifacts (Session 17)
-- Hero (Canva): https://www.canva.com/d/wDX_xg3mClWE0t7
-- Engineering (Claude Design): https://claude.ai/design/p/f8108663-9376-444f-8c2c-1e93302a02d6
-- Ops (Canva mirror): https://www.canva.com/d/3dkWS667S3h08UB
 
 ## Context hints
 - Use parallel sonnet agents for bounded tasks (10+ OK)
@@ -70,7 +68,11 @@ cat docs/CHADO_INSIGHTS.md
 - `google-antigravity` — НЕ использовать (квота/бан)
 - Subprocess: всегда `env=clean_subprocess_env()`
 - LM Studio: ONE AT A TIME (RAM overflow на 36GB M4 Max)
-- Krab > Chado: OpenClaw Gateway, Swarm teams, Dashboard V4, Memory Phase 2, 12 routines, 7000+ tests
+
+## Architecture artifacts (Session 17, still valid)
+- Hero (Canva): https://www.canva.com/d/wDX_xg3mClWE0t7
+- Engineering (Claude Design): https://claude.ai/design/p/f8108663-9376-444f-8c2c-1e93302a02d6
+- Ops (Canva mirror): https://www.canva.com/d/3dkWS667S3h08UB
 
 ---
 
