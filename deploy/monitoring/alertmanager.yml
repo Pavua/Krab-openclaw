@@ -1,0 +1,33 @@
+global:
+  resolve_timeout: 5m
+
+# Маршрутизация — все алерты идут в Telegram.
+# Замените BOT_TOKEN и CHAT_ID на реальные значения.
+# CHAT_ID — ваш личный chat_id (owner DM).
+route:
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: telegram_owner
+
+receivers:
+  - name: telegram_owner
+    webhook_configs:
+      - url: "http://host.docker.internal:8080/api/notify"
+        send_resolved: true
+        http_config:
+          tls_config:
+            insecure_skip_verify: false
+        # Тело запроса адаптировано под Krab /api/notify endpoint.
+        # Если нужен прямой Telegram bot webhook — замените url на:
+        # https://api.telegram.org/bot<BOT_TOKEN>/sendMessage
+        # и добавьте пустой template ниже с chat_id и text полями.
+
+inhibit_rules:
+  # Не дублировать warning если уже есть critical по тому же alertname.
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: ["alertname"]

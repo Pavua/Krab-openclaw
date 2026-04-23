@@ -1,0 +1,79 @@
+# Krab Prometheus alert rules.
+# Load from prometheus.yml via rule_files: ["krab_alerts.yml"]
+#
+# Три группы: critical, capacity, engagement.
+# Документация: docs/PROMETHEUS_MONITORING.md
+
+groups:
+  # ── Critical: немедленное внимание ──────────────────────────────────────────
+  - name: krab_critical
+    interval: 30s
+    rules:
+      - alert: KrabLLMRouteDown
+        expr: krab_llm_route_ok == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Krab LLM route failing for {{ $labels.provider }}/{{ $labels.model }}"
+          description: "`krab_llm_route_ok` = 0 for 2 min. Check Gateway + provider OAuth."
+
+      - alert: KrabMemoryValidatorOverload
+        expr: krab_memory_validator_pending > 15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory validator pending queue > 15 для 10+ мин"
+          description: "Возможно injection attack или много legitimate рекуррентных запросов. Проверь `!memory confirm list`."
+
+      - alert: KrabMetricsStale
+        expr: (time() - krab_metrics_generated_at) > 120
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Krab /metrics endpoint stale (>2min)"
+          description: "Krab возможно down или endpoint не отвечает. Проверь `!health` и процесс userbot."
+
+  # ── Capacity: планирование ёмкости ──────────────────────────────────────────
+  - name: krab_capacity
+    interval: 5m
+    rules:
+      - alert: KrabArchiveGrowingFast
+        expr: rate(krab_archive_messages_total[1h]) > 10000
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "archive.db растёт > 10k msgs/час"
+          description: "Рассмотри корректировку retention policy или архивацию старых сообщений."
+
+      - alert: KrabArchiveDBLarge
+        expr: krab_archive_db_size_bytes > 1073741824  # 1 GiB
+        labels:
+          severity: warning
+        annotations:
+          summary: "archive.db > 1 GB — рассмотри partitioning/pruning"
+          description: "Текущий размер: {{ $value | humanize1024 }}B."
+
+      - alert: KrabAutoRestartSpiking
+        expr: rate(krab_auto_restart_attempts_total[10m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Auto-restart attempts > 0.1/sec за 10 мин"
+          description: "Service {{ $labels.service }} нестабилен — нужен manual investigation. Логи: `!log {{ $labels.service }}`."
+
+  # ── Engagement: бизнес-сигналы ──────────────────────────────────────────────
+  - name: krab_engagement
+    interval: 5m
+    rules:
+      - alert: KrabInjectionSpike
+        expr: rate(krab_memory_validator_injection_blocked_total[1h]) > 0.01
+        labels:
+          severity: info
+        annotations:
+          summary: "Injection attempts > 36 per hour"
+          description: "Под atak'ом или нужна tune паттернов validator. См. `src/core/memory_validator.py`."

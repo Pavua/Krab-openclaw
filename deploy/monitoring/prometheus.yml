@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+  external_labels:
+    instance: krab_local
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+rule_files:
+  - /etc/prometheus/rules/krab_alerts.yml
+
+scrape_configs:
+  - job_name: krab_owner_panel
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+    metrics_path: /metrics
+    honor_labels: true
