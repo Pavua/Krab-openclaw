@@ -394,6 +394,38 @@ class LLMTextProcessingMixin:
         return ""
 
     @classmethod
+    def _apply_phantom_action_guard(cls, text: str, *, tool_was_called: bool = False) -> str:
+        """
+        Перехватывает phantom-фразы типа «передал владельцу» если tool НЕ был вызван.
+
+        Почему нужен:
+        - LLM иногда пишет "передал владельцу" / "forwarded to owner" без реального
+          tool call — это phantom action, пользователь думает что что-то произошло;
+        - этот guard перехватывает такие фразы и заменяет честным текстом;
+        - если tool_was_called=True — guard не трогает ответ (action реально выполнен).
+
+        WARNING: Логирует phantom_action_detected при срабатывании.
+        """
+        if tool_was_called:
+            return text
+        raw = str(text or "").strip()
+        if not raw:
+            return raw
+        try:
+            from ..core.forward_to_owner import is_phantom_forward_promise
+
+            if not is_phantom_forward_promise(raw):
+                return raw
+        except Exception:  # noqa: BLE001
+            return raw
+        logger.warning("phantom_action_detected", response_preview=raw[:200])
+        honest = (
+            "🦀 Запрос получен, но автоматического forward к владельцу у меня нет. "
+            "Если это важно — напиши @p0lrd в DM."
+        )
+        return honest
+
+    @classmethod
     def _apply_deferred_action_guard(cls, text: str) -> str:
         """
         Защищает от ложных обещаний "сделаю позже", когда scheduler выключен.
