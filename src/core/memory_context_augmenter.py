@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from .logger import get_logger
@@ -82,6 +83,10 @@ class _Adapted:
     text: str
     chunk_id: str
     sources: list[str]
+    # Атрибуция — для формирования [MEMORY] блока с явным чатом и временем.
+    chat_id: str = ""
+    timestamp: Optional[datetime] = None
+    chat_title: str = ""
 
 
 def _adapt_retrieval_result(r: Any) -> Optional[_Adapted]:
@@ -112,11 +117,27 @@ def _adapt_retrieval_result(r: Any) -> Optional[_Adapted]:
 
     sources = list(getattr(r, "sources", []) or []) or ["hybrid"]
 
+    # Атрибуция: chat_id и timestamp — из SearchResult или совместимого объекта.
+    chat_id = str(getattr(r, "chat_id", "") or "")
+    ts: Optional[datetime] = None
+    raw_ts = getattr(r, "timestamp", None)
+    if isinstance(raw_ts, datetime):
+        ts = raw_ts
+    elif isinstance(raw_ts, str) and raw_ts:
+        try:
+            s = raw_ts.rstrip("Z")
+            parsed = datetime.fromisoformat(s)
+            ts = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+
     return _Adapted(
         rrf_score=float(score),
         text=str(text),
         chunk_id=str(chunk_id),
         sources=sources,
+        chat_id=chat_id,
+        timestamp=ts,
     )
 
 
@@ -298,6 +319,8 @@ async def augment_query_with_memory(
             "chunk_id": r.chunk_id,
             "score": r.rrf_score,
             "sources": list(r.sources),
+            "chat_id": r.chat_id,
+            "chat_title": r.chat_title,
         }
         for r in strong_results
     ]
