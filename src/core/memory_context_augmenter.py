@@ -120,6 +120,56 @@ def _adapt_retrieval_result(r: Any) -> Optional[_Adapted]:
     )
 
 
+def _resolve_chat_titles(chat_ids: list[str]) -> dict[str, str]:
+    """
+    Достаёт title из таблицы chats для списка chat_id.
+    Возвращает {chat_id: title}. Graceful: при любой ошибке возвращает {}.
+    """
+    if not chat_ids:
+        return {}
+    try:
+        from .memory_archive import ArchivePaths, open_archive
+
+        paths = ArchivePaths.default()
+        if not paths.db.exists():
+            return {}
+        conn = open_archive(paths, read_only=True, create_if_missing=False)
+        try:
+            placeholders = ",".join("?" * len(chat_ids))
+            rows = conn.execute(
+                f"SELECT chat_id, title FROM chats WHERE chat_id IN ({placeholders})",
+                chat_ids,
+            ).fetchall()
+            return {r[0]: (r[1] or r[0]) for r in rows}
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("memory_context_chat_title_lookup_failed", error=str(exc))
+        return {}
+
+
+def _format_memory_block(r: "_Adapted", chat_title: str) -> str:
+    """
+    Форматирует один chunk как [MEMORY] блок с явной атрибуцией чат + время.
+    """
+    ts_str = ""
+    if r.timestamp is not None:
+        try:
+            ts_str = r.timestamp.strftime("%d.%m.%Y %H:%M")
+        except Exception:  # noqa: BLE001
+            ts_str = str(r.timestamp)[:16]
+
+    label_parts = []
+    if chat_title:
+        label_parts.append(f'в чате "{chat_title}"')
+    if ts_str:
+        label_parts.append(ts_str)
+
+    label = " ".join(label_parts) if label_parts else r.chunk_id
+    text_preview = _short_preview(r.text, max_len=400)
+    return f"[MEMORY] {label}:\n{text_preview}"
+
+
 def _call_retrieval(query: str, limit: int) -> list[Any]:
     """
     Runtime-resolved retrieval. В первую очередь пробуем `hybrid_search` из
@@ -212,12 +262,33 @@ async def augment_query_with_memory(
             enabled=True,
         )
 
-    # Формируем prefix.
-    lines = ["[Контекст из твоей памяти:]"]
-    for i, r in enumerate(strong_results, 1):
-        text_preview = _short_preview(r.text, max_len=400)
-        sources = "+".join(r.sources) if r.sources else "hybrid"
-        lines.append(f"{i}. [{sources}] {text_preview}")
+    # Резолвим chat_title для всех chunks через chats-таблицу.
+    unique_chat_ids = list({r.chat_id for r in strong_results if r.chat_id})
+    chat_titles = _resolve_chat_titles(unique_chat_ids)
+    for r in strong_results:
+        r.chat_title = chat_titles.get(r.chat_id, r.chat_id)
+
+    # Формируем prefix с явной атрибуцией [MEMORY] блоков.
+    lines = [
+        "[Контекст из твоей памяти:]",
+        "",
+        "🔴 КРИТИЧНО про [MEMORY] блоки:",
+        '- `в чате "<X>"` = это ПОЛНЫЙ собеседник-контекст (с кем вёлся разговор)',
+        '- ИМЕНА В ТЕКСТЕ сообщения (например "Даша", "Алиса") — это люди О КОТОРЫХ user говорил, НЕ собеседники',
+        '- Если запрос "что я писал С Х?", смотри ТОЛЬКО блоки где chat_title содержит X',
+        '- НЕ делай выводы "собеседник был Х" на основании упоминания X в тексте сообщения',
+        "",
+        "Пример атрибуции:",
+        '  [MEMORY] в чате "Анна 🌸" 22.04.2026 15:00:',
+        "  Анна, у меня Даша просит испанский номер для AppStore, как лучше?",
+        "",
+        '  ❌ НЕПРАВИЛЬНО: "Ты писал Даше про AppStore"',
+        '  ✅ ПРАВИЛЬНО: "Ты писал Анне о том, что Даша попросила номер"',
+        "",
+    ]
+    for r in strong_results:
+        lines.append(_format_memory_block(r, r.chat_title))
+        lines.append("")
     lines.append("---")
     lines.append(f"Вопрос: {query}")
 
