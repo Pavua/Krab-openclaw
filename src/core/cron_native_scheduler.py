@@ -88,15 +88,21 @@ class CronNativeScheduler:
             # и job не был запущен в течение последних 50 секунд
             last = self._last_fired.get(job_id, 0.0)
             if due_ts <= now + _POLL_INTERVAL and (now - last) > 50:
-                self._last_fired[job_id] = now
-                asyncio.ensure_future(self._run_job(job))
+                # Штампуем due_ts (точное время срабатывания), не текущий now —
+                # иначе cooldown будет считаться от момента peek, а не от fire.
+                self._last_fired[job_id] = due_ts
+                asyncio.ensure_future(self._run_job(job, due_ts))
 
-    async def _run_job(self, job: dict) -> None:
-        """Выполняет один job: вызывает sender с промптом."""
+    async def _run_job(self, job: dict, due_ts: float | None = None) -> None:
+        """Выполняет один job: ждёт due_ts, потом вызывает sender с промптом."""
         job_id = str(job.get("id") or "?")
         prompt = str(job.get("prompt") or "")
         if not prompt:
             return
+        # Ждём точного момента срабатывания — устраняет calendar-boundary misfires
+        # (Monday 00:00 peek на Sunday 23:59:45 → sleep 15s → fire ровно в 00:00).
+        if due_ts is not None:
+            await asyncio.sleep(max(0.0, due_ts - time.time()))
         logger.info("cron_native_job_firing", job_id=job_id, cron_spec=job.get("cron_spec"))
         try:
             if self._sender:
