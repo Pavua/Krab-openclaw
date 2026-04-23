@@ -28,7 +28,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -178,6 +177,54 @@ class _EditMessageInput(BaseModel):
     chat_id: str = Field(..., description="ID чата или username")
     message_id: int = Field(..., gt=0, description="ID сообщения для редактирования")
     text: str = Field(..., min_length=1, max_length=4096, description="Новый текст сообщения")
+
+
+class _SendPhotoInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(..., description="ID чата или username получателя")
+    photo_path: str = Field(default="", description="Локальный путь к файлу фото")
+    photo_url: str = Field(default="", description="URL фото (если не задан photo_path)")
+    caption: str = Field(default="", max_length=1024, description="Подпись к фото (необязательно)")
+
+
+class _SendReactionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(..., description="ID чата или username")
+    message_id: int = Field(..., gt=0, description="ID сообщения для реакции")
+    emoji: str = Field(..., min_length=1, description="Эмодзи реакции (например: '👍') или JSON-список")
+
+
+class _ForwardMessageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    from_chat_id: str = Field(..., description="ID чата-источника")
+    message_id: int = Field(..., gt=0, description="ID пересылаемого сообщения")
+    to_chat_id: str = Field(..., description="ID чата-назначения")
+
+
+class _DeleteMessageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(..., description="ID чата или username")
+    message_id: int = Field(..., gt=0, description="ID сообщения для удаления")
+
+
+class _PinMessageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(..., description="ID чата или username")
+    message_id: int = Field(..., gt=0, description="ID сообщения для закрепления")
+    unpin: bool = Field(default=False, description="True — открепить, False — закрепить (default)")
+
+
+class _GetMessageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(..., description="ID чата или username")
+    message_id: int = Field(..., gt=0, description="ID сообщения")
+
+
+class _SendVoiceInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(..., description="ID чата или username получателя")
+    voice_path: str = Field(..., min_length=1, description="Локальный путь к .ogg файлу")
+    duration: int | None = Field(default=None, ge=0, description="Длительность в секундах (необязательно)")
 
 
 class _TailLogsInput(BaseModel):
@@ -450,6 +497,210 @@ async def telegram_edit_message(params: _EditMessageInput) -> str:
         cid = params.chat_id
     result = await _bridge.edit_message(cid, params.message_id, params.text)
     return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool(
+    name="telegram_send_photo",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
+async def telegram_send_photo(params: _SendPhotoInput) -> str:
+    """Отправляет фото в Telegram-чат из локального файла или URL.
+
+    Args:
+        params:
+            - chat_id (str): ID чата или @username
+            - photo_path (str): Локальный путь к файлу (приоритет перед photo_url)
+            - photo_url (str): URL фото (если photo_path не задан)
+            - caption (str): Подпись к фото (до 1024 символов, необязательно)
+
+    Returns:
+        str: JSON-объект с метаданными отправленного сообщения
+    """
+    photo = params.photo_path.strip() or params.photo_url.strip()
+    if not photo:
+        return json.dumps({"ok": False, "error": "Укажи photo_path или photo_url"}, ensure_ascii=False)
+    try:
+        cid: int | str = int(params.chat_id)
+    except ValueError:
+        cid = params.chat_id
+    try:
+        result = await _bridge.send_photo(cid, photo, caption=params.caption)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_send_reaction",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True},
+)
+async def telegram_send_reaction(params: _SendReactionInput) -> str:
+    """Ставит эмодзи-реакцию на сообщение Telegram.
+
+    Args:
+        params:
+            - chat_id (str): ID чата или @username
+            - message_id (int): ID сообщения
+            - emoji (str): Эмодзи (например: '👍', '❤️') или JSON-список эмодзи
+
+    Returns:
+        str: JSON-объект {"ok": true, "emoji": [...]}
+    """
+    try:
+        cid: int | str = int(params.chat_id)
+    except ValueError:
+        cid = params.chat_id
+    # Поддержка JSON-списка в строке
+    try:
+        emoji_val: str | list[str] = json.loads(params.emoji)
+    except (json.JSONDecodeError, ValueError):
+        emoji_val = params.emoji
+    try:
+        result = await _bridge.send_reaction(cid, params.message_id, emoji_val)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_forward_message",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
+async def telegram_forward_message(params: _ForwardMessageInput) -> str:
+    """Пересылает сообщение из одного чата в другой.
+
+    Args:
+        params:
+            - from_chat_id (str): ID чата-источника
+            - message_id (int): ID сообщения для пересылки
+            - to_chat_id (str): ID чата-назначения
+
+    Returns:
+        str: JSON-объект с метаданными пересланного сообщения
+    """
+    try:
+        from_cid: int | str = int(params.from_chat_id)
+    except ValueError:
+        from_cid = params.from_chat_id
+    try:
+        to_cid: int | str = int(params.to_chat_id)
+    except ValueError:
+        to_cid = params.to_chat_id
+    try:
+        result = await _bridge.forward_message(from_cid, params.message_id, to_cid)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_delete_message",
+    annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True},
+)
+async def telegram_delete_message(params: _DeleteMessageInput) -> str:
+    """Удаляет своё сообщение из чата Telegram.
+
+    ВНИМАНИЕ: действие необратимо.
+
+    Args:
+        params:
+            - chat_id (str): ID чата или @username
+            - message_id (int): ID сообщения для удаления
+
+    Returns:
+        str: JSON-объект {"ok": true, "deleted": [message_id]}
+    """
+    try:
+        cid: int | str = int(params.chat_id)
+    except ValueError:
+        cid = params.chat_id
+    try:
+        result = await _bridge.delete_messages(cid, params.message_id)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_pin_message",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True},
+)
+async def telegram_pin_message(params: _PinMessageInput) -> str:
+    """Закрепляет или открепляет сообщение в чате Telegram.
+
+    Args:
+        params:
+            - chat_id (str): ID чата или @username
+            - message_id (int): ID сообщения
+            - unpin (bool): True — открепить, False — закрепить (default: False)
+
+    Returns:
+        str: JSON-объект {"ok": true, "action": "pinned"|"unpinned"}
+    """
+    try:
+        cid: int | str = int(params.chat_id)
+    except ValueError:
+        cid = params.chat_id
+    try:
+        result = await _bridge.pin_message(cid, params.message_id, unpin=params.unpin)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_get_message",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def telegram_get_message(params: _GetMessageInput) -> str:
+    """Получает одно сообщение Telegram по его ID.
+
+    Возвращает полную информацию: текст, медиа, entities, from_user, дату.
+
+    Args:
+        params:
+            - chat_id (str): ID чата или @username
+            - message_id (int): ID сообщения
+
+    Returns:
+        str: JSON-объект с полями сообщения (id, text, from_user, date, has_media, entities, ...)
+    """
+    try:
+        cid: int | str = int(params.chat_id)
+    except ValueError:
+        cid = params.chat_id
+    try:
+        result = await _bridge.get_message(cid, params.message_id)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_send_voice",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
+async def telegram_send_voice(params: _SendVoiceInput) -> str:
+    """Отправляет голосовое сообщение (.ogg) в Telegram-чат.
+
+    Args:
+        params:
+            - chat_id (str): ID чата или @username получателя
+            - voice_path (str): Локальный путь к .ogg файлу
+            - duration (int | None): Длительность в секундах (необязательно)
+
+    Returns:
+        str: JSON-объект с метаданными отправленного сообщения
+    """
+    try:
+        cid: int | str = int(params.chat_id)
+    except ValueError:
+        cid = params.chat_id
+    try:
+        result = await _bridge.send_voice(cid, params.voice_path, duration=params.duration)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

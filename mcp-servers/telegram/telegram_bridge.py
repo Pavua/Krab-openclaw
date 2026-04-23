@@ -274,3 +274,115 @@ class TelegramBridge:
             return _msg_to_dict(msg)
 
         return await self._run_client_call(_op)
+
+    async def send_photo(
+        self,
+        chat_id: int | str,
+        photo: str,
+        caption: str = "",
+    ) -> dict[str, Any]:
+        """Отправляет фото (локальный путь или URL) с опциональной подписью."""
+        async def _op(client: Client) -> dict[str, Any]:
+            msg = await client.send_photo(chat_id, photo, caption=caption or None)
+            return _msg_to_dict(msg)
+
+        return await self._run_client_call(_op)
+
+    async def send_reaction(
+        self,
+        chat_id: int | str,
+        message_id: int,
+        emoji: str | list[str],
+    ) -> dict[str, Any]:
+        """Ставит реакцию на сообщение."""
+        emojis = [emoji] if isinstance(emoji, str) else list(emoji)
+
+        async def _op(client: Client) -> dict[str, Any]:
+            # pyrofork send_reaction принимает emoji напрямую как str | list[str]
+            await client.send_reaction(chat_id, message_id, emoji=emojis)
+            return {"ok": True, "chat_id": str(chat_id), "message_id": message_id, "emoji": emojis}
+
+        return await self._run_client_call(_op)
+
+    async def forward_message(
+        self,
+        from_chat_id: int | str,
+        message_id: int,
+        to_chat_id: int | str,
+    ) -> dict[str, Any]:
+        """Пересылает сообщение из одного чата в другой."""
+        async def _op(client: Client) -> dict[str, Any]:
+            msgs = await client.forward_messages(to_chat_id, from_chat_id, message_id)
+            forwarded = msgs[0] if isinstance(msgs, list) else msgs
+            return _msg_to_dict(forwarded)
+
+        return await self._run_client_call(_op)
+
+    async def delete_messages(
+        self,
+        chat_id: int | str,
+        message_ids: int | list[int],
+    ) -> dict[str, Any]:
+        """Удаляет одно или несколько сообщений."""
+        ids = [message_ids] if isinstance(message_ids, int) else list(message_ids)
+
+        async def _op(client: Client) -> dict[str, Any]:
+            await client.delete_messages(chat_id, ids)
+            return {"ok": True, "deleted": ids}
+
+        return await self._run_client_call(_op)
+
+    async def pin_message(
+        self,
+        chat_id: int | str,
+        message_id: int,
+        unpin: bool = False,
+    ) -> dict[str, Any]:
+        """Закрепляет или открепляет сообщение в чате."""
+        async def _op(client: Client) -> dict[str, Any]:
+            if unpin:
+                await client.unpin_chat_message(chat_id, message_id)
+                return {"ok": True, "action": "unpinned", "message_id": message_id}
+            else:
+                await client.pin_chat_message(chat_id, message_id)
+                return {"ok": True, "action": "pinned", "message_id": message_id}
+
+        return await self._run_client_call(_op)
+
+    async def get_message(
+        self,
+        chat_id: int | str,
+        message_id: int,
+    ) -> dict[str, Any]:
+        """Получает одно сообщение по ID."""
+        async def _op(client: Client) -> dict[str, Any]:
+            msgs = await client.get_messages(chat_id, message_ids=message_id)
+            msg: Message = msgs if not isinstance(msgs, list) else msgs[0]
+            if msg is None:
+                raise ValueError(f"Сообщение {message_id} не найдено в чате {chat_id}")
+            result = _msg_to_dict(msg)
+            # Расширенные поля
+            result["entities"] = (
+                [{"type": str(e.type), "offset": e.offset, "length": e.length} for e in msg.entities]
+                if msg.entities
+                else []
+            )
+            return result
+
+        return await self._run_client_call(_op)
+
+    async def send_voice(
+        self,
+        chat_id: int | str,
+        voice_path: str,
+        duration: int | None = None,
+    ) -> dict[str, Any]:
+        """Отправляет голосовое сообщение (.ogg)."""
+        async def _op(client: Client) -> dict[str, Any]:
+            kwargs: dict = {}
+            if duration is not None:
+                kwargs["duration"] = duration
+            msg = await client.send_voice(chat_id, voice_path, **kwargs)
+            return _msg_to_dict(msg)
+
+        return await self._run_client_call(_op)
