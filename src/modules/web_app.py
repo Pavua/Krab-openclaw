@@ -71,11 +71,6 @@ from src.core.observability import (  # noqa: E402
     metrics,
     timeline,
 )
-from src.core.openclaw_cli_budget import (  # noqa: E402
-    get_global_semaphore,
-    get_sync_semaphore,
-    terminate_and_reap,
-)
 from src.core.openclaw_runtime_signal_truth import (  # noqa: E402
     discover_gateway_signal_log,
     runtime_auth_failed_providers_from_signal_log,
@@ -156,11 +151,6 @@ class WebApp:
         # поэтому write-path панели использует отдельный короткий cache.
         self._model_catalog_cache: tuple[float, dict[str, Any]] | None = None
         self._vg_subscriber: VoiceGatewayEventSubscriber | None = None
-        # Глобальный лимит параллельных openclaw CLI subprocess'ов.
-        # Защита от утечек при одновременных polling запросах.
-        _cli_budget = int(os.getenv("OPENCLAW_CLI_SPAWN_BUDGET", "3"))
-        self._openclaw_cli_sem = asyncio.Semaphore(_cli_budget)
-        logger.info("openclaw_cli_semaphore_init", budget=_cli_budget)
         self._setup_routes()
 
     @property
@@ -685,47 +675,21 @@ class WebApp:
         Нужен, чтобы owner UI опирался на тот же auth/runtime view,
         который уже считает сам OpenClaw, а не на самодельный разбор текста.
         """
-        timeout_sec = cls._float_env(
-            "KRAB_WEB_OPENCLAW_MODELS_STATUS_TIMEOUT_SEC",
-            2.5,
-            min_value=0.2,
-            max_value=15.0,
-        )
         try:
-            # Семафор ограничивает одновременные openclaw probe'ы из sync callsites.
-            with get_sync_semaphore():
-                # Не используем subprocess.run(timeout=...): `openclaw models status`
-                # может породить дочерний `codex login status`, и при зависании
-                # простой timeout оставляет сироту, который держит web-запрос.
-                # Отдельная process group позволяет погасить весь probe целиком.
-                proc = subprocess.Popen(
-                    ["openclaw", "models", "status", "--json"],
-                    cwd=str(cls._project_root()),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    start_new_session=True,
-                )
-                try:
-                    stdout, _stderr = proc.communicate(timeout=timeout_sec)
-                except subprocess.TimeoutExpired:
-                    # Диагностический probe не должен блокировать owner-панель.
-                    # Лучше вернуть деградированный срез, чем повесить event loop.
-                    try:
-                        os.killpg(proc.pid, 15)
-                        proc.communicate(timeout=1.0)
-                    except Exception:
-                        try:
-                            os.killpg(proc.pid, 9)
-                        except Exception:
-                            pass
-                    return {}
+            proc = subprocess.run(
+                ["openclaw", "models", "status", "--json"],
+                cwd=str(cls._project_root()),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
         except Exception:
             return {}
         if proc.returncode != 0:
             return {}
         try:
-            payload = json.loads(str(stdout or "{}"))
+            payload = json.loads(str(proc.stdout or "{}"))
         except (TypeError, ValueError):
             return {}
 
@@ -789,43 +753,21 @@ class WebApp:
     @classmethod
     def _openclaw_models_full_catalog(cls) -> dict[str, Any]:
         """Читает `openclaw models list --all --json` и группирует модели по provider."""
-        timeout_sec = cls._float_env(
-            "KRAB_WEB_OPENCLAW_MODELS_LIST_TIMEOUT_SEC",
-            3.0,
-            min_value=0.2,
-            max_value=20.0,
-        )
         try:
-            # Семафор ограничивает одновременные openclaw probe'ы из sync callsites.
-            with get_sync_semaphore():
-                # Этот probe обслуживает только UI-каталог. Если CLI или вложенный
-                # provider-probe зависнет, нельзя блокировать весь web event loop.
-                proc = subprocess.Popen(
-                    ["openclaw", "models", "list", "--all", "--json"],
-                    cwd=str(cls._project_root()),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    start_new_session=True,
-                )
-                try:
-                    stdout, _stderr = proc.communicate(timeout=timeout_sec)
-                except subprocess.TimeoutExpired:
-                    try:
-                        os.killpg(proc.pid, 15)
-                        proc.communicate(timeout=1.0)
-                    except Exception:
-                        try:
-                            os.killpg(proc.pid, 9)
-                        except Exception:
-                            pass
-                    return {"count": 0, "providers": {}}
+            proc = subprocess.run(
+                ["openclaw", "models", "list", "--all", "--json"],
+                cwd=str(cls._project_root()),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=20,
+            )
         except Exception:
             return {"count": 0, "providers": {}}
         if proc.returncode != 0:
             return {"count": 0, "providers": {}}
         try:
-            payload = json.loads(str(stdout or "{}"))
+            payload = json.loads(str(proc.stdout or "{}"))
         except (TypeError, ValueError):
             return {"count": 0, "providers": {}}
 
@@ -2686,9 +2628,13 @@ class WebApp:
         - тестам удобнее подменять один seam, чем мокать subprocess по всему модулю;
         - owner-панель получает truthful state ровно из того же CLI-контура,
           который пользователь может вызвать вручную.
+        Вызов защищён семафором openclaw_cli_budget (budget=3).
         """
-        async with self._openclaw_cli_sem:
-            try:
+        from ..core.openclaw_cli_budget import acquire as _cli_acquire
+        from ..core.openclaw_cli_budget import terminate_and_reap as _reap
+
+        try:
+            async with _cli_acquire():
                 proc = await asyncio.create_subprocess_exec(
                     "openclaw",
                     *args,
@@ -2699,27 +2645,7 @@ class WebApp:
                 try:
                     stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
                 except asyncio.TimeoutError:
-                    if proc.returncode is None:
-                        try:
-                            proc.terminate()
-                        except ProcessLookupError:
-                            pass
-                        else:
-                            # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
-                            try:
-                                await asyncio.wait_for(proc.wait(), timeout=2.0)
-                            except asyncio.TimeoutError:
-                                try:
-                                    proc.kill()
-                                except ProcessLookupError:
-                                    pass
-                                try:
-                                    await asyncio.wait_for(proc.wait(), timeout=1.0)
-                                except asyncio.TimeoutError:
-                                    logger.warning(
-                                        "openclaw_cli_force_killed_but_no_reap",
-                                        pid=proc.pid,
-                                    )
+                    await _reap(proc)
                     return {
                         "ok": False,
                         "error": "openclaw_timeout",
@@ -2727,31 +2653,31 @@ class WebApp:
                         "exit_code": None,
                         "raw": "",
                     }
-            except Exception as exc:
-                return {
-                    "ok": False,
-                    "error": "openclaw_exec_failed",
-                    "detail": str(exc),
-                    "exit_code": None,
-                    "raw": "",
-                }
-
-            raw_output = stdout.decode("utf-8", errors="replace")
-            result: dict[str, Any] = {
-                "ok": proc.returncode == 0,
-                "exit_code": proc.returncode,
-                "raw": raw_output,
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": "openclaw_exec_failed",
+                "detail": str(exc),
+                "exit_code": None,
+                "raw": "",
             }
-            if not expect_json:
-                return result
 
-            try:
-                result["data"] = json.loads(raw_output or "{}")
-            except Exception as exc:
-                result["ok"] = False
-                result["error"] = "openclaw_json_parse_failed"
-                result["detail"] = f"Не удалось распарсить JSON ответа openclaw: {exc}"
+        raw_output = stdout.decode("utf-8", errors="replace")
+        result: dict[str, Any] = {
+            "ok": proc.returncode == 0,
+            "exit_code": proc.returncode,
+            "raw": raw_output,
+        }
+        if not expect_json:
             return result
+
+        try:
+            result["data"] = json.loads(raw_output or "{}")
+        except Exception as exc:
+            result["ok"] = False
+            result["error"] = "openclaw_json_parse_failed"
+            result["detail"] = f"Не удалось распарсить JSON ответа openclaw: {exc}"
+        return result
 
     @staticmethod
     def _normalize_openclaw_cron_job(job: dict[str, Any]) -> dict[str, Any]:
@@ -6202,8 +6128,15 @@ class WebApp:
         *,
         timeout_sec: float = 12.0,
     ) -> tuple[dict[str, Any], str]:
-        """Запускает `openclaw ... --json` и безопасно возвращает `(payload, error)`."""
-        async with self._openclaw_cli_sem:
+        """Запускает `openclaw ... --json` и безопасно возвращает `(payload, error)`.
+
+        Вызов защищён семафором openclaw_cli_budget (budget=3) — предотвращает
+        накопление transient CLI-процессов при параллельных запросах owner-панели.
+        """
+        from ..core.openclaw_cli_budget import acquire as _cli_acquire
+        from ..core.openclaw_cli_budget import terminate_and_reap as _reap
+
+        async with _cli_acquire():
             try:
                 proc = await asyncio.create_subprocess_exec(
                     "openclaw",
@@ -6218,27 +6151,7 @@ class WebApp:
             try:
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
             except asyncio.TimeoutError:
-                if proc.returncode is None:
-                    try:
-                        proc.terminate()
-                    except ProcessLookupError:
-                        pass
-                    else:
-                        # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
-                        try:
-                            await asyncio.wait_for(proc.wait(), timeout=2.0)
-                        except asyncio.TimeoutError:
-                            try:
-                                proc.kill()
-                            except ProcessLookupError:
-                                pass
-                            try:
-                                await asyncio.wait_for(proc.wait(), timeout=1.0)
-                            except asyncio.TimeoutError:
-                                logger.warning(
-                                    "openclaw_cli_force_killed_but_no_reap",
-                                    pid=proc.pid,
-                                )
+                await _reap(proc)
                 return {}, "cli_timeout"
 
             stdout_text = stdout.decode("utf-8", errors="replace").strip()
@@ -6319,25 +6232,28 @@ class WebApp:
         gateway_detail = ""
 
         try:
-            async with get_global_semaphore():
-                proc = await asyncio.create_subprocess_exec(
-                    "openclaw",
-                    "gateway",
-                    "probe",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    env=self._openclaw_cli_env(),
-                )
-                try:
-                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=12.0)
-                    gateway_probe_raw = stdout.decode("utf-8", errors="replace")
-                    parsed_probe = self._parse_openclaw_gateway_probe(gateway_probe_raw)
-                    gateway_reachable = bool(parsed_probe.get("gateway_reachable"))
-                    local_target = str(parsed_probe.get("local_target") or "")
-                    gateway_detail = str(parsed_probe.get("detail") or "")
-                except asyncio.TimeoutError:
-                    await terminate_and_reap(proc)
-                    gateway_probe_error = "gateway_probe_timeout"
+            proc = await asyncio.create_subprocess_exec(
+                "openclaw",
+                "gateway",
+                "probe",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=self._openclaw_cli_env(),
+            )
+            try:
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=12.0)
+                gateway_probe_raw = stdout.decode("utf-8", errors="replace")
+                parsed_probe = self._parse_openclaw_gateway_probe(gateway_probe_raw)
+                gateway_reachable = bool(parsed_probe.get("gateway_reachable"))
+                local_target = str(parsed_probe.get("local_target") or "")
+                gateway_detail = str(parsed_probe.get("detail") or "")
+            except asyncio.TimeoutError:
+                if proc.returncode is None:
+                    try:
+                        proc.terminate()
+                    except ProcessLookupError:
+                        pass
+                gateway_probe_error = "gateway_probe_timeout"
         except Exception as exc:
             gateway_probe_error = f"gateway_probe_failed: {exc}"
 
@@ -7702,38 +7618,6 @@ class WebApp:
                 "note": "flush будет выполнен в течение batch_timeout_sec",
             }
 
-        @self.app.post("/api/memory/indexer/backfill")
-        async def memory_indexer_backfill(
-            batch: int = 1000,
-            dry_run: bool = False,
-        ):
-            """
-            Enqueue backfill для chunk'ов без embedding в vec_chunks.
-
-            Параметры (query params):
-              batch: сколько chunk_id обработать за один вызов (default 1000).
-              dry_run: если true — только подсчитать, не запускать embed.
-
-            Returns:
-              unencoded_total — найдено chunk'ов без вектора до старта.
-              queued          — chunk_id отправлено в embedder (0 при dry_run).
-              embedded        — реально проэмбеддено (0 при dry_run).
-              elapsed_sec     — время выполнения.
-            """
-            try:
-                import asyncio as _asyncio  # noqa: PLC0415
-
-                from scripts.force_memory_backfill import run_backfill  # noqa: PLC0415
-            except ImportError as exc:
-                return {"error": f"backfill_unavailable: {exc}"}
-
-            result = await _asyncio.to_thread(
-                run_backfill,
-                batch,
-                dry_run,
-            )
-            return result
-
         @self.app.get("/api/memory/search")
         async def memory_search(
             q: str = "",
@@ -8453,6 +8337,22 @@ class WebApp:
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
 
+        @self.app.get("/api/costs/codex-quota")
+        async def get_codex_quota(refresh: bool = False):
+            """Квота Codex CLI: план, подписка, usage из OpenAI API / JWT."""
+            try:
+                from ..core.codex_quota import fetch_quota, get_cached_quota
+
+                if not refresh:
+                    cached = get_cached_quota()
+                    if cached:
+                        return {"ok": True, "quota": cached, "cached": True}
+
+                quota = await fetch_quota()
+                return {"ok": True, "quota": quota, "cached": False}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
         @self.app.get("/api/swarm/status")
         async def get_swarm_status():
             """Статус мультиагентного свёрма для /swarm dashboard."""
@@ -8517,32 +8417,6 @@ class WebApp:
                 }
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
-
-        @self.app.get("/api/swarm/channels/status")
-        async def get_swarm_channels_status():
-            """Снапшот состояния Forum Topics свёрма (read-only, для Dashboard)."""
-            try:
-                from ..core.swarm_channels import swarm_channels as _sc
-
-                if not hasattr(_sc, "get_channels_status"):
-                    from fastapi.responses import JSONResponse
-
-                    return JSONResponse(
-                        status_code=503,
-                        content={
-                            "ok": False,
-                            "error": "SwarmChannels.get_channels_status unavailable",
-                        },
-                    )
-                data = _sc.get_channels_status()
-                return {"ok": True, **data}
-            except Exception as exc:
-                from fastapi.responses import JSONResponse
-
-                return JSONResponse(
-                    status_code=503,
-                    content={"ok": False, "error": str(exc)},
-                )
 
         # ── Browser Bridge API ──────────────────────────────────────────────
         from ..integrations.browser_bridge import browser_bridge as _browser_bridge
@@ -9369,6 +9243,46 @@ class WebApp:
             if not reaction_engine:
                 return {"ok": False, "error": "reaction_engine_not_configured"}
             return {"ok": True, "stats": reaction_engine.get_reaction_stats(chat_id=chat_id)}
+
+        @self.app.get("/api/reactions/incoming")
+        async def get_reactions_incoming(
+            chat_id: int | None = Query(default=None),
+            message_id: int | None = Query(default=None),
+            limit: int = Query(default=50, ge=1, le=500),
+        ):
+            """
+            Входящие реакции от пользователей (кто что поставил).
+
+            Query params:
+              - chat_id + message_id: реакции на конкретное сообщение
+              - limit: ограничение на количество последних событий (default 50)
+            """
+            try:
+                from src.core.reaction_handler import (  # noqa: PLC0415
+                    get_reactions_for_message,
+                    get_recent_reactions,
+                    get_stats,
+                )
+
+                if chat_id is not None and message_id is not None:
+                    events = get_reactions_for_message(chat_id, message_id)
+                    return {
+                        "ok": True,
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "reactions": events,
+                        "count": len(events),
+                    }
+
+                recent = get_recent_reactions(limit=limit)
+                stats = get_stats()
+                return {
+                    "ok": True,
+                    "recent": recent,
+                    "stats": stats,
+                }
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": str(exc)}
 
         @self.app.get("/api/mood/{chat_id}")
         async def get_chat_mood(chat_id: int):
@@ -11136,72 +11050,6 @@ class WebApp:
 
             return collect_memory_stats()
 
-        @self.app.get("/api/memory/coverage-audit")
-        async def memory_coverage_audit(
-            threshold: int = Query(default=100, ge=1, le=100000),
-        ):
-            """Аудит покрытия чатов в archive.db.
-
-            Сравнивает количество сообщений в archive.db с реальным числом
-            в Telegram (если pyrogram доступен) или флагует чаты < threshold.
-
-            Params:
-              threshold: порог «мало сообщений» (default 100)
-
-            Returns:
-              { generated_at, db_path, threshold, total_chats,
-                total_db_messages, under_threshold_count, rows }
-            """
-            from pathlib import Path as _Path
-
-            from scripts.audit_chat_coverage import run_audit  # type: ignore[import]
-
-            db_path = _Path("~/.openclaw/krab_memory/archive.db").expanduser()
-
-            try:
-                result = run_audit(
-                    db_path=db_path,
-                    threshold=threshold,
-                    skip_telegram=True,  # web endpoint: не блокируем на TG API
-                    output=None,  # не перезаписывать MD при каждом GET
-                )
-                return result
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("coverage_audit_failed", error=str(exc))
-                from fastapi.responses import JSONResponse
-
-                return JSONResponse(
-                    status_code=503,
-                    content={"ok": False, "error": str(exc)},
-                )
-
-        @self.app.get("/api/memory/doctor")
-        async def memory_doctor_get():
-            """Диагностика Memory Layer — 6 проверок без side-effects.
-
-            Returns:
-              ok: bool, checks: dict, failed/warnings: list, summary: str
-            """
-            from ..core.memory_doctor import run_diagnostics
-
-            return await run_diagnostics()
-
-        @self.app.post("/api/memory/doctor/fix")
-        async def memory_doctor_fix():
-            """Диагностика + авто-ремонт Memory Layer.
-
-            Действия: WAL checkpoint, backfill embeddings (если ratio < 50%),
-            перезапуск MCP yung-nagato (если недоступен).
-
-            Returns:
-              diagnostics: dict, repairs: list[dict], ok: bool
-            """
-            from ..core.memory_doctor import run_diagnostics, run_repairs
-
-            diag = await run_diagnostics()
-            repair_result = await run_repairs(checks=diag.get("checks"))
-            return {"diagnostics": diag, **repair_result}
-
         @self.app.get("/api/system/clock_drift")
         async def system_clock_drift():
             """Дрейф системных часов относительно NTP (диагностика Pyrogram msg_id)."""
@@ -11655,6 +11503,22 @@ class WebApp:
 
             return {"ok": True, "listeners_enabled": is_listeners_enabled()}
 
+        @self.app.get("/api/swarm/delegations/active")
+        async def swarm_delegations_active():
+            """Активные цепочки делегирования для visibility/dashboard."""
+            from ..core.swarm_loop_guard import swarm_loop_guard
+
+            chains = swarm_loop_guard.active_chains_snapshot()
+            counters = swarm_loop_guard.blocked_counters()
+            return {
+                "ok": True,
+                "active_chains": chains,
+                "active_count": len(chains),
+                "blocked_counters": counters,
+                "max_hops": swarm_loop_guard._max_hops,
+                "timeout_sec": swarm_loop_guard._timeout_sec,
+            }
+
         @self.app.get("/api/silence/status")
         async def silence_status():
             """Текущий статус тишины."""
@@ -11870,25 +11734,28 @@ class WebApp:
 
             async def _inner() -> dict:
                 # [R9] Безопасный запуск через asyncio subprocess с таймаутом.
-                async with get_global_semaphore():
-                    proc = await asyncio.create_subprocess_exec(
-                        "openclaw",
-                        "channels",
-                        "status",
-                        "--probe",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                        env=self._openclaw_cli_env(),
-                    )
-                    try:
-                        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=45.0)
-                    except asyncio.TimeoutError:
-                        await terminate_and_reap(proc)
-                        return {
-                            "ok": False,
-                            "error": "openclaw_timeout",
-                            "detail": "Запрос статуса каналов превысил 45 сек.",
-                        }
+                proc = await asyncio.create_subprocess_exec(
+                    "openclaw",
+                    "channels",
+                    "status",
+                    "--probe",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=self._openclaw_cli_env(),
+                )
+                try:
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=45.0)
+                except asyncio.TimeoutError:
+                    if proc.returncode is None:
+                        try:
+                            proc.terminate()
+                        except ProcessLookupError:
+                            pass
+                    return {
+                        "ok": False,
+                        "error": "openclaw_timeout",
+                        "detail": "Запрос статуса каналов превысил 45 сек.",
+                    }
 
                 raw_output = stdout.decode("utf-8", errors="replace")
 
@@ -12482,89 +12349,6 @@ class WebApp:
                 media_type="application/json",
                 filename=out_path.name,
             )
-
-        @self.app.get("/api/ecosystem/comparison")
-        async def ecosystem_comparison():
-            """Observable delta Krab vs known peer agents (Chado §7 P2).
-
-            self — динамические данные из CommandRegistry / маршрутов / memory_stats.
-            peers — hardcoded профиль Chado (Telethon-based userbot с 7 anti-bot слоями).
-            """
-            # ── self.commands_count ──────────────────────────────────────────
-            commands_count = 154  # fallback из CLAUDE.md
-            try:
-                from ..core.command_registry import registry as _reg
-
-                commands_count = len(_reg.all())
-            except Exception as _exc:  # noqa: BLE001
-                logger.debug("ecosystem_comparison_commands_count_failed", error=str(_exc))
-
-            # ── self.api_endpoints_count ────────────────────────────────────
-            api_endpoints_count = 204  # fallback из CLAUDE.md
-            try:
-                api_endpoints_count = len(self.app.routes)
-            except Exception as _exc:  # noqa: BLE001
-                logger.debug("ecosystem_comparison_routes_count_failed", error=str(_exc))
-
-            # ── self.chats_active ───────────────────────────────────────────
-            chats_active: int | None = None
-            try:
-                from ..core.chat_window_manager import chat_window_manager as _cwm
-
-                cw_stats = _cwm.stats()
-                chats_active = cw_stats.get("active_windows") or cw_stats.get("size") or 0
-            except Exception as _exc:  # noqa: BLE001
-                logger.debug("ecosystem_comparison_chat_windows_failed", error=str(_exc))
-
-            # ── self.memory_* ───────────────────────────────────────────────
-            memory_messages: int | None = None
-            memory_chunks: int | None = None
-            try:
-                from ..core.memory_stats import collect_memory_stats as _cms
-
-                mem = _cms()
-                memory_messages = mem.get("total_messages")
-                memory_chunks = mem.get("total_chunks")
-            except Exception as _exc:  # noqa: BLE001
-                logger.debug("ecosystem_comparison_memory_stats_failed", error=str(_exc))
-
-            self_profile: dict[str, Any] = {
-                "commands_count": commands_count,
-                "api_endpoints_count": api_endpoints_count,
-                "chats_active": chats_active,
-                "memory_messages": memory_messages,
-                "memory_chunks": memory_chunks,
-                "routines_launchd": 5,
-                "routines_desktop": 7,
-                "tests_count_estimate": 6800,
-                "integrations": [
-                    "telegram_userbot",
-                    "openclaw_gateway",
-                    "sentry",
-                    "linear",
-                    "canva",
-                    "figma",
-                    "claude_design",
-                ],
-            }
-
-            peers = [
-                {
-                    "name": "chado",
-                    "profile": "elegant minimalist",
-                    "known_patterns": {
-                        "event_driven": "Telethon + asyncio Queue/Lock/Event",
-                        "backpressure": "per-chat CW + LRU + batching",
-                        "anti_bot_layers": 7,
-                    },
-                }
-            ]
-
-            return {
-                "self": self_profile,
-                "peers": peers,
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-            }
 
         @self.app.get("/api/model/recommend")
         async def model_recommend(
@@ -13775,6 +13559,38 @@ class WebApp:
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             return {"ok": True, "result": result}
+
+        @self.app.get("/api/ops/openclaw-procs")
+        async def ops_openclaw_procs():
+            """Список текущих openclaw-процессов с командой, возрастом и RSS MB.
+
+            Steady-state ожидаемые: 1 openclaw-gateway.
+            Transient CLI (openclaw models status/list, cron list и т.д.) должны
+            появляться только под семафором budget=3 и исчезать сразу после завершения.
+            Количество > 4 указывает на лик.
+            """
+            from ..core.openclaw_cli_budget import (
+                OPENCLAW_CLI_BUDGET,
+                budget_available,
+                list_openclaw_procs,
+            )
+
+            procs = list_openclaw_procs()
+            gateways = [p for p in procs if p.get("is_gateway")]
+            transient = [p for p in procs if not p.get("is_gateway")]
+            total = len(procs)
+            leak_suspected = total > (1 + OPENCLAW_CLI_BUDGET)
+            return {
+                "ok": True,
+                "total": total,
+                "expected_steady_state": 1,
+                "transient_count": len(transient),
+                "gateway_count": len(gateways),
+                "budget_slots_free": budget_available(),
+                "budget_total": OPENCLAW_CLI_BUDGET,
+                "leak_suspected": leak_suspected,
+                "processes": procs,
+            }
 
         @self.app.get("/api/archive/growth")
         async def archive_growth():
@@ -15025,23 +14841,25 @@ class WebApp:
                 # --- Шаг 1: проверяем runtime каналов ---
                 runtime_ok = False
                 try:
-                    async with get_global_semaphore():
-                        proc_channels = await asyncio.create_subprocess_exec(
-                            "openclaw",
-                            "channels",
-                            "status",
-                            "--probe",
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.STDOUT,
+                    proc_channels = await asyncio.create_subprocess_exec(
+                        "openclaw",
+                        "channels",
+                        "status",
+                        "--probe",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                    )
+                    try:
+                        stdout_ch, _ = await asyncio.wait_for(
+                            proc_channels.communicate(), timeout=30.0
                         )
+                        runtime_ok = proc_channels.returncode == 0
+                    except asyncio.TimeoutError:
                         try:
-                            stdout_ch, _ = await asyncio.wait_for(
-                                proc_channels.communicate(), timeout=30.0
-                            )
-                            runtime_ok = proc_channels.returncode == 0
-                        except asyncio.TimeoutError:
-                            await terminate_and_reap(proc_channels)
-                            runtime_ok = False
+                            proc_channels.terminate()
+                        except ProcessLookupError:
+                            pass
+                        runtime_ok = False
                 except Exception:
                     runtime_ok = False
 
@@ -15049,30 +14867,32 @@ class WebApp:
                 schema_markers = {"unsupported schema node", "schema", "validation"}
                 control_schema_warnings: list[str] = []
                 try:
-                    async with get_global_semaphore():
-                        proc_logs = await asyncio.create_subprocess_exec(
-                            "openclaw",
-                            "logs",
-                            "--tail",
-                            "200",
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.STDOUT,
+                    proc_logs = await asyncio.create_subprocess_exec(
+                        "openclaw",
+                        "logs",
+                        "--tail",
+                        "200",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                    )
+                    try:
+                        stdout_logs, _ = await asyncio.wait_for(
+                            proc_logs.communicate(), timeout=10.0
                         )
+                        raw_logs = stdout_logs.decode("utf-8", errors="replace")
+                        for line in raw_logs.splitlines():
+                            line_lower = line.lower()
+                            # Ищем строки, содержащие хотя бы один из маркеров схемы
+                            if any(marker in line_lower for marker in schema_markers):
+                                stripped = line.strip()
+                                if stripped:
+                                    control_schema_warnings.append(stripped)
+                    except asyncio.TimeoutError:
                         try:
-                            stdout_logs, _ = await asyncio.wait_for(
-                                proc_logs.communicate(), timeout=10.0
-                            )
-                            raw_logs = stdout_logs.decode("utf-8", errors="replace")
-                            for line in raw_logs.splitlines():
-                                line_lower = line.lower()
-                                # Ищем строки, содержащие хотя бы один из маркеров схемы
-                                if any(marker in line_lower for marker in schema_markers):
-                                    stripped = line.strip()
-                                    if stripped:
-                                        control_schema_warnings.append(stripped)
-                        except asyncio.TimeoutError:
-                            await terminate_and_reap(proc_logs)
-                            # При таймауте логов — не считаем это runtime-риском
+                            proc_logs.terminate()
+                        except ProcessLookupError:
+                            pass
+                        # При таймауте логов — не считаем это runtime-риском
                 except Exception:
                     # CLI openclaw logs недоступен — просто нет данных для schema-анализа
                     pass

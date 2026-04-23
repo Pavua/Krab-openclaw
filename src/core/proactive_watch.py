@@ -49,9 +49,6 @@ _SWARM_STALL_FACTOR: float = 2.0
 
 logger = get_logger(__name__)
 
-# Лимит одного параллельного cron probe — защита от накопления orphan Node.js процессов
-_cron_probe_sem = asyncio.Semaphore(1)
-
 
 def _now_utc_iso() -> str:
     """Возвращает timezone-aware UTC timestamp для snapshot/state."""
@@ -79,9 +76,13 @@ async def _fetch_openclaw_cron_jobs() -> list[dict[str, Any]]:
     Получает список cron jobs из OpenClaw CLI (openclaw cron list --json --all).
 
     Возвращает пустой список при любой ошибке — не должна ронять proactive_watch.
+    Вызов защищён семафором openclaw_cli_budget (budget=3).
     """
-    async with _cron_probe_sem:
-        try:
+    from .openclaw_cli_budget import acquire as _cli_acquire
+    from .openclaw_cli_budget import terminate_and_reap as _reap
+
+    try:
+        async with _cli_acquire():
             proc = await asyncio.create_subprocess_exec(
                 "openclaw",
                 "cron",
@@ -95,34 +96,14 @@ async def _fetch_openclaw_cron_jobs() -> list[dict[str, Any]]:
             try:
                 stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20.0)
             except asyncio.TimeoutError:
-                if proc.returncode is None:
-                    try:
-                        proc.terminate()
-                    except ProcessLookupError:
-                        pass
-                    else:
-                        # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
-                        try:
-                            await asyncio.wait_for(proc.wait(), timeout=2.0)
-                        except asyncio.TimeoutError:
-                            try:
-                                proc.kill()
-                            except ProcessLookupError:
-                                pass
-                            try:
-                                await asyncio.wait_for(proc.wait(), timeout=1.0)
-                            except asyncio.TimeoutError:
-                                logger.warning(
-                                    "openclaw_cli_force_killed_but_no_reap",
-                                    pid=proc.pid,
-                                )
+                await _reap(proc)
                 return []
             raw = stdout.decode("utf-8", errors="replace").strip()
             payload = json.loads(raw)
             jobs = payload.get("jobs") if isinstance(payload.get("jobs"), list) else []
             return [j for j in jobs if isinstance(j, dict)]
-        except Exception:  # noqa: BLE001
-            return []
+    except Exception:  # noqa: BLE001
+        return []
 
 
 @dataclass
@@ -448,13 +429,34 @@ class ProactiveWatchService:
 
         last_alert_ts = str(state.get("last_alert_ts") or "")
         last_alerted_reason = str(state.get("last_alerted_reason") or "")
+        # last_gateway_alert_ts — отдельный cooldown для gateway событий (down+recovered).
+        # Без него down→recovered→down чередование обходит per-reason cooldown и
+        # вызывает 19× DM spam при sleep/wake или нестабильной сети.
+        last_gateway_alert_ts = str(state.get("last_gateway_alert_ts") or "")
         cooldown_ok = True
+        _gateway_reasons = {"gateway_down", "gateway_recovered"}
         if last_alert_ts and last_alerted_reason == reason:
             try:
                 elapsed = datetime.now(timezone.utc) - datetime.fromisoformat(last_alert_ts)
                 cooldown_ok = elapsed.total_seconds() >= self.alert_cooldown_sec
             except ValueError:
                 cooldown_ok = True
+        # Дополнительный глобальный gateway cooldown — независимо от смены reason.
+        if cooldown_ok and reason in _gateway_reasons and last_gateway_alert_ts:
+            try:
+                gw_elapsed = datetime.now(timezone.utc) - datetime.fromisoformat(
+                    last_gateway_alert_ts
+                )
+                if gw_elapsed.total_seconds() < self.alert_cooldown_sec:
+                    cooldown_ok = False
+                    logger.debug(
+                        "proactive_watch_gateway_cooldown_active",
+                        reason=reason,
+                        elapsed_sec=round(gw_elapsed.total_seconds()),
+                        cooldown_sec=self.alert_cooldown_sec,
+                    )
+            except ValueError:
+                pass
 
         if notify and reason and notifier is not None and cooldown_ok:
             try:
@@ -474,6 +476,10 @@ class ProactiveWatchService:
             if alerted
             else str(state.get("last_alerted_reason") or ""),
             "last_cron_runs": updated_cron_runs,
+            # Обновляем gateway cooldown timestamp при любом gateway alert.
+            "last_gateway_alert_ts": snapshot.ts_utc
+            if (alerted and reason in _gateway_reasons)
+            else last_gateway_alert_ts,
         }
         self._save_state(payload)
         if reason:
@@ -541,6 +547,16 @@ class ProactiveWatchService:
                     logger.warning(
                         "proactive_watch_action_trace_close_failed", reason=reason, error=str(exc)
                     )
+                # Gateway вернулся → сбрасываем stale consecutive_failures в failover_policy
+                # чтобы следующий запрос не упирался в порог и шёл напрямую без блокировки.
+                if reason == "gateway_recovered":
+                    try:
+                        from .provider_failover import failover_policy  # noqa: PLC0415
+
+                        failover_policy.reset()
+                        logger.info("failover_policy_reset_on_gateway_recovery")
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("failover_policy_reset_failed", error=str(exc))
         return {
             "snapshot": asdict(snapshot),
             "reason": reason,
