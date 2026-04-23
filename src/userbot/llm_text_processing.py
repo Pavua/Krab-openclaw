@@ -79,6 +79,8 @@ class LLMTextProcessingMixin:
         cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
         cleaned = re.sub(r"(?mi)^\s*(assistant|user|system)\s*$", "", cleaned)
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        # Hard-filter запрещённых обращений (last-resort, после всех других обработок)
+        cleaned = cls._strip_gospodin(cleaned)
         return cleaned.strip()
 
     @classmethod
@@ -587,6 +589,69 @@ class LLMTextProcessingMixin:
 
             parts[i] = _url_re.sub(_maybe_wrap, segment)
         return "`".join(parts)
+
+    @staticmethod
+    def _strip_gospodin(text: str) -> str:
+        """
+        Hard output filter — убирает все формы обращения "Мой Господин" / "Господин"
+        из финального ответа, независимо от того, что сгенерировала модель.
+
+        Это last-resort safety net: даже если система промптов не сработала
+        (старый контекст, memory прецеденты, jailbreak), пользователь не увидит
+        запрещённого обращения.
+
+        Правила замены:
+        - "Мой Господин" / "Мой господин" → "" (убираем с запятой/пробелом после)
+        - "Господин" как самостоятельное обращение → "" (без тех случаев где слово
+          встречается как часть нарицательного существительного в тексте — берём
+          только в начале предложения / после запятой как обращение)
+        - "Хозяин" как обращение (в начале или после запятой) → ""
+
+        WARNING: Не трогает слово "господин" внутри цитат о запрете (например,
+        "'Мой Господин' запрещено") — regex требует отсутствия кавычки перед словом.
+        """
+        if not text:
+            return text
+
+        result = text
+
+        # "Мой Господин" / "Мой господин" + опциональная пунктуация после
+        result = re.sub(
+            r'(?<!["\'])Мой [Гг]осподин\b[,\.!\s]*',
+            "",
+            result,
+        )
+
+        # "Господин" как приветственное обращение:
+        # в начале строки / после символов .,!? или после пробела+запятой
+        result = re.sub(
+            r'(?m)(?<!["\'])\bГосподин\b[,\.]?\s*(?=\n|$)',
+            "",
+            result,
+        )
+        # "Господин," в начале предложения внутри строки
+        result = re.sub(
+            r'(?<!["\'])\bГосподин,\s+',
+            "",
+            result,
+        )
+
+        # "Хозяин" как обращение (начало строки или после запятой)
+        result = re.sub(
+            r'(?m)(?<!["\'])\bХозяин\b[,\.]?\s*(?=\n|$)',
+            "",
+            result,
+        )
+        result = re.sub(
+            r'(?<!["\'])\bХозяин,\s+',
+            "",
+            result,
+        )
+
+        # Убираем артефакты — пустые строки в начале после strip
+        result = re.sub(r"^\s*\n", "", result)
+        result = re.sub(r"\n{3,}", "\n\n", result)
+        return result.strip() if result.strip() != text.strip() else result
 
     @staticmethod
     def _normalize_user_visible_fallback_text(text: str) -> str:
