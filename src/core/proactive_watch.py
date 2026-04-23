@@ -25,6 +25,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+try:
+    import sentry_sdk as _sentry_sdk
+except ImportError:  # noqa: BLE001
+    _sentry_sdk = None  # type: ignore[assignment]
+
 from ..config import config
 from ..integrations.macos_automation import macos_automation
 from ..memory_engine import memory_manager
@@ -640,6 +645,8 @@ class ProactiveWatchService:
                 await self.run_auto_restart_checks()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("auto_restart_loop_error", error=str(exc))
+                if _sentry_sdk is not None:
+                    _sentry_sdk.capture_exception(exc)
 
     def start_auto_restart_loop(self) -> "asyncio.Task[None]":
         """Запускает фоновую задачу auto-restart и возвращает Task."""

@@ -18,6 +18,11 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any
 
+try:
+    import sentry_sdk as _sentry_sdk
+except ImportError:  # noqa: BLE001
+    _sentry_sdk = None  # type: ignore[assignment]
+
 if TYPE_CHECKING:
     from pyrogram.types import Message
 
@@ -37,6 +42,60 @@ from ..core.openclaw_task_poller import (
 LLM_STAGNATION_CANCEL_REASON = "llm_stagnation_detected"
 
 logger = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Cost footer (Feature A)
+# ---------------------------------------------------------------------------
+
+# KRAB_COST_FOOTER=compact|verbose|off  (default: compact)
+_COST_FOOTER_MODE_ENV = "KRAB_COST_FOOTER"
+_COST_FOOTER_DEFAULT = "compact"
+
+
+def _get_cost_footer_mode() -> str:
+    """Возвращает режим cost footer: compact / verbose / off."""
+    return os.getenv(_COST_FOOTER_MODE_ENV, _COST_FOOTER_DEFAULT).strip().lower()
+
+
+def _build_cost_footer(
+    *,
+    cost_usd: float,
+    input_tokens: int,
+    output_tokens: int,
+    model: str,
+    elapsed_sec: float,
+    is_fallback: bool = False,
+    tool_calls_count: int = 0,
+    reasoning_mode: str = "",
+    mode: str = "compact",
+) -> str:
+    """
+    Формирует строку-футер с данными о стоимости запроса.
+
+    compact → однострочник: ━━━ 💰 $0.012 · 24.1k↓ / 0.8k↑ · model · 3.2s
+    verbose → compact + reasoning mode, fallback, tool_calls
+    off     → пустая строка (не отправляем)
+    """
+    if mode == "off":
+        return ""
+    in_k = round(input_tokens / 1000, 1)
+    out_k = round(output_tokens / 1000, 1)
+    elapsed_f = round(elapsed_sec, 1)
+    cost_str = f"${cost_usd:.4f}" if cost_usd >= 0.0001 else "$0.0000"
+    model_short = (model or "unknown").split("/")[-1]  # убираем провайдер-префикс
+    line = f"━━━━━━━━━━━━━\n💰 {cost_str} · {in_k}k↓ / {out_k}k↑ · {model_short} · {elapsed_f}s"
+    if mode == "verbose":
+        extras: list[str] = []
+        if reasoning_mode:
+            extras.append(f"reasoning={reasoning_mode}")
+        if is_fallback:
+            extras.append("fallback")
+        if tool_calls_count:
+            extras.append(f"tools={tool_calls_count}")
+        if extras:
+            line += " · " + " · ".join(extras)
+    return line
+
 
 # Auto-reactions integrated — see core/auto_reactions.py for reaction types.
 # Enabled via AUTO_REACTIONS_ENABLED env (default true).
@@ -419,6 +478,19 @@ class LLMFlowMixin:
         _reaction_sent = False  # флаг: уже поставили ✅/❌ на исходное сообщение
         _agent_marked = False  # флаг: уже отметили agent_mode реакцией
 
+        # Sentry span: трассируем end-to-end LLM flow (10% sampling в production)
+        _sentry_span = None
+        if _sentry_sdk is not None:
+            try:
+                _sentry_span = _sentry_sdk.start_span(
+                    op="llm.flow",
+                    description="openclaw_stream_end_to_end",
+                )
+                _sentry_span.set_tag("has_images", bool(images))
+                _sentry_span.set_tag("force_cloud", force_cloud)
+            except Exception:  # noqa: BLE001
+                _sentry_span = None
+
         # Auto-reaction: запрос принят
         await _safe_react(mark_accepted, self, message)
         # Progress-уведомления только в личных чатах или для self-сообщений.
@@ -466,6 +538,51 @@ class LLMFlowMixin:
             and hasattr(access_profile, "level")
             and str(getattr(access_profile.level, "value", access_profile.level)).lower() == "guest"
         )
+
+        # Reasoning autoscale: per-request ThinkingDepth override
+        _autoscale_depth_restored: str | None = None
+        try:
+            from ..core.reasoning_autoscale import detect_reasoning_mode
+            from ..core.reasoning_autoscale import is_enabled as _autoscale_on
+
+            if _autoscale_on():
+                _history_tokens = 0
+                try:
+                    from ..openclaw_client import openclaw_client as _oc
+
+                    _sess = _oc._sessions.get(str(runtime_chat_id), [])  # type: ignore[attr-defined]
+                    # Грубая оценка: len(json) / 4
+                    import json as _json
+
+                    _history_tokens = len(_json.dumps(_sess)) // 4
+                except Exception:  # noqa: BLE001
+                    pass
+                _auto_mode = detect_reasoning_mode(
+                    query,
+                    has_photo=bool(images),
+                    is_swarm=bool(getattr(self, "_swarm_active", False)),
+                    history_tokens=_history_tokens,
+                )
+                from ..core.provider_manager import ThinkingDepth, provider_manager
+
+                _current_depth = provider_manager._state.thinking_depth  # type: ignore[attr-defined]
+                _mapped: ThinkingDepth | None = None
+                try:
+                    _mapped = ThinkingDepth(_auto_mode)
+                except ValueError:
+                    pass
+                if _mapped is not None and _mapped != _current_depth:
+                    _autoscale_depth_restored = _current_depth.value
+                    provider_manager.set_thinking_depth(_mapped)
+                    logger.info(
+                        "reasoning_autoscale_applied",
+                        mode=_auto_mode,
+                        prev=_current_depth.value,
+                        chat_id=chat_id,
+                    )
+        except Exception:  # noqa: BLE001
+            pass
+
         stream = openclaw_client.send_message_stream(
             message=effective_query,
             chat_id=runtime_chat_id,
@@ -1233,6 +1350,38 @@ class LLMFlowMixin:
                 text=full_response,
             )
 
+            # OperatorInfoGuard: Defense-in-depth PII sanitizer.
+            # Для guest-контекстов (non-owner чаты/пользователи) редактируем
+            # email оператора, SSH-ключи, приватные GitHub-репо и телефон из ответа.
+            # Это вторая линия защиты после guest-XOR-fix (W10.1).
+            if bool(getattr(config, "OPERATOR_INFO_GUARD_ENABLED", True)):
+                _access_level_str = (
+                    str(getattr(access_profile, "level", None) or "").strip().lower()
+                )
+                # owner/full — не редактируем; guest/partial — редактируем
+                _is_owner_level = _access_level_str in ("owner", "full")
+                if not _is_owner_level:
+                    try:
+                        from ..core.operator_info_guard import sanitize_for_context
+
+                        _sanitized, _redacted_cats = sanitize_for_context(
+                            full_response, context="guest"
+                        )
+                        if _redacted_cats:
+                            logger.warning(
+                                "operator_pii_sanitized_in_response",
+                                chat_id=chat_id,
+                                access_level=_access_level_str,
+                                categories=_redacted_cats,
+                            )
+                            full_response = _sanitized
+                    except Exception as _guard_exc:  # noqa: BLE001
+                        logger.warning(
+                            "operator_info_guard_failed",
+                            chat_id=chat_id,
+                            error=str(_guard_exc),
+                        )
+
             # Экранируем URL в группах: admin-боты (например, HOW2AI) удаляют
             # сообщения с кликабельными ссылками у не-админов. Оборачиваем в
             # бэктики — Telegram рендерит их как код, не как гиперссылку.
@@ -1273,6 +1422,47 @@ class LLMFlowMixin:
             ):
                 asyncio.create_task(self._send_message_reaction(message, "✅"))
                 _reaction_sent = True
+
+            # Cost footer (Feature A): показываем owner'у стоимость запроса.
+            _cost_footer_mode = _get_cost_footer_mode()
+            if (
+                is_self
+                and not timeout_error_was_sent
+                and _cost_footer_mode != "off"
+                and full_response
+            ):
+                try:
+                    from ..core.cost_analytics import cost_analytics as _ca
+
+                    _calls = getattr(_ca, "_calls", [])
+                    _last_call = _calls[-1] if _calls else None
+                    _flow_elapsed = time.time() - _flow_start_ts
+                    _route_meta_footer: dict[str, Any] = {}
+                    if hasattr(openclaw_client, "get_last_runtime_route"):
+                        try:
+                            _route_meta_footer = openclaw_client.get_last_runtime_route() or {}
+                        except Exception:
+                            _route_meta_footer = {}
+                    _footer_model = str(
+                        _route_meta_footer.get("model")
+                        or (_last_call.model_id if _last_call else "")
+                        or getattr(config, "MODEL", "")
+                        or "unknown"
+                    ).strip()
+                    _footer = _build_cost_footer(
+                        cost_usd=_last_call.cost_usd if _last_call else 0.0,
+                        input_tokens=_last_call.input_tokens if _last_call else 0,
+                        output_tokens=_last_call.output_tokens if _last_call else 0,
+                        model=_footer_model,
+                        elapsed_sec=_flow_elapsed,
+                        is_fallback=_last_call.is_fallback if _last_call else False,
+                        tool_calls_count=_last_call.tool_calls_count if _last_call else 0,
+                        mode=_cost_footer_mode,
+                    )
+                    if _footer:
+                        asyncio.create_task(self.client.send_message(chat_id, _footer))
+                except Exception as _cf_exc:  # noqa: BLE001
+                    logger.debug("cost_footer_skip", error=str(_cf_exc))
 
             # Post-response relay: если Краб пообещал передать в ответе, а входящее
             # не попало в _RELAY_INTENT_KEYWORDS — форсируем relay.
@@ -1436,6 +1626,20 @@ class LLMFlowMixin:
                     openclaw_client.register_current_request_task(None)
                 except Exception:  # noqa: BLE001
                     pass
+            # Восстанавливаем thinking_depth если autoscale делал override
+            if _autoscale_depth_restored is not None:
+                try:
+                    from ..core.provider_manager import ThinkingDepth, provider_manager
+
+                    provider_manager.set_thinking_depth(ThinkingDepth(_autoscale_depth_restored))
+                except Exception:  # noqa: BLE001
+                    pass
+            # Закрываем Sentry span
+            if _sentry_span is not None:
+                try:
+                    _sentry_span.finish()
+                except Exception:  # noqa: BLE001
+                    pass
 
     async def _finish_ai_request_background(self, **kwargs: Any) -> None:
         """Доводит long LLM/tool path до конца уже после release per-chat lock."""
@@ -1530,6 +1734,11 @@ class LLMFlowMixin:
                 error_type=error_type_name,
                 traceback=traceback.format_exc(),
             )
+            if _sentry_sdk is not None:
+                with _sentry_sdk.push_scope() as scope:
+                    scope.set_tag("flow", "background_ai_request")
+                    scope.set_tag("chat_id", str(chat_id))
+                    _sentry_sdk.capture_exception(exc)
             # Если это persistent chat-level bar (USER_BANNED_IN_CHANNEL /
             # ChatWriteForbidden / UserDeactivated / ChannelPrivate), помечаем
             # чат в ban cache, чтобы следующие сообщения из него не гоняли
