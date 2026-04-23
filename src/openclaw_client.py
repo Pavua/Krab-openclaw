@@ -160,6 +160,9 @@ class OpenClawClient:
         # doctor --fix при каждом старте Краба может ротировать gateway token,
         # поэтому .env может устареть — runtime openclaw.json всегда актуальнее.
         self._sync_token_from_runtime_on_init()
+        # W24: авто-починка models.json — добавляем image в input для vision-моделей.
+        # OpenClaw gateway стриппит image_url из payload если 'image' не заявлен в input[].
+        self.ensure_vision_input_in_models_json()
         self._openclaw_sessions_index_path = (
             Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json"
         )
@@ -1199,6 +1202,69 @@ class OpenClawClient:
                 "openclaw_models_write_failed", error=str(exc), path=str(self._models_path)
             )
             return False
+
+    # Паттерны ID моделей, которые умеют vision/multimodal
+    _VISION_MODEL_PATTERNS: tuple[str, ...] = (
+        "gemini-1.5",
+        "gemini-2",
+        "gemini-3",
+        "gpt-4o",
+        "gpt-4.1",
+        "gpt-4-vision",
+        "gpt-5",
+        "claude-opus",
+        "claude-sonnet",
+        "claude-haiku",
+    )
+
+    def _is_model_declared_vision_in_config(self, model_id: str) -> bool:
+        """Проверяет что models.json объявляет image в input для модели model_id.
+
+        W24: OpenClaw gateway читает input[] для маршрутизации multimodal запросов.
+        Если image отсутствует — gateway стриппит image_url из payload перед
+        передачей в Gemini/OpenAI, даже если bytes были переданы корректно.
+        """
+        data = self._read_models_json()
+        norm = str(model_id or "").strip().lower()
+        for pdata in data.get("providers", {}).values():
+            for m in pdata.get("models", []):
+                mid = str(m.get("id", "") or "").lower()
+                if mid == norm or norm.endswith(f"/{mid}") or mid.endswith(f"/{norm}"):
+                    inp = m.get("input", [])
+                    return isinstance(inp, list) and "image" in inp
+        return False
+
+    def ensure_vision_input_in_models_json(self) -> int:
+        """Добавляет 'image' в input[] для всех vision-capable моделей в models.json.
+
+        W24 fix: при старте Краба авто-починяет models.json если gateway стриппит image.
+        Возвращает количество исправленных моделей (0 = ничего не изменилось).
+        """
+        data = self._read_models_json()
+        updated = 0
+        for pdata in data.get("providers", {}).values():
+            for m in pdata.get("models", []):
+                mid = str(m.get("id", "") or "").lower()
+                name = str(m.get("name", "") or "").lower()
+                is_vision = any(p in mid or p in name for p in self._VISION_MODEL_PATTERNS)
+                if not is_vision:
+                    continue
+                inp = m.get("input", [])
+                if not isinstance(inp, list):
+                    inp = ["text"]
+                if "image" not in inp:
+                    if "text" not in inp:
+                        inp.append("text")
+                    inp.append("image")
+                    m["input"] = inp
+                    updated += 1
+        if updated:
+            self._write_models_json(data)
+            logger.info(
+                "models_json_vision_input_patched",
+                patched_count=updated,
+            )
+        return updated
 
     def _set_google_key_in_models(self, key_value: str) -> bool:
         data = self._read_models_json()
@@ -2826,6 +2892,15 @@ class OpenClawClient:
                     trim_reason="local_primary_route",
                 )
 
+            # W24: проверяем что выбранная модель объявлена как vision-capable в models.json.
+            # Если нет — gateway стрипнет image_url, Gemini получит только текст.
+            if has_photo and not self._is_model_declared_vision_in_config(selected_model):
+                patched = self.ensure_vision_input_in_models_json()
+                logger.warning(
+                    "photo_model_not_declared_vision_in_config",
+                    model=selected_model,
+                    patched_count=patched,
+                )
             logger.info(
                 "openclaw_stream_start",
                 chat_id=chat_id,
