@@ -96,6 +96,7 @@ from .handlers import (
     handle_explain,
     handle_export,
     handle_fix,
+    handle_forget,
     handle_fwd,
     handle_gemini_cli,
     handle_grep,
@@ -613,8 +614,15 @@ class KraabUserbot(
             filters.command("forget", prefixes=prefixes) & _make_command_filter("forget"), group=-1
         )
         async def wrap_forget(c, m):
-            # !forget — alias for !clear (drop session history, cure history poisoning)
-            await run_cmd(handle_clear, m)
+            await run_cmd(handle_forget, m)
+
+        @self.client.on_message(
+            filters.command("clear_session", prefixes=prefixes)
+            & _make_command_filter("clear_session"),
+            group=-1,
+        )
+        async def wrap_clear_session(c, m):
+            await run_cmd(handle_forget, m)
 
         @self.client.on_message(
             filters.command("config", prefixes=prefixes) & _make_command_filter("config"), group=-1

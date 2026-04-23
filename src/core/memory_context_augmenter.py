@@ -25,6 +25,7 @@ Env:
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -170,7 +171,9 @@ async def augment_query_with_memory(
     top_k = top_k if top_k is not None else _default_top_k()
     min_score = min_score if min_score is not None else _default_min_score()
     if force_enable is None:
-        enabled = _auto_context_enabled()
+        # Auto-enable: если env выключен, но запрос похож на recall — включаем.
+        # Это ловит "о чём я писал с Дашкой..." без явного MEMORY_AUTO_CONTEXT_ENABLED=true.
+        enabled = _auto_context_enabled() or _is_memory_query(query)
     else:
         enabled = force_enable
 
@@ -252,8 +255,96 @@ def _short_preview(text: str, max_len: int = 400) -> str:
     return t[:max_len] + "..."
 
 
+# Ключевые слова для auto-detect memory/recall запросов.
+_MEMORY_QUERY_KEYWORDS: tuple[str, ...] = (
+    # Русские — действия с прошлым
+    "писал",
+    "писала",
+    "говорил",
+    "говорила",
+    "сказал",
+    "сказала",
+    "обсуждали",
+    "договорились",
+    "упоминал",
+    "упоминала",
+    "напомни",
+    "вспомни",
+    "что было",
+    "о чём",
+    "про что",
+    "история",
+    "переписка",
+    "разговор",
+    "диалог",
+    # English
+    "remember",
+    "recall",
+    "told",
+    "said",
+    "discussed",
+    "mentioned",
+    "conversation",
+    "chat history",
+    "what did",
+)
+
+
+def _is_memory_query(query: str) -> bool:
+    """
+    Эвристика: выглядит ли запрос как recall-запрос по истории чатов?
+    Используется для auto-enable memory augmentation без явного флага env.
+    При совпадении любого ключевого слова возвращает True.
+    """
+    q = query.lower()
+    return any(kw in q for kw in _MEMORY_QUERY_KEYWORDS)
+
+
 # Shim-обёртка: позволяет тестам делать monkeypatch.setattr(m, "hybrid_search", ...)
 # без необходимости патчить _call_retrieval.
 def hybrid_search(query: str, limit: int = 3) -> list[Any]:
     """Shim over retrieval pipeline, патчится в тестах."""
     return _call_retrieval(query, limit=limit)
+
+
+# ---------------------------------------------------------------------------
+# Memory-query detection: эвристика для auto-clear session history
+# ---------------------------------------------------------------------------
+
+# Паттерн запросов об истории/архиве: «что я/он писал», «история», «архив», «recall».
+_MEMORY_QUERY_RE = re.compile(
+    r"(?:что|кто|когда|где|как|сколько)[^.!?]{0,60}писа(?:л|ли|ла|ло)"
+    r"|(?:история|архив|recall|mem(?:ory)?|вспомни|найди в памяти)",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def detect_memory_query(query: str) -> bool:
+    """Возвращает True если query похож на запрос к архиву/истории сообщений.
+
+    Эвристика: маркеры «что писал», «история», «архив», «recall», «memory».
+    Используется для auto-clear накопленной session history перед prompt-сборкой,
+    чтобы предотвратить stale-attribution из предыдущих LLM-ответов.
+    """
+    if not query or not query.strip():
+        return False
+    return bool(_MEMORY_QUERY_RE.search(query))
+
+
+def maybe_flag_memory_query(chat_id: str, query: str) -> bool:
+    """Если query — memory-запрос, ставит флаг в openclaw_client.
+
+    Вызывается из llm_flow / memory_commands перед отправкой в LLM.
+    Возвращает True если флаг был поднят.
+    """
+    if not detect_memory_query(query):
+        return False
+    try:
+        from ..openclaw_client import openclaw_client  # type: ignore[attr-defined]
+
+        openclaw_client.flag_memory_query(chat_id)
+        logger.info("memory_query_auto_flagged", chat_id=chat_id, query_preview=query[:80])
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory_query_flag_failed", error=str(exc))
+        return False

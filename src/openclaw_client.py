@@ -148,6 +148,9 @@ class OpenClawClient:
         # `/api/v1/chat` без пересылки полного assistant-хвоста.
         self._lm_native_chat_state: Dict[str, dict[str, str]] = {}
         self._usage_stats = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        # Одноразовые флаги: чаты, для которых при следующем запросе история
+        # не должна отправляться в LLM (memory-query режим).
+        self._memory_query_flags: set[str] = set()
 
         # Source-of-truth по моделям/ключам OpenClaw (решение проекта: ~/.openclaw)
         self._models_path = default_openclaw_models_path()
@@ -2655,6 +2658,16 @@ class OpenClawClient:
                     hint="SOUL.md or USER.md contains 'Господин' instruction — review required",
                 )
 
+        # Если запрос помечен как memory-query — очищаем накопленную session history
+        # (кроме system prompt), чтобы старые stale-ответы не отравляли атрибуцию.
+        # Флаг одноразовый: is_memory_query_flagged() сбрасывает его при чтении.
+        if self.is_memory_query_flagged(chat_id):
+            existing = self._sessions.get(chat_id, [])
+            # Оставляем только system-сообщение (если есть).
+            system_msgs = [m for m in existing if m.get("role") == "system"]
+            self._sessions[chat_id] = system_msgs
+            logger.info("memory_query_history_cleared", chat_id=chat_id)
+
         if images:
             content_parts = [{"type": "text", "text": message}]
             for img_b64 in images:
@@ -3342,6 +3355,21 @@ class OpenClawClient:
             )
 
         logger.info("session_cleared", chat_id=chat_id)
+
+    def flag_memory_query(self, chat_id: str) -> None:
+        """Помечает chat_id: следующий send_message_stream пропустит session history.
+
+        Одноразовый флаг — сбрасывается автоматически в начале запроса.
+        Используется memory_context_augmenter при детекции archive-запроса.
+        """
+        self._memory_query_flags.add(chat_id)
+        logger.debug("memory_query_flagged", chat_id=chat_id)
+
+    def is_memory_query_flagged(self, chat_id: str) -> bool:
+        """Возвращает True если флаг установлен (и немедленно сбрасывает его)."""
+        flagged = chat_id in self._memory_query_flags
+        self._memory_query_flags.discard(chat_id)
+        return flagged
 
     @staticmethod
     def _cleanup_openclaw_session_files(chat_id: str) -> int:

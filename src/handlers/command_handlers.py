@@ -1929,6 +1929,30 @@ async def handle_clear(bot: "KraabUserbot", message: Message) -> None:
 
 
 # ---------------------------------------------------------------------------
+# !forget / !clear_session — быстрая очистка session history текущего чата
+# ---------------------------------------------------------------------------
+
+
+async def handle_forget(bot: "KraabUserbot", message: Message) -> None:
+    """!forget — очистить session history текущего чата.
+
+    Алиас: !clear_session
+    Owner-only (или DM владельца).
+    Удаляет накопленный _sessions[chat_id] + history_cache, чтобы LLM начал
+    с чистого листа. Полезно перед memory-recall запросами, чтобы старые
+    stale-ответы не отравляли атрибуцию.
+    """
+    # Owner-check
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
+
+    chat_id = str(message.chat.id)
+    openclaw_client.clear_session(chat_id)
+    await message.reply("🧠 Контекст чата очищен. Начинаю свежий разговор.")
+
+
+# ---------------------------------------------------------------------------
 # !reset — агрессивная многослойная очистка истории
 # ---------------------------------------------------------------------------
 
