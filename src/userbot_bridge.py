@@ -95,6 +95,7 @@ from .handlers import (
     handle_del,
     handle_diagnose,
     handle_digest,
+    handle_e2e_smoke,
     handle_emoji,
     handle_eval,
     handle_explain,
@@ -942,6 +943,13 @@ class KraabUserbot(
         )
         async def wrap_trust(c, m):
             await run_cmd(handle_trust, m)
+
+        @self.client.on_message(
+            filters.command("e2e_smoke", prefixes=prefixes) & _make_command_filter("e2e_smoke"),
+            group=-1,
+        )
+        async def wrap_e2e_smoke(c, m):
+            await run_cmd(handle_e2e_smoke, m)
 
         @self.client.on_message(
             filters.command("ls", prefixes=prefixes) & _make_command_filter("ls"), group=-1

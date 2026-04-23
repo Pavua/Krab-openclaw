@@ -18997,3 +18997,93 @@ async def handle_proactivity(bot: "KraabUserbot", message: Message) -> None:
         f"✅ Proactivity переключён: **{lv.name.lower()}** ({lv.value})\n"
         f"Autonomy: `{get_autonomy_mode()}` | Threshold: `{get_trigger_threshold()}`"
     )
+
+
+async def handle_e2e_smoke(bot: "KraabUserbot", message: Message) -> None:
+    """!e2e-smoke — запустить E2E regression smoke tests (owner-only).
+
+    Синтаксис:
+      !e2e-smoke           — запустить все тесты
+      !e2e-smoke <name>    — запустить один тест по имени
+      !e2e-smoke list      — список доступных тестов
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!e2e-smoke` доступен только владельцу.")
+
+    raw = (message.text or "").strip()
+    parts = raw.split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    # Динамический импорт e2e-модуля (не в production-path)
+    import importlib.util as _ilu  # noqa: PLC0415
+    import pathlib as _pl  # noqa: PLC0415
+
+    _script_path = _pl.Path(__file__).parent.parent.parent / "scripts" / "e2e_smoke_test.py"
+    _spec = _ilu.spec_from_file_location("e2e_smoke_test", _script_path)
+    if _spec is None or _spec.loader is None:
+        await message.reply("❌ e2e_smoke_test.py не найден. Проверьте scripts/e2e_smoke_test.py")
+        return
+    _e2e = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_e2e)  # type: ignore[union-attr]
+
+    TEST_CASES = _e2e.TEST_CASES  # noqa: N806
+
+    # list
+    if arg == "list":
+        names = "\n".join(f"  • `{c.name}` — {c.description}" for c in TEST_CASES)
+        await message.reply(f"**E2E тесты ({len(TEST_CASES)}):**\n{names}")
+        return
+
+    # Определить owner chat_id
+    owner_chat_id: int | None = None
+    try:
+        owner_chat_id = message.from_user.id if message.from_user else None
+    except Exception:
+        pass
+    if owner_chat_id is None and hasattr(bot, "owner_user_id"):
+        owner_chat_id = bot.owner_user_id
+
+    if not owner_chat_id:
+        await message.reply("❌ Не удалось определить owner chat_id для E2E.")
+        return
+
+    # Отфильтровать тесты
+    selected = TEST_CASES
+    if arg and arg != "all":
+        selected = [c for c in TEST_CASES if c.name == arg]
+        if not selected:
+            names_list = ", ".join(f"`{c.name}`" for c in TEST_CASES)
+            await message.reply(f"❌ Тест `{arg}` не найден.\nДоступные: {names_list}")
+            return
+
+    await message.reply(
+        f"⚙️ Запускаем E2E smoke tests ({len(selected)}/{len(TEST_CASES)})…\n"
+        f"Ожидайте до {len(selected) * 65}s"
+    )
+
+    runner = _e2e.E2ESmokeRunner(chat_id=owner_chat_id, timeout=60.0, verbose=False)
+
+    results = await runner.run_all(selected)
+
+    passed = sum(1 for r in results if r.passed)
+    total = len(results)
+
+    lines = [f"**E2E Smoke Results: {passed}/{total} passed**\n"]
+    for r in results:
+        icon = "✅" if r.passed else "❌"
+        snippet = (r.actual_text[:60] + "…") if len(r.actual_text) > 60 else r.actual_text
+        reason = f" — {r.failure_reason}" if not r.passed else ""
+        lines.append(f"{icon} `{r.case.name}` ({r.elapsed:.1f}s){reason}")
+        if r.passed and snippet:
+            lines.append(f"   _{snippet}_")
+
+    # Сохранить отчёт
+    try:
+        report = _e2e._render_report(results, sum(r.elapsed for r in results))
+        _e2e.save_report(report)
+        lines.append("\nОтчёт: `docs/E2E_RESULTS_LATEST.md`")
+    except Exception as exc:
+        logger.warning("e2e-smoke: save report failed: %s", exc)
+
+    await message.reply("\n".join(lines))

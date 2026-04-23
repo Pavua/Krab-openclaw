@@ -53,6 +53,7 @@ from .command_handlers import (
     handle_diff,
     handle_digest,
     handle_dns,
+    handle_e2e_smoke,
     handle_emoji,
     handle_encrypt,
     handle_eval,
@@ -171,6 +172,7 @@ from .loglevel_command import handle_loglevel
 
 __all__ = [
     "handle_acl",
+    "handle_e2e_smoke",
     "handle_scope",
     "handle_afk",
     "handle_emoji",
