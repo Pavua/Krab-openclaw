@@ -372,9 +372,8 @@ def _assert_response(case: TestCase, actual: str) -> str | None:
     if case.max_length is not None and len(actual) > case.max_length:
         return f"слишком длинный ответ: {len(actual)} > {case.max_length}"
 
-    for pat in case.must_contain:
-        if pat not in actual:
-            return f"не найдено обязательное: {pat!r}"
+    if case.must_contain and not any(pat in actual for pat in case.must_contain):
+        return f"ни одна из обязательных не найдена: {case.must_contain!r}"
 
     for pat in case.must_not_contain:
         if pat in actual:

@@ -118,6 +118,41 @@ class TestAssertResponse:
         result = _assert_response(case, "⚡ Proactivity Level: attentive\nthreshold: 0.7")
         assert result is None
 
+    # OR semantics regression tests (bug_008)
+    def test_must_contain_or_semantics_first_present_passes(self):
+        """must_contain=[A, B], actual has A → pass (OR)."""
+        case = _case(must_contain=["foo", "bar"])
+        result = _assert_response(case, "hello foo world")
+        assert result is None
+
+    def test_must_contain_or_semantics_second_present_passes(self):
+        """must_contain=[A, B], actual has B → pass (OR)."""
+        case = _case(must_contain=["foo", "bar"])
+        result = _assert_response(case, "hello bar world")
+        assert result is None
+
+    def test_must_contain_or_semantics_none_present_fails(self):
+        """must_contain=[A, B], actual has neither → fail."""
+        case = _case(must_contain=["foo", "bar"])
+        result = _assert_response(case, "hello world")
+        assert result is not None
+
+    def test_must_contain_empty_list_always_passes(self):
+        """must_contain=[], actual any → pass (no check)."""
+        case = _case(must_contain=[])
+        result = _assert_response(case, "anything goes here")
+        assert result is None
+
+    def test_must_not_contain_and_semantics_unchanged(self):
+        """must_not_contain still uses AND (all must be absent)."""
+        case = _case(must_not_contain=["bad", "evil"])
+        # "bad" is present → fail
+        result = _assert_response(case, "bad outcome")
+        assert result is not None
+        # neither present → pass
+        result2 = _assert_response(case, "fine outcome")
+        assert result2 is None
+
 
 # ---------------------------------------------------------------------------
 # _render_report
