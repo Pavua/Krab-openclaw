@@ -155,6 +155,17 @@ class WebApp:
         self._vg_subscriber: VoiceGatewayEventSubscriber | None = None
         self._setup_basic_auth_middleware()
         self._setup_bcrypt_auth_middleware()
+        # Hard-require SENTRY_WEBHOOK_SECRET: генерируем и persist-им в .env
+        # при первом старте, чтобы /api/hooks/sentry никогда не работал
+        # в "open" режиме (любой знающий URL не должен пройти HMAC).
+        try:
+            from src.bootstrap.sentry_webhook_secret import (
+                ensure_sentry_webhook_secret,
+            )
+
+            ensure_sentry_webhook_secret()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("sentry_webhook_secret_bootstrap_failed", error=str(exc))
         self._setup_routes()
 
     @property
@@ -7548,8 +7559,9 @@ class WebApp:
             """Приём webhook-ов от Sentry Alert Rules → Telegram Saved Messages.
 
             Аутентификация: `X-Sentry-Signature-256` HMAC-SHA256 от raw body
-            с секретом `SENTRY_WEBHOOK_SECRET`. Если секрет не задан —
-            принимаем всё (удобно для первичной настройки/тестов).
+            с секретом `SENTRY_WEBHOOK_SECRET`. Secret обязателен —
+            если не задан, endpoint отвечает 503 и ничего не доставляет
+            (иначе любой, кто знает публичный URL, мог бы спамить owner).
 
             Форматирование: `format_sentry_alert(payload)` — лаконичный
             markdown с level, title, env, events, users, permalink.
@@ -7560,22 +7572,38 @@ class WebApp:
 
             from ..core.sentry_webhook_formatter import format_sentry_alert
 
-            # HMAC verification (если secret задан)
+            # Hard-require secret: пустой секрет == endpoint отключён.
             secret = os.getenv("SENTRY_WEBHOOK_SECRET", "").strip()
-            if secret and request is not None:
-                raw_body = await request.body()
-                received_sig = (
-                    request.headers.get("x-sentry-signature-256")
-                    or request.headers.get("sentry-hook-signature")
-                    or ""
+            if not secret:
+                logger.warning(
+                    "sentry_webhook_not_configured",
+                    hint=(
+                        "SENTRY_WEBHOOK_SECRET env is empty; endpoint rejects all "
+                        "requests until a secret is set (auto-generated at boot)."
+                    ),
                 )
-                expected = hmac.new(
-                    secret.encode("utf-8"),
-                    raw_body,
-                    hashlib.sha256,
-                ).hexdigest()
-                if not hmac.compare_digest(received_sig, expected):
-                    raise HTTPException(status_code=401, detail="bad_signature")
+                raise HTTPException(status_code=503, detail="webhook_not_configured")
+
+            if request is None:
+                # Невозможно без Request: нет raw body для HMAC.
+                raise HTTPException(status_code=400, detail="request_required")
+
+            raw_body = await request.body()
+            received_sig = (
+                request.headers.get("x-sentry-signature-256")
+                or request.headers.get("sentry-hook-signature")
+                or ""
+            ).strip()
+            if not received_sig:
+                raise HTTPException(status_code=401, detail="signature_missing")
+
+            expected = hmac.new(
+                secret.encode("utf-8"),
+                raw_body,
+                hashlib.sha256,
+            ).hexdigest()
+            if not hmac.compare_digest(received_sig, expected):
+                raise HTTPException(status_code=401, detail="bad_signature")
 
             text = format_sentry_alert(payload)
             if not text:
@@ -7607,6 +7635,32 @@ class WebApp:
             except Exception as exc:
                 logger.error("sentry_webhook_send_failed", error=str(exc))
                 raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        @self.app.post("/api/hooks/sentry/secret/rotate")
+        async def sentry_webhook_secret_rotate(request: Request):
+            """Регенерирует SENTRY_WEBHOOK_SECRET (owner-only, loopback).
+
+            Доступ разрешён только с 127.0.0.1 / ::1 — endpoint не требует
+            токена (панель всё равно не слушает извне), но проверяет
+            `request.client.host` для защиты от внешнего доступа через
+            reverse-proxy / Cloudflare tunnel.
+            """
+            client_host = request.client.host if request.client else ""
+            if client_host not in {"127.0.0.1", "::1", "localhost"}:
+                raise HTTPException(status_code=403, detail="loopback_only")
+
+            from src.bootstrap.sentry_webhook_secret import (
+                rotate_sentry_webhook_secret,
+            )
+
+            new_secret = rotate_sentry_webhook_secret()
+            return {
+                "ok": True,
+                "secret_preview": f"{new_secret[:6]}…{new_secret[-4:]}",
+                "note": (
+                    "Обнови secret в Sentry Internal Integration (Settings → Developer Settings)."
+                ),
+            }
 
         @self.app.get("/api/stats")
         async def get_stats():

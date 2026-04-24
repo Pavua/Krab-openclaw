@@ -16,7 +16,10 @@
 3. High event rate (>10 events in 5m)   — спайк ошибок.
 
 Все правила шлют POST на WEBHOOK_URL. Secret (SENTRY_WEBHOOK_SECRET)
-опционален — если задан, Krab будет проверять HMAC подпись.
+ОБЯЗАТЕЛЕН — Krab проверяет HMAC подпись и без secret'а отказывает
+с 503 (endpoint отключён). Генерируется автоматически при первом
+старте web_app и пишется в .env. Передаётся в Internal Integration
+через `webhookSecret` при создании.
 
 Запуск:
     python scripts/setup_sentry_alerts.py
@@ -107,10 +110,12 @@ def ensure_webhook_integration(
     token: str,
     org: str,
     webhook_url: str,
+    webhook_secret: str | None = None,
 ) -> str | None:
     """Создаёт Internal Integration в organization с webhook URL.
 
     Возвращает slug integration'а (для ссылки из rules), или None.
+    Если передан `webhook_secret` — прокидывается в Sentry для HMAC-подписи.
     """
     # Поиск существующего
     existing = _request(
@@ -125,7 +130,7 @@ def ensure_webhook_integration(
             return app.get("slug")
 
     # Создание
-    body = {
+    body: dict[str, Any] = {
         "name": "Krab Telegram Webhook",
         "organization": org,
         "isAlertable": True,
@@ -133,6 +138,9 @@ def ensure_webhook_integration(
         "scopes": ["event:read", "project:read"],
         "schema": {"elements": []},
     }
+    if webhook_secret:
+        # Sentry хранит secret на своей стороне и подписывает webhook body
+        body["webhookSecret"] = webhook_secret
     created = _request(
         client,
         "POST",
@@ -196,8 +204,19 @@ def main() -> int:
             "WEBHOOK_URL", "http://127.0.0.1:8080/api/hooks/sentry"
         ),
     )
+    parser.add_argument(
+        "--secret",
+        default=os.getenv("SENTRY_WEBHOOK_SECRET", "").strip() or None,
+        help="HMAC secret (default: $SENTRY_WEBHOOK_SECRET). Required in prod.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+
+    if not args.secret:
+        sys.stderr.write(
+            "WARN: SENTRY_WEBHOOK_SECRET не задан. Krab отклонит webhook с 503. "
+            "Запусти web_app хотя бы раз (он сгенерит secret), затем перечитай .env.\n"
+        )
 
     token = os.getenv("SENTRY_AUTH_TOKEN", "").strip()
     if not token:
@@ -228,7 +247,7 @@ def main() -> int:
         # 1. Ensure Internal Integration (чтобы rules могли слать на webhook)
         print("Step 1/2: ensuring Internal Integration…")
         integration_slug = ensure_webhook_integration(
-            client, token, org, args.webhook_url
+            client, token, org, args.webhook_url, webhook_secret=args.secret
         )
         print(f"  → integration slug: {integration_slug}")
 
