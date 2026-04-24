@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Auto-rollback watchdog (opt-in).
+        Каждую минуту проверяет Sentry; если spike > threshold — git revert.
+        Активно ТОЛЬКО когда KRAB_AUTO_ROLLBACK_ENABLED=1 в .env (скрипт сам
+        проверяет и exit 0 если выключено). Install:
+          cp scripts/launchagents/ai.krab.auto-rollback-watchdog.plist \
+             ~/Library/LaunchAgents/
+          launchctl load -w ~/Library/LaunchAgents/ai.krab.auto-rollback-watchdog.plist
+    -->
+    <key>Label</key>
+    <string>ai.krab.auto-rollback-watchdog</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/sentry_auto_rollback.sh</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>KRAB_REPO</key>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/krab_auto_rollback_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/krab_auto_rollback_stderr.log</string>
+
+    <key>KeepAlive</key>
+    <false/>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
