@@ -15,7 +15,7 @@ from ..config import config
 from ..core.access_control import get_effective_owner_label
 from ..model_manager import model_manager
 from ..openclaw_client import openclaw_client
-from ..userbot_bridge import KraabUserbot
+from ..userbot_bridge import KraabUserbot, _telegram_send_queue
 
 logger = structlog.get_logger(__name__)
 
@@ -145,6 +145,11 @@ async def run_app() -> None:
 
     if not claw_health:
         logger.warning("openclaw_unreachable", url=config.OPENCLAW_URL)
+
+    # W32: explicit reset send-queue singleton — защита от foreign-loop state,
+    # оставшегося от предыдущего процесса (например, при рестарте внутри
+    # одного Python-интерпретатора через retry-loop).
+    _telegram_send_queue.reset()
 
     perceptor = _build_perceptor()
     kraab = KraabUserbot(perceptor=perceptor)

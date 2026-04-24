@@ -301,6 +301,20 @@ class _TelegramSendQueue:
                     pass
         self._workers.clear()
         self._queues.clear()
+        self._slowmode_last_sent.clear()
+
+    def reset(self) -> None:
+        """
+        Сбрасывает state без async-cancel (W32: для синхронного bootstrap).
+
+        Вызывать при старте нового event loop'а, когда старые queues/workers
+        привязаны к убитому loop'у и `await` недоступен. Задачи не
+        отменяются (loop уже мёртв — `cancel()` бросит RuntimeError), просто
+        отбрасываем ссылки: GC подчистит их вместе со старым loop'ом.
+        """
+        self._queues.clear()
+        self._workers.clear()
+        self._slowmode_last_sent.clear()
 
     # ------------------------------------------------------------------
     # Internals
@@ -321,13 +335,70 @@ class _TelegramSendQueue:
             logger.debug("slowmode_wait", chat_id=chat_id, wait_sec=round(remaining, 1))
             await asyncio.sleep(remaining)
 
+    def _queue_matches_loop(
+        self,
+        queue: asyncio.Queue,
+        current_loop: asyncio.AbstractEventLoop,
+    ) -> bool:
+        """True, если очередь может безопасно использоваться в `current_loop`.
+
+        `asyncio.Queue` (через `_LoopBoundMixin`) лениво кэширует loop в
+        `_loop`. Пока `_loop is None` — очередь ещё не привязана, подходит
+        любому loop. При mismatch `_get_loop()` бросит
+        `RuntimeError: bound to a different event loop`.
+        """
+        bound = getattr(queue, "_loop", None)
+        if bound is None:
+            return True
+        return bound is current_loop
+
     def _get_or_create_queue(self, chat_id: int) -> asyncio.Queue:
-        if chat_id not in self._queues:
+        """Создаёт или возвращает per-chat очередь.
+
+        W32: если существующая очередь привязана к другому event loop
+        (сценарий рестарта userbot'а — модульный singleton переживает loop),
+        пересоздаём её вместе с воркером. Без этого `queue.put()` бросает
+        `RuntimeError: Queue bound to different event loop`.
+        """
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        existing = self._queues.get(chat_id)
+        if (
+            existing is not None
+            and current_loop is not None
+            and not self._queue_matches_loop(existing, current_loop)
+        ):
+            bound = getattr(existing, "_loop", None)
+            logger.warning(
+                "telegram_send_queue_loop_mismatch_rebind",
+                chat_id=chat_id,
+                bound_closed=getattr(bound, "_closed", None),
+            )
+            # Старый воркер привязан к убитому loop — просто отбрасываем
+            # ссылку; cancel() на foreign loop бросил бы RuntimeError.
+            self._workers.pop(chat_id, None)
+            existing = None
+
+        if existing is None:
             self._queues[chat_id] = asyncio.Queue()
         return self._queues[chat_id]
 
     def _ensure_worker_running(self, chat_id: int) -> None:
         task = self._workers.get(chat_id)
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        # W32: если task из другого loop'а — игнорируем и создаём новый.
+        if task is not None and current_loop is not None:
+            task_loop = getattr(task, "_loop", None)
+            if task_loop is not None and task_loop is not current_loop:
+                task = None
+
         if task is None or task.done():
             self._workers[chat_id] = asyncio.create_task(
                 self._worker(chat_id), name=f"tg-send-{chat_id}"
