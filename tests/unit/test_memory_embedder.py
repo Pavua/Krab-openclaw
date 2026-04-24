@@ -488,3 +488,90 @@ class TestIntegrationSmoke:
         emb.close()
         # Повторный close не падает.
         emb.close()
+
+
+# ---------------------------------------------------------------------------
+# Thread safety (регрессия Sentry: "SQLite objects created in a thread can
+# only be used in that same thread"). Embedder инстанциируется в main thread,
+# но ``embed_specific`` вызывается через ``asyncio.to_thread`` — т.е. из
+# пула worker'ов. До фикса SQLite-connection, открытый в main thread,
+# падал при re-use в worker.
+# ---------------------------------------------------------------------------
+
+
+class TestThreadSafety:
+    def test_embed_specific_from_worker_thread(self, tmp_path: Path) -> None:
+        """Инстанциируем в main, зовём embed_specific из чужого потока."""
+        import threading
+
+        paths, conn = _make_archive(tmp_path)
+        _seed_chunks(conn, 3)
+        conn.close()
+
+        emb = MemoryEmbedder(archive_paths=paths, _model=FakeEmbedModel())
+        # Прогреваем connection в main thread (как делает indexer_worker).
+        emb._ensure_connection()  # noqa: SLF001
+
+        errors: list[BaseException] = []
+
+        def _run() -> None:
+            try:
+                emb.embed_specific(["chunk_000", "chunk_001", "chunk_002"])
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        t = threading.Thread(target=_run)
+        t.start()
+        t.join(timeout=10)
+
+        try:
+            assert not t.is_alive(), "worker thread hung"
+            assert errors == [], f"worker thread raised: {errors}"
+        finally:
+            emb.close()
+
+    def test_concurrent_embed_from_two_threads(self, tmp_path: Path) -> None:
+        """Параллельные embed'ы из двух потоков — без crash'ей и без потерь."""
+        import threading
+
+        paths, conn = _make_archive(tmp_path)
+        _seed_chunks(conn, 6)
+        conn.close()
+
+        emb = MemoryEmbedder(archive_paths=paths, _model=FakeEmbedModel())
+
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(2)
+
+        def _run(ids: list[str]) -> None:
+            try:
+                barrier.wait(timeout=5)
+                emb.embed_specific(ids)
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        t1 = threading.Thread(target=_run, args=(["chunk_000", "chunk_001", "chunk_002"],))
+        t2 = threading.Thread(target=_run, args=(["chunk_003", "chunk_004", "chunk_005"],))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        try:
+            assert not t1.is_alive() and not t2.is_alive(), "thread hung"
+            assert errors == [], f"threads raised: {errors}"
+
+            # Финальная проверка: все 6 chunks эмбеднуты.
+            verify_conn = sqlite3.connect(str(paths.db))
+            try:
+                import sqlite_vec  # type: ignore[import-not-found]
+
+                verify_conn.enable_load_extension(True)
+                sqlite_vec.load(verify_conn)
+                verify_conn.enable_load_extension(False)
+                cnt = verify_conn.execute("SELECT COUNT(*) FROM vec_chunks;").fetchone()[0]
+                assert cnt == 6
+            finally:
+                verify_conn.close()
+        finally:
+            emb.close()
