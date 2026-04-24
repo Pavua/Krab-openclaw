@@ -33,6 +33,7 @@ from src.core.memory_retrieval import (
     SearchResult,
     _escape_fts5,
     _parse_iso,
+    _rrf_vector_weight,
     decay_aggressive,
     decay_gentle,
     decay_none,
@@ -626,4 +627,225 @@ class TestErrorPaths:
         conn = r._ensure_connection()
         assert conn is not None
         assert r._fetch_chunks(conn, []) == {}
+        r.close()
+
+
+# ---------------------------------------------------------------------------
+# C1: _vector_search() real implementation + feature flag.
+# ---------------------------------------------------------------------------
+
+
+class _FakeVecModel:
+    """
+    Детерминированный fake Model2Vec для C1.
+
+    encode([text]) → numpy array shape (1, dim). Сид = sum(ord(ch)) + len(text),
+    что даёт близкие векторы для близких текстов (модифицируем первую
+    координату для "ключевых слов", чтобы top-K был предсказуемым).
+    """
+
+    def __init__(self, dim: int = 256) -> None:
+        self.dim = dim
+
+    def encode(self, texts):  # noqa: ANN001
+        import numpy as np
+
+        out = np.zeros((len(texts), self.dim), dtype="float32")
+        for i, t in enumerate(texts):
+            seed = (sum(ord(c) for c in t) + len(t)) % (10**6)
+            rng = np.random.RandomState(seed)
+            out[i] = rng.randn(self.dim).astype("float32")
+        return out
+
+
+def _seed_vec_chunks(
+    paths: ArchivePaths,
+    chat_id: str,
+    chunks: list[tuple[str, str, str]],
+    model: _FakeVecModel,
+) -> None:
+    """Полный seed: chunks + messages_fts + vec_chunks с реальными векторами."""
+    from src.core.memory_embedder import create_vec_table, serialize_f32
+
+    conn = open_archive(paths)
+    try:
+        from src.core.memory_archive import create_schema
+
+        create_schema(conn)
+    except Exception:
+        pass
+    _seed_chunks(conn, chat_id=chat_id, chunks=chunks)
+    # Создать vec_chunks с dim=256.
+    create_vec_table(conn, dim=model.dim)
+    # Вставить векторы для каждого seeded chunk. rowid = chunks.id.
+    for chunk_id, _ts, text in chunks:
+        row = conn.execute(
+            "SELECT id FROM chunks WHERE chunk_id = ? AND chat_id = ?;",
+            (chunk_id, chat_id),
+        ).fetchone()
+        if row is None:
+            continue
+        rowid = row[0]
+        vec = model.encode([text])[0]
+        conn.execute(
+            "INSERT INTO vec_chunks(rowid, vector) VALUES (?, ?);",
+            (rowid, serialize_f32(vec)),
+        )
+    conn.commit()
+    conn.close()
+
+
+@pytest.fixture
+def archive_with_vec(tmp_path: Path) -> ArchivePaths:
+    """archive.db с FTS + vec_chunks, 5 chunks в chat_id='-100aaa', 2 в 'bbb'."""
+    paths = ArchivePaths.under(tmp_path / "memvec")
+    model = _FakeVecModel(dim=256)
+    _seed_vec_chunks(
+        paths,
+        chat_id="-100aaa",
+        chunks=[
+            ("v1", "2026-04-01T10:00:00Z", "dashboard redesign plan"),
+            ("v2", "2026-04-01T10:05:00Z", "dashboard metrics overview"),
+            ("v3", "2026-04-01T11:00:00Z", "coffee break discussion"),
+            ("v4", "2026-04-01T12:00:00Z", "docker compose config"),
+            ("v5", "2026-04-01T13:00:00Z", "frontend grid layout"),
+        ],
+        model=model,
+    )
+    _seed_vec_chunks(
+        paths,
+        chat_id="-100bbb",
+        chunks=[
+            ("w1", "2026-04-01T09:00:00Z", "weather forecast api"),
+            ("w2", "2026-04-01T09:30:00Z", "astronomy constellation"),
+        ],
+        model=model,
+    )
+    return paths
+
+
+class TestVectorSearchC1:
+    """C1: _vector_search() — feature flag, happy path, chat_id filter, errors."""
+
+    def test_vector_search_disabled_returns_empty(
+        self,
+        archive_with_vec: ArchivePaths,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """При KRAB_RAG_PHASE2_ENABLED != "1" возвращает [], даже если всё готово."""
+        monkeypatch.delenv("KRAB_RAG_PHASE2_ENABLED", raising=False)
+        r = HybridRetriever(archive_paths=archive_with_vec, model_name=None)
+        # Инъекция модели + load vec-extension не требуется — early-return по flag.
+        conn = r._ensure_connection()
+        assert conn is not None
+        assert r._vector_search(conn, "dashboard", None, limit=5) == []
+
+        monkeypatch.setenv("KRAB_RAG_PHASE2_ENABLED", "0")
+        assert r._vector_search(conn, "dashboard", None, limit=5) == []
+        r.close()
+
+    def test_vector_search_no_model_returns_empty_when_enabled(
+        self,
+        archive_with_vec: ArchivePaths,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Flag=1, но model_name=None → _ensure_model()→None → []."""
+        monkeypatch.setenv("KRAB_RAG_PHASE2_ENABLED", "1")
+        r = HybridRetriever(archive_paths=archive_with_vec, model_name=None)
+        conn = r._ensure_connection()
+        assert conn is not None
+        assert r._vector_search(conn, "dashboard", None, limit=5) == []
+        r.close()
+
+    def test_vector_search_happy_path(
+        self,
+        archive_with_vec: ArchivePaths,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Flag=1 + injected model → возвращает top-K chunk_id из vec_chunks."""
+        monkeypatch.setenv("KRAB_RAG_PHASE2_ENABLED", "1")
+        r = HybridRetriever(archive_paths=archive_with_vec, model_name=None)
+        # Инжектим fake модель в обход _ensure_model.
+        r._model = _FakeVecModel(dim=256)
+        r._model_name = "fake"  # чтобы _ensure_model вернул кэш, не пытаясь load'ить
+        conn = r._ensure_connection()
+        assert conn is not None
+        # Без chat_id — KNN по всей базе, top 3.
+        results = r._vector_search(conn, "dashboard redesign plan", None, limit=3)
+        assert isinstance(results, list)
+        assert len(results) <= 3
+        assert len(results) > 0
+        # Все возвращённые id — из seed (7 chunks total).
+        known = {"v1", "v2", "v3", "v4", "v5", "w1", "w2"}
+        assert all(cid in known for cid in results)
+        r.close()
+
+    def test_vector_search_with_chat_id_filter(
+        self,
+        archive_with_vec: ArchivePaths,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Per-chat subquery: только chunk_id из указанного chat_id."""
+        monkeypatch.setenv("KRAB_RAG_PHASE2_ENABLED", "1")
+        r = HybridRetriever(archive_paths=archive_with_vec, model_name=None)
+        r._model = _FakeVecModel(dim=256)
+        r._model_name = "fake"
+        conn = r._ensure_connection()
+        assert conn is not None
+
+        # -100bbb содержит только w1/w2.
+        scoped = r._vector_search(conn, "weather forecast", "-100bbb", limit=5)
+        assert all(cid in {"w1", "w2"} for cid in scoped)
+
+        # -100aaa содержит только v*.
+        scoped_a = r._vector_search(conn, "dashboard", "-100aaa", limit=5)
+        assert all(cid.startswith("v") for cid in scoped_a)
+        r.close()
+
+    def test_vector_search_operational_error_graceful(
+        self,
+        archive_with_vec: ArchivePaths,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """sqlite3.OperationalError → warning + []. Retriever не падает."""
+        monkeypatch.setenv("KRAB_RAG_PHASE2_ENABLED", "1")
+        r = HybridRetriever(archive_paths=archive_with_vec, model_name=None)
+        r._model = _FakeVecModel(dim=256)
+        r._model_name = "fake"
+
+        class BrokenConn:
+            def execute(self, sql, *args, **kwargs):
+                raise sqlite3.OperationalError("simulated vec failure")
+
+        # Передаём broken conn напрямую — execute() упадёт.
+        results = r._vector_search(BrokenConn(), "dashboard", None, limit=5)  # type: ignore[arg-type]
+        assert results == []
+        # И с chat_id — тоже graceful.
+        results_scoped = r._vector_search(
+            BrokenConn(),
+            "dashboard",
+            "-100aaa",
+            limit=5,  # type: ignore[arg-type]
+        )
+        assert results_scoped == []
+        r.close()
+
+    def test_vector_search_encode_failure_graceful(
+        self,
+        archive_with_vec: ArchivePaths,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Если model.encode() бросает — warning + []."""
+        monkeypatch.setenv("KRAB_RAG_PHASE2_ENABLED", "1")
+        r = HybridRetriever(archive_paths=archive_with_vec, model_name=None)
+
+        class BrokenModel:
+            def encode(self, texts):  # noqa: ANN001
+                raise RuntimeError("encode blew up")
+
+        r._model = BrokenModel()
+        r._model_name = "fake"
+        conn = r._ensure_connection()
+        assert conn is not None
+        assert r._vector_search(conn, "dashboard", None, limit=5) == []
         r.close()

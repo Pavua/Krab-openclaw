@@ -96,6 +96,51 @@ async def _start_web_panel(
         return None
 
 
+async def _warmup_memory_embeddings() -> None:
+    """
+    Background embedder warmup: idempotent ``MemoryEmbedder.embed_all_unindexed()``.
+
+    Почему отдельный background-task:
+    - bootstrap не должен блокироваться на тяжёлой операции эмбеддинга;
+    - 72k chunks уже эмбеддены (repaired W20), bootstrap возвращает ~100ms
+      идемпотентно; но новые chunks появляются между рестартами — incremental.
+    - feature-flagged через ``KRAB_RAG_PHASE2_ENABLED`` (default "0") — до
+      включения Phase 2 runtime даже не импортирует embedder.
+    - graceful: любое исключение логируется, task никогда не поднимает.
+    """
+    try:
+        # Дать Krab полностью подняться перед heavy operation (userbot+web
+        # уже должны обслуживать трафик, чтобы HF/Model2Vec загрузка не била
+        # по первой волне запросов).
+        await asyncio.sleep(30.0)
+        if os.getenv("KRAB_RAG_PHASE2_ENABLED", "0") != "1":
+            logger.debug("memory_bootstrap_embed_skip", reason="phase2_disabled")
+            return
+
+        from ..core.memory_embedder import MemoryEmbedder  # noqa: PLC0415
+
+        embedder = MemoryEmbedder()
+        # Timeout 10 минут — 72k chunks уже эмбеддены (~1s reality), запас
+        # на случай появления большого incremental после простоя.
+        stats = await asyncio.wait_for(
+            asyncio.to_thread(embedder.embed_all_unindexed),
+            timeout=600.0,
+        )
+        logger.info(
+            "memory_bootstrap_embed_done",
+            processed=getattr(stats, "chunks_processed", None),
+            skipped=getattr(stats, "chunks_skipped", None),
+        )
+    except asyncio.TimeoutError:
+        logger.warning("memory_bootstrap_embed_timeout", timeout_s=600)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "memory_bootstrap_embed_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+
+
 async def _warmup_runtime_route_truth() -> None:
     """
     Подтверждает живой route-truth вскоре после старта runtime.
@@ -156,6 +201,7 @@ async def run_app() -> None:
     await _start_web_panel(kraab_userbot=kraab, perceptor=perceptor)
     stop_event = asyncio.Event()
     warmup_task: asyncio.Task | None = None
+    embed_bootstrap_task: asyncio.Task | None = None
 
     def _request_stop(reason: str) -> None:
         """Запрашивает штатную остановку приложения без форс-килла."""
@@ -184,6 +230,10 @@ async def run_app() -> None:
         else:
             logger.warning("kraab_degraded_mode", **kraab_state)
         warmup_task = asyncio.create_task(_warmup_runtime_route_truth())
+        # Memory Phase 2 — warmup background task (idempotent, feature-flagged).
+        embed_bootstrap_task = asyncio.create_task(
+            _warmup_memory_embeddings(), name="krab_memory_bootstrap_embed"
+        )
         await stop_event.wait()
     except asyncio.CancelledError:
         if stop_event.is_set():
@@ -205,6 +255,12 @@ async def run_app() -> None:
             warmup_task.cancel()
             try:
                 await warmup_task
+            except asyncio.CancelledError:
+                pass
+        if embed_bootstrap_task is not None and not embed_bootstrap_task.done():
+            embed_bootstrap_task.cancel()
+            try:
+                await embed_bootstrap_task
             except asyncio.CancelledError:
                 pass
         try:

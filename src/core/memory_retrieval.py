@@ -171,19 +171,37 @@ def detect_decay_mode(query: str) -> str:
 def reciprocal_rank_fusion(
     *ranked_lists: list[str],
     k: int = 60,
+    weights: list[float] | None = None,
 ) -> dict[str, float]:
     """
-    Классический Reciprocal Rank Fusion.
+    Классический Reciprocal Rank Fusion с опциональными per-source весами.
 
     Принимает N списков chunk_id (уже отсортированных от лучшего к худшему)
     и возвращает словарь {chunk_id: fused_score}. Не требует нормализации
     исходных scores — только ранги.
+
+    weights: опциональный список весов по одному на ranked_list. Формула —
+    `fused[chunk_id] += weight / (k + rank)`. None → все веса 1.0
+    (backward-compat). Некорректная длина → игнорируем и считаем по 1.0.
     """
+    if weights is not None and len(weights) != len(ranked_lists):
+        # Silently fall back to equal weights — сохраняем legacy-контракт.
+        weights = None
     fused: dict[str, float] = {}
-    for lst in ranked_lists:
+    for idx, lst in enumerate(ranked_lists):
+        w = weights[idx] if weights is not None else 1.0
         for rank, chunk_id in enumerate(lst, start=1):
-            fused[chunk_id] = fused.get(chunk_id, 0.0) + 1.0 / (k + rank)
+            fused[chunk_id] = fused.get(chunk_id, 0.0) + w / (k + rank)
     return fused
+
+
+def _rrf_vector_weight() -> float:
+    """Env: KRAB_RAG_RRF_VECTOR_WEIGHT (default 1.0, clamp 0.0..5.0)."""
+    try:
+        w = float(os.getenv("KRAB_RAG_RRF_VECTOR_WEIGHT", "1.0"))
+    except ValueError:
+        return 1.0
+    return max(0.0, min(5.0, w))
 
 
 def normalize_scores_0_1(scores: dict[str, float]) -> dict[str, float]:
@@ -306,9 +324,15 @@ class HybridRetriever:
                     fallback="fts_only",
                 )
 
-        # Fusion.
+        # Fusion. FTS list всегда weight=1.0; vec list — env-настраиваемый вес
+        # (C3 Memory Phase 2). Backward-compat: default weights → прежнее поведение.
         if vec_ids:
-            fused = reciprocal_rank_fusion(fts_ids, vec_ids, k=self._rrf_k)
+            fused = reciprocal_rank_fusion(
+                fts_ids,
+                vec_ids,
+                k=self._rrf_k,
+                weights=[1.0, _rrf_vector_weight()],
+            )
         else:
             fused = reciprocal_rank_fusion(fts_ids, k=self._rrf_k)
 
@@ -557,21 +581,69 @@ class HybridRetriever:
         limit: int,
     ) -> list[str]:
         """
-        Пока no-op (sqlite-vec загружен, но vec_chunks таблица не создана).
-        После Phase 2 индексации — полноценный `vector MATCH ? ORDER BY distance`.
+        Vector KNN через sqlite-vec: `vec_chunks.vector MATCH ? AND k = ?`.
+
+        Поведение:
+          * Feature-flag `KRAB_RAG_PHASE2_ENABLED` (env, default "0"). При
+            `!= "1"` возвращает []. Проверка per-call — toggle без restart'а.
+          * Lazy-load Model2Vec через `_ensure_model()`. Если модель
+            недоступна — []
+          * Per-chat фильтр реализован через subquery: KNN MATCH не
+            поддерживает дополнительный WHERE напрямую, поэтому берём
+            `limit * 3` соседей по вектору и фильтруем по `chat_id`
+            во внешнем SELECT.
+          * Любой `sqlite3.OperationalError` → warning + []. Retriever
+            продолжает работу в FTS-only режиме.
         """
+        if os.getenv("KRAB_RAG_PHASE2_ENABLED", "0") != "1":
+            return []
+
         model = self._ensure_model()
         if model is None:
             return []
-        # В Phase 2 реализация:
-        #   q_vec = model.encode([query])[0]
-        #   rows = conn.execute(
-        #       "SELECT rowid FROM vec_chunks "
-        #       "WHERE vector MATCH ? ORDER BY distance LIMIT ?",
-        #       (serialize_f32(q_vec), limit),
-        #   ).fetchall()
-        #   → JOIN chunks ON rowid для получения chunk_id
-        return []
+
+        # Late-import serialize_f32 — тот же путь, что в memory_embedder'е.
+        try:
+            from src.core.memory_embedder import serialize_f32
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_vec_search_import_failed", error=str(exc))
+            return []
+
+        try:
+            q_vec = model.encode([query])[0]  # type: ignore[attr-defined]
+            q_blob = serialize_f32(q_vec)
+        except Exception as exc:  # noqa: BLE001 - encode best-effort
+            logger.warning("memory_vec_search_encode_failed", error=str(exc))
+            return []
+
+        try:
+            if chat_id is not None:
+                # KNN-поиск по вектору с запасом, затем фильтр по chat_id.
+                # `limit * 3` — типичный recall-boost для per-chat режима.
+                sql = """
+                    SELECT c.chunk_id
+                    FROM chunks AS c
+                    WHERE c.id IN (
+                        SELECT rowid FROM vec_chunks
+                        WHERE vector MATCH ? AND k = ?
+                    )
+                      AND c.chat_id = ?
+                    ORDER BY c.id;
+                """
+                rows = conn.execute(sql, (q_blob, limit * 3, chat_id)).fetchall()
+                return [r[0] for r in rows][:limit]
+            sql = """
+                SELECT c.chunk_id, v.distance
+                FROM vec_chunks AS v
+                JOIN chunks AS c ON c.id = v.rowid
+                WHERE v.vector MATCH ? AND k = ?
+                ORDER BY v.distance;
+            """
+            rows = conn.execute(sql, (q_blob, limit)).fetchall()
+            return [r[0] for r in rows]
+        except sqlite3.OperationalError as exc:
+            logger.warning("memory_vec_search_failed", error=str(exc))
+            return []
 
     # ------------------------------------------------------------------
     # Сборка результатов.
