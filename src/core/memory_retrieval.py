@@ -71,6 +71,7 @@ from structlog import get_logger
 
 from src.core.memory_adaptive_rerank import rerank_adaptive
 from src.core.memory_archive import ArchivePaths, open_archive
+from src.core.memory_mmr import mmr_is_enabled, mmr_rerank_texts
 from src.core.memory_retrieval_scores import record_scores
 
 logger = get_logger(__name__)
@@ -260,16 +261,39 @@ class HybridRetriever:
             logger.debug("memory_retrieval_no_db", path=str(self._paths.db))
             return []
 
+        # Query expansion (P2 carry-over, opt-in).
+        # Короткие запросы (< N токенов) расширяются через Gemini Flash:
+        # 3 перефразировки, RRF над union. Fallback на [query] при любой ошибке.
+        queries = self._maybe_expand_query(query)
+
         # FTS5 — минимум, который мы обязаны выдать.
-        fts_ids = self._fts_search(conn, query, chat_id, limit=top_k * 4)
+        if len(queries) <= 1:
+            fts_ids = self._fts_search(
+                conn, queries[0] if queries else query, chat_id, limit=top_k * 4
+            )
+        else:
+            fts_lists: list[list[str]] = []
+            for q in queries:
+                ids = self._fts_search(conn, q, chat_id, limit=top_k * 4)
+                if ids:
+                    fts_lists.append(ids)
+            if not fts_lists:
+                return []
+            # RRF между FTS-списками разных перефразировок.
+            exp_fused = reciprocal_rank_fusion(*fts_lists, k=self._rrf_k)
+            fts_ids = [cid for cid, _ in sorted(exp_fused.items(), key=lambda kv: -kv[1])]
+            fts_ids = fts_ids[: top_k * 4]
+
         if not fts_ids:
             return []
+
+        query_for_vector = queries[0] if queries else query
 
         # Vector — опционально, если доступен.
         vec_ids: list[str] = []
         if self._vec_available and self._model_name:
             try:
-                vec_ids = self._vector_search(conn, query, chat_id, limit=top_k * 4)
+                vec_ids = self._vector_search(conn, query_for_vector, chat_id, limit=top_k * 4)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "memory_retrieval_vec_failed",
@@ -376,6 +400,32 @@ class HybridRetriever:
                 )
 
         return results
+
+    def _maybe_expand_query(self, query: str) -> list[str]:
+        """
+        Возвращает [original] или [original + LLM-перефразировки].
+
+        Fallback на [query] при disabled-flag, ошибке или активном event loop
+        (нельзя запускать sync run_until_complete внутри async-кода).
+        """
+        try:
+            from src.core.memory_llm_query_expansion import expand_query_llm, is_enabled
+        except Exception:  # noqa: BLE001
+            return [query]
+        if not is_enabled():
+            return [query]
+        try:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+            if loop.is_running():
+                # В живом loop'е expansion не делаем — caller может вызвать async-версию.
+                return [query]
+            return loop.run_until_complete(expand_query_llm(query)) or [query]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("memory_query_expansion_invoke_failed", error=str(exc))
+            return [query]
 
     def close(self) -> None:
         """Закрывает БД-подключение. Безопасно при повторном вызове."""
@@ -579,6 +629,31 @@ class HybridRetriever:
             for sr, _ in enriched
         ]
         final.sort(key=lambda r: r.score, reverse=True)
+
+        # MMR diversity re-ranking (P2 carry-over). Убирает near-duplicate chunks
+        # из top-K. Backward-compat: при KRAB_RAG_MMR_ENABLED=0 — не применяется.
+        if mmr_is_enabled() and len(final) > 1:
+            try:
+                doc_ids = [r.message_id for r in final]
+                doc_texts = [r.text_redacted for r in final]
+                rrf_scores_list = [r.score for r in final]
+                ordered_ids = mmr_rerank_texts(
+                    query="",
+                    doc_ids=doc_ids,
+                    doc_texts=doc_texts,
+                    rrf_scores=rrf_scores_list,
+                    top_k=top_k,
+                )
+                if ordered_ids:
+                    by_id = {r.message_id: r for r in final}
+                    final = [by_id[i] for i in ordered_ids if i in by_id]
+            except Exception as exc:  # noqa: BLE001 - MMR не должен ломать retrieval.
+                logger.warning(
+                    "memory_mmr_rerank_failed",
+                    error=str(exc),
+                    fallback="rrf_order",
+                )
+
         return final[:top_k]
 
     # ------------------------------------------------------------------
