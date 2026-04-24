@@ -46,6 +46,8 @@ from .core.openclaw_secrets_runtime import (
     reload_openclaw_secrets,
 )
 from .core.routing_errors import RouterError, RouterQuotaError
+from .core.sentry_perf import set_tag as _sentry_tag
+from .core.sentry_perf import start_transaction as _sentry_txn
 
 logger = get_logger(__name__)
 
@@ -2632,6 +2634,20 @@ class OpenClawClient:
         4) fallback на локальную модель,
         5) прямой LM Studio fallback (если force_cloud=False).
         """
+        # Sentry Performance Monitoring: обёртка-транзакция для P95 latency
+        # по gateway LLM call. Graceful — no-op если sentry_sdk не установлен
+        # или init пропущен (dev env без SENTRY_DSN).
+        _txn_name = f"openclaw_{preferred_model or 'auto'}"
+        _txn_cm = _sentry_txn(op="llm.call", name=_txn_name)
+        _txn_cm.__enter__()
+        try:
+            _sentry_tag("chat_id", str(chat_id))
+            _sentry_tag("model", str(preferred_model or "auto"))
+            _sentry_tag("force_cloud", "1" if force_cloud else "0")
+            _sentry_tag("has_images", "1" if images else "0")
+        except Exception:  # noqa: BLE001
+            pass
+
         self._request_disable_tools = disable_tools
         self._active_tool_calls.clear()
         if chat_id not in self._sessions:
@@ -3410,6 +3426,11 @@ class OpenClawClient:
                     model_manager.mark_request_finished()
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("model_manager_mark_request_finished_failed", error=str(exc))
+            # Закрываем Sentry-транзакцию (graceful no-op если SDK отсутствует).
+            try:
+                _txn_cm.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001
+                pass
 
     def clear_session(self, chat_id: str):
         """Очищает историю чата (in-memory + кэш + persistent session-файлы).
