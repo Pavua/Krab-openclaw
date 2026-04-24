@@ -101,6 +101,63 @@ def test_coders_allow_run_tests_and_tail_logs() -> None:
     assert "telegram_send_message" not in names
 
 
+def test_coders_allow_fs_and_git_tools() -> None:
+    """coders видят fs_/git_/system_/db_ tools (MCP commit aa7cf30)."""
+    manifest = [
+        _mk_tool("filesystem__fs_read_file"),
+        _mk_tool("filesystem__fs_search"),
+        _mk_tool("filesystem__fs_list_dir"),
+        _mk_tool("git__git_status"),
+        _mk_tool("git__git_log"),
+        _mk_tool("git__git_diff"),
+        _mk_tool("system__system_info"),
+        _mk_tool("db__db_query"),
+        _mk_tool("net__http_fetch"),
+        _mk_tool("time__time_now"),
+        _mk_tool("telegram_send_message"),  # creative only — должно отсечься
+    ]
+    filtered = stl.filter_tools_for_team(manifest, "coders")
+    names = {t["function"]["name"] for t in filtered}
+
+    assert "filesystem__fs_read_file" in names
+    assert "filesystem__fs_search" in names
+    assert "filesystem__fs_list_dir" in names
+    assert "git__git_status" in names
+    assert "git__git_log" in names
+    assert "git__git_diff" in names
+    assert "system__system_info" in names
+    assert "db__db_query" in names
+    assert "net__http_fetch" in names
+    assert "time__time_now" in names
+    assert "telegram_send_message" not in names
+
+    # Silent-guard тоже должен разрешать.
+    assert stl.is_tool_allowed("filesystem__fs_read_file", "coders") is True
+    assert stl.is_tool_allowed("git__git_status", "coders") is True
+
+
+def test_analysts_allow_fs_read_and_db_query() -> None:
+    """analysts получают fs_read_file/fs_search/db_query/http_fetch."""
+    manifest = [
+        _mk_tool("filesystem__fs_read_file"),
+        _mk_tool("filesystem__fs_search"),
+        _mk_tool("db__db_query"),
+        _mk_tool("net__http_fetch"),
+        _mk_tool("filesystem__fs_list_dir"),  # coders only
+        _mk_tool("git__git_status"),  # coders only
+    ]
+    filtered = stl.filter_tools_for_team(manifest, "analysts")
+    names = {t["function"]["name"] for t in filtered}
+
+    assert "filesystem__fs_read_file" in names
+    assert "filesystem__fs_search" in names
+    assert "db__db_query" in names
+    assert "net__http_fetch" in names
+    # Эти — coders-only, не должны пройти.
+    assert "filesystem__fs_list_dir" not in names
+    assert "git__git_status" not in names
+
+
 def test_context_var_set_and_reset() -> None:
     """ContextVar выставляется и корректно сбрасывается."""
     assert stl.get_current_team() is None

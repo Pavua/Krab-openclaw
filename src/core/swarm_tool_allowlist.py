@@ -94,6 +94,11 @@ TEAM_TOOL_ALLOWLIST: dict[str, frozenset[str]] = {
             "telegram_search",
             "telegram_get_chat_history",
             "peekaboo",
+            # fs/db/http — MCP commit aa7cf30: analyst может читать код и SQL.
+            "fs_read_file",
+            "fs_search",
+            "db_query",
+            "http_fetch",
         }
     ),
     "coders": frozenset(
@@ -107,6 +112,18 @@ TEAM_TOOL_ALLOWLIST: dict[str, frozenset[str]] = {
             "claude_cli",
             "codex",
             "gemini",
+            # fs/git/system — MCP commit aa7cf30: coder читает код и git state.
+            "fs_read_file",
+            "fs_search",
+            "fs_list_dir",
+            "git_status",
+            "git_log",
+            "git_diff",
+            "system_info",
+            "http_fetch",
+            "time_now",
+            "time_parse",
+            "db_query",
         }
     ),
     "creative": frozenset(

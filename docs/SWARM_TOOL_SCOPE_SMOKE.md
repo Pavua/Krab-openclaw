@@ -38,18 +38,22 @@ venv/bin/python -m pytest tests/unit/test_swarm_tool_allowlist.py -q
 - **blocked:** все `git__*`, `filesystem__*`, `*__krab_run_tests`,
   `*__krab_tail_logs`, `*__telegram_*`, `peekaboo`, `*__krab_restart_gateway`
 
-### `coders` (whitelist = 9 + base)
-- **allowed (9):** `web_search`, `*__krab_memory_search`,
+### `coders` (whitelist = 19 + base)
+- **allowed:** `web_search`, `*__krab_memory_search`,
   `*__krab_run_tests`, `*__krab_tail_logs`, `yung-nagato__krab_status`,
-  `yung-nagato__krab_restart_gateway`
-- **blocked:** все `git__*`, `filesystem__*`, `*__telegram_*`,
-  `peekaboo`, `tor_fetch`
+  `yung-nagato__krab_restart_gateway`, `claude_cli`, `codex`, `gemini`,
+  `filesystem__fs_read_file`, `filesystem__fs_search`, `filesystem__fs_list_dir`,
+  `git__git_status`, `git__git_log`, `git__git_diff`, `system_info`,
+  `http_fetch`, `time_now`, `time_parse`, `db_query` (MCP commit `aa7cf30`)
+- **blocked:** `*__telegram_*`, `peekaboo`, `tor_fetch`
 
-### `analysts` (whitelist = 7 + base)
-- **allowed (8):** `web_search`, `tor_fetch`, `peekaboo`,
+### `analysts` (whitelist = 11 + base)
+- **allowed:** `web_search`, `tor_fetch`, `peekaboo`,
   `*__krab_memory_search`, `yung-nagato__krab_memory_stats`,
-  `yung-nagato__telegram_search`, `yung-nagato__telegram_get_chat_history`
-- **blocked:** `git__*`, `filesystem__*`, `*__krab_run_tests`,
+  `yung-nagato__telegram_search`, `yung-nagato__telegram_get_chat_history`,
+  `filesystem__fs_read_file`, `filesystem__fs_search`, `db_query`, `http_fetch`
+  (MCP commit `aa7cf30`)
+- **blocked:** `git__*`, `filesystem__fs_list_dir`, `*__krab_run_tests`,
   `*__krab_tail_logs`, `*__telegram_send_message`, `*__telegram_edit_message`
 
 ### `creative` (whitelist = 4 + base)
@@ -85,7 +89,7 @@ Unit suite `tests/unit/test_swarm_tool_allowlist.py`: **9/9 PASS**.
 
 | Team | Ожидалось | Реально в allowlist | Комментарий |
 |------|-----------|---------------------|-------------|
-| coders | `fs_*`, `git_*` | НЕТ | filesystem/git MCP на портах 8011/8012 вообще НЕ экспортируют tools с именами `fs_*` или `git_*`; `yung-nagato`/`p0lrd` экспортируют `krab_*` + `telegram_*`. Либо (a) добавить `filesystem__*` / `git__*` в coders allowlist, либо (b) забыть — coders сейчас работают через `!codex`/`!claude_cli` и прямой `krab_run_tests`. |
+| coders | `fs_*`, `git_*` | **ДА** (после MCP aa7cf30) | coders и analysts расширены `fs_read_file`, `fs_search`, `fs_list_dir`, `git_status`, `git_log`, `git_diff`, `system_info`, `http_fetch`, `time_now/parse`, `db_query`. Фильтр по базовому имени — работает независимо от server-префикса. |
 | creative | `img_*`, `tts_*` | НЕТ | в manifest'е нет `img_generate` / `tts_speak` как MCP-tool'ов — они вызываются через userbot-команды `!img` / `!tts`. LLM свёрма их и так не может дёрнуть. Фикс не нужен, но whitelist стоит документировать в коде. |
 
 Это **не блокер** для commit `8d58c5d` — фильтр работает для тех tools, что
