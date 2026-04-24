@@ -3384,7 +3384,35 @@ class KraabUserbot(
         if text and text.lstrip()[:1] in ("!", "/", "."):
             cmd_word = text.lstrip().split()[0].lstrip("!/.").lower()
             if cmd_word in self._known_commands:
+                # W32 — blocklist silent skip даже в fallback dispatcher-пути.
+                # Раньше blocklist проверялся только в _make_command_filter; если
+                # filter не attached (команда известна, но правило per-chat
+                # отключает её), сообщение попадало сюда и генерировало deny-reply
+                # с текстом «!status доступна только…» — spam-бот ловил в нём
+                # подстроку !status → loop в группе How2AI.
+                try:
+                    from .core import command_blocklist as _cblist  # noqa: PLC0415
+
+                    if _cblist.is_blocked(message.chat.id, cmd_word):
+                        logger.debug(
+                            "command_blocklist_skip_fallback",
+                            command=cmd_word,
+                            chat=message.chat.id,
+                        )
+                        return
+                except Exception:  # noqa: BLE001
+                    pass
                 if not access_profile.can_execute_command(cmd_word, self._known_commands):
+                    # W32 — не отвечаем ботам / сообщениям на наши reply:
+                    # это часто триггер loop с другими спам-ботами группы.
+                    _from = getattr(message, "from_user", None)
+                    if _from is not None and bool(getattr(_from, "is_bot", False)):
+                        logger.debug(
+                            "command_access_denied_skip_bot_source",
+                            command=cmd_word,
+                            from_user=str(getattr(_from, "id", "?")),
+                        )
+                        return
                     await self._safe_reply_or_send_new(
                         message,
                         self._build_command_access_denied_text(cmd_word, access_profile),
