@@ -1,14 +1,46 @@
 {
   "__inputs": [],
   "__requires": [
-    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
-    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" },
-    { "type": "panel", "id": "timeseries", "name": "Time series", "version": "" },
-    { "type": "panel", "id": "stat", "name": "Stat", "version": "" },
-    { "type": "panel", "id": "gauge", "name": "Gauge", "version": "" },
-    { "type": "panel", "id": "piechart", "name": "Pie chart", "version": "" }
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "gauge",
+      "name": "Gauge",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "piechart",
+      "name": "Pie chart",
+      "version": ""
+    }
   ],
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": []
+  },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -16,19 +48,32 @@
   "uid": "krab-main",
   "title": "Krab — Main Dashboard",
   "description": "Главный dashboard Краба: health, LLM routing, memory retrieval (C6), swarm, errors, ops.",
-  "tags": ["krab", "observability"],
+  "tags": [
+    "krab",
+    "observability"
+  ],
   "timezone": "",
   "schemaVersion": 39,
   "version": 1,
   "weekStart": "",
   "refresh": "30s",
-  "time": { "from": "now-24h", "to": "now" },
-  "templating": { "list": [] },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
   "links": [],
   "panels": [
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
       "title": "Row 1 — Health",
       "type": "row"
@@ -38,14 +83,58 @@
       "type": "stat",
       "title": "Krab uptime",
       "description": "time() - process_start_time_seconds. Сбрасывается при рестарте userbot.",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 1 },
-      "fieldConfig": {
-        "defaults": { "unit": "s", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 60 }, { "color": "green", "value": 300 } ] } }
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
       },
-      "options": { "colorMode": "background", "graphMode": "area", "justifyMode": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "green",
+                "value": 300
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
       "targets": [
-        { "refId": "A", "expr": "time() - process_start_time_seconds{job=\"krab_owner_panel\"}" }
+        {
+          "refId": "A",
+          "expr": "time() - process_start_time_seconds{job=\"krab_owner_panel\"}"
+        }
       ]
     },
     {
@@ -53,34 +142,131 @@
       "type": "stat",
       "title": "Metrics freshness",
       "description": "Возраст последнего сбора /metrics. Если > 120с — Prometheus не скрапит Krab.",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 1 },
-      "fieldConfig": {
-        "defaults": { "unit": "s", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 60 }, { "color": "red", "value": 120 } ] } }
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
       },
-      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "targets": [ { "refId": "A", "expr": "time() - krab_metrics_generated_at" } ]
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "red",
+                "value": 120
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - krab_metrics_generated_at"
+        }
+      ]
     },
     {
       "id": 12,
       "type": "stat",
       "title": "LLM route status",
       "description": "krab_llm_route_ok (1=ok, 0=error). Берём max по меткам provider/model.",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 1 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
-          "mappings": [ { "type": "value", "options": { "0": { "text": "ERROR", "color": "red" }, "1": { "text": "OK", "color": "green" } } } ]
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "ERROR",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "OK",
+                  "color": "green"
+                }
+              }
+            }
+          ]
         }
       },
-      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "targets": [ { "refId": "A", "expr": "max(krab_llm_route_ok)" } ]
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(krab_llm_route_ok)"
+        }
+      ]
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
       "id": 2,
       "title": "Row 2 — LLM + Routing",
       "type": "row"
@@ -90,11 +276,32 @@
       "type": "timeseries",
       "title": "LLM request rate per provider",
       "description": "rate(krab_llm_route_latency_seconds_count) by provider — число завершённых LLM-запросов в секунду.",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
-      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 } } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          }
+        }
+      },
       "targets": [
-        { "refId": "A", "expr": "sum by (provider) (rate(krab_llm_route_latency_seconds_count[5m]))", "legendFormat": "{{provider}}" }
+        {
+          "refId": "A",
+          "expr": "sum by (provider) (rate(krab_llm_route_latency_seconds_count[5m]))",
+          "legendFormat": "{{provider}}"
+        }
       ]
     },
     {
@@ -102,11 +309,31 @@
       "type": "timeseries",
       "title": "LLM route errors per provider",
       "description": "krab_llm_route_ok == 0 по времени — считаем провайдеры, которые сейчас в ошибке.",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
-      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 40 } } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 40
+          }
+        }
+      },
       "targets": [
-        { "refId": "A", "expr": "count by (provider) (krab_llm_route_ok == 0)", "legendFormat": "{{provider}}" }
+        {
+          "refId": "A",
+          "expr": "count by (provider) (krab_llm_route_ok == 0)",
+          "legendFormat": "{{provider}}"
+        }
       ]
     },
     {
@@ -114,11 +341,32 @@
       "type": "stat",
       "title": "Active LLM route (provider/model)",
       "description": "Последний активный маршрут — чей статус == ok.",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
-      "options": { "colorMode": "value", "graphMode": "none", "textMode": "name", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 8
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
       "targets": [
-        { "refId": "A", "expr": "krab_llm_route_ok == 1", "legendFormat": "{{provider}} / {{model}}" }
+        {
+          "refId": "A",
+          "expr": "krab_llm_route_ok == 1",
+          "legendFormat": "{{provider}} / {{model}}"
+        }
       ]
     },
     {
@@ -126,18 +374,52 @@
       "type": "timeseries",
       "title": "LLM route latency P50 / P90 / P99",
       "description": "histogram_quantile по krab_llm_route_latency_seconds_bucket.",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
-      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 5 } } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 5
+          }
+        }
+      },
       "targets": [
-        { "refId": "A", "expr": "histogram_quantile(0.5, sum by (le, provider) (rate(krab_llm_route_latency_seconds_bucket[5m])))", "legendFormat": "P50 {{provider}}" },
-        { "refId": "B", "expr": "histogram_quantile(0.9, sum by (le, provider) (rate(krab_llm_route_latency_seconds_bucket[5m])))", "legendFormat": "P90 {{provider}}" },
-        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le, provider) (rate(krab_llm_route_latency_seconds_bucket[5m])))", "legendFormat": "P99 {{provider}}" }
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, provider) (rate(krab_llm_route_latency_seconds_bucket[5m])))",
+          "legendFormat": "P50 {{provider}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.9, sum by (le, provider) (rate(krab_llm_route_latency_seconds_bucket[5m])))",
+          "legendFormat": "P90 {{provider}}"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le, provider) (rate(krab_llm_route_latency_seconds_bucket[5m])))",
+          "legendFormat": "P99 {{provider}}"
+        }
       ]
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
       "id": 3,
       "title": "Row 3 — Memory Retrieval (C6)",
       "type": "row"
@@ -147,11 +429,38 @@
       "type": "piechart",
       "title": "Retrieval mode distribution",
       "description": "krab_memory_retrieval_mode_total by mode (fts/vec/hybrid/none).",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 25 },
-      "options": { "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] }, "pieType": "donut", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 25
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value",
+            "percent"
+          ]
+        },
+        "pieType": "donut",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
       "targets": [
-        { "refId": "A", "expr": "sum by (mode) (krab_memory_retrieval_mode_total)", "legendFormat": "{{mode}}" }
+        {
+          "refId": "A",
+          "expr": "sum by (mode) (krab_memory_retrieval_mode_total)",
+          "legendFormat": "{{mode}}"
+        }
       ]
     },
     {
@@ -159,13 +468,42 @@
       "type": "timeseries",
       "title": "Retrieval latency P50 / P90 / P99 per phase",
       "description": "histogram_quantile по krab_memory_retrieval_latency_seconds_bucket (phase = fts/vec/mmr/total).",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 10, "x": 8, "y": 25 },
-      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 5 } } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 8,
+        "y": 25
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 5
+          }
+        }
+      },
       "targets": [
-        { "refId": "A", "expr": "histogram_quantile(0.5, sum by (le, phase) (rate(krab_memory_retrieval_latency_seconds_bucket[5m])))", "legendFormat": "P50 {{phase}}" },
-        { "refId": "B", "expr": "histogram_quantile(0.9, sum by (le, phase) (rate(krab_memory_retrieval_latency_seconds_bucket[5m])))", "legendFormat": "P90 {{phase}}" },
-        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le, phase) (rate(krab_memory_retrieval_latency_seconds_bucket[5m])))", "legendFormat": "P99 {{phase}}" }
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, phase) (rate(krab_memory_retrieval_latency_seconds_bucket[5m])))",
+          "legendFormat": "P50 {{phase}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.9, sum by (le, phase) (rate(krab_memory_retrieval_latency_seconds_bucket[5m])))",
+          "legendFormat": "P90 {{phase}}"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le, phase) (rate(krab_memory_retrieval_latency_seconds_bucket[5m])))",
+          "legendFormat": "P99 {{phase}}"
+        }
       ]
     },
     {
@@ -173,22 +511,64 @@
       "type": "gauge",
       "title": "Archive DB size",
       "description": "krab_archive_db_size_bytes. Threshold 1 GiB.",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 25 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 25
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "bytes",
           "min": 0,
           "max": 2147483648,
-          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 536870912 }, { "color": "red", "value": 1073741824 } ] }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 536870912
+              },
+              {
+                "color": "red",
+                "value": 1073741824
+              }
+            ]
+          }
         }
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "showThresholdLabels": false, "showThresholdMarkers": true },
-      "targets": [ { "refId": "A", "expr": "krab_archive_db_size_bytes" } ]
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "krab_archive_db_size_bytes"
+        }
+      ]
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
       "id": 4,
       "title": "Row 4 — Swarm + Tools",
       "type": "row"
@@ -198,11 +578,31 @@
       "type": "timeseries",
       "title": "Swarm per-team tool blocks",
       "description": "rate(krab_swarm_tool_blocked_total) by team.",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 34 },
-      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "bars", "fillOpacity": 40 } } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 40
+          }
+        }
+      },
       "targets": [
-        { "refId": "A", "expr": "sum by (team) (rate(krab_swarm_tool_blocked_total[5m]))", "legendFormat": "{{team}}" }
+        {
+          "refId": "A",
+          "expr": "sum by (team) (rate(krab_swarm_tool_blocked_total[5m]))",
+          "legendFormat": "{{team}}"
+        }
       ]
     },
     {
@@ -210,16 +610,41 @@
       "type": "timeseries",
       "title": "Top commands (rate 5m)",
       "description": "topk(10, rate(krab_command_invocations_total[5m])).",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 34 },
-      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
       "targets": [
-        { "refId": "A", "expr": "topk(10, sum by (command) (rate(krab_command_invocations_total[5m])))", "legendFormat": "!{{command}}" }
+        {
+          "refId": "A",
+          "expr": "topk(10, sum by (command) (rate(krab_command_invocations_total[5m])))",
+          "legendFormat": "!{{command}}"
+        }
       ]
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 42
+      },
       "id": 5,
       "title": "Row 5 — Errors + Ops",
       "type": "row"
@@ -229,11 +654,31 @@
       "type": "timeseries",
       "title": "Error digest fires",
       "description": "rate(krab_error_digest_fired_total) by outcome (ok/empty/failed).",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 43 },
-      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "bars", "fillOpacity": 40 } } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 43
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 40
+          }
+        }
+      },
       "targets": [
-        { "refId": "A", "expr": "sum by (outcome) (rate(krab_error_digest_fired_total[15m]))", "legendFormat": "{{outcome}}" }
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(krab_error_digest_fired_total[15m]))",
+          "legendFormat": "{{outcome}}"
+        }
       ]
     },
     {
@@ -241,11 +686,31 @@
       "type": "timeseries",
       "title": "Auto-restart attempts",
       "description": "rate(krab_auto_restart_attempts_total[10m]) — должно быть ~0 в стабильном контуре.",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 43 },
-      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "bars", "fillOpacity": 40 } } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 43
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 40
+          }
+        }
+      },
       "targets": [
-        { "refId": "A", "expr": "sum by (service) (rate(krab_auto_restart_attempts_total[10m]))", "legendFormat": "{{service}}" }
+        {
+          "refId": "A",
+          "expr": "sum by (service) (rate(krab_auto_restart_attempts_total[10m]))",
+          "legendFormat": "{{service}}"
+        }
       ]
     },
     {
@@ -253,11 +718,31 @@
       "type": "timeseries",
       "title": "Memory validator — injections blocked",
       "description": "rate(krab_memory_validator_injection_blocked_total[1h]) — prompt-injection attempts остановленные при сохранении memory.",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 43 },
-      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 43
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
       "targets": [
-        { "refId": "A", "expr": "rate(krab_memory_validator_injection_blocked_total[1h])", "legendFormat": "injections/hr" }
+        {
+          "refId": "A",
+          "expr": "rate(krab_memory_validator_injection_blocked_total[1h])",
+          "legendFormat": "injections/hr"
+        }
       ]
     },
     {
@@ -265,33 +750,169 @@
       "type": "stat",
       "title": "Memory validator pending",
       "description": "krab_memory_validator_pending — подтверждений в очереди (alert > 15).",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 51 },
-      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 15 } ] } } },
-      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "targets": [ { "refId": "A", "expr": "krab_memory_validator_pending" } ]
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 51
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 15
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "krab_memory_validator_pending"
+        }
+      ]
     },
     {
       "id": 54,
       "type": "stat",
       "title": "Reminders pending",
       "description": "krab_reminders_pending_total — напоминания в очереди.",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 51 },
-      "fieldConfig": { "defaults": { "unit": "short" } },
-      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "targets": [ { "refId": "A", "expr": "krab_reminders_pending_total" } ]
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 51
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "krab_reminders_pending_total"
+        }
+      ]
     },
     {
       "id": 55,
       "type": "stat",
       "title": "Guest LLM skips (security)",
       "description": "Суммарные пропуски LLM-ответов гостям в группах (ACL).",
-      "datasource": { "type": "prometheus", "uid": "Prometheus" },
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 51 },
-      "fieldConfig": { "defaults": { "unit": "short" } },
-      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "targets": [ { "refId": "A", "expr": "sum(krab_guest_llm_skipped_total)" } ]
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 51
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(krab_guest_llm_skipped_total)"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 55
+      },
+      "id": 60,
+      "title": "Row — Sentry Performance (external links)",
+      "type": "row"
+    },
+    {
+      "id": 61,
+      "type": "text",
+      "title": "LLM call P95 (Sentry)",
+      "description": "External link to Sentry Performance tab filtered by transaction.op:llm.call. Healthy: P95 < 10s.",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 56
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### LLM latency (Sentry Performance)\n\n**op:** `llm.call` — per-request span around `openclaw_<model>` stream.\n\n**Healthy:** P95 < 10s, P50 < 3s.\n\n[Open in Sentry](https://po-zm.sentry.io/performance/?project=4511254217818192&query=transaction.op%3Allm.call&statsPeriod=24h)"
+      }
+    },
+    {
+      "id": 62,
+      "type": "text",
+      "title": "Memory retrieval P95 (Sentry)",
+      "description": "External link to Sentry Performance tab filtered by transaction.op:memory.retrieval. Healthy: P95 < 100ms.",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 56
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### Memory retrieval latency (Sentry Performance)\n\n**op:** `memory.retrieval` — HybridRetriever.search with sub-spans `memory.fts`, `memory.vec`, `memory.mmr`.\n\n**Healthy:** P95 < 100ms, P50 < 30ms.\n\n[Open in Sentry](https://po-zm.sentry.io/performance/?project=4511254217818192&query=transaction.op%3Amemory.retrieval&statsPeriod=24h)"
+      }
     }
   ]
 }
