@@ -1738,22 +1738,116 @@ _FORBIDDEN_SQL_KEYWORDS = (
 _PRAGMA_WRITE_RE = _re.compile(r"\bPRAGMA\b[^;]*=", _re.IGNORECASE)
 
 
+def _strip_sql_comments(sql: str) -> str:
+    """Убирает SQL-комментарии (/* ... */ и -- ...) без затрагивания строковых литералов.
+
+    Нужно, чтобы write-keyword чек не обойти через `/* x */ INSERT` или `-- \n INSERT`.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        nxt = sql[i + 1] if i + 1 < n else ""
+        # Строковые литералы — копируем как есть (с учётом doubled-quote escape).
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            while i < n:
+                c = sql[i]
+                out.append(c)
+                i += 1
+                if c == quote:
+                    # doubled quote — escape, продолжаем внутри литерала
+                    if i < n and sql[i] == quote:
+                        out.append(sql[i])
+                        i += 1
+                        continue
+                    break
+            continue
+        # Block comment
+        if ch == "/" and nxt == "*":
+            i += 2
+            while i < n and not (sql[i] == "*" and i + 1 < n and sql[i + 1] == "/"):
+                i += 1
+            i += 2  # skip */
+            out.append(" ")
+            continue
+        # Line comment
+        if ch == "-" and nxt == "-":
+            i += 2
+            while i < n and sql[i] != "\n":
+                i += 1
+            out.append(" ")
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _has_semicolon_outside_literals(sql: str) -> bool:
+    """True если в SQL есть ';' вне строковых литералов (т.е. multi-statement).
+
+    Trailing ';' допустим — удаляется вызывающим через rstrip(';').
+    """
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            while i < n:
+                c = sql[i]
+                i += 1
+                if c == quote:
+                    if i < n and sql[i] == quote:
+                        # doubled quote escape
+                        i += 1
+                        continue
+                    break
+            continue
+        if ch == ";":
+            return True
+        i += 1
+    return False
+
+
 def _is_read_only_sql(sql: str) -> bool:
-    """True если SQL — только SELECT / WITH / EXPLAIN и без запретных ключевых слов."""
-    s = sql.strip().rstrip(";").strip()
-    if not s:
+    """True если SQL — только SELECT / WITH / EXPLAIN и без запретных ключевых слов.
+
+    Защита от: multi-statement (';' outside literals), SQL-комментариев
+    ('/* */' и '--'), которые могут скрывать write-keywords.
+    """
+    raw = sql.strip()
+    if not raw:
         return False
-    # Только один statement (запрет ';' внутри, кроме trailing).
-    if ";" in s:
+    # Валидация «одного завершённого statement» через sqlite3.
+    # complete_statement ожидает trailing ';' — добавляем если нет.
+    probe = raw if raw.endswith(";") else raw + ";"
+    if not _sqlite3.complete_statement(probe):
         return False
-    head = s.split(None, 1)[0].upper()
+    # Strip trailing ';' и проверяем что нет других ';' вне литералов.
+    body = raw.rstrip(";").strip()
+    if not body:
+        return False
+    if _has_semicolon_outside_literals(body):
+        return False
+    # Убираем комментарии ДО проверки head / write-keywords (иначе bypass).
+    stripped = _strip_sql_comments(body).strip()
+    if not stripped:
+        return False
+    head_parts = stripped.split(None, 1)
+    if not head_parts:
+        return False
+    head = head_parts[0].upper()
     if head not in ("SELECT", "WITH", "EXPLAIN"):
         return False
-    # Проверяем отсутствие write-ключевых слов (word boundaries).
     for kw in _FORBIDDEN_SQL_KEYWORDS:
-        if _re.search(rf"\b{kw}\b", s, _re.IGNORECASE):
+        if _re.search(rf"\b{kw}\b", stripped, _re.IGNORECASE):
             return False
-    if _PRAGMA_WRITE_RE.search(s):
+    if _PRAGMA_WRITE_RE.search(stripped):
         return False
     return True
 

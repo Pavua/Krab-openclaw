@@ -146,6 +146,77 @@ async def test_db_query_sql_error_path(mcp_server, tmp_archive_db):
 
 
 @pytest.mark.asyncio
+async def test_select_with_semicolon_in_literal_accepts(mcp_server, tmp_archive_db):
+    """SELECT с ';' внутри строкового литерала — валидный single-statement."""
+    result = await mcp_server.db_query(
+        mcp_server._DbQueryInput(
+            sql="SELECT id, name FROM items WHERE name=';'",
+            db_name="archive",
+        )
+    )
+    data = json.loads(result)
+    assert data["ok"] is True
+    assert data["row_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_select_with_semicolon_in_double_quote_accepts(mcp_server, tmp_archive_db):
+    """SELECT с ';' внутри double-quoted литерала — валидный single-statement."""
+    # SQLite трактует "..." как identifier, но парсер _is_read_only_sql не должен
+    # падать из-за ';' внутри. Используем literal в WHERE через single-quote wrapper.
+    result = await mcp_server.db_query(
+        mcp_server._DbQueryInput(
+            sql='SELECT id FROM items WHERE name != \'no;such\'',
+            db_name="archive",
+        )
+    )
+    data = json.loads(result)
+    assert data["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_comment_based_write_rejected(mcp_server, tmp_archive_db):
+    """/* ... */ INSERT ... — должен быть rejected (bypass защищён stripping)."""
+    result = await mcp_server.db_query(
+        mcp_server._DbQueryInput(
+            sql="/* harmless */ INSERT INTO items (name) VALUES ('x')",
+            db_name="archive",
+        )
+    )
+    data = json.loads(result)
+    assert data["ok"] is False
+    assert data["error"] == "not_read_only_statement"
+
+
+@pytest.mark.asyncio
+async def test_dash_comment_write_rejected(mcp_server, tmp_archive_db):
+    """-- ... \\n INSERT ... — должен быть rejected."""
+    result = await mcp_server.db_query(
+        mcp_server._DbQueryInput(
+            sql="-- comment\nINSERT INTO items (name) VALUES ('x')",
+            db_name="archive",
+        )
+    )
+    data = json.loads(result)
+    assert data["ok"] is False
+    assert data["error"] == "not_read_only_statement"
+
+
+@pytest.mark.asyncio
+async def test_multi_statement_rejected(mcp_server, tmp_archive_db):
+    """SELECT 1; INSERT ... — multi-statement блокируется."""
+    result = await mcp_server.db_query(
+        mcp_server._DbQueryInput(
+            sql="SELECT 1; INSERT INTO items (name) VALUES ('x')",
+            db_name="archive",
+        )
+    )
+    data = json.loads(result)
+    assert data["ok"] is False
+    assert data["error"] == "not_read_only_statement"
+
+
+@pytest.mark.asyncio
 async def test_db_query_timeout_handling(mcp_server, tmp_archive_db, monkeypatch):
     """Если внутренний executor висит дольше лимита — возвращается 'timeout'."""
 
