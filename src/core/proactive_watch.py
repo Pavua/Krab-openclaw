@@ -693,6 +693,11 @@ class ProactiveWatchService:
     # 0 fires за 49 рестартов сказали что 6h избыточно; 24h совпадает со scope
     # weekly_digest и покрывает типичный рабочий цикл).
     ERROR_DIGEST_INTERVAL_SEC: int = 86400
+    # Первый fire — через короткую задержку после старта (а не через 24h),
+    # чтобы при частых рестартах loop всё равно успевал стрельнуть хотя бы раз.
+    # Аналог FIRST_RUN_DELAY_SEC в weekly_digest. Идемпотентность обеспечивается
+    # dedupe_key `proactive:error_digest:YYYY-MM-DDTHH` в inbox_service.
+    ERROR_DIGEST_FIRST_RUN_DELAY_SEC: int = 300
     # Максимум ошибок в сводке
     ERROR_DIGEST_MAX_ITEMS: int = 10
 
@@ -783,13 +788,20 @@ class ProactiveWatchService:
         return {"ok": True, "total": total, "counts": counts, "digest_ts": ts_now}
 
     async def _error_digest_loop(self) -> None:
-        """Бесконечный цикл: 1 раз в 24 часа (downgrade с 6h после аудита)."""
+        """Бесконечный цикл: 1 раз в 24 часа (downgrade с 6h после аудита).
+
+        ВАЖНО: первый fire — через ERROR_DIGEST_FIRST_RUN_DELAY_SEC (5 мин) после
+        старта, не через 24h. Иначе при частых рестартах loop никогда не доходит
+        до первого fire. Идемпотентность — через dedupe_key в inbox_service.
+        """
+        # Короткая задержка перед первым fire — даём userbot полностью подняться
+        await asyncio.sleep(self.ERROR_DIGEST_FIRST_RUN_DELAY_SEC)
         while True:
-            await asyncio.sleep(self.ERROR_DIGEST_INTERVAL_SEC)
             try:
                 await self.run_error_digest()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("error_digest_loop_error", error=str(exc))
+            await asyncio.sleep(self.ERROR_DIGEST_INTERVAL_SEC)
 
     def start_error_digest_loop(self) -> "asyncio.Task[None]":
         """Запускает фоновую задачу Error Digest и возвращает Task."""
