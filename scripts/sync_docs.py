@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
-"""Composite docs synchroniser для Krab.
+"""Composite docs auto-sync для Krab.
 
 Сканирует исходники и перегенерирует marker-секции в CLAUDE.md:
     - Owner Panel endpoints (из src/modules/web_app.py)
     - Команды userbot (из src/handlers/command_handlers.py)
     - Prometheus алерты / метрики (из ops/prometheus/krab_alerts.yml)
 
-Поддерживает ``--dry-run`` — печатает diff без записи на диск.
+Также оркестрирует запуск смежных генераторов:
+    - scripts/generate_commands_cheatsheet.py (cheatsheet)
+    - scripts/generate_docs_index.py (index)
+
+Флаги:
+    --dry-run       печатает diff без записи на диск
+    --check         exit 1 если есть drift (без записи)
+    --only {section}  запустить только одну секцию: cheatsheet|index|claude
+
 Используется как Wave 20-G composite-генератор.
 """
 
@@ -15,6 +23,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,9 +43,7 @@ MARK_METRICS_BEGIN = "<!-- BEGIN:auto-metrics -->"
 MARK_METRICS_END = "<!-- END:auto-metrics -->"
 
 # Regex для @self.app.<method>("/path", ...)
-ROUTE_RE = re.compile(
-    r'@self\.app\.(get|post|put|delete|patch)\(\s*["\']([^"\']+)["\']'
-)
+ROUTE_RE = re.compile(r'@self\.app\.(get|post|put|delete|patch)\(\s*["\']([^"\']+)["\']')
 # Regex для async def handle_<name>(...)
 HANDLER_RE = re.compile(r"async def handle_([a-z_0-9]+)\s*\(")
 # Regex для alert: <Name> в prometheus yaml
@@ -129,11 +136,42 @@ def replace_or_append(doc: str, begin: str, end: str, block: str) -> str:
     return doc + "\n" + block + "\n"
 
 
+def _run_generator(script_name: str) -> int:
+    """Запускает вспомогательный генератор из scripts/. Возвращает returncode."""
+    script = REPO_ROOT / "scripts" / script_name
+    if not script.exists():
+        print(f"[sync_docs] generator missing: {script_name}", file=sys.stderr)
+        return 1
+    print(f"[sync_docs] running {script_name}")
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=REPO_ROOT,
+        capture_output=False,
+    )
+    return result.returncode
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Sync auto-generated sections in CLAUDE.md")
+    parser = argparse.ArgumentParser(description="Krab docs auto-sync composite generator")
     parser.add_argument("--dry-run", action="store_true", help="Не писать файл, показать diff")
+    parser.add_argument(
+        "--check", action="store_true", help="Exit 1 при наличии drift (без записи)"
+    )
+    parser.add_argument(
+        "--only",
+        choices=["cheatsheet", "index", "claude"],
+        default=None,
+        help="Запустить только одну секцию (cheatsheet|index|claude)",
+    )
     args = parser.parse_args()
 
+    # --only filter: cheatsheet / index — делегируем внешним генераторам.
+    if args.only == "index":
+        return _run_generator("generate_docs_index.py")
+    if args.only == "cheatsheet":
+        return _run_generator("generate_commands_cheatsheet.py")
+
+    # Иначе запускаем CLAUDE.md секцию (с опциональным --only claude).
     web_text = WEB_APP.read_text(encoding="utf-8") if WEB_APP.exists() else ""
     cmd_text = CMD_HANDLERS.read_text(encoding="utf-8") if CMD_HANDLERS.exists() else ""
     prom_text = PROM_RULES.read_text(encoding="utf-8") if PROM_RULES.exists() else ""
@@ -142,8 +180,10 @@ def main() -> int:
     commands = extract_commands(cmd_text)
     alerts, metrics = extract_alerts_and_metrics(prom_text)
 
-    print(f"[sync_docs] endpoints={len(endpoints)} commands={len(commands)} "
-          f"alerts={len(alerts)} metrics={len(metrics)}")
+    print(
+        f"[sync_docs] endpoints={len(endpoints)} commands={len(commands)} "
+        f"alerts={len(alerts)} metrics={len(metrics)}"
+    )
 
     if not CLAUDE_MD.exists():
         print(f"[sync_docs] CLAUDE.md not found at {CLAUDE_MD}", file=sys.stderr)
@@ -174,8 +214,15 @@ def main() -> int:
             n=1,
         )
     )
-    changed_lines = sum(1 for line in diff if line.startswith(("+", "-")) and not line.startswith(("+++", "---")))
+    changed_lines = sum(
+        1 for line in diff if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+    )
     print(f"[sync_docs] diff: {changed_lines} lines changed")
+
+    if args.check:
+        sys.stdout.writelines(diff[:80])
+        print(f"[sync_docs] check: drift detected ({changed_lines} lines)")
+        return 1
 
     if args.dry_run:
         sys.stdout.writelines(diff[:80])
