@@ -18,6 +18,14 @@ Expected: `KNN OK` + vec_chunks count ≈ 72k. If empty, run `scripts/encode_mem
 
 Runs hybrid queries in parallel with FTS but **returns FTS results to callers** — pure telemetry, zero user impact.
 
+**One-shot activation** (recommended) — добавит env-флаг, рестартит Krab, прогонит smoke `/api/memory/search` и подсчитает `memory_phase2_shadow_compare` в `logs/krab_launchd.out.log`:
+
+```bash
+scripts/shadow_reads_enable.sh
+```
+
+Или вручную:
+
 ```bash
 echo "KRAB_RAG_PHASE2_SHADOW=1" >> /Users/pablito/Antigravity_AGENTS/Краб/.env
 # Restart Krab
