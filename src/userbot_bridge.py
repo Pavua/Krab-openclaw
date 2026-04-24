@@ -1655,16 +1655,20 @@ class KraabUserbot(
                 is_allowed_sender=True,
                 access_level="owner",
             )
+            # W32 hotfix v3: chat_id MUST be numeric (target_chat = owner_id),
+            # не synthetic string "cron:job:..." — иначе openclaw_client hangs
+            # in memory_adapter trying to load history for non-existent chat.
+            # Manual run_now showed firing → silent hang (никаких событий после
+            # cron_native_job_firing).
             adapter = _AgentRoomRouterAdapter(
-                chat_id=f"cron:job:{owner_id or 'self'}",
+                chat_id=str(target_chat),
                 system_prompt=system_prompt,
                 team_name=None,
             )
-            # W32 hotfix: _AgentRoomRouterAdapter exposes route_query (returns
-            # full string), not .stream(). Predecessor implementation called
-            # adapter.stream() → AttributeError → cron_job_llm_failed silent.
-            # route_query is async and returns the assembled response.
-            full_reply = (await adapter.route_query(prompt)).strip()
+            # W32 hotfix v2: _AgentRoomRouterAdapter exposes route_query (returns
+            # full string), not .stream(). Add 90s timeout — cron prompts должны
+            # отвечать быстро, иначе откатываемся на skip без блокировки scheduler.
+            full_reply = (await asyncio.wait_for(adapter.route_query(prompt), timeout=90.0)).strip()
             if not full_reply:
                 logger.warning("cron_job_empty_llm_reply", prompt_preview=prompt[:80])
                 return
