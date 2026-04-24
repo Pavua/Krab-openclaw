@@ -42,7 +42,7 @@ except ImportError as exc:  # pragma: no cover
 # Конфигурация
 # ---------------------------------------------------------------------------
 
-MCP_SSE_URL = "http://127.0.0.1:8011/sse"
+MCP_SSE_URL = "http://127.0.0.1:8012/sse"  # p0lrd MCP — тестирует от guest perspective, не от self
 PANEL_BASE = "http://127.0.0.1:8080"
 RESULTS_PATH = (
     pathlib.Path(__file__).resolve().parent.parent / "docs" / "E2E_RESULTS_LATEST.md"
