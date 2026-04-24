@@ -290,12 +290,12 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 updateUI(data);
             } catch (e) {
                 console.warn('Fetch failed, using fallback data for preview.');
-                // Fallback mock data if API is unreachable
+                // Fallback на "—" если API недоступен — без хардкода имён моделей
                 updateUI({
-                    last_runtime_route: { model: "claude-3-opus-20240229" },
-                    telegram: { session_state: "connected" },
-                    inbox_summary: { open_items: 12 },
-                    voice: { enabled: true },
+                    last_runtime_route: { model: "—" },
+                    telegram: { session_state: "unknown" },
+                    inbox_summary: { open_items: 0 },
+                    voice: { enabled: false },
                     scheduler: { enabled: false }
                 });
             }

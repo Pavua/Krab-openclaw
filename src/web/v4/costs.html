@@ -324,12 +324,9 @@
     var mockReport = {
         total_cost_usd:42.15, total_calls:1254, input_tokens:850000, output_tokens:210000,
         total_tool_calls:342, total_fallbacks:12, total_context_tokens:1060000, avg_context_tokens:845,
-        by_model:{
-            'gemini-3-pro':     {cost_usd:28.50,calls:800,input_tokens:450000,output_tokens:150000},
-            'gemini-3-flash':   {cost_usd:8.20, calls:300,input_tokens:200000,output_tokens:80000},
-            'claude-3-5-sonnet':{cost_usd:4.00, calls:100,input_tokens:120000,output_tokens:40000},
-            'llama-3-local':    {cost_usd:0.00, calls:54, input_tokens:20000, output_tokens:10000}
-        },
+        // Placeholder-only mock: имена моделей должны приходить из /api/costs/report,
+        // чтобы UI всегда отражал live routing (никаких хардкод-имён).
+        by_model:{},
         by_channel:{telegram:850,swarm:200,translator:154,api:50},
         history:[
             {cost_usd:5.5,calls:150,tokens:75000},{cost_usd:6.2,calls:180,tokens:82000},
