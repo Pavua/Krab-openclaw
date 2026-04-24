@@ -107,6 +107,17 @@ class CronNativeScheduler:
         try:
             if self._sender:
                 await self._sender("cron_native", prompt)
+                logger.info("cron_native_job_sender_returned", job_id=job_id)
+            else:
+                # W32: critical observability — was silent no-op до session 22.
+                # Если sender is None, scheduler tick'ает но cron prompts
+                # никогда не доходят до LLM/Telegram. Mark_run всё ещё
+                # обновляется чтобы избежать infinite re-fire.
+                logger.warning(
+                    "cron_native_job_sender_not_bound",
+                    job_id=job_id,
+                    hint="bind_sender() was never called or scheduler started before bind",
+                )
             cron_native_store.mark_run(job_id)
             logger.info("cron_native_job_done", job_id=job_id)
         except Exception as exc:  # noqa: BLE001
