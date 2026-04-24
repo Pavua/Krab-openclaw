@@ -1,41 +1,42 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-  <dict>
+<dict>
     <key>Label</key>
     <string>ai.krab.log-rotation</string>
 
     <key>Comment</key>
-    <string>Krab Log Rotation — gzip logs >50MB, delete .gz >30d, truncate live logs if >500MB</string>
+    <string>Krab Log Rotation — gzip logs >50MB, delete .gz >30d, truncate live logs >500MB. Runs every 6 hours.</string>
 
     <key>ProgramArguments</key>
     <array>
-      <string>/bin/bash</string>
-      <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/log_rotation.sh</string>
+        <string>/bin/bash</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/log_rotation.sh</string>
     </array>
-
-    <key>StartCalendarInterval</key>
-    <dict>
-      <key>Hour</key>
-      <integer>3</integer>
-      <key>Minute</key>
-      <integer>27</integer>
-    </dict>
 
     <key>WorkingDirectory</key>
     <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
 
+    <key>StartInterval</key>
+    <integer>21600</integer>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>RunAtLoad</key>
+    <false/>
+
     <key>StandardOutPath</key>
-    <string>/tmp/krab-log-rotation.log</string>
+    <string>/tmp/krab_log_rotation.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/krab-log-rotation.err.log</string>
+    <string>/tmp/krab_log_rotation.err.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
-      <key>HOME</key>
-      <string>/Users/pablito</string>
-      <key>PATH</key>
-      <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
-  </dict>
+</dict>
 </plist>
