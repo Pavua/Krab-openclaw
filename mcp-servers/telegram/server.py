@@ -1738,6 +1738,647 @@ async def db_query(params: _DbQueryInput) -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# ── APPLE NATIVE TOOLS (Notes / iMessage / Reminders / Calendar) ─────────────
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Reuse: src.integrations.macos_automation.MacOSAutomationService (osascript).
+# iMessage read — прямой read-only доступ к chat.db (sqlite3), это быстрее и
+# стабильнее чем osascript. Write-операции заблокированы env-флагом.
+#
+# TCC permissions (выдать один раз в System Settings → Privacy & Security):
+#   - Automation: Notes.app      для notes_*
+#   - Automation: Reminders.app  для reminders_*
+#   - Automation: Calendar.app   для calendar_*
+#   - Full Disk Access           для чтения ~/Library/Messages/chat.db
+# Если доступ не выдан — возвращаем structured {"ok": false, "error":
+# "permission_denied", "tcc_required": ...}.
+
+
+def _apple_write_enabled() -> bool:
+    """Разрешён ли write в Apple-app'ы. Gate на KRAB_MCP_APPLE_WRITE_ENABLED=1."""
+    return os.getenv("KRAB_MCP_APPLE_WRITE_ENABLED", "").strip() in {"1", "true", "yes"}
+
+
+def _detect_tcc_denied(err_text: str) -> bool:
+    """Эвристика: osascript-ошибка похожа на TCC denial?"""
+    lowered = (err_text or "").lower()
+    markers = (
+        "not authorized",
+        "not allowed",
+        "erraeventnotpermitted",
+        "-1743",
+        "privacy",
+        "is not allowed assistive access",
+    )
+    return any(m in lowered for m in markers)
+
+
+def _tcc_error(app_name: str, raw_error: str) -> dict[str, Any]:
+    """Формирует единый permission_denied ответ."""
+    return {
+        "ok": False,
+        "error": "permission_denied",
+        "tcc_required": f"Automation: {app_name}.app",
+        "detail": (raw_error or "")[:200],
+    }
+
+
+def _get_macos_service():
+    """Лениво импортирует MacOSAutomationService (sys.path уже настроен)."""
+    from src.integrations.macos_automation import (  # type: ignore
+        MacOSAutomationError,
+        MacOSAutomationService,
+    )
+
+    return MacOSAutomationService(), MacOSAutomationError
+
+
+# ── Input models ────────────────────────────────────────────────────────────
+
+
+class _NotesListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    folder: str = Field(default="", description="Имя папки Notes (пусто = все)")
+    limit: int = Field(default=20, ge=1, le=100, description="Лимит (1–100)")
+
+
+class _NotesGetInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    note_id: str = Field(..., min_length=1, description="id заметки или её title")
+
+
+class _NotesSearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(..., min_length=1, max_length=255)
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+class _NotesCreateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(..., min_length=1, max_length=255)
+    body: str = Field(..., min_length=1, max_length=50_000)
+    folder: str = Field(default="")
+
+
+class _IMessageSearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(..., min_length=1, max_length=255)
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class _IMessageUnreadInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class _IMessageHistoryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id_or_handle: str = Field(
+        ..., min_length=1, description="ROWID чата или phone/email (handle.id)"
+    )
+    limit: int = Field(default=30, ge=1, le=200)
+
+
+class _RemindersListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    list_name: str = Field(default="", description="Имя списка Reminders (пусто = все)")
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class _RemindersCreateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(..., min_length=1, max_length=255)
+    due_date: str = Field(default="", description="ISO 8601 datetime (пусто = без due)")
+    list_name: str = Field(default="")
+
+
+class _CalendarEventsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start_date: str = Field(default="", description="ISO 8601 (default=сейчас)")
+    end_date: str = Field(default="", description="ISO 8601 (default=+7 дней)")
+    calendar_name: str = Field(default="")
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class _CalendarCreateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(..., min_length=1, max_length=255)
+    start: str = Field(..., min_length=1, description="ISO 8601 datetime начала")
+    end: str = Field(..., min_length=1, description="ISO 8601 datetime окончания")
+    calendar_name: str = Field(default="")
+    notes: str = Field(default="", max_length=10_000)
+
+
+# ── Apple Notes ─────────────────────────────────────────────────────────────
+
+
+@mcp.tool(
+    name="notes_list",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def notes_list(params: _NotesListInput) -> str:
+    """Список заметок Apple Notes (account/folder/title).
+
+    Требует TCC: Automation: Notes.app.
+    """
+    svc, err_cls = _get_macos_service()
+    try:
+        rows = await svc.list_notes(limit=params.limit)
+        if params.folder:
+            rows = [r for r in rows if r.get("folder_name") == params.folder]
+        return json.dumps({"ok": True, "notes": rows, "count": len(rows)}, ensure_ascii=False)
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Notes", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="notes_get",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def notes_get(params: _NotesGetInput) -> str:
+    """Полный текст заметки по id или title (первое совпадение).
+
+    Требует TCC: Automation: Notes.app.
+    """
+    svc, err_cls = _get_macos_service()
+    script = (
+        "\non run argv\n"
+        "    set needle to item 1 of argv\n"
+        '    tell application "Notes"\n'
+        "        repeat with acc in accounts\n"
+        "            repeat with folderRef in folders of acc\n"
+        "                repeat with noteRef in notes of folderRef\n"
+        "                    try\n"
+        "                        if (id of noteRef as text) is needle or (name of noteRef as text) is needle then\n"
+        '                            return ((name of noteRef as text) & "\\n---\\n" & (body of noteRef as text))\n'
+        "                        end if\n"
+        "                    end try\n"
+        "                end repeat\n"
+        "            end repeat\n"
+        "        end repeat\n"
+        "    end tell\n"
+        '    return ""\n'
+        "end run\n"
+    )
+    try:
+        output = await svc._run_osascript(script, params.note_id)
+        if not output:
+            return json.dumps({"ok": False, "error": "not_found"}, ensure_ascii=False)
+        title, _, body = output.partition("\n---\n")
+        return json.dumps({"ok": True, "title": title, "body": body}, ensure_ascii=False)
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Notes", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="notes_search",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def notes_search(params: _NotesSearchInput) -> str:
+    """Поиск по title/body Apple Notes (substring).
+
+    Требует TCC: Automation: Notes.app.
+    """
+    svc, err_cls = _get_macos_service()
+    script = (
+        "\non run argv\n"
+        "    set needle to item 1 of argv\n"
+        "    set maxItems to (item 2 of argv as integer)\n"
+        "    set outLines to {}\n"
+        '    tell application "Notes"\n'
+        "        repeat with acc in accounts\n"
+        "            repeat with folderRef in folders of acc\n"
+        "                repeat with noteRef in notes of folderRef\n"
+        "                    try\n"
+        "                        set nt to name of noteRef as text\n"
+        "                        set bd to body of noteRef as text\n"
+        "                        if (nt contains needle) or (bd contains needle) then\n"
+        '                            set end of outLines to ((id of noteRef as text) & "||" & nt & "||" & (name of folderRef as text))\n'
+        "                            if (count of outLines) is greater than or equal to maxItems then exit repeat\n"
+        "                        end if\n"
+        "                    end try\n"
+        "                end repeat\n"
+        "                if (count of outLines) is greater than or equal to maxItems then exit repeat\n"
+        "            end repeat\n"
+        "            if (count of outLines) is greater than or equal to maxItems then exit repeat\n"
+        "        end repeat\n"
+        "    end tell\n"
+        "    set AppleScript's text item delimiters to linefeed\n"
+        "    return outLines as text\n"
+        "end run\n"
+    )
+    try:
+        output = await svc._run_osascript(script, params.query, str(params.limit))
+        results: list[dict[str, str]] = []
+        for line in (output or "").splitlines():
+            parts = line.split("||", 2)
+            if len(parts) == 3:
+                results.append({"id": parts[0], "title": parts[1], "folder": parts[2]})
+        return json.dumps(
+            {"ok": True, "results": results, "count": len(results)}, ensure_ascii=False
+        )
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Notes", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="notes_create",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
+async def notes_create(params: _NotesCreateInput) -> str:
+    """Создать заметку. Gate: KRAB_MCP_APPLE_WRITE_ENABLED=1.
+
+    Требует TCC: Automation: Notes.app.
+    """
+    if not _apple_write_enabled():
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "write_disabled",
+                "hint": "set KRAB_MCP_APPLE_WRITE_ENABLED=1",
+            },
+            ensure_ascii=False,
+        )
+    svc, err_cls = _get_macos_service()
+    try:
+        res = await svc.create_note(
+            title=params.title, body=params.body, folder_name=params.folder
+        )
+        return json.dumps({"ok": True, **res}, ensure_ascii=False)
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Notes", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+# ── iMessage (read-only via chat.db) ────────────────────────────────────────
+#
+# chat.db.date — COCOA epoch (2001-01-01 UTC), наносекунды с macOS High Sierra.
+# Формула: unix_ts = date / 1e9 + 978307200.
+
+_CHAT_DB_PATH = Path(
+    os.getenv("KRAB_MCP_IMESSAGE_DB", "~/Library/Messages/chat.db")
+).expanduser()
+
+
+def _open_chat_db():
+    """Открывает chat.db read-only. Возвращает (conn, None) или (None, err_dict)."""
+    import sqlite3
+
+    if not _CHAT_DB_PATH.exists():
+        return None, {
+            "ok": False,
+            "error": "chat_db_not_found",
+            "path": str(_CHAT_DB_PATH),
+        }
+    try:
+        conn = sqlite3.connect(
+            f"file:{_CHAT_DB_PATH}?mode=ro",
+            uri=True,
+            timeout=5.0,
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute("SELECT 1 FROM message LIMIT 1").fetchone()
+        return conn, None
+    except sqlite3.OperationalError as exc:
+        msg = str(exc)
+        lowered = msg.lower()
+        if (
+            "authorization" in lowered
+            or "unable to open" in lowered
+            or "permission" in lowered
+        ):
+            err = _tcc_error("Messages", msg)
+            err["tcc_required"] = "Full Disk Access (for MCP runtime process)"
+            return None, err
+        return None, {"ok": False, "error": msg}
+
+
+def _cocoa_to_iso(cocoa_ns: int | None) -> str:
+    """Конвертирует COCOA-timestamp (ns since 2001-01-01 UTC) в ISO 8601."""
+    if not cocoa_ns:
+        return ""
+    import datetime as _dt
+
+    try:
+        unix = (cocoa_ns / 1_000_000_000) + 978_307_200
+        return _dt.datetime.fromtimestamp(unix, tz=_dt.timezone.utc).isoformat()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+@mcp.tool(
+    name="imessage_search",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def imessage_search(params: _IMessageSearchInput) -> str:
+    """Поиск по тексту сообщений в ~/Library/Messages/chat.db.
+
+    Требует TCC: Full Disk Access (для процесса MCP-сервера).
+    """
+    conn, err = _open_chat_db()
+    if err:
+        return json.dumps(err, ensure_ascii=False)
+    try:
+        rows = conn.execute(
+            """
+            SELECT m.ROWID as id, m.text, m.date, m.is_from_me,
+                   h.id as handle,
+                   c.ROWID as chat_rowid, c.display_name as chat_name
+              FROM message m
+              LEFT JOIN handle h ON m.handle_id = h.ROWID
+              LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+              LEFT JOIN chat c ON c.ROWID = cmj.chat_id
+             WHERE m.text LIKE ?
+             ORDER BY m.date DESC
+             LIMIT ?
+            """,
+            (f"%{params.query}%", params.limit),
+        ).fetchall()
+        results = [
+            {
+                "id": r["id"],
+                "text": r["text"] or "",
+                "date": _cocoa_to_iso(r["date"]),
+                "is_from_me": bool(r["is_from_me"]),
+                "handle": r["handle"] or "",
+                "chat_id": r["chat_rowid"],
+                "chat_name": r["chat_name"] or "",
+            }
+            for r in rows
+        ]
+        return json.dumps(
+            {"ok": True, "results": results, "count": len(results)}, ensure_ascii=False
+        )
+    finally:
+        conn.close()
+
+
+@mcp.tool(
+    name="imessage_unread",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def imessage_unread(params: _IMessageUnreadInput) -> str:
+    """Непрочитанные iMessage (is_read=0 AND is_from_me=0)."""
+    conn, err = _open_chat_db()
+    if err:
+        return json.dumps(err, ensure_ascii=False)
+    try:
+        rows = conn.execute(
+            """
+            SELECT m.ROWID as id, m.text, m.date, h.id as handle,
+                   c.display_name as chat_name
+              FROM message m
+              LEFT JOIN handle h ON m.handle_id = h.ROWID
+              LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+              LEFT JOIN chat c ON c.ROWID = cmj.chat_id
+             WHERE m.is_read = 0 AND m.is_from_me = 0
+             ORDER BY m.date DESC
+             LIMIT ?
+            """,
+            (params.limit,),
+        ).fetchall()
+        results = [
+            {
+                "id": r["id"],
+                "text": r["text"] or "",
+                "date": _cocoa_to_iso(r["date"]),
+                "handle": r["handle"] or "",
+                "chat_name": r["chat_name"] or "",
+            }
+            for r in rows
+        ]
+        return json.dumps(
+            {"ok": True, "results": results, "count": len(results)}, ensure_ascii=False
+        )
+    finally:
+        conn.close()
+
+
+@mcp.tool(
+    name="imessage_history",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def imessage_history(params: _IMessageHistoryInput) -> str:
+    """История сообщений одного чата. chat_id_or_handle = ROWID чата ИЛИ handle.id."""
+    conn, err = _open_chat_db()
+    if err:
+        return json.dumps(err, ensure_ascii=False)
+    target = params.chat_id_or_handle.strip()
+    try:
+        chat_rowid: int | None = None
+        try:
+            chat_rowid = int(target)
+        except ValueError:
+            pass
+
+        if chat_rowid is not None:
+            sql = """
+                SELECT m.ROWID as id, m.text, m.date, m.is_from_me, h.id as handle
+                  FROM message m
+                  LEFT JOIN handle h ON m.handle_id = h.ROWID
+                  JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+                 WHERE cmj.chat_id = ?
+                 ORDER BY m.date DESC
+                 LIMIT ?
+            """
+            args: tuple[Any, ...] = (chat_rowid, params.limit)
+        else:
+            sql = """
+                SELECT m.ROWID as id, m.text, m.date, m.is_from_me, h.id as handle
+                  FROM message m
+                  JOIN handle h ON m.handle_id = h.ROWID
+                 WHERE h.id = ?
+                 ORDER BY m.date DESC
+                 LIMIT ?
+            """
+            args = (target, params.limit)
+
+        rows = conn.execute(sql, args).fetchall()
+        results = [
+            {
+                "id": r["id"],
+                "text": r["text"] or "",
+                "date": _cocoa_to_iso(r["date"]),
+                "is_from_me": bool(r["is_from_me"]),
+                "handle": r["handle"] or "",
+            }
+            for r in rows
+        ]
+        return json.dumps(
+            {"ok": True, "results": results, "count": len(results)}, ensure_ascii=False
+        )
+    finally:
+        conn.close()
+
+
+# ── Reminders ───────────────────────────────────────────────────────────────
+
+
+@mcp.tool(
+    name="reminders_list",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def reminders_list(params: _RemindersListInput) -> str:
+    """Список незавершённых reminder'ов (с фильтром по list_name).
+
+    Требует TCC: Automation: Reminders.app.
+    """
+    svc, err_cls = _get_macos_service()
+    try:
+        rows = await svc.list_reminders(limit=params.limit)
+        if params.list_name:
+            rows = [r for r in rows if r.get("list_name") == params.list_name]
+        return json.dumps(
+            {"ok": True, "reminders": rows, "count": len(rows)}, ensure_ascii=False
+        )
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Reminders", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="reminders_create",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
+async def reminders_create(params: _RemindersCreateInput) -> str:
+    """Создать reminder. Gate: KRAB_MCP_APPLE_WRITE_ENABLED=1.
+
+    due_date — ISO 8601. Требует TCC: Automation: Reminders.app.
+    """
+    if not _apple_write_enabled():
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "write_disabled",
+                "hint": "set KRAB_MCP_APPLE_WRITE_ENABLED=1",
+            },
+            ensure_ascii=False,
+        )
+    svc, err_cls = _get_macos_service()
+    due_at = None
+    if params.due_date:
+        from datetime import datetime as _dt
+
+        try:
+            due_at = _dt.fromisoformat(params.due_date)
+        except ValueError:
+            return json.dumps(
+                {"ok": False, "error": "invalid_due_date_iso"}, ensure_ascii=False
+            )
+    try:
+        res = await svc.create_reminder(
+            title=params.title, due_at=due_at, list_name=params.list_name
+        )
+        return json.dumps({"ok": True, **res}, ensure_ascii=False)
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Reminders", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+# ── Calendar ─────────────────────────────────────────────────────────────────
+
+
+@mcp.tool(
+    name="calendar_events",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def calendar_events(params: _CalendarEventsInput) -> str:
+    """Ближайшие события Calendar (окно start_date..end_date).
+
+    Без дат — [сейчас, +7 дней]. Требует TCC: Automation: Calendar.app.
+    """
+    svc, err_cls = _get_macos_service()
+    days_ahead = 7
+    if params.end_date:
+        from datetime import datetime as _dt
+
+        try:
+            end_dt = _dt.fromisoformat(params.end_date)
+            start_dt = (
+                _dt.fromisoformat(params.start_date)
+                if params.start_date
+                else _dt.now().astimezone()
+            )
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.astimezone()
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.astimezone()
+            days_ahead = max(1, (end_dt - start_dt).days)
+        except ValueError:
+            return json.dumps({"ok": False, "error": "invalid_date_iso"}, ensure_ascii=False)
+    try:
+        rows = await svc.list_upcoming_calendar_events(
+            limit=params.limit, days_ahead=days_ahead
+        )
+        if params.calendar_name:
+            rows = [r for r in rows if r.get("calendar_name") == params.calendar_name]
+        return json.dumps({"ok": True, "events": rows, "count": len(rows)}, ensure_ascii=False)
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Calendar", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="calendar_create_event",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
+async def calendar_create_event(params: _CalendarCreateInput) -> str:
+    """Создать событие в Calendar. Gate: KRAB_MCP_APPLE_WRITE_ENABLED=1.
+
+    start/end — ISO 8601. Требует TCC: Automation: Calendar.app.
+    Примечание: поле notes пока не пробрасывается (базовый helper не принимает).
+    """
+    if not _apple_write_enabled():
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "write_disabled",
+                "hint": "set KRAB_MCP_APPLE_WRITE_ENABLED=1",
+            },
+            ensure_ascii=False,
+        )
+    svc, err_cls = _get_macos_service()
+    from datetime import datetime as _dt
+
+    try:
+        start_dt = _dt.fromisoformat(params.start)
+        end_dt = _dt.fromisoformat(params.end)
+    except ValueError:
+        return json.dumps({"ok": False, "error": "invalid_iso_datetime"}, ensure_ascii=False)
+    duration_min = max(1, int((end_dt - start_dt).total_seconds() // 60))
+    try:
+        res = await svc.create_calendar_event(
+            title=params.title,
+            start_at=start_dt,
+            duration_minutes=duration_min,
+            calendar_name=params.calendar_name,
+        )
+        return json.dumps({"ok": True, **res}, ensure_ascii=False)
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Calendar", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Entry point
 # ═════════════════════════════════════════════════════════════════════════════
 
