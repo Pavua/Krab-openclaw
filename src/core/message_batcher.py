@@ -289,12 +289,18 @@ class MessageBatcher:
 
             batch.busy = True
             batch.pending.append(msg)
+            # Drain под локом: всё, что было в pending — уйдёт в текущий combined.
+            # Новые messages, прилетевшие во время processor await, попадут в
+            # уже пустой batch.pending и НЕ будут затёрты (старый баг: line 297
+            # делал batch.pending=[] безусловно, теряя buffered messages).
+            current_msgs = batch.drain()
 
         try:
             # Обрабатываем первое сообщение (или накопленный batch если уже были)
-            combined = batch.format_batched_prompt()
+            snapshot = ChatBatch(chat_id=chat_id)
+            snapshot.pending = current_msgs
+            combined = snapshot.format_batched_prompt()
             response = await processor(chat_id, combined)
-            batch.pending = []
             return ("immediate", response)
         finally:
             # После обработки проверяем накопленные в очереди → запускаем flush
@@ -313,10 +319,15 @@ class MessageBatcher:
             if batch.busy or not batch.pending:
                 return
             batch.busy = True
+            # Атомарно забираем snapshot pending под локом — новые messages,
+            # пришедшие во время processor await, попадут в чистый batch.pending
+            # и будут подобраны рекурсивным flush ниже.
+            current_msgs = batch.drain()
 
         try:
-            combined = batch.format_batched_prompt()
-            batch.pending = []
+            snapshot = ChatBatch(chat_id=chat_id)
+            snapshot.pending = current_msgs
+            combined = snapshot.format_batched_prompt()
             logger.info("batch_flushing", chat_id=chat_id, combined_length=len(combined))
             await processor(chat_id, combined)
         except Exception as e:
