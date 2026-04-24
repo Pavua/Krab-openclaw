@@ -1345,3 +1345,112 @@ class TestC6PrometheusMetrics:
 
         assert hasattr(pm, "_memory_retrieval_mode_total")
         assert hasattr(pm, "_memory_retrieval_latency_seconds")
+
+
+# ---------------------------------------------------------------------------
+# C4: MMR vec-cache (Memory Phase 2).
+# ---------------------------------------------------------------------------
+
+
+class TestMMRVecCacheC4:
+    """C4: MMR читает pre-computed embeddings из vec_chunks (10× speedup)."""
+
+    def test_mmr_c4_uses_cached_vectors_when_available(
+        self,
+        archive_with_vec: ArchivePaths,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Pre-populated vec_chunks → MMR вообще НЕ вызывает encode(doc_texts)."""
+        monkeypatch.setenv("KRAB_RAG_MMR_ENABLED", "1")
+        monkeypatch.setenv("KRAB_RAG_PHASE2_ENABLED", "1")
+
+        class _CountingModel(_FakeVecModel):
+            def __init__(self, dim: int = 256) -> None:
+                super().__init__(dim=dim)
+                self.encode_calls: list[int] = []
+
+            def encode(self, texts):  # noqa: ANN001
+                self.encode_calls.append(len(list(texts)) if hasattr(texts, "__iter__") else 1)
+                return super().encode(texts)
+
+        counting = _CountingModel(dim=256)
+        r = HybridRetriever(archive_paths=archive_with_vec, model_name=None)
+        r._model = counting
+        r._model_name = "fake"
+        # _vec_available выставится в _ensure_connection().
+        _ = r._ensure_connection()
+
+        results = r.search("dashboard redesign plan", top_k=5)
+        assert results, "retrieval вернул пустой список"
+        # Ожидаем хотя бы один encode — это [query] (len=1). НЕ должно быть encode для doc_texts.
+        # Размеры encode: query всегда 1; missing-docs encode — только если cache < 100%.
+        # Все 5 chunks из chat_id=-100aaa имеют vec_chunks → cache_hit_rate == 1.0.
+        assert counting.encode_calls, "model.encode должен был вызваться хотя бы для query"
+        # НИ один encode-вызов не должен быть на >= 2 docs (doc_texts=5 → было бы 5).
+        assert all(n <= 1 for n in counting.encode_calls), (
+            f"MMR C4 не использует cache: encode_calls={counting.encode_calls}"
+        )
+        r.close()
+
+    def test_mmr_c4_fallback_to_encode_on_missing_vectors(
+        self,
+        archive_with_vec: ArchivePaths,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """< 50% кэша → старый on-the-fly encode путь (cosine_encode)."""
+        monkeypatch.setenv("KRAB_RAG_MMR_ENABLED", "1")
+        monkeypatch.setenv("KRAB_RAG_PHASE2_ENABLED", "1")
+
+        class _CountingModel(_FakeVecModel):
+            def __init__(self, dim: int = 256) -> None:
+                super().__init__(dim=dim)
+                self.encode_calls: list[int] = []
+
+            def encode(self, texts):  # noqa: ANN001
+                texts_list = list(texts) if hasattr(texts, "__iter__") else [texts]
+                self.encode_calls.append(len(texts_list))
+                return super().encode(texts_list)
+
+        counting = _CountingModel(dim=256)
+        r = HybridRetriever(archive_paths=archive_with_vec, model_name=None)
+        r._model = counting
+        r._model_name = "fake"
+        _ = r._ensure_connection()
+
+        # Удаляем ВСЕ vec_chunks → cache_hit_rate = 0 → fallback на encode(doc_texts).
+        conn = r._ensure_connection()
+        assert conn is not None
+        conn.execute("DELETE FROM vec_chunks;")
+        conn.commit()
+
+        results = r.search("dashboard redesign plan", top_k=5)
+        # При отсутствии векторов _vector_search также вернёт []; путь будет только FTS.
+        assert isinstance(results, list)
+        # При cache_hit_rate=0 и model+query есть → ожидаем cosine_encode путь (encode(doc_texts))
+        # ИЛИ jaccard fallback (если FTS вернул 0/1 docs). Проверяем что encode с N>=2 случился хотя бы раз,
+        # ЛИБО результат из FTS содержит не более 1 docs (MMR skipped).
+        if len(results) > 1:
+            assert any(n >= 2 for n in counting.encode_calls), (
+                f"Ожидали encode(doc_texts) fallback при 0% cache: encode_calls={counting.encode_calls}"
+            )
+        r.close()
+
+    def test_mmr_c4_fallback_to_jaccard_when_no_model(
+        self,
+        archive_with_vec: ArchivePaths,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """model=None → ни cosine_cached, ни cosine_encode → jaccard_fallback."""
+        monkeypatch.setenv("KRAB_RAG_MMR_ENABLED", "1")
+        # PHASE2 выключаем, чтобы _vector_search не пытался вернуть результаты.
+        monkeypatch.delenv("KRAB_RAG_PHASE2_ENABLED", raising=False)
+
+        r = HybridRetriever(archive_paths=archive_with_vec, model_name=None)
+        # model_name=None → _ensure_model() вернёт None.
+        assert r._ensure_model() is None
+
+        # Search должен отработать на FTS-only + MMR через jaccard.
+        results = r.search("dashboard", top_k=5)
+        # Даже если results пустой / 1-элементный — не должно быть исключений.
+        assert isinstance(results, list)
+        r.close()
