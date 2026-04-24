@@ -11038,6 +11038,7 @@ class WebApp:
 
         @self.app.post("/api/krab/restart_userbot")
         async def restart_userbot(
+            request: Request,
             x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
             token: str = Query(default=""),
         ):
@@ -11049,6 +11050,17 @@ class WebApp:
             - перезапуск userbot легче и безопаснее, чем полный restart всего Krab;
             - это закрывает split-state, когда web panel жива, но transport userbot деградировал.
             """
+            # W32: лог caller (IP + User-Agent) чтобы поймать restart-loop источник.
+            # Каждые 30-40с эндпоинт дёргается, но launchd watchdogs ничего не зовут.
+            client_host = request.client.host if request.client else "unknown"
+            user_agent = request.headers.get("user-agent", "n/a")
+            referer = request.headers.get("referer", "n/a")
+            logger.warning(
+                "restart_userbot_endpoint_called",
+                client_ip=client_host,
+                user_agent=user_agent[:120],
+                referer=referer[:120],
+            )
             self._assert_write_access(x_krab_web_key, token)
             kraab_userbot = self.deps.get("kraab_userbot")
             if (
