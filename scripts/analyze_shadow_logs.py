@@ -81,7 +81,14 @@ def _parse_value(v: str):
         return v
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mGKH]")
+
+
 def _parse_line(line: str) -> ShadowEvent | None:
+    # Strip ANSI escape codes (structlog color output) — иначе regex не матчит ключи.
+    # Пример проблемного line (ANSI): `\x1b[36mfts_hits\x1b[0m=\x1b[35m40\x1b[0m`
+    line = _ANSI_RE.sub("", line)
+
     if EVENT_MARK not in line:
         return None
 
