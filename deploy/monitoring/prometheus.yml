@@ -14,7 +14,8 @@ rule_files:
 
 scrape_configs:
   - job_name: krab_owner_panel
-    scrape_interval: 15s
+    scrape_interval: 30s
+    scrape_timeout: 20s
     static_configs:
       - targets: ["host.docker.internal:8080"]
     metrics_path: /metrics
