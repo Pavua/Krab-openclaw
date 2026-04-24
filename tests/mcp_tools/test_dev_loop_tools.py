@@ -170,6 +170,32 @@ async def test_sentry_resolve_not_found(mcp_server, monkeypatch):
     assert data["resolved_count"] == 0
 
 
+@pytest.mark.asyncio
+async def test_sentry_resolve_fallback_to_90d(mcp_server, monkeypatch):
+    """14d окно возвращает пусто → fallback на 90d находит shortId."""
+    monkeypatch.setenv("SENTRY_AUTH_TOKEN", "fake")
+    # Первый GET (14d) — пусто; второй GET (90d) — найдено.
+    get_resps = [
+        _FakeResponse(200, []),
+        _FakeResponse(
+            200,
+            [{"shortId": "PYTHON-FASTAPI-7", "id": "7007", "count": "1"}],
+        ),
+    ]
+    put_resp = _FakeResponse(200, {})
+    fake = _FakeAsyncClient(get_resp=get_resps, put_resp=put_resp)
+    with patch.object(httpx, "AsyncClient", return_value=fake):
+        result = await mcp_server.krab_sentry_resolve(
+            mcp_server._SentryResolveInput(
+                shortIds=["PYTHON-FASTAPI-7"], project="python-fastapi"
+            )
+        )
+    data = json.loads(result)
+    assert data["ok"] is True
+    assert data["resolved_count"] == 1
+    assert data["resolved"][0]["shortId"] == "PYTHON-FASTAPI-7"
+
+
 # ── krab_run_e2e ─────────────────────────────────────────────────────────────
 
 
@@ -200,6 +226,24 @@ async def test_run_e2e_parses_pass_fail(mcp_server, monkeypatch, tmp_path):
     assert data["failed"] == 1
     names = {c["name"] for c in data["cases"]}
     assert "version_cmd" in names and "silence_status" in names
+
+
+@pytest.mark.asyncio
+async def test_run_e2e_suggests_start_when_not_healthy(mcp_server, monkeypatch, tmp_path):
+    """exit_code=2 + 'Krab not healthy' в stdout → подсказка как запустить."""
+    fake_script = tmp_path / "e2e_mcp_smoke.py"
+    fake_script.write_text("# noop")
+    monkeypatch.setattr(mcp_server, "_E2E_SMOKE_SCRIPT", fake_script)
+
+    fake_stdout = "Krab not healthy, skipping: connection refused\n"
+    fake_proc = MagicMock(returncode=2, stdout=fake_stdout, stderr="")
+    with patch.object(subprocess, "run", return_value=fake_proc):
+        result = await mcp_server.krab_run_e2e(mcp_server._RunE2EInput())
+    data = json.loads(result)
+    assert data["ok"] is False
+    assert data["exit_code"] == 2
+    assert "suggestion" in data
+    assert "new start_krab.command" in data["suggestion"]
 
 
 @pytest.mark.asyncio

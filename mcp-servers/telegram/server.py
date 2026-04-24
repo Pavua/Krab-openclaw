@@ -2780,18 +2780,25 @@ async def krab_sentry_resolve(params: _SentryResolveInput) -> str:
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             # 1) находим numeric id для каждого shortId
+            # Sentry иногда возвращает 400 для старых issues при слишком широком окне —
+            # пробуем 14d сначала, потом 90d как fallback для ненайденных.
             for proj in projects:
                 if all(v is not None for v in target.values()):
                     break
-                try:
-                    _, issues = await _sentry_get_issues(client, proj, "30d", 100, token)
-                except Exception as exc:  # noqa: BLE001
-                    _dev_logger.warning("sentry list failed for %s: %s", proj, exc)
-                    continue
-                for issue in issues:
-                    sid = (issue.get("shortId") or "").upper()
-                    if sid in target and target[sid] is None:
-                        target[sid] = {"id": issue.get("id"), "project": proj}
+                for period in ("14d", "90d"):
+                    if all(v is not None for v in target.values()):
+                        break
+                    try:
+                        _, issues = await _sentry_get_issues(client, proj, period, 100, token)
+                    except Exception as exc:  # noqa: BLE001
+                        _dev_logger.warning(
+                            "sentry list failed for %s period=%s: %s", proj, period, exc
+                        )
+                        continue
+                    for issue in issues:
+                        sid = (issue.get("shortId") or "").upper()
+                        if sid in target and target[sid] is None:
+                            target[sid] = {"id": issue.get("id"), "project": proj}
 
             # 2) группируем по project + bulk resolve
             by_proj: dict[str, list[str]] = {}
@@ -2911,20 +2918,23 @@ async def krab_run_e2e(params: _RunE2EInput) -> str:
     output = (result.stdout or "") + "\n" + (result.stderr or "")
     parsed = _parse_e2e_output(output)
     report_path = _PROJECT_ROOT / "docs" / "E2E_RESULTS_LATEST.md"
-    return json.dumps(
-        {
-            "ok": result.returncode == 0,
-            "exit_code": result.returncode,
-            "passed": parsed["passed"],
-            "failed": parsed["failed"],
-            "duration_s": duration,
-            "cases": parsed["cases"],
-            "report_path": str(report_path) if report_path.exists() else "",
-            "chat_id": params.chat_id,
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
+    payload: dict[str, Any] = {
+        "ok": result.returncode == 0,
+        "exit_code": result.returncode,
+        "passed": parsed["passed"],
+        "failed": parsed["failed"],
+        "duration_s": duration,
+        "cases": parsed["cases"],
+        "report_path": str(report_path) if report_path.exists() else "",
+        "chat_id": params.chat_id,
+    }
+    # Если Краб не поднят — e2e смок выдаёт exit_code=2 и лог "Krab not healthy".
+    # Подсказываем оператору как это починить.
+    if result.returncode == 2 or "not healthy" in output.lower():
+        payload["suggestion"] = (
+            "Start Krab via 'new start_krab.command' и повтори запрос"
+        )
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 @mcp.tool(
