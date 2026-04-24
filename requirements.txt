@@ -24,3 +24,6 @@ langdetect>=1.0.9
 sqlite-vec>=0.1.6
 model2vec>=0.3.0
 pymorphy3>=2.0
+
+# Observability — Prometheus export (C6: /metrics endpoint, memory retrieval telemetry)
+prometheus-client>=0.20.0

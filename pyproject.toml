@@ -58,3 +58,9 @@ name = "kraab"
 version = "1.0.0"
 description = "🦀 Краб - AI Userbot с интеграцией OpenClaw и LM Studio"
 requires-python = ">=3.11"
+dependencies = [
+    # Full runtime list лежит в requirements.txt; здесь перечислены только
+    # те зависимости, которые важны для Prometheus/Grafana observability stack,
+    # чтобы `pip install -e .` в deploy-окружении подтягивал их без requirements.txt.
+    "prometheus-client>=0.20.0",
+]
