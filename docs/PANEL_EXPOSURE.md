@@ -213,8 +213,29 @@ Option 2 (CF Tunnel) + KRAB_PANEL_AUTH=1
 
 ---
 
+---
+
+## Migration: quick tunnel → named tunnel
+
+Сейчас активен **quick tunnel** (`ai.krab.cloudflared-tunnel.plist`, URL
+`*.trycloudflare.com`, меняется при рестарте). Недостатки: 0–60 сек потери
+alerts на каждом switch, нет SLA, случайный URL.
+
+**Готовые артефакты для перехода** (требуется 1 click у пользователя для
+`cloudflared tunnel login`):
+- Пошаговая инструкция: [`docs/NAMED_TUNNEL_SETUP.md`](./NAMED_TUNNEL_SETUP.md)
+- LaunchAgent template: `scripts/launchagents/ai.krab.cloudflared-named-tunnel.plist`
+- Config template: `deploy/cloudflare/config.yml.template`
+
+Migration plan включает параллельный запуск quick + named, обновление
+Sentry webhook до выключения quick, и rollback-сценарий.
+
+---
+
 ## Связанные файлы
 
 - `scripts/setup_cloudflare_tunnel.command` — интерактивный setup Option 2
 - `deploy/cloudflare/config.yml.template` — шаблон конфига cloudflared
+- `scripts/launchagents/ai.krab.cloudflared-named-tunnel.plist` — LaunchAgent для named tunnel
+- `docs/NAMED_TUNNEL_SETUP.md` — пошаговая миграция quick → named
 - `docs/PANEL_VPN_ACCESS.md` — полная инструкция Option 1
