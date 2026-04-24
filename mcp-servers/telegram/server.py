@@ -191,7 +191,9 @@ class _SendReactionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     chat_id: str = Field(..., description="ID чата или username")
     message_id: int = Field(..., gt=0, description="ID сообщения для реакции")
-    emoji: str = Field(..., min_length=1, description="Эмодзи реакции (например: '👍') или JSON-список")
+    emoji: str = Field(
+        ..., min_length=1, description="Эмодзи реакции (например: '👍') или JSON-список"
+    )
 
 
 class _ForwardMessageInput(BaseModel):
@@ -224,7 +226,9 @@ class _SendVoiceInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     chat_id: str = Field(..., description="ID чата или username получателя")
     voice_path: str = Field(..., min_length=1, description="Локальный путь к .ogg файлу")
-    duration: int | None = Field(default=None, ge=0, description="Длительность в секундах (необязательно)")
+    duration: int | None = Field(
+        default=None, ge=0, description="Длительность в секундах (необязательно)"
+    )
 
 
 class _TailLogsInput(BaseModel):
@@ -518,7 +522,9 @@ async def telegram_send_photo(params: _SendPhotoInput) -> str:
     """
     photo = params.photo_path.strip() or params.photo_url.strip()
     if not photo:
-        return json.dumps({"ok": False, "error": "Укажи photo_path или photo_url"}, ensure_ascii=False)
+        return json.dumps(
+            {"ok": False, "error": "Укажи photo_path или photo_url"}, ensure_ascii=False
+        )
     try:
         cid: int | str = int(params.chat_id)
     except ValueError:
@@ -1206,8 +1212,15 @@ async def fs_read_file(params: _FsReadInput) -> str:
     end = min(end, start + 499, total)
     if start > total:
         return json.dumps(
-            {"ok": True, "path": str(target), "start_line": start, "end_line": start,
-             "total_lines": total, "content": "", "truncated": False},
+            {
+                "ok": True,
+                "path": str(target),
+                "start_line": start,
+                "end_line": start,
+                "total_lines": total,
+                "content": "",
+                "truncated": False,
+            },
             ensure_ascii=False,
         )
     slice_lines = all_lines[start - 1 : end]
@@ -1236,8 +1249,16 @@ async def fs_search(params: _FsSearchInput) -> str:
         JSON {"ok": bool, "pattern": str, "count": int,
               "matches": [{"path","line","text"}]}
     """
-    rg_cmd = ["rg", "--no-heading", "--line-number", "--color=never",
-              "--max-count", str(params.max_results), "-e", params.pattern]
+    rg_cmd = [
+        "rg",
+        "--no-heading",
+        "--line-number",
+        "--color=never",
+        "--max-count",
+        str(params.max_results),
+        "-e",
+        params.pattern,
+    ]
     if params.glob:
         rg_cmd.extend(["--glob", params.glob])
     rg_cmd.append(str(_PROJECT_ROOT))
@@ -1472,6 +1493,56 @@ class _HttpFetchInput(BaseModel):
 
 
 _HTTP_MAX_BYTES = 100 * 1024  # 100KB
+_HTTP_MAX_REDIRECTS = 5
+_HTTP_ALLOWED_CT_PREFIXES = ("text/", "application/json", "application/xml")
+
+
+def _host_is_private(host: str) -> bool:
+    """Резолвит hostname и возвращает True, если ЛЮБОЙ из адресов — частный/loopback/link-local.
+
+    Используем ipaddress stdlib: is_private покрывает RFC1918 + loopback + link-local,
+    плюс явная проверка на IPv6 ULA (fc00::/7) и unique-local.
+    """
+    import ipaddress
+    import socket
+
+    if not host:
+        return True
+    # Прямая проверка, если hostname уже IP-литерал
+    try:
+        ip_obj = ipaddress.ip_address(host.strip("[]"))
+        return (
+            ip_obj.is_private
+            or ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or ip_obj.is_reserved
+            or ip_obj.is_multicast
+            or ip_obj.is_unspecified
+        )
+    except ValueError:
+        pass
+    # Резолвим все адреса
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        # Нерезолвимый хост — блокируем (fail-closed)
+        return True
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip_obj = ipaddress.ip_address(addr)
+        except ValueError:
+            return True
+        if (
+            ip_obj.is_private
+            or ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or ip_obj.is_reserved
+            or ip_obj.is_multicast
+            or ip_obj.is_unspecified
+        ):
+            return True
+    return False
 
 
 @mcp.tool(
@@ -1479,36 +1550,75 @@ _HTTP_MAX_BYTES = 100 * 1024  # 100KB
     annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
 )
 async def http_fetch(params: _HttpFetchInput) -> str:
-    """HTTP GET/HEAD с redirects. Тело ограничено 100KB (обрезается).
+    """HTTP GET/HEAD с SSRF guard, ручным redirect loop (до 5 hops) и 100KB cap.
+
+    Блокирует private/loopback/link-local адреса перед каждым hop'ом.
+    Бинарные content-type возвращаются как summary без decode.
 
     Returns:
-        JSON {"ok","status","headers","body","truncated","final_url"}
+        JSON {"ok","status","headers","body","truncated","final_url","content_type"}
     """
+    from urllib.parse import urljoin, urlparse
+
     if not (params.url.startswith("http://") or params.url.startswith("https://")):
         return json.dumps({"ok": False, "error": "invalid_scheme"}, ensure_ascii=False)
+
+    current_url = params.url
     try:
-        async with httpx.AsyncClient(
-            timeout=params.timeout, follow_redirects=True, max_redirects=5
-        ) as client:
-            r = await client.request(params.method, params.url)
-            raw = r.content or b""
-            truncated = len(raw) > _HTTP_MAX_BYTES
-            raw = raw[:_HTTP_MAX_BYTES]
-            try:
-                body = raw.decode("utf-8", errors="replace")
-            except Exception:  # noqa: BLE001
-                body = f"<binary:{len(raw)} bytes>"
-            return json.dumps(
-                {
-                    "ok": True,
-                    "status": r.status_code,
-                    "final_url": str(r.url),
-                    "headers": dict(r.headers),
-                    "body": body,
-                    "truncated": truncated,
-                },
-                ensure_ascii=False,
-            )
+        async with httpx.AsyncClient(timeout=params.timeout, follow_redirects=False) as client:
+            for _hop in range(_HTTP_MAX_REDIRECTS + 1):
+                parsed = urlparse(current_url)
+                host = parsed.hostname or ""
+                if _host_is_private(host):
+                    return json.dumps(
+                        {"ok": False, "error": "private_host_blocked", "host": host},
+                        ensure_ascii=False,
+                    )
+                r = await client.request(params.method, current_url)
+                # Редирект?
+                if r.status_code in (301, 302, 303, 307, 308):
+                    loc = r.headers.get("location")
+                    if not loc:
+                        break
+                    current_url = urljoin(current_url, loc)
+                    if not (
+                        current_url.startswith("http://") or current_url.startswith("https://")
+                    ):
+                        return json.dumps(
+                            {"ok": False, "error": "invalid_redirect_scheme"},
+                            ensure_ascii=False,
+                        )
+                    continue
+                # Финальный ответ — обрабатываем
+                ct = (r.headers.get("content-type") or "").lower()
+                raw = r.content or b""
+                truncated = len(raw) > _HTTP_MAX_BYTES
+                raw = raw[:_HTTP_MAX_BYTES]
+                # Content-type guard: только text/* и json/xml decode'им
+                ct_main = ct.split(";", 1)[0].strip()
+                is_textual = ct_main.startswith("text/") or ct_main in (
+                    "application/json",
+                    "application/xml",
+                    "application/javascript",
+                )
+                if not is_textual and ct_main:
+                    body = f"<binary:{len(raw)} bytes>"
+                    truncated = True
+                else:
+                    body = raw.decode("utf-8", errors="replace")
+                return json.dumps(
+                    {
+                        "ok": True,
+                        "status": r.status_code,
+                        "final_url": str(r.url),
+                        "headers": dict(r.headers),
+                        "body": body,
+                        "truncated": truncated,
+                        "content_type": ct_main,
+                    },
+                    ensure_ascii=False,
+                )
+            return json.dumps({"ok": False, "error": "too_many_redirects"}, ensure_ascii=False)
     except httpx.TimeoutException:
         return json.dumps({"ok": False, "error": "timeout"}, ensure_ascii=False)
     except Exception as exc:  # noqa: BLE001
@@ -1572,8 +1682,11 @@ async def time_parse(params: _TimeParseInput) -> str:
 
     parsed = dateparser.parse(
         params.text,
-        settings={"TIMEZONE": params.timezone, "RETURN_AS_TIMEZONE_AWARE": True,
-                  "PREFER_DATES_FROM": "future"},
+        settings={
+            "TIMEZONE": params.timezone,
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "PREFER_DATES_FROM": "future",
+        },
     )
     if parsed is None:
         return json.dumps(
@@ -1606,8 +1719,18 @@ _DB_WHITELIST: dict[str, Path] = {
 
 # Запрещённые write-ключевые слова (regex word-boundaries, case-insensitive).
 _FORBIDDEN_SQL_KEYWORDS = (
-    "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
-    "ATTACH", "DETACH", "REPLACE", "TRUNCATE", "VACUUM", "REINDEX",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "DROP",
+    "CREATE",
+    "ALTER",
+    "ATTACH",
+    "DETACH",
+    "REPLACE",
+    "TRUNCATE",
+    "VACUUM",
+    "REINDEX",
 )
 
 # PRAGMA — разрешаем только read-only подмножество (schema_version, table_info и т.п.).
@@ -1688,9 +1811,7 @@ async def db_query(params: _DbQueryInput) -> str:
     """
     # 1) read-only statement check.
     if not _is_read_only_sql(params.sql):
-        return json.dumps(
-            {"ok": False, "error": "not_read_only_statement"}, ensure_ascii=False
-        )
+        return json.dumps({"ok": False, "error": "not_read_only_statement"}, ensure_ascii=False)
 
     # 2) whitelisted db_name check.
     db_path = _DB_WHITELIST.get(params.db_name)
@@ -2010,9 +2131,7 @@ async def notes_create(params: _NotesCreateInput) -> str:
         )
     svc, err_cls = _get_macos_service()
     try:
-        res = await svc.create_note(
-            title=params.title, body=params.body, folder_name=params.folder
-        )
+        res = await svc.create_note(title=params.title, body=params.body, folder_name=params.folder)
         return json.dumps({"ok": True, **res}, ensure_ascii=False)
     except err_cls as exc:
         msg = str(exc)
@@ -2026,9 +2145,7 @@ async def notes_create(params: _NotesCreateInput) -> str:
 # chat.db.date — COCOA epoch (2001-01-01 UTC), наносекунды с macOS High Sierra.
 # Формула: unix_ts = date / 1e9 + 978307200.
 
-_CHAT_DB_PATH = Path(
-    os.getenv("KRAB_MCP_IMESSAGE_DB", "~/Library/Messages/chat.db")
-).expanduser()
+_CHAT_DB_PATH = Path(os.getenv("KRAB_MCP_IMESSAGE_DB", "~/Library/Messages/chat.db")).expanduser()
 
 
 def _open_chat_db():
@@ -2053,11 +2170,7 @@ def _open_chat_db():
     except sqlite3.OperationalError as exc:
         msg = str(exc)
         lowered = msg.lower()
-        if (
-            "authorization" in lowered
-            or "unable to open" in lowered
-            or "permission" in lowered
-        ):
+        if "authorization" in lowered or "unable to open" in lowered or "permission" in lowered:
             err = _tcc_error("Messages", msg)
             err["tcc_required"] = "Full Disk Access (for MCP runtime process)"
             return None, err
@@ -2239,9 +2352,7 @@ async def reminders_list(params: _RemindersListInput) -> str:
         rows = await svc.list_reminders(limit=params.limit)
         if params.list_name:
             rows = [r for r in rows if r.get("list_name") == params.list_name]
-        return json.dumps(
-            {"ok": True, "reminders": rows, "count": len(rows)}, ensure_ascii=False
-        )
+        return json.dumps({"ok": True, "reminders": rows, "count": len(rows)}, ensure_ascii=False)
     except err_cls as exc:
         msg = str(exc)
         if _detect_tcc_denied(msg):
@@ -2275,9 +2386,7 @@ async def reminders_create(params: _RemindersCreateInput) -> str:
         try:
             due_at = _dt.fromisoformat(params.due_date)
         except ValueError:
-            return json.dumps(
-                {"ok": False, "error": "invalid_due_date_iso"}, ensure_ascii=False
-            )
+            return json.dumps({"ok": False, "error": "invalid_due_date_iso"}, ensure_ascii=False)
     try:
         res = await svc.create_reminder(
             title=params.title, due_at=due_at, list_name=params.list_name
@@ -2322,9 +2431,7 @@ async def calendar_events(params: _CalendarEventsInput) -> str:
         except ValueError:
             return json.dumps({"ok": False, "error": "invalid_date_iso"}, ensure_ascii=False)
     try:
-        rows = await svc.list_upcoming_calendar_events(
-            limit=params.limit, days_ahead=days_ahead
-        )
+        rows = await svc.list_upcoming_calendar_events(limit=params.limit, days_ahead=days_ahead)
         if params.calendar_name:
             rows = [r for r in rows if r.get("calendar_name") == params.calendar_name]
         return json.dumps({"ok": True, "events": rows, "count": len(rows)}, ensure_ascii=False)
