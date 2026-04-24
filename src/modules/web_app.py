@@ -11063,6 +11063,29 @@ class WebApp:
                 user_agent=user_agent[:120],
                 referer=referer[:120],
             )
+
+            # W32 v3: rate limit — max 1 restart per 5 min. Защита от restart loop.
+            # Observed caller python-httpx/0.28.1 долбил endpoint каждые 30-40s,
+            # ломая swarm SQLite sessions. Legitimate watchdog срабатывает <1/h.
+            import time as _time
+
+            now_ts = _time.time()
+            last_restart_ts = getattr(self, "_last_restart_userbot_ts", 0)
+            cooldown_sec = 300
+            if now_ts - last_restart_ts < cooldown_sec:
+                remaining = int(cooldown_sec - (now_ts - last_restart_ts))
+                logger.warning(
+                    "restart_userbot_rate_limited",
+                    client_ip=client_host,
+                    cooldown_remaining_sec=remaining,
+                )
+                return {
+                    "ok": False,
+                    "error": "rate_limited",
+                    "detail": f"cooldown {remaining}s (max 1 per {cooldown_sec}s)",
+                }
+            self._last_restart_userbot_ts = now_ts
+
             self._assert_write_access(x_krab_web_key, token)
             kraab_userbot = self.deps.get("kraab_userbot")
             if (
