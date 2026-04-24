@@ -53,7 +53,14 @@ def _make_model_manager(
 
 
 def run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # Используем новый event loop, чтобы избежать pollution из ранее
+    # запущенных asyncio-тестов (Python 3.13 закрывает default loop после
+    # каждого pytest-asyncio теста, и get_event_loop() поднимает RuntimeError).
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 # ---------------------------------------------------------------------------
