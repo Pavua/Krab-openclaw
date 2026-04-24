@@ -44,12 +44,10 @@ except ImportError as exc:  # pragma: no cover
 
 MCP_SSE_URL = "http://127.0.0.1:8012/sse"  # p0lrd MCP — тестирует от guest perspective, не от self
 PANEL_BASE = "http://127.0.0.1:8080"
-RESULTS_PATH = (
-    pathlib.Path(__file__).resolve().parent.parent / "docs" / "E2E_RESULTS_LATEST.md"
-)
+RESULTS_PATH = pathlib.Path(__file__).resolve().parent.parent / "docs" / "E2E_RESULTS_LATEST.md"
 
-OWNER_CHAT_ID = 312322764           # owner DM (pablito)
-HOW2AI_CHAT_ID = -1001587432709     # групповой чат — blocklist target (W26.1)
+OWNER_CHAT_ID = 312322764  # owner DM (pablito)
+HOW2AI_CHAT_ID = -1001587432709  # групповой чат — blocklist target (W26.1)
 
 POLL_INTERVAL = 2.0
 DEFAULT_TIMEOUT = 30.0
@@ -73,7 +71,7 @@ class TestCase:
     min_length: int = 1
     max_length: int | None = None
     expect_no_reply: bool = False  # W26.1: ожидаем тишину
-    wait_seconds: float = 0.0       # кастомная задержка (0 = использовать timeout)
+    wait_seconds: float = 0.0  # кастомная задержка (0 = использовать timeout)
     description: str = ""
 
 
@@ -111,6 +109,9 @@ TEST_CASES: list[TestCase] = [
         message="!proactivity",
         must_contain=["Proactivity", "proactivity", "level", "Level", "уровень"],
         min_length=5,
+        # Команда сама по себе sync (<1s), но под нагрузкой фонового
+        # scheduler/мемо-ретрива первый ответ иногда задерживается на 20-40s.
+        wait_seconds=60.0,
         description="!proactivity показывает текущий уровень",
     ),
     TestCase(
@@ -139,6 +140,9 @@ TEST_CASES: list[TestCase] = [
         message="передай Чадо привет от меня",
         must_not_contain=["передал", "передала", "отправил", "уже написал Чадо"],
         min_length=3,
+        # LLM-ответ с memory retrieval + streaming может занимать 25-50s
+        # на холодном контексте; таймаут 30s был слишком жёсткий.
+        wait_seconds=75.0,
         description="Phantom-action guard — Краб не врёт что отправил",
     ),
     TestCase(
@@ -199,9 +203,7 @@ class MCPKrabClient:
         raise RuntimeError(f"MCP call {tool} failed after retries: {last_exc}")
 
     async def send_message(self, chat_id: int, text: str) -> Any:
-        return await self.call(
-            "telegram_send_message", {"chat_id": str(chat_id), "text": text}
-        )
+        return await self.call("telegram_send_message", {"chat_id": str(chat_id), "text": text})
 
     async def get_history(self, chat_id: int, limit: int = 10) -> list[dict[str, Any]]:
         data = await self.call(
@@ -225,13 +227,21 @@ class MCPKrabClient:
 
 async def krab_is_healthy() -> tuple[bool, str]:
     """Проверить что Краб и p0lrd MCP подняты."""
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as c:
-            r = await c.get(f"{PANEL_BASE}/api/v1/health")
-            if r.status_code != 200 or not r.json().get("ok"):
-                return False, f"panel {PANEL_BASE} unhealthy: {r.status_code}"
-    except Exception as exc:
-        return False, f"panel unreachable: {exc}"
+    # Панель может отвечать медленно (до ~10s) под нагрузкой фоновых задач —
+    # даём щедрый retry вместо жёсткого 3s (который рвал smoke при cold state).
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as c:
+                r = await c.get(f"{PANEL_BASE}/api/v1/health")
+                if r.status_code != 200 or not r.json().get("ok"):
+                    return False, f"panel {PANEL_BASE} unhealthy: {r.status_code}"
+                break
+        except Exception as exc:
+            last_exc = exc
+            await asyncio.sleep(1.0 + attempt)
+    else:
+        return False, f"panel unreachable: {last_exc!r}"
     try:
         async with httpx.AsyncClient(timeout=3.0) as c:
             r = await c.get("http://127.0.0.1:8011/sse", timeout=2.0)
@@ -335,7 +345,10 @@ class Runner:
         wait = case.wait_seconds if case.wait_seconds > 0 else self.timeout
         deadline = time.monotonic() + wait
         reply = await self._wait_for_krab_reply(
-            case.chat_id, sent_id, case.message, deadline,
+            case.chat_id,
+            sent_id,
+            case.message,
+            deadline,
         )
         elapsed = time.monotonic() - t0
 
@@ -345,8 +358,11 @@ class Runner:
             if reply is None or not _looks_like_krab(reply):
                 return TestResult(case, True, reply or "", "", elapsed)
             return TestResult(
-                case, False, reply,
-                f"ожидали тишину, но Краб ответил: {reply[:120]!r}", elapsed,
+                case,
+                False,
+                reply,
+                f"ожидали тишину, но Краб ответил: {reply[:120]!r}",
+                elapsed,
             )
 
         if reply is None:
@@ -363,7 +379,9 @@ class Runner:
             status = "PASS" if res.passed else "FAIL"
             snippet = (res.actual_text[:80] + "…") if len(res.actual_text) > 80 else res.actual_text
             snippet = snippet.replace("\n", " ")
-            print(f"  [{status}] {case.name} ({res.elapsed:.1f}s) — {snippet or res.failure_reason}")
+            print(
+                f"  [{status}] {case.name} ({res.elapsed:.1f}s) — {snippet or res.failure_reason}"
+            )
             await asyncio.sleep(2.0)
         return results
 
@@ -373,7 +391,9 @@ class Runner:
 # ---------------------------------------------------------------------------
 
 
-def render_report(results: list[TestResult], elapsed_total: float, status_snap: dict[str, Any]) -> str:
+def render_report(
+    results: list[TestResult], elapsed_total: float, status_snap: dict[str, Any]
+) -> str:
     passed = sum(1 for r in results if r.passed)
     total = len(results)
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -385,7 +405,7 @@ def render_report(results: list[TestResult], elapsed_total: float, status_snap: 
         f"**Total:** {passed}/{total} passed  ",
         f"**Elapsed:** {elapsed_total:.1f}s  ",
         f"**Transport:** MCP SSE `{MCP_SSE_URL}`  ",
-        f"**Krab status:** `{status_snap.get('status','?')}` / userbot=`{status_snap.get('telegram_userbot_state','?')}`",
+        f"**Krab status:** `{status_snap.get('status', '?')}` / userbot=`{status_snap.get('telegram_userbot_state', '?')}`",
         "",
         "| Test | Status | Elapsed | Chat | Snippet | Reason |",
         "|------|--------|---------|------|---------|--------|",
@@ -455,7 +475,7 @@ async def async_main(args: argparse.Namespace) -> int:
 
     passed = sum(1 for r in results if r.passed)
     total = len(results)
-    print(f"\n{'='*44}\nИтого: {passed}/{total} passed ({elapsed_total:.1f}s)\n{'='*44}")
+    print(f"\n{'=' * 44}\nИтого: {passed}/{total} passed ({elapsed_total:.1f}s)\n{'=' * 44}")
 
     report = render_report(results, elapsed_total, status_snap)
     if not args.no_save:
