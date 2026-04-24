@@ -46,6 +46,19 @@ from .openclaw_workspace import append_workspace_memory_entry
 from .scheduler import krab_scheduler
 from .subprocess_env import clean_subprocess_env
 
+# Prometheus metric для error digest — помогает увидеть fire-frequency
+# (важно: audit выявил 0 fires за 49 рестартов, metric даст явную картину).
+try:
+    from prometheus_client import Counter as _Counter  # type: ignore
+
+    _error_digest_fired_total = _Counter(
+        "krab_error_digest_fired_total",
+        "Количество успешных fires Error Digest (proactive_watch)",
+        ["outcome"],  # outcome: ok|empty|failed
+    )
+except Exception:  # noqa: BLE001
+    _error_digest_fired_total = None  # type: ignore[assignment]
+
 # Порог «критических» ошибок для alert inbox_critical
 _INBOX_CRITICAL_ERROR_THRESHOLD: int = 5
 
@@ -676,8 +689,10 @@ class ProactiveWatchService:
             "last_snapshot": snapshot,
         }
 
-    # Интервал Error Digest в секундах (6 часов)
-    ERROR_DIGEST_INTERVAL_SEC: int = 21600
+    # Интервал Error Digest в секундах (24 часа — downgrade с 6h после аудита:
+    # 0 fires за 49 рестартов сказали что 6h избыточно; 24h совпадает со scope
+    # weekly_digest и покрывает типичный рабочий цикл).
+    ERROR_DIGEST_INTERVAL_SEC: int = 86400
     # Максимум ошибок в сводке
     ERROR_DIGEST_MAX_ITEMS: int = 10
 
@@ -749,13 +764,26 @@ class ProactiveWatchService:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("error_digest_upsert_failed", error=str(exc))
+            if _error_digest_fired_total is not None:
+                try:
+                    _error_digest_fired_total.labels(outcome="failed").inc()
+                except Exception:  # noqa: BLE001
+                    pass
             return {"ok": False, "error": str(exc)}
 
         logger.info("error_digest_written", total=total, counts=counts)
+        # Prometheus counter — различаем ok/empty/failed outcome для чтения
+        # /metrics и понимания реальной активности.
+        if _error_digest_fired_total is not None:
+            try:
+                outcome = "empty" if total == 0 else "ok"
+                _error_digest_fired_total.labels(outcome=outcome).inc()
+            except Exception:  # noqa: BLE001
+                pass
         return {"ok": True, "total": total, "counts": counts, "digest_ts": ts_now}
 
     async def _error_digest_loop(self) -> None:
-        """Бесконечный цикл: каждые 6 часов запускает run_error_digest."""
+        """Бесконечный цикл: 1 раз в 24 часа (downgrade с 6h после аудита)."""
         while True:
             await asyncio.sleep(self.ERROR_DIGEST_INTERVAL_SEC)
             try:
