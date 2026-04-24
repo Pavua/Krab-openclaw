@@ -184,8 +184,22 @@ def hs_tile(preset: str, app: str = "") -> dict[str, Any]:
 
 
 def main() -> None:
-    """MCP server stdio entry point. Запускается Claude Desktop автоматически."""
-    mcp.run()
+    """MCP server entry point.
+
+    Transport выбирается через env:
+      MCP_TRANSPORT=stdio (default) — Claude Desktop spawn
+      MCP_TRANSPORT=sse              — LaunchAgent на :MCP_PORT (default 8013)
+    """
+    transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
+    if transport == "sse":
+        # FastMCP читает host/port из своих settings
+        port = int(os.environ.get("MCP_PORT", "8013"))
+        host = os.environ.get("MCP_HOST", "127.0.0.1")
+        mcp.settings.host = host
+        mcp.settings.port = port
+        mcp.run(transport="sse")
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":
