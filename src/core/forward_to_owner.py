@@ -58,6 +58,15 @@ _PHANTOM_FORWARD_PHRASES: list[str] = [
     r"notified\s+(?:the\s+)?owner",
     r"отправил\s+(?:тебе|вам|ему)\s+уведомление",
     r"владельцу\s+(?:уже\s+)?(?:передал|сообщил|отправил)",
+    # W31: после live-теста — LLM фабриковал messageId/chat ID и формулировки
+    # типа «Доставка подтверждена». Эти паттерны ловят phantom-confirmations.
+    r"доставка\s+подтверждена",
+    r"delivery\s+confirmed",
+    r"messageId\s*[:=]?\s*\d+",
+    r"message[\s_]*id\s*[:=]?\s*\d+",
+    # Начало ответа с «Отправил» + детальная «отчётность» — классический галлюцин.
+    r"^\s*отправил\b[^.]{0,80}(?:сообщени|телеграм|telegram|chat)",
+    r"^\s*sent\b[^.]{0,80}(?:message|telegram|chat)",
 ]
 
 _PHANTOM_RE = re.compile(
