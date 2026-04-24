@@ -36,13 +36,19 @@ send_telegram_alert() {
         return 1
     fi
 
-    curl -sS --max-time 10 \
+    local resp_log="${STATE_DIR}/tg_resp.log"
+    local status
+    status=$(curl -sS --max-time 10 -o "$resp_log" -w '%{http_code}' \
         -X POST "https://api.telegram.org/bot${token}/sendMessage" \
         -d "chat_id=${owner_id}" \
         -d "text=${message}" \
-        -d "parse_mode=HTML" \
-        >> "$LOG_FILE" 2>&1
-    log "telegram_alert_sent"
+        -d "parse_mode=HTML" 2>>"$LOG_FILE" || echo "000")
+    if [[ "$status" != "200" ]]; then
+        log "telegram_alert_failed http=$status (resp: $(head -c 200 "$resp_log" 2>/dev/null || true))"
+        return 1
+    fi
+    log "telegram_alert_sent http=200"
+    return 0
 }
 
 # Проверяем: зарегистрирован ли LaunchAgent в launchctl list?
@@ -65,6 +71,11 @@ fi
 
 # launchctl load -w (переопределяет Disabled если был)
 if launchctl load -w "$PLIST" 2>>"$LOG_FILE"; then
+    load_exit=0
+else
+    load_exit=$?
+fi
+if [[ "$load_exit" -eq 0 ]]; then
     log "reload_ok"
     # Даём launchd ~3 сек подняться
     sleep 3
@@ -78,8 +89,8 @@ if launchctl load -w "$PLIST" 2>>"$LOG_FILE"; then
         exit 2
     fi
 else
-    log "reload_failed"
-    send_telegram_alert "🚨 <b>Gateway watchdog</b>: не удалось launchctl load -w ${PLIST}. См. ${LOG_FILE}."
+    log "reload_failed exit=$load_exit"
+    send_telegram_alert "🚨 <b>Gateway watchdog</b>: не удалось launchctl load -w ${PLIST} (exit=${load_exit}). Fallback: попробуй вручную \`launchctl bootstrap gui/$(id -u) ${PLIST}\`. См. ${LOG_FILE}." || log "fallback_alert_failed"
     echo "failed" > "$STATE_FILE"
     exit 2
 fi
