@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 # Вспомогательные функции
 # ---------------------------------------------------------------------------
 
+
 def _make_archive(path: Path, *, rows: list[tuple] | None = None) -> None:
     """Создаёт минимальную schema + данные archive.db для тестов."""
     conn = sqlite3.connect(str(path))
@@ -86,6 +87,10 @@ def _build_app_with_db(db_path: Path) -> FastAPI:
 
         from fastapi.responses import JSONResponse
 
+        from src.modules.web_app_heatmap import build_bucket_sql_expr
+
+        bucket_hours = max(1, min(int(bucket_hours), 8760))
+
         # Позволяем подменять путь через атрибут приложения (инъекция в тест)
         db_path_inner: Path = app.state.archive_db  # type: ignore[attr-defined]
 
@@ -142,17 +147,18 @@ def _build_app_with_db(db_path: Path) -> FastAPI:
             except _sqlite3.DatabaseError:
                 pass
 
+            bucket_expr = build_bucket_sql_expr(bucket_hours)
             try:
                 placeholders = ",".join("?" * len(top_chat_ids))
                 density_rows = conn.execute(
                     f"""
                     SELECT chat_id,
-                           strftime('%Y-%m-%d', timestamp) AS day,
+                           {bucket_expr} AS bucket_ts,
                            COUNT(*) AS cnt
                     FROM messages
                     WHERE chat_id IN ({placeholders})
-                    GROUP BY chat_id, day
-                    ORDER BY chat_id, day
+                    GROUP BY chat_id, bucket_ts
+                    ORDER BY chat_id, bucket_ts
                     """,
                     top_chat_ids,
                 ).fetchall()
@@ -163,8 +169,8 @@ def _build_app_with_db(db_path: Path) -> FastAPI:
                 )
 
             buckets_by_chat: dict[str, list[dict]] = defaultdict(list)
-            for chat_id, day, cnt in density_rows:
-                buckets_by_chat[chat_id].append({"ts": day, "count": cnt})
+            for chat_id, bucket_ts, cnt in density_rows:
+                buckets_by_chat[chat_id].append({"ts": bucket_ts, "count": cnt})
 
             chats_out = []
             for chat_id in top_chat_ids:
@@ -234,10 +240,7 @@ class TestMemoryHeatmapEndpoint:
     def test_top_chats_limit(self, tmp_path: Path) -> None:
         """top_chats ограничивает количество чатов в ответе."""
         db = tmp_path / "archive.db"
-        rows = [
-            (f"m{i}", f"chat_{i:03d}", "2026-04-10T10:00:00Z", "msg")
-            for i in range(30)
-        ]
+        rows = [(f"m{i}", f"chat_{i:03d}", "2026-04-10T10:00:00Z", "msg") for i in range(30)]
         _make_archive(db, rows=rows)
         app = _build_app_with_db(db)
         client = TestClient(app)
@@ -339,13 +342,123 @@ class TestMemoryHeatmapEndpoint:
         april10 = next(b for b in buckets if b["ts"] == "2026-04-10")
         assert april10["count"] == 2
 
+    def test_bucket_hours_1_hourly_aggregation(self, tmp_path: Path) -> None:
+        """bucket_hours=1: каждый час — отдельный bucket."""
+        db = tmp_path / "archive.db"
+        _make_archive(
+            db,
+            rows=[
+                ("m1", "c1", "2026-04-10T08:15:00Z", "a"),
+                ("m2", "c1", "2026-04-10T08:45:00Z", "b"),  # тот же час → один bucket
+                ("m3", "c1", "2026-04-10T09:05:00Z", "c"),  # другой час
+                ("m4", "c1", "2026-04-10T10:00:00Z", "d"),
+            ],
+        )
+        app = _build_app_with_db(db)
+        client = TestClient(app)
+
+        resp = client.get("/api/memory/heatmap?bucket_hours=1")
+        assert resp.status_code == 200
+        buckets = resp.json()["chats"][0]["buckets"]
+        # 3 уникальных часовых корзины
+        assert len(buckets) == 3
+        ts_to_count = {b["ts"]: b["count"] for b in buckets}
+        assert ts_to_count["2026-04-10T08:00:00Z"] == 2
+        assert ts_to_count["2026-04-10T09:00:00Z"] == 1
+        assert ts_to_count["2026-04-10T10:00:00Z"] == 1
+
+    def test_bucket_hours_6_six_hour_buckets(self, tmp_path: Path) -> None:
+        """bucket_hours=6: сообщения внутри одной 6-часовой корзины сливаются."""
+        db = tmp_path / "archive.db"
+        _make_archive(
+            db,
+            rows=[
+                ("m1", "c1", "2026-04-10T00:30:00Z", "a"),  # bucket 00:00
+                ("m2", "c1", "2026-04-10T05:55:00Z", "b"),  # bucket 00:00
+                ("m3", "c1", "2026-04-10T06:01:00Z", "c"),  # bucket 06:00
+                ("m4", "c1", "2026-04-10T13:00:00Z", "d"),  # bucket 12:00
+            ],
+        )
+        app = _build_app_with_db(db)
+        client = TestClient(app)
+
+        resp = client.get("/api/memory/heatmap?bucket_hours=6")
+        assert resp.status_code == 200
+        buckets = resp.json()["chats"][0]["buckets"]
+        ts_to_count = {b["ts"]: b["count"] for b in buckets}
+        assert ts_to_count["2026-04-10T00:00:00Z"] == 2
+        assert ts_to_count["2026-04-10T06:00:00Z"] == 1
+        assert ts_to_count["2026-04-10T12:00:00Z"] == 1
+
+    def test_bucket_hours_168_weekly(self, tmp_path: Path) -> None:
+        """bucket_hours=168 (неделя): сообщения внутри одной недели сливаются."""
+        db = tmp_path / "archive.db"
+        _make_archive(
+            db,
+            rows=[
+                # Все три внутри одной 168-часовой корзины
+                ("m1", "c1", "2026-04-10T00:00:00Z", "a"),
+                ("m2", "c1", "2026-04-12T00:00:00Z", "b"),
+                ("m3", "c1", "2026-04-15T00:00:00Z", "c"),
+            ],
+        )
+        app = _build_app_with_db(db)
+        client = TestClient(app)
+
+        resp = client.get("/api/memory/heatmap?bucket_hours=168")
+        assert resp.status_code == 200
+        buckets = resp.json()["chats"][0]["buckets"]
+        # Все 3 сообщения в одной недельной корзине
+        assert len(buckets) == 1
+        assert buckets[0]["count"] == 3
+
+    def test_bucket_hours_results_differ_across_intervals(self, tmp_path: Path) -> None:
+        """Разные bucket_hours должны давать разные результаты на одном датасете."""
+        db = tmp_path / "archive.db"
+        _make_archive(
+            db,
+            rows=[
+                ("m1", "c1", "2026-04-10T00:30:00Z", "a"),
+                ("m2", "c1", "2026-04-10T08:30:00Z", "b"),
+                ("m3", "c1", "2026-04-10T16:30:00Z", "c"),
+                ("m4", "c1", "2026-04-11T08:30:00Z", "d"),
+            ],
+        )
+        app = _build_app_with_db(db)
+        client = TestClient(app)
+
+        hourly = client.get("/api/memory/heatmap?bucket_hours=1").json()["chats"][0]["buckets"]
+        six = client.get("/api/memory/heatmap?bucket_hours=6").json()["chats"][0]["buckets"]
+        daily = client.get("/api/memory/heatmap?bucket_hours=24").json()["chats"][0]["buckets"]
+
+        # Hourly: 4 уникальных часа → 4 bucket'а
+        assert len(hourly) == 4
+        # 6-hour: 4 разные 6-часовые корзины (00, 06, 12, 06 след. дня)
+        assert len(six) == 4
+        # Daily: 2 дня
+        assert len(daily) == 2
+        # Daily всё ещё в формате YYYY-MM-DD (backward-compat)
+        assert all(len(b["ts"]) == 10 for b in daily)
+        # Sub-daily — ISO datetime с 'Z'
+        assert all(b["ts"].endswith("Z") for b in hourly)
+
+    def test_bucket_hours_clamped_to_minimum(self, tmp_path: Path) -> None:
+        """bucket_hours <= 0 clamp'ится к 1."""
+        db = tmp_path / "archive.db"
+        _make_archive(db, rows=[("m1", "c1", "2026-04-10T08:15:00Z", "a")])
+        app = _build_app_with_db(db)
+        client = TestClient(app)
+
+        resp = client.get("/api/memory/heatmap?bucket_hours=0")
+        assert resp.status_code == 200
+        assert resp.json()["bucket_hours"] == 1
+
     def test_top_chats_ordering_by_message_count(self, tmp_path: Path) -> None:
         """Чаты упорядочены по убыванию количества сообщений."""
         db = tmp_path / "archive.db"
-        rows = (
-            [("m_big_%d" % i, "big_chat", "2026-04-10T10:00:00Z", "x") for i in range(10)]
-            + [("m_small_%d" % i, "small_chat", "2026-04-10T10:00:00Z", "x") for i in range(3)]
-        )
+        rows = [("m_big_%d" % i, "big_chat", "2026-04-10T10:00:00Z", "x") for i in range(10)] + [
+            ("m_small_%d" % i, "small_chat", "2026-04-10T10:00:00Z", "x") for i in range(3)
+        ]
         _make_archive(db, rows=rows)
         app = _build_app_with_db(db)
         client = TestClient(app)

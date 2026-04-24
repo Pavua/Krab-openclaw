@@ -7992,10 +7992,15 @@ class WebApp:
             top_chats: int = 20,
         ):
             """
-            Плотность сообщений по чатам и дням для Dashboard V4 (heatmap).
+            Плотность сообщений по чатам и временным bucket'ам (heatmap, Dashboard V4).
 
             Params:
-              bucket_hours: размер bucket в часах (default 24 = daily)
+              bucket_hours: размер bucket в часах. Поддерживается любое
+                положительное целое (clamped к [1, 8760]). Примеры:
+                  1   → почасовая агрегация ("2026-04-10T08:00:00Z")
+                  6   → 6-часовые корзины  ("2026-04-10T06:00:00Z")
+                  24  → суточная (default)  ("2026-04-10")
+                  168 → недельная           ("2026-04-05T00:00:00Z" — понедельник UTC)
               top_chats: сколько топ-чатов включить (default 20)
 
             Returns:
@@ -8004,6 +8009,11 @@ class WebApp:
             import sqlite3 as _sqlite3
             from datetime import datetime, timezone
             from pathlib import Path
+
+            from src.modules.web_app_heatmap import build_bucket_sql_expr
+
+            # Clamp до разумного диапазона: [1, 8760] часов (год)
+            bucket_hours = max(1, min(int(bucket_hours), 8760))
 
             db_path = Path("~/.openclaw/krab_memory/archive.db").expanduser()
 
@@ -8068,18 +8078,19 @@ class WebApp:
                 except _sqlite3.DatabaseError:
                     pass  # chats table может отсутствовать — fallback к chat_id
 
-                # Агрегируем по (chat_id, день) — strftime('%Y-%m-%d', timestamp)
+                # Агрегируем по (chat_id, bucket) согласно bucket_hours
+                bucket_expr = build_bucket_sql_expr(bucket_hours)
                 try:
                     placeholders = ",".join("?" * len(top_chat_ids))
                     density_rows = conn.execute(
                         f"""
                         SELECT chat_id,
-                               strftime('%Y-%m-%d', timestamp) AS day,
+                               {bucket_expr} AS bucket_ts,
                                COUNT(*) AS cnt
                         FROM messages
                         WHERE chat_id IN ({placeholders})
-                        GROUP BY chat_id, day
-                        ORDER BY chat_id, day
+                        GROUP BY chat_id, bucket_ts
+                        ORDER BY chat_id, bucket_ts
                         """,
                         top_chat_ids,
                     ).fetchall()
@@ -8095,8 +8106,8 @@ class WebApp:
                 from collections import defaultdict
 
                 buckets_by_chat: dict[str, list[dict]] = defaultdict(list)
-                for chat_id, day, cnt in density_rows:
-                    buckets_by_chat[chat_id].append({"ts": day, "count": cnt})
+                for chat_id, bucket_ts, cnt in density_rows:
+                    buckets_by_chat[chat_id].append({"ts": bucket_ts, "count": cnt})
 
                 chats_out = []
                 for chat_id in top_chat_ids:
@@ -11510,7 +11521,7 @@ class WebApp:
             # boot_ts ленится так же, как в /api/uptime
             import time as _t
 
-            from ..core.dashboard_summary import collect_dashboard_summary
+            from ..core.dashboard_summary import collect_dashboard_summary_async
 
             boot = getattr(self, "_boot_ts", None)
             if not boot:
@@ -11518,7 +11529,7 @@ class WebApp:
                 boot = self._boot_ts
 
             router = self.deps.get("router")
-            return collect_dashboard_summary(boot_ts=boot, router=router)
+            return await collect_dashboard_summary_async(boot_ts=boot, router=router)
 
         @self.app.get("/api/translator/test")
         async def translator_test_api(text: str = Query(default=""), tgt: str = Query(default="")):
