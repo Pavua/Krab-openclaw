@@ -63,6 +63,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Iterable, Optional
@@ -75,6 +76,50 @@ from src.core.memory_mmr import mmr_is_enabled, mmr_rerank, mmr_rerank_texts
 from src.core.memory_retrieval_scores import record_scores
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# C6: Prometheus инструментация (module-level хелперы).
+# ---------------------------------------------------------------------------
+
+
+def _inc_mode(mode: str) -> None:
+    """Инкрементирует counter krab_memory_retrieval_mode_total{mode=...}.
+
+    Silent no-op если prometheus_client недоступен или метрика упала на init.
+    """
+    try:
+        from src.core.prometheus_metrics import _memory_retrieval_mode_total
+
+        if _memory_retrieval_mode_total is not None:
+            _memory_retrieval_mode_total.labels(mode=mode).inc()
+    except Exception:  # noqa: BLE001 - инструментация best-effort
+        pass
+
+
+def _observe_phase(phase: str, seconds: float) -> None:
+    """Observe латентность phase в histogram krab_memory_retrieval_latency_seconds.
+
+    Silent no-op если prometheus_client недоступен.
+    """
+    try:
+        from src.core.prometheus_metrics import _memory_retrieval_latency_seconds
+
+        if _memory_retrieval_latency_seconds is not None:
+            _memory_retrieval_latency_seconds.labels(phase=phase).observe(seconds)
+    except Exception:  # noqa: BLE001 - инструментация best-effort
+        pass
+
+
+def _compute_mode(vec_hits: int, fts_hits: int) -> str:
+    """vec>0 & fts>0 → hybrid; vec>0 only → vec; fts>0 only → fts; else none."""
+    if vec_hits > 0 and fts_hits > 0:
+        return "hybrid"
+    if vec_hits > 0:
+        return "vec"
+    if fts_hits > 0:
+        return "fts"
+    return "none"
 
 
 # ---------------------------------------------------------------------------
@@ -278,12 +323,17 @@ class HybridRetriever:
         if not query:
             return []
 
+        # C6: инструментация per-phase latency + mode counter.
+        _total_start = time.perf_counter()
+
         # Сохраняем для cosine MMR в _materialize_results().
         self._last_query = query
 
         conn = self._ensure_connection()
         if conn is None:
             logger.debug("memory_retrieval_no_db", path=str(self._paths.db))
+            _observe_phase("total", time.perf_counter() - _total_start)
+            _inc_mode("none")
             return []
 
         # Query expansion (P2 carry-over, opt-in).
@@ -292,6 +342,7 @@ class HybridRetriever:
         queries = self._maybe_expand_query(query)
 
         # FTS5 — минимум, который мы обязаны выдать.
+        _fts_start = time.perf_counter()
         if len(queries) <= 1:
             fts_ids = self._fts_search(
                 conn, queries[0] if queries else query, chat_id, limit=top_k * 4
@@ -303,19 +354,26 @@ class HybridRetriever:
                 if ids:
                     fts_lists.append(ids)
             if not fts_lists:
+                _observe_phase("fts", time.perf_counter() - _fts_start)
+                _observe_phase("total", time.perf_counter() - _total_start)
+                _inc_mode("none")
                 return []
             # RRF между FTS-списками разных перефразировок.
             exp_fused = reciprocal_rank_fusion(*fts_lists, k=self._rrf_k)
             fts_ids = [cid for cid, _ in sorted(exp_fused.items(), key=lambda kv: -kv[1])]
             fts_ids = fts_ids[: top_k * 4]
+        _observe_phase("fts", time.perf_counter() - _fts_start)
 
         if not fts_ids:
+            _observe_phase("total", time.perf_counter() - _total_start)
+            _inc_mode("none")
             return []
 
         query_for_vector = queries[0] if queries else query
 
         # Vector — опционально, если доступен.
         vec_ids: list[str] = []
+        _vec_start = time.perf_counter()
         if self._vec_available and self._model_name:
             try:
                 vec_ids = self._vector_search(conn, query_for_vector, chat_id, limit=top_k * 4)
@@ -325,6 +383,7 @@ class HybridRetriever:
                     error=str(exc),
                     fallback="fts_only",
                 )
+        _observe_phase("vec", time.perf_counter() - _vec_start)
 
         # Fusion. FTS list всегда weight=1.0; vec list — env-настраиваемый вес
         # (C3 Memory Phase 2). Backward-compat: default weights → прежнее поведение.
@@ -430,6 +489,22 @@ class HybridRetriever:
                     fallback="pre_rerank_order",
                 )
 
+        # C6: total latency + mode counter + structured summary log.
+        total_elapsed = time.perf_counter() - _total_start
+        _observe_phase("total", total_elapsed)
+        mode = _compute_mode(len(vec_ids), len(fts_ids))
+        _inc_mode(mode)
+        logger.debug(
+            "memory_retrieval_summary",
+            query_len=len(query),
+            vec_hits=len(vec_ids),
+            fts_hits=len(fts_ids),
+            merged_hits=len(fused),
+            mmr_reranked=len(results),
+            mode=mode,
+            total_ms=round(total_elapsed * 1000, 1),
+        )
+
         return results
 
     def _maybe_expand_query(self, query: str) -> list[str]:
@@ -499,8 +574,67 @@ class HybridRetriever:
             self._vec_available = False
             logger.debug("memory_retrieval_vec_unavailable", error=str(exc))
 
+        # C7: embedding version guard. Если vec_chunks_meta существует и
+        # model_name/model_dim не совпадают с текущими — вектора
+        # невалидны (Model2Vec поменялся), падаем в FTS-only до rebuild_all().
+        if self._vec_available:
+            self._vec_available = self._check_vec_meta_compat(conn)
+
         self._conn = conn
         return conn
+
+    def _check_vec_meta_compat(self, conn: sqlite3.Connection) -> bool:
+        """
+        C7: сверяет текущую embedding-модель с записью в vec_chunks_meta.
+
+        Возвращает:
+          * True — metadata отсутствует (свежая БД без embeddings) ИЛИ
+            совпадает с текущими (model_name/model_dim).
+          * False — mismatch (меняли модель, вектора невалидны) ИЛИ
+            таблицы vec_chunks_meta нет вовсе (legacy-schema без C7 DDL —
+            безопасно fallback'аться в FTS, пока embedder не запишет meta).
+        """
+        try:
+            meta_rows = conn.execute(
+                "SELECT key, value FROM vec_chunks_meta WHERE key IN ('model_name','model_dim');"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # Таблицы ещё нет (старая БД до C7). Безопаснее отключить
+            # vector path: rebuild_all() создаст meta и включит обратно.
+            logger.debug("memory_vec_meta_missing", action="fallback_to_fts_only")
+            return False
+
+        if not meta_rows:
+            # Таблица есть, но ещё пуста — embedder не прогонялся.
+            # Вектора если и есть, не сверяемы — оставляем vec path включённым;
+            # первое успешное embed_all_unindexed() заполнит meta.
+            return True
+
+        meta = {str(k): str(v) for k, v in meta_rows}
+        stored_name = meta.get("model_name")
+        stored_dim_raw = meta.get("model_dim")
+        try:
+            stored_dim = int(stored_dim_raw) if stored_dim_raw is not None else 0
+        except (TypeError, ValueError):
+            stored_dim = 0
+
+        if stored_name and self._model_name and stored_name != self._model_name:
+            logger.warning(
+                "memory_vec_model_mismatch",
+                stored=stored_name,
+                current=self._model_name,
+                action="fallback_to_fts_only",
+            )
+            return False
+        if stored_dim and self._model_dim and stored_dim != self._model_dim:
+            logger.warning(
+                "memory_vec_dim_mismatch",
+                stored=stored_dim,
+                current=self._model_dim,
+                action="fallback_to_fts_only",
+            )
+            return False
+        return True
 
     def _ensure_model(self) -> object | None:
         """Late-import Model2Vec. Возвращает model или None если недоступна."""
@@ -596,6 +730,10 @@ class HybridRetriever:
             во внешнем SELECT.
           * Любой `sqlite3.OperationalError` → warning + []. Retriever
             продолжает работу в FTS-only режиме.
+          * C7 guard: `self._vec_available` выставляется в `_ensure_connection()`
+            по результату `_check_vec_meta_compat()` (сверка model_name/dim с
+            vec_chunks_meta). `search()` gate'ит вызов `_vector_search()` по
+            этому флагу — при embedding-mismatch путь автоматически обходится.
         """
         if os.getenv("KRAB_RAG_PHASE2_ENABLED", "0") != "1":
             return []
@@ -711,6 +849,8 @@ class HybridRetriever:
 
         # MMR diversity re-ranking (P2 carry-over). Убирает near-duplicate chunks
         # из top-K. Backward-compat: при KRAB_RAG_MMR_ENABLED=0 — не применяется.
+        # C6: per-phase latency histogram (phase=mmr) вокруг всего блока.
+        _mmr_start = time.perf_counter()
         if mmr_is_enabled() and len(final) > 1:
             try:
                 doc_ids = [r.message_id for r in final]
@@ -786,6 +926,7 @@ class HybridRetriever:
                     error=str(exc),
                     fallback="rrf_order",
                 )
+        _observe_phase("mmr", time.perf_counter() - _mmr_start)
 
         return final[:top_k]
 

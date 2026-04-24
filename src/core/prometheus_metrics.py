@@ -24,6 +24,30 @@ _ADAPTIVE_RERANK_COUNTER: list[int] = [0]
 # Словарь reason → count. Инкрементируется из userbot_bridge._process_message_serialized.
 _GUEST_LLM_SKIPPED_COUNTER: dict[str, int] = {}
 
+# === C6: Memory retrieval метрики (prometheus_client). ===
+# Регистрируем один раз на уровне модуля. Если prometheus_client отсутствует —
+# объекты становятся None, а вызывающий код (memory_retrieval.search) делает
+# None-check перед inc/observe. Это сохраняет совместимость dev-окружений без
+# опциональной зависимости.
+try:
+    from prometheus_client import Counter as _Counter  # type: ignore[import-not-found]
+    from prometheus_client import Histogram as _Histogram  # type: ignore[import-not-found]
+
+    _memory_retrieval_mode_total = _Counter(
+        "krab_memory_retrieval_mode_total",
+        "Количество retrieval queries по режиму (fts/vec/hybrid/none)",
+        ["mode"],
+    )
+    _memory_retrieval_latency_seconds = _Histogram(
+        "krab_memory_retrieval_latency_seconds",
+        "Latency retrieval per phase (fts/vec/mmr/total)",
+        ["phase"],
+        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+    )
+except Exception:  # noqa: BLE001 - prometheus_client optional
+    _memory_retrieval_mode_total = None  # type: ignore[assignment]
+    _memory_retrieval_latency_seconds = None  # type: ignore[assignment]
+
 
 def _sanitize_label(value: str) -> str:
     """Escape кавычек и переводов строк в значении label."""

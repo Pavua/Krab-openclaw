@@ -911,3 +911,424 @@ class TestVectorSearchC1:
         assert conn is not None
         assert r._vector_search(conn, "dashboard", None, limit=5) == []
         r.close()
+
+
+# ---------------------------------------------------------------------------
+# C7: embedding version guard via vec_chunks_meta.
+# ---------------------------------------------------------------------------
+
+
+class TestVecMetaGuardC7:
+    """
+    C7: если Model2Vec поменялся, `_ensure_connection()` читает vec_chunks_meta
+    и выставляет `_vec_available=False` → retrieval автоматически деградирует
+    в FTS-only до rebuild_all().
+    """
+
+    def _populate_meta(
+        self,
+        paths: ArchivePaths,
+        model_name: str,
+        model_dim: int,
+    ) -> None:
+        """Вручную записывает meta в archive.db (эмулирует старый embedder-ран)."""
+        conn = open_archive(paths)
+        try:
+            create_schema(conn)
+        except Exception:
+            pass
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vec_chunks_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            ) WITHOUT ROWID;
+            """
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO vec_chunks_meta(key, value) VALUES (?, ?);",
+            [
+                ("model_name", model_name),
+                ("model_dim", str(model_dim)),
+                ("indexed_at", "2026-01-01T00:00:00+00:00"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+    def test_vec_model_mismatch_disables_vector(self, archive_with_vec: ArchivePaths) -> None:
+        """stored model_name != current → _vec_available=False."""
+        self._populate_meta(archive_with_vec, model_name="other/model-v2", model_dim=256)
+        r = HybridRetriever(
+            archive_paths=archive_with_vec,
+            model_name="minishlab/M2V_multilingual_output",
+            model_dim=256,
+        )
+        conn = r._ensure_connection()
+        # Если sqlite_vec в окружении не установлен, guard не запускается —
+        # _vec_available уже False из-за extension load failure (тоже корректно).
+        assert conn is not None
+        assert r._vec_available is False
+        r.close()
+
+    def test_vec_model_match_enables_vector(self, archive_with_vec: ArchivePaths) -> None:
+        """stored model_name == current → _vec_available=True (если sqlite-vec есть)."""
+        self._populate_meta(
+            archive_with_vec,
+            model_name="minishlab/M2V_multilingual_output",
+            model_dim=256,
+        )
+        r = HybridRetriever(
+            archive_paths=archive_with_vec,
+            model_name="minishlab/M2V_multilingual_output",
+            model_dim=256,
+        )
+        conn = r._ensure_connection()
+        assert conn is not None
+        # Если sqlite_vec установлен — guard подтвердит match → True.
+        # Если не установлен — extension load упадёт раньше → False.
+        # Проверяем только что вызов не падает; _vec_available в {True, False}.
+        assert r._vec_available in (True, False)
+        # Если extension load прошёл (import sqlite_vec успешен) — True.
+        try:
+            import sqlite_vec  # noqa: F401
+
+            assert r._vec_available is True
+        except ImportError:
+            assert r._vec_available is False
+        r.close()
+
+    def test_vec_meta_missing_graceful(self, tmp_path: Path) -> None:
+        """
+        vec_chunks_meta не существует (старая БД, pre-C7 schema) → guard
+        возвращает False, ретривер не падает.
+        """
+        # Создаём archive.db со старой схемой (без vec_chunks_meta).
+        paths = ArchivePaths.under(tmp_path / "legacy")
+        conn = open_archive(paths)
+        # Только минимальные таблицы, БЕЗ vec_chunks_meta.
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS chats (
+                chat_id TEXT PRIMARY KEY,
+                title TEXT,
+                chat_type TEXT
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chunk_id TEXT NOT NULL UNIQUE,
+                chat_id TEXT NOT NULL,
+                start_ts TEXT NOT NULL,
+                end_ts TEXT NOT NULL,
+                message_count INTEGER NOT NULL,
+                char_len INTEGER NOT NULL,
+                text_redacted TEXT NOT NULL
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                text_redacted,
+                content='chunks',
+                content_rowid='rowid',
+                tokenize='unicode61 remove_diacritics 2'
+            );
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        r = HybridRetriever(
+            archive_paths=paths,
+            model_name="minishlab/M2V_multilingual_output",
+            model_dim=256,
+        )
+        conn2 = r._ensure_connection()
+        assert conn2 is not None
+        # Таблицы нет → guard возвращает False, vec path выключен.
+        assert r._vec_available is False
+        # Search() не падает — FTS-only всё равно работает (нет ошибок).
+        assert r.search("anything") == []
+        r.close()
+
+    def test_vec_dim_mismatch_disables_vector(self, archive_with_vec: ArchivePaths) -> None:
+        """stored model_dim != current → _vec_available=False."""
+        self._populate_meta(
+            archive_with_vec,
+            model_name="minishlab/M2V_multilingual_output",
+            model_dim=512,  # другая размерность
+        )
+        r = HybridRetriever(
+            archive_paths=archive_with_vec,
+            model_name="minishlab/M2V_multilingual_output",
+            model_dim=256,
+        )
+        conn = r._ensure_connection()
+        assert conn is not None
+        assert r._vec_available is False
+        r.close()
+
+    def test_vec_meta_empty_table_allows_vector(self, archive_with_vec: ArchivePaths) -> None:
+        """Таблица есть, но пустая (embedder ещё не прогонялся) → True (если vec доступен)."""
+        # archive_with_vec уже содержит vec_chunks (seed через _seed_vec_chunks),
+        # но vec_chunks_meta НЕ заполнялась — embedder не вызывался.
+        r = HybridRetriever(
+            archive_paths=archive_with_vec,
+            model_name="minishlab/M2V_multilingual_output",
+            model_dim=256,
+        )
+        conn = r._ensure_connection()
+        assert conn is not None
+        # Если sqlite_vec установлен — extension грузится, guard видит пустую
+        # meta-таблицу и оставляет _vec_available=True.
+        try:
+            import sqlite_vec  # noqa: F401
+
+            assert r._vec_available is True
+        except ImportError:
+            assert r._vec_available is False
+        r.close()
+
+
+class TestEmbedderWritesVecMeta:
+    """
+    C7: MemoryEmbedder.embed_all_unindexed() пишет vec_chunks_meta
+    только когда chunks_processed > 0.
+    """
+
+    def test_embed_writes_meta_on_success(self, tmp_path: Path) -> None:
+        """После успешного embed_all_unindexed() meta заполнена."""
+        from src.core.memory_embedder import MemoryEmbedder
+
+        paths = ArchivePaths.under(tmp_path / "emb")
+        conn = open_archive(paths)
+        create_schema(conn)
+        _seed_chunks(
+            conn,
+            chat_id="-100aaa",
+            chunks=[
+                ("e1", "2026-04-01T10:00:00Z", "dashboard redesign"),
+                ("e2", "2026-04-01T10:05:00Z", "metrics overview"),
+            ],
+        )
+        conn.close()
+
+        emb = MemoryEmbedder(
+            archive_paths=paths,
+            model_name="test-model",
+            dim=256,
+            _model=_FakeVecModel(dim=256),
+        )
+        try:
+            stats = emb.embed_all_unindexed()
+        except Exception:
+            # sqlite_vec может быть недоступен — тест для окружений с ним.
+            pytest.skip("sqlite_vec extension недоступен")
+        assert stats.chunks_processed == 2
+
+        # Проверяем, что meta записалась.
+        conn = open_archive(paths)
+        try:
+            rows = conn.execute("SELECT key, value FROM vec_chunks_meta;").fetchall()
+        finally:
+            conn.close()
+        meta = dict(rows)
+        assert meta.get("model_name") == "test-model"
+        assert meta.get("model_dim") == "256"
+        assert "indexed_at" in meta
+
+    def test_embed_idempotent_noop_does_not_touch_meta(self, tmp_path: Path) -> None:
+        """
+        Второй запуск embed_all_unindexed() (chunks_processed=0) НЕ обновляет
+        indexed_at — так мы видим "когда реально была индексация".
+        """
+        from src.core.memory_embedder import MemoryEmbedder
+
+        paths = ArchivePaths.under(tmp_path / "idem")
+        conn = open_archive(paths)
+        create_schema(conn)
+        _seed_chunks(
+            conn,
+            chat_id="-100aaa",
+            chunks=[("e1", "2026-04-01T10:00:00Z", "hello")],
+        )
+        conn.close()
+
+        emb = MemoryEmbedder(
+            archive_paths=paths,
+            model_name="m1",
+            dim=256,
+            _model=_FakeVecModel(dim=256),
+        )
+        try:
+            first = emb.embed_all_unindexed()
+        except Exception:
+            pytest.skip("sqlite_vec extension недоступен")
+        assert first.chunks_processed == 1
+
+        # Читаем indexed_at после первого запуска.
+        conn = open_archive(paths)
+        ts1_row = conn.execute(
+            "SELECT value FROM vec_chunks_meta WHERE key='indexed_at';"
+        ).fetchone()
+        conn.close()
+        assert ts1_row is not None
+        ts1 = ts1_row[0]
+
+        # Второй запуск — no-op (всё уже проиндексировано).
+        second = emb.embed_all_unindexed()
+        assert second.chunks_processed == 0
+
+        conn = open_archive(paths)
+        ts2_row = conn.execute(
+            "SELECT value FROM vec_chunks_meta WHERE key='indexed_at';"
+        ).fetchone()
+        conn.close()
+        assert ts2_row is not None
+        # indexed_at не поменялся — no-op не перезаписывает meta.
+        assert ts2_row[0] == ts1
+
+
+# ---------------------------------------------------------------------------
+# C6: Prometheus metrics — mode counter + per-phase latency histogram.
+# ---------------------------------------------------------------------------
+
+
+class TestC6PrometheusMetrics:
+    """Проверяет инструментацию HybridRetriever.search() — C6 Memory Phase 2.
+
+    Monkeypatch на module-level helpers (`_inc_mode`, `_observe_phase`) —
+    тесты не зависят от наличия prometheus_client.
+    """
+
+    def test_compute_mode_branches(self) -> None:
+        from src.core.memory_retrieval import _compute_mode
+
+        assert _compute_mode(vec_hits=0, fts_hits=0) == "none"
+        assert _compute_mode(vec_hits=0, fts_hits=5) == "fts"
+        assert _compute_mode(vec_hits=3, fts_hits=0) == "vec"
+        assert _compute_mode(vec_hits=3, fts_hits=5) == "hybrid"
+
+    def test_retrieval_mode_counter_fts(
+        self,
+        archive_with_data: ArchivePaths,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """FTS-only путь инкрементирует counter{mode="fts"}."""
+        from src.core import memory_retrieval as mr
+
+        calls: list[str] = []
+        monkeypatch.setattr(mr, "_inc_mode", lambda mode: calls.append(mode))
+        monkeypatch.setattr(mr, "_observe_phase", lambda phase, s: None)
+
+        r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
+        results = r.search("dashboard")
+        assert results  # sanity — поиск отработал
+        assert calls == ["fts"], f"expected ['fts'], got {calls}"
+        r.close()
+
+    def test_retrieval_mode_counter_hybrid(
+        self,
+        archive_with_data: ArchivePaths,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Мокаем _vector_search чтобы вернул hits → mode=hybrid."""
+        from src.core import memory_retrieval as mr
+
+        calls: list[str] = []
+        monkeypatch.setattr(mr, "_inc_mode", lambda mode: calls.append(mode))
+        monkeypatch.setattr(mr, "_observe_phase", lambda phase, s: None)
+
+        r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
+        r._vec_available = True
+        r._model_name = "fake-model"
+        monkeypatch.setattr(r, "_vector_search", lambda conn, q, cid, limit: ["c1", "c2"])
+
+        results = r.search("dashboard")
+        assert results
+        assert calls == ["hybrid"], f"expected ['hybrid'], got {calls}"
+        r.close()
+
+    def test_retrieval_mode_counter_none_on_empty_fts(
+        self,
+        archive_with_data: ArchivePaths,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Запрос без попаданий → mode=none."""
+        from src.core import memory_retrieval as mr
+
+        calls: list[str] = []
+        monkeypatch.setattr(mr, "_inc_mode", lambda mode: calls.append(mode))
+        monkeypatch.setattr(mr, "_observe_phase", lambda phase, s: None)
+
+        r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
+        results = r.search("nonexistentwordxyz42")
+        assert results == []
+        assert calls == ["none"]
+        r.close()
+
+    def test_retrieval_latency_observed(
+        self,
+        archive_with_data: ArchivePaths,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Histogram observe() вызывается per phase: fts, vec, total."""
+        from src.core import memory_retrieval as mr
+
+        observed: list[tuple[str, float]] = []
+        monkeypatch.setattr(mr, "_inc_mode", lambda mode: None)
+        monkeypatch.setattr(mr, "_observe_phase", lambda phase, s: observed.append((phase, s)))
+
+        r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
+        results = r.search("dashboard")
+        assert results
+        phases = [p for p, _ in observed]
+        assert "fts" in phases
+        assert "vec" in phases
+        assert "total" in phases
+        for _phase, seconds in observed:
+            assert seconds >= 0.0
+        r.close()
+
+    def test_retrieval_mmr_phase_observed_when_enabled(
+        self,
+        archive_with_data: ArchivePaths,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """При KRAB_RAG_MMR_ENABLED=1 — phase=mmr тоже попадает в observed."""
+        from src.core import memory_retrieval as mr
+
+        observed: list[tuple[str, float]] = []
+        monkeypatch.setenv("KRAB_RAG_MMR_ENABLED", "1")
+        monkeypatch.setattr(mr, "_inc_mode", lambda mode: None)
+        monkeypatch.setattr(mr, "_observe_phase", lambda phase, s: observed.append((phase, s)))
+
+        r = HybridRetriever(archive_paths=archive_with_data, model_name=None)
+        _ = r.search("dashboard metrics kofe docker")
+        phases = [p for p, _ in observed]
+        assert "mmr" in phases
+        r.close()
+
+    def test_retrieval_no_db_still_increments_none(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Отсутствие archive.db → mode=none + total observed (graceful)."""
+        from src.core import memory_retrieval as mr
+
+        calls: list[str] = []
+        observed: list[tuple[str, float]] = []
+        monkeypatch.setattr(mr, "_inc_mode", lambda mode: calls.append(mode))
+        monkeypatch.setattr(mr, "_observe_phase", lambda phase, s: observed.append((phase, s)))
+
+        missing = ArchivePaths.under(tmp_path / "no_such_dir")
+        r = HybridRetriever(archive_paths=missing, model_name=None)
+        assert r.search("anything") == []
+        assert calls == ["none"]
+        assert any(p == "total" for p, _ in observed)
+        r.close()
+
+    def test_prometheus_metrics_module_exposes_symbols(self) -> None:
+        """prometheus_metrics экспортирует оба объекта (None или Counter/Histogram)."""
+        from src.core import prometheus_metrics as pm
+
+        assert hasattr(pm, "_memory_retrieval_mode_total")
+        assert hasattr(pm, "_memory_retrieval_latency_seconds")
