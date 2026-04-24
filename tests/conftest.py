@@ -12,6 +12,7 @@ Root cause: утечки состояния между файлами — мут
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from collections.abc import Iterator
@@ -19,6 +20,15 @@ from typing import Any
 
 import pytest
 import structlog
+
+# ---------------------------------------------------------------------------
+# Session 21 baseline cleanup: исключаем тесты, привязанные к удалённым
+# скриптам (FileNotFoundError при collection).
+# ---------------------------------------------------------------------------
+collect_ignore_glob = [
+    "tools/test_sync_krab_agent_skills.py",
+]
+
 
 # ---------------------------------------------------------------------------
 # Sentinel — отличает "ключ отсутствовал" от "ключ был равен None".
@@ -65,6 +75,43 @@ _ENV_VARS_TO_GUARD = [
 ]
 
 _ENV_ORIGINAL: dict[str, Any] = {k: os.environ.get(k, _SENTINEL) for k in _ENV_VARS_TO_GUARD}
+
+# ---------------------------------------------------------------------------
+# W32: полный snapshot os.environ для systemic env-isolation.
+# Фиксируется один раз при загрузке conftest (до любого теста). Любые
+# тесты, которые делают os.environ[...] = ... напрямую (без monkeypatch),
+# не смогут протекать в следующие тесты — добавленные ключи удаляются,
+# изменённые значения восстанавливаются.
+# ---------------------------------------------------------------------------
+_FULL_ENV_SNAPSHOT: dict[str, str] = dict(os.environ)
+
+# Ключи, которые намеренно выставляются в tests/integration/conftest.py и
+# НЕ должны трогаться глобальным snapshot (они уже в snapshot, но оставляем
+# явно для документации).
+# _FULL_ENV_SNAPSHOT уже содержит их, если они были выставлены до загрузки
+# этого файла. Если integration/conftest.py выставил их ПОЗЖЕ — они не
+# попадут в snapshot и будут удалены. Чтобы это не ломало интеграцию,
+# перечисляем защищённые ключи ниже.
+_ENV_ALWAYS_PRESERVE: set[str] = {
+    "TELEGRAM_API_ID",
+    "TELEGRAM_API_HASH",
+    "PATH",
+    "HOME",
+    "USER",
+    "LANG",
+    "LC_ALL",
+    "TMPDIR",
+    "VIRTUAL_ENV",
+    "PYTHONPATH",
+}
+
+# Префиксы env-ключей, которыми управляет pytest/рантайм — не трогать.
+_ENV_PRESERVE_PREFIXES: tuple[str, ...] = (
+    "PYTEST_",
+    "_PYTEST_",
+    "PY_COLORS",
+    "COV_",
+)
 
 # ---------------------------------------------------------------------------
 # Сохраняем глобальную конфигурацию structlog при загрузке conftest.
@@ -191,3 +238,53 @@ def _reset_krab_global_state() -> Iterator[None]:
         _telegram_send_queue._slowmode_last_sent.clear()
     except Exception:  # noqa: BLE001
         pass
+
+    # -- post-test: W32 systemic env cleanup --
+    # Удаляем ключи, добавленные тестом сверх snapshot (не трогая preserved).
+    _current_keys = set(os.environ.keys())
+    _snapshot_keys = set(_FULL_ENV_SNAPSHOT.keys())
+    for key in _current_keys - _snapshot_keys:
+        if key in _ENV_ALWAYS_PRESERVE:
+            continue
+        if key.startswith(_ENV_PRESERVE_PREFIXES):
+            continue
+        try:
+            del os.environ[key]
+        except KeyError:
+            pass
+    # Восстанавливаем изменённые значения до snapshot.
+    for key, val in _FULL_ENV_SNAPSHOT.items():
+        if key.startswith(_ENV_PRESERVE_PREFIXES):
+            continue
+        if os.environ.get(key) != val:
+            os.environ[key] = val
+
+
+@pytest.fixture(autouse=True)
+def _cancel_leftover_asyncio_tasks() -> Iterator[None]:
+    """
+    W32: отменяет фоновые asyncio.Task, оставленные предыдущим тестом.
+
+    После теста, использовавшего event loop с `asyncio.create_task()`
+    без await, незавершённые таски могут всплыть в следующем тесте
+    как "Task was destroyed but it is pending!" и дестабилизировать
+    fixtures, которые создают свой loop.
+    """
+    yield
+    try:
+        loop = asyncio.get_event_loop_policy().get_event_loop()
+    except Exception:  # noqa: BLE001
+        return
+    if loop.is_closed() or loop.is_running():
+        return
+    try:
+        pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+    except RuntimeError:
+        return
+    for task in pending:
+        task.cancel()
+    if pending:
+        try:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        except Exception:  # noqa: BLE001
+            pass
