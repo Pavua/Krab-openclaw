@@ -44,18 +44,28 @@ def _reset_blocklist(monkeypatch):
     """
     Каждый тест видит пустой blocklist, даже если `.env` в репо его выставил.
 
-    Важная тонкость: `test_config_voice_settings.py` в том же sweep может сделать
-    `importlib.reload(src.config)`, и после этого `src.config.Config` — это УЖЕ
-    НОВЫЙ класс, а `userbot_bridge.config` держит instance ПРЕДЫДУЩЕГО Config.
-    Поэтому monkeypatch'им тот class, на который реально смотрит userbot_bridge,
-    а не тот, который виден через `config_module.Config`.
+    Важная тонкость: `test_config_voice_settings.py` в том же sweep делает
+    `importlib.reload(src.config)`. После reload:
+    - `src.config.config` — НОВЫЙ instance НОВОГО Config класса,
+    - `userbot_bridge_module.config` (импортированный на старте) — СТАРЫЙ instance.
+
+    `voice_profile.py` внутри методов делает `from ..config import config`, то есть
+    читает **текущий** `src.config.config` (новый). Поэтому patch'ить надо этот
+    live instance, а не `userbot_bridge_module.config.__class__` — иначе runtime
+    читает один объект, а мы чистим другой, и состояние протекает между тестами.
     """
-    target_cls = userbot_bridge_module.config.__class__
-    monkeypatch.setattr(target_cls, "VOICE_REPLY_BLOCKED_CHATS", [], raising=False)
+    import src.config as _config_module  # noqa: PLC0415
+
+    live_cls = _config_module.config.__class__
+    monkeypatch.setattr(live_cls, "VOICE_REPLY_BLOCKED_CHATS", [], raising=False)
+    # Страхуемся: если инстанс shadow'ит class-атрибут через instance dict —
+    # убираем, чтобы class-level patch не был проигнорирован.
+    if "VOICE_REPLY_BLOCKED_CHATS" in _config_module.config.__dict__:
+        monkeypatch.delattr(_config_module.config, "VOICE_REPLY_BLOCKED_CHATS")
     # update_setting() в этих тестах не должен трогать реальный .env — подменяем
     # на чистую in-memory реализацию, которая пишет только в classref.
     monkeypatch.setattr(
-        target_cls,
+        live_cls,
         "update_setting",
         classmethod(
             lambda cls, key, value: (
@@ -134,8 +144,13 @@ def test_live_config_reads_without_rebuild() -> None:
     `config.update_setting`, bot должен сразу это видеть без рестарта. Эмулируем
     прямой monkeypatch атрибута, как если бы это сделал dotenv reload.
     """
+    import src.config as _config_module  # noqa: PLC0415
+
     bot = _make_bot_stub()
-    target_cls = userbot_bridge_module.config.__class__
+    # Читаем ровно тот instance, который `voice_profile.py` видит через
+    # `from ..config import config` — иначе после `importlib.reload(src.config)`
+    # в других тестах patch и runtime смотрят на разные Config-классы.
+    target_cls = _config_module.config.__class__
     assert bot._is_voice_blocked_for_chat(-777) is False
     target_cls.VOICE_REPLY_BLOCKED_CHATS = ["-777"]
     try:

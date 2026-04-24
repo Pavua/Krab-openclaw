@@ -292,7 +292,16 @@ async def test_perceptor_transcribe_file_not_found() -> None:
     # Должен содержать сигнал об ошибке, не падать
     assert result != ""
     lower = result.lower()
-    assert "не найден" in lower or "ошибка" in lower
+    # После honest-failure patch (commit 34e06ff) Perceptor возвращает машинно-
+    # читаемый диагностический токен `[transcription_failed: ...]` с причиной,
+    # например `voice_gateway=file_not_found`. Проверяем либо старый русский
+    # префикс, либо новый структурированный.
+    assert (
+        "не найден" in lower
+        or "ошибка" in lower
+        or "transcription_failed" in lower
+        or "file_not_found" in lower
+    )
 
 
 @pytest.mark.asyncio
