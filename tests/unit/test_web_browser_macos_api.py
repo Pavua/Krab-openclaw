@@ -16,12 +16,13 @@ macOS automation используется только как probe внутри
 
 from __future__ import annotations
 
+import importlib
+import sys
 from contextlib import contextmanager
 from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
 
-import src.integrations.browser_bridge as _bb_module
 from src.modules.web_app import WebApp
 
 # ---------------------------------------------------------------------------
@@ -121,7 +122,12 @@ def _client_with_browser(**kwargs):
     Возвращает TestClient.
     """
     mock_bb = _make_mock_browser(**kwargs)
-    # Патчим атрибут модуля — именно оттуда импортируется browser_bridge в web_app
+    # Патчим атрибут модуля — именно оттуда импортируется browser_bridge в web_app.
+    # ВАЖНО: резолвим модуль из sys.modules динамически (не кешируем),
+    # т.к. test_browser_bridge_stealth_hook делает importlib.reload и создаёт
+    # новый module object, оставляя наш старый _bb_module устаревшим (pollution).
+    mod_name = "src.integrations.browser_bridge"
+    _bb_module = sys.modules.get(mod_name) or importlib.import_module(mod_name)
     original = _bb_module.browser_bridge
     _bb_module.browser_bridge = mock_bb
     try:
