@@ -164,6 +164,7 @@ from .handlers import (
     handle_unarchive,
     handle_unpin,
     handle_uptime,
+    handle_version,
     handle_voice,
     handle_watch,
     handle_web,
@@ -736,11 +737,19 @@ class KraabUserbot(
             await run_cmd(handle_cap, m)
 
         @self.client.on_message(
-            filters.command("тишина", prefixes=prefixes) & _make_command_filter("тишина"),
+            filters.command(["тишина", "silence"], prefixes=prefixes)
+            & _make_command_filter("silence"),
             group=-1,
         )
         async def wrap_silence(c, m):
             await run_cmd(handle_silence, m)
+
+        @self.client.on_message(
+            filters.command("version", prefixes=prefixes) & _make_command_filter("version"),
+            group=-1,
+        )
+        async def wrap_version(c, m):
+            await run_cmd(handle_version, m)
 
         @self.client.on_message(
             filters.command("stats", prefixes=prefixes) & _make_command_filter("stats"),

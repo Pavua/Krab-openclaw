@@ -7386,8 +7386,22 @@ async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
         await message.reply("❌ Неверный формат. Пример: `!тишина расписание 23:00-08:00`")
         return
 
-    if args == "статус":
+    if args in ("статус", "status"):
         await message.reply(silence_manager.format_status())
+        return
+
+    if args in ("on", "off"):
+        if args == "off":
+            was_chat = silence_manager.unmute_chat(chat_id)
+            was_global = silence_manager.unmute_global()
+            if was_chat or was_global:
+                await message.reply("🔊 Тишина снята.")
+            else:
+                await message.reply("ℹ️ Тишина не была активна.")
+            return
+        minutes = int(getattr(config, "SILENCE_DEFAULT_MINUTES", 30))
+        silence_manager.mute_chat(chat_id, minutes)
+        await message.reply(f"🤫 Тишина в этом чате на **{minutes}** мин.")
         return
 
     if args.startswith("стоп"):
