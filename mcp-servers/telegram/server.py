@@ -1125,6 +1125,473 @@ async def krab_memory_stats() -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# ── FILESYSTEM TOOLS (read-only, sandboxed к _PROJECT_ROOT) ──────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Security model (sanitize_path):
+#   1. Путь резолвится через Path.resolve() — симлинки и «..» разворачиваются.
+#   2. Проверяем `is_relative_to(_PROJECT_ROOT)` — запрет escape из sandbox.
+#   3. Все fs_* операции READ-ONLY (никаких write/mkdir/rm).
+#   4. Жёсткие лимиты: fs_read_file ≤ 500 строк, fs_search max_results ≤ 200.
+
+
+def _sanitize_path(raw: str) -> Path:
+    """Резолвит путь и проверяет что он внутри _PROJECT_ROOT. Иначе ValueError."""
+    if not raw or not isinstance(raw, str):
+        raise ValueError("empty_path")
+    # Разрешаем как абсолютные, так и относительные (от project root).
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = _PROJECT_ROOT / candidate
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(_PROJECT_ROOT.resolve())
+    except ValueError as exc:
+        raise ValueError(f"path_escape: {raw} вне sandbox {_PROJECT_ROOT}") from exc
+    return resolved
+
+
+class _FsReadInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(..., description="Путь к файлу (absolute или относительно корня проекта)")
+    start_line: int = Field(default=1, ge=1, description="Стартовая строка (1-indexed)")
+    end_line: int | None = Field(
+        default=None,
+        description="Последняя строка (inclusive). Если None — читаем start_line + 500.",
+    )
+
+
+class _FsSearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pattern: str = Field(..., min_length=1, max_length=500, description="Regex или литерал")
+    glob: str = Field(default="", description="Glob фильтр, напр. '*.py' или 'src/**/*.py'")
+    max_results: int = Field(default=50, ge=1, le=200, description="Лимит совпадений (1–200)")
+
+
+class _FsListDirInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(default=".", description="Путь к директории (default: корень проекта)")
+
+
+@mcp.tool(
+    name="fs_read_file",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def fs_read_file(params: _FsReadInput) -> str:
+    """Читает файл из sandbox проекта Краба (read-only, ≤500 строк за запрос).
+
+    Returns:
+        JSON {"ok": bool, "path": str, "start_line": int, "end_line": int,
+              "total_lines": int, "content": str, "truncated": bool}
+    """
+    try:
+        target = _sanitize_path(params.path)
+    except ValueError as exc:
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+    if not target.exists():
+        return json.dumps({"ok": False, "error": f"not_found: {target}"}, ensure_ascii=False)
+    if not target.is_file():
+        return json.dumps({"ok": False, "error": f"not_a_file: {target}"}, ensure_ascii=False)
+    try:
+        with open(target, encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": f"read_failed: {exc}"}, ensure_ascii=False)
+
+    total = len(all_lines)
+    start = max(1, params.start_line)
+    # Максимум 500 строк за вызов
+    default_end = start + 499
+    end = params.end_line if params.end_line is not None else default_end
+    end = min(end, start + 499, total)
+    if start > total:
+        return json.dumps(
+            {"ok": True, "path": str(target), "start_line": start, "end_line": start,
+             "total_lines": total, "content": "", "truncated": False},
+            ensure_ascii=False,
+        )
+    slice_lines = all_lines[start - 1 : end]
+    return json.dumps(
+        {
+            "ok": True,
+            "path": str(target),
+            "start_line": start,
+            "end_line": end,
+            "total_lines": total,
+            "content": "".join(slice_lines),
+            "truncated": end < total,
+        },
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool(
+    name="fs_search",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def fs_search(params: _FsSearchInput) -> str:
+    """Полнотекстовый поиск по файлам проекта Краба через ripgrep (read-only).
+
+    Returns:
+        JSON {"ok": bool, "pattern": str, "count": int,
+              "matches": [{"path","line","text"}]}
+    """
+    rg_cmd = ["rg", "--no-heading", "--line-number", "--color=never",
+              "--max-count", str(params.max_results), "-e", params.pattern]
+    if params.glob:
+        rg_cmd.extend(["--glob", params.glob])
+    rg_cmd.append(str(_PROJECT_ROOT))
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(rg_cmd, capture_output=True, text=True, timeout=15),
+        )
+    except FileNotFoundError:
+        return json.dumps({"ok": False, "error": "ripgrep_not_installed"}, ensure_ascii=False)
+    except subprocess.TimeoutExpired:
+        return json.dumps({"ok": False, "error": "search_timeout"}, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    matches: list[dict[str, Any]] = []
+    for line in (result.stdout or "").splitlines():
+        # Формат: path:line:text
+        parts = line.split(":", 2)
+        if len(parts) < 3:
+            continue
+        path_s, line_s, text_s = parts
+        try:
+            line_n = int(line_s)
+        except ValueError:
+            continue
+        matches.append({"path": path_s, "line": line_n, "text": text_s})
+        if len(matches) >= params.max_results:
+            break
+    return json.dumps(
+        {"ok": True, "pattern": params.pattern, "count": len(matches), "matches": matches},
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool(
+    name="fs_list_dir",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def fs_list_dir(params: _FsListDirInput) -> str:
+    """Листинг директории (structured `ls -la`).
+
+    Returns:
+        JSON {"ok": bool, "path": str, "entries":
+              [{"name","type","size","mtime"}]}
+    """
+    try:
+        target = _sanitize_path(params.path)
+    except ValueError as exc:
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+    if not target.exists():
+        return json.dumps({"ok": False, "error": f"not_found: {target}"}, ensure_ascii=False)
+    if not target.is_dir():
+        return json.dumps({"ok": False, "error": f"not_a_dir: {target}"}, ensure_ascii=False)
+    entries: list[dict[str, Any]] = []
+    try:
+        for item in sorted(target.iterdir(), key=lambda p: p.name):
+            try:
+                st = item.stat()
+            except OSError:
+                continue
+            entries.append(
+                {
+                    "name": item.name,
+                    "type": "dir" if item.is_dir() else ("link" if item.is_symlink() else "file"),
+                    "size": st.st_size,
+                    "mtime": int(st.st_mtime),
+                }
+            )
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": f"list_failed: {exc}"}, ensure_ascii=False)
+    return json.dumps(
+        {"ok": True, "path": str(target), "entries": entries},
+        ensure_ascii=False,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── GIT TOOLS (read-only) ─────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class _GitLogInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    limit: int = Field(default=10, ge=1, le=100, description="Количество коммитов (1–100)")
+    file: str = Field(default="", description="Опциональный путь файла (лог по файлу)")
+
+
+class _GitDiffInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    file: str = Field(default="", description="Опциональный путь файла")
+    staged: bool = Field(default=False, description="True — diff staged изменений")
+
+
+async def _run_git(args: list[str], timeout: float = 10.0) -> tuple[int, str]:
+    """Запускает git в _PROJECT_ROOT, возвращает (exit_code, output)."""
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                ["git", *args],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=str(_PROJECT_ROOT),
+            ),
+        )
+        out = (result.stdout + result.stderr).rstrip()
+        return result.returncode, out
+    except subprocess.TimeoutExpired:
+        return 124, "git_timeout"
+    except FileNotFoundError:
+        return 127, "git_not_installed"
+
+
+@mcp.tool(
+    name="git_status",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def git_status() -> str:
+    """Короткий git status (porcelain). READ-ONLY."""
+    code, out = await _run_git(["status", "--short", "--branch"])
+    return json.dumps({"ok": code == 0, "exit_code": code, "output": out}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="git_log",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def git_log(params: _GitLogInput) -> str:
+    """Последние N коммитов. Если задан file — лог по файлу."""
+    args = ["log", f"-n{params.limit}", "--oneline", "--no-decorate"]
+    if params.file:
+        try:
+            fp = _sanitize_path(params.file)
+            args.extend(["--", str(fp.relative_to(_PROJECT_ROOT.resolve()))])
+        except ValueError as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+    code, out = await _run_git(args)
+    return json.dumps({"ok": code == 0, "exit_code": code, "output": out}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="git_diff",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def git_diff(params: _GitDiffInput) -> str:
+    """git diff (опционально --staged, опционально по файлу). Вывод обрезается до 50k символов."""
+    args = ["diff"]
+    if params.staged:
+        args.append("--staged")
+    if params.file:
+        try:
+            fp = _sanitize_path(params.file)
+            args.extend(["--", str(fp.relative_to(_PROJECT_ROOT.resolve()))])
+        except ValueError as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+    code, out = await _run_git(args, timeout=15.0)
+    truncated = False
+    if len(out) > 50_000:
+        out = out[:50_000]
+        truncated = True
+    return json.dumps(
+        {"ok": code == 0, "exit_code": code, "output": out, "truncated": truncated},
+        ensure_ascii=False,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── SYSTEM INFO ──────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool(
+    name="system_info",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def system_info() -> str:
+    """CPU/RAM/Disk/uptime/load_avg хоста. Использует psutil если есть, иначе os/shutil."""
+    import platform as _pl
+    import shutil
+
+    info: dict[str, Any] = {
+        "platform": _pl.platform(),
+        "python": _pl.python_version(),
+    }
+    try:
+        import psutil  # type: ignore
+
+        info["cpu_count"] = psutil.cpu_count(logical=True)
+        info["cpu_percent"] = psutil.cpu_percent(interval=0.1)
+        vm = psutil.virtual_memory()
+        info["ram"] = {
+            "total_mb": round(vm.total / 1024 / 1024),
+            "available_mb": round(vm.available / 1024 / 1024),
+            "percent": vm.percent,
+        }
+        du = psutil.disk_usage(str(_PROJECT_ROOT))
+        info["disk"] = {
+            "total_gb": round(du.total / 1024**3, 2),
+            "free_gb": round(du.free / 1024**3, 2),
+            "percent": du.percent,
+        }
+        info["uptime_sec"] = int(__import__("time").time() - psutil.boot_time())
+    except ImportError:
+        du = shutil.disk_usage(str(_PROJECT_ROOT))
+        info["disk"] = {
+            "total_gb": round(du.total / 1024**3, 2),
+            "free_gb": round(du.free / 1024**3, 2),
+        }
+        info["cpu_count"] = os.cpu_count()
+
+    try:
+        load1, load5, load15 = os.getloadavg()
+        info["load_avg"] = {"1m": round(load1, 2), "5m": round(load5, 2), "15m": round(load15, 2)}
+    except (OSError, AttributeError):
+        info["load_avg"] = None
+
+    return json.dumps(info, ensure_ascii=False, indent=2)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── HTTP FETCH ───────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class _HttpFetchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str = Field(..., min_length=7, description="URL (http://... или https://...)")
+    method: str = Field(default="GET", pattern="^(GET|HEAD)$", description="GET|HEAD")
+    timeout: float = Field(default=15.0, ge=1.0, le=60.0, description="Timeout в секундах")
+
+
+_HTTP_MAX_BYTES = 100 * 1024  # 100KB
+
+
+@mcp.tool(
+    name="http_fetch",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def http_fetch(params: _HttpFetchInput) -> str:
+    """HTTP GET/HEAD с redirects. Тело ограничено 100KB (обрезается).
+
+    Returns:
+        JSON {"ok","status","headers","body","truncated","final_url"}
+    """
+    if not (params.url.startswith("http://") or params.url.startswith("https://")):
+        return json.dumps({"ok": False, "error": "invalid_scheme"}, ensure_ascii=False)
+    try:
+        async with httpx.AsyncClient(
+            timeout=params.timeout, follow_redirects=True, max_redirects=5
+        ) as client:
+            r = await client.request(params.method, params.url)
+            raw = r.content or b""
+            truncated = len(raw) > _HTTP_MAX_BYTES
+            raw = raw[:_HTTP_MAX_BYTES]
+            try:
+                body = raw.decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                body = f"<binary:{len(raw)} bytes>"
+            return json.dumps(
+                {
+                    "ok": True,
+                    "status": r.status_code,
+                    "final_url": str(r.url),
+                    "headers": dict(r.headers),
+                    "body": body,
+                    "truncated": truncated,
+                },
+                ensure_ascii=False,
+            )
+    except httpx.TimeoutException:
+        return json.dumps({"ok": False, "error": "timeout"}, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── TIME / CALENDAR ──────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class _TimeNowInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    timezone: str = Field(default="Europe/Madrid", description="IANA timezone")
+
+
+class _TimeParseInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(..., min_length=1, max_length=200, description="Текст: «завтра 15:00»")
+    timezone: str = Field(default="Europe/Madrid", description="IANA timezone для относительных")
+
+
+@mcp.tool(
+    name="time_now",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def time_now(params: _TimeNowInput) -> str:
+    """Текущее время в указанной timezone (ISO 8601)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        tz = ZoneInfo(params.timezone)
+    except ZoneInfoNotFoundError:
+        return json.dumps(
+            {"ok": False, "error": f"unknown_timezone: {params.timezone}"}, ensure_ascii=False
+        )
+    now = datetime.now(tz)
+    return json.dumps(
+        {
+            "ok": True,
+            "iso": now.isoformat(),
+            "timezone": params.timezone,
+            "unix": int(now.timestamp()),
+            "weekday": now.strftime("%A"),
+        },
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool(
+    name="time_parse",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def time_parse(params: _TimeParseInput) -> str:
+    """Парсит свободный текст («завтра 15:00», «in 2 hours») в ISO."""
+    try:
+        import dateparser  # type: ignore
+    except ImportError:
+        return json.dumps({"ok": False, "error": "dateparser_not_installed"}, ensure_ascii=False)
+
+    parsed = dateparser.parse(
+        params.text,
+        settings={"TIMEZONE": params.timezone, "RETURN_AS_TIMEZONE_AWARE": True,
+                  "PREFER_DATES_FROM": "future"},
+    )
+    if parsed is None:
+        return json.dumps(
+            {"ok": False, "error": "parse_failed", "text": params.text}, ensure_ascii=False
+        )
+    return json.dumps(
+        {
+            "ok": True,
+            "iso": parsed.isoformat(),
+            "unix": int(parsed.timestamp()),
+            "text": params.text,
+            "timezone": params.timezone,
+        },
+        ensure_ascii=False,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Entry point
 # ═════════════════════════════════════════════════════════════════════════════
 
