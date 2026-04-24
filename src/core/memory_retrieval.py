@@ -71,7 +71,7 @@ from structlog import get_logger
 
 from src.core.memory_adaptive_rerank import rerank_adaptive
 from src.core.memory_archive import ArchivePaths, open_archive
-from src.core.memory_mmr import mmr_is_enabled, mmr_rerank_texts
+from src.core.memory_mmr import mmr_is_enabled, mmr_rerank, mmr_rerank_texts
 from src.core.memory_retrieval_scores import record_scores
 
 logger = get_logger(__name__)
@@ -231,6 +231,8 @@ class HybridRetriever:
         self._conn: sqlite3.Connection | None = None
         self._model: object | None = None  # Model2Vec.StaticModel, late import
         self._vec_available: bool = False
+        # Последний query — нужен для cosine MMR в _materialize_results().
+        self._last_query: str = ""
 
     # ------------------------------------------------------------------
     # Публичный API.
@@ -255,6 +257,9 @@ class HybridRetriever:
         query = (query or "").strip()
         if not query:
             return []
+
+        # Сохраняем для cosine MMR в _materialize_results().
+        self._last_query = query
 
         conn = self._ensure_connection()
         if conn is None:
@@ -637,13 +642,45 @@ class HybridRetriever:
                 doc_ids = [r.message_id for r in final]
                 doc_texts = [r.text_redacted for r in final]
                 rrf_scores_list = [r.score for r in final]
-                ordered_ids = mmr_rerank_texts(
-                    query="",
-                    doc_ids=doc_ids,
-                    doc_texts=doc_texts,
-                    rrf_scores=rrf_scores_list,
-                    top_k=top_k,
-                )
+
+                # Mini-win: если Model2Vec доступен и есть _last_query — используем
+                # cosine MMR на on-the-fly эмбеддингах. Иначе — Jaccard fallback.
+                ordered_ids: list[str] = []
+                model = self._ensure_model()
+                if model is not None and self._last_query:
+                    try:
+                        q_vec = model.encode([self._last_query])[0].tolist()  # type: ignore[attr-defined]
+                        d_vecs = [v.tolist() for v in model.encode(doc_texts)]  # type: ignore[attr-defined]
+                        ordered_ids = mmr_rerank(
+                            q_vec,
+                            d_vecs,
+                            doc_ids,
+                            rrf_scores=rrf_scores_list,
+                            top_k=top_k,
+                        )
+                        logger.debug("memory_mmr_mode", mode="cosine", docs=len(doc_texts))
+                    except Exception as exc:  # noqa: BLE001 — cosine best-effort.
+                        logger.debug(
+                            "memory_mmr_cosine_failed",
+                            error=str(exc),
+                            fallback="jaccard",
+                        )
+                        ordered_ids = []
+
+                if not ordered_ids:
+                    ordered_ids = mmr_rerank_texts(
+                        query=self._last_query or "",
+                        doc_ids=doc_ids,
+                        doc_texts=doc_texts,
+                        rrf_scores=rrf_scores_list,
+                        top_k=top_k,
+                    )
+                    logger.debug(
+                        "memory_mmr_mode",
+                        mode="jaccard",
+                        reason="no_model_or_empty_query",
+                    )
+
                 if ordered_ids:
                     by_id = {r.message_id: r for r in final}
                     final = [by_id[i] for i in ordered_ids if i in by_id]

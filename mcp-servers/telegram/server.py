@@ -1592,6 +1592,152 @@ async def time_parse(params: _TimeParseInput) -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# ── DB QUERY (READ-ONLY) ─────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+
+import re as _re  # noqa: E402
+import sqlite3 as _sqlite3  # noqa: E402
+
+# Белый список БД, к которым разрешён запрос.
+_DB_WHITELIST: dict[str, Path] = {
+    "archive": Path("/Users/pablito/.openclaw/krab_memory/archive.db"),
+    "memory": _PROJECT_ROOT / "memory_db" / "chroma.sqlite3",
+}
+
+# Запрещённые write-ключевые слова (regex word-boundaries, case-insensitive).
+_FORBIDDEN_SQL_KEYWORDS = (
+    "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
+    "ATTACH", "DETACH", "REPLACE", "TRUNCATE", "VACUUM", "REINDEX",
+)
+
+# PRAGMA — разрешаем только read-only подмножество (schema_version, table_info и т.п.).
+# На всякий случай блокируем PRAGMA writes (с '=').
+_PRAGMA_WRITE_RE = _re.compile(r"\bPRAGMA\b[^;]*=", _re.IGNORECASE)
+
+
+def _is_read_only_sql(sql: str) -> bool:
+    """True если SQL — только SELECT / WITH / EXPLAIN и без запретных ключевых слов."""
+    s = sql.strip().rstrip(";").strip()
+    if not s:
+        return False
+    # Только один statement (запрет ';' внутри, кроме trailing).
+    if ";" in s:
+        return False
+    head = s.split(None, 1)[0].upper()
+    if head not in ("SELECT", "WITH", "EXPLAIN"):
+        return False
+    # Проверяем отсутствие write-ключевых слов (word boundaries).
+    for kw in _FORBIDDEN_SQL_KEYWORDS:
+        if _re.search(rf"\b{kw}\b", s, _re.IGNORECASE):
+            return False
+    if _PRAGMA_WRITE_RE.search(s):
+        return False
+    return True
+
+
+class _DbQueryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sql: str = Field(..., min_length=1, max_length=10_000, description="SELECT / WITH / EXPLAIN")
+    db_name: str = Field(default="archive", description="archive | memory")
+    limit: int = Field(default=100, ge=1, le=500, description="Max rows (cap 500)")
+
+
+def _run_db_query_sync(sql: str, db_path: Path, limit: int, timeout_sec: float = 10.0) -> dict:
+    """Синхронный executor — вызывается через asyncio.to_thread для timeout."""
+    conn = _sqlite3.connect(
+        f"file:{db_path}?mode=ro",
+        uri=True,
+        timeout=timeout_sec,
+        isolation_level=None,
+    )
+    try:
+        # Пытаемся подгрузить sqlite-vec (для vec_* tables). Best-effort.
+        try:
+            import sqlite_vec  # type: ignore
+
+            conn.enable_load_extension(True)
+            sqlite_vec.load(conn)
+            conn.enable_load_extension(False)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Busy timeout — чтобы не зависнуть надолго.
+        conn.execute(f"PRAGMA busy_timeout = {int(timeout_sec * 1000)};")
+
+        cur = conn.execute(sql)
+        rows_raw = cur.fetchmany(limit)
+        columns = [d[0] for d in (cur.description or [])]
+        rows = [list(r) for r in rows_raw]
+        return {"columns": columns, "rows": rows, "row_count": len(rows)}
+    finally:
+        try:
+            conn.close()
+        except _sqlite3.Error:
+            pass
+
+
+@mcp.tool(
+    name="db_query",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def db_query(params: _DbQueryInput) -> str:
+    """READ-ONLY SQL query к whitelisted БД (archive/memory).
+
+    Разрешены только SELECT / WITH / EXPLAIN. sqlite-vec extension подгружается
+    автоматически для запросов по vec_* таблицам.
+    """
+    # 1) read-only statement check.
+    if not _is_read_only_sql(params.sql):
+        return json.dumps(
+            {"ok": False, "error": "not_read_only_statement"}, ensure_ascii=False
+        )
+
+    # 2) whitelisted db_name check.
+    db_path = _DB_WHITELIST.get(params.db_name)
+    if db_path is None:
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "db_not_whitelisted",
+                "allowed": sorted(_DB_WHITELIST.keys()),
+            },
+            ensure_ascii=False,
+        )
+
+    # 3) limit cap (хотя pydantic уже ограничил, страхуемся).
+    limit = min(max(1, int(params.limit)), 500)
+
+    # 4) execute с timeout через asyncio.
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(_run_db_query_sync, params.sql, db_path, limit),
+            timeout=10.0,
+        )
+    except asyncio.TimeoutError:
+        return json.dumps({"ok": False, "error": "timeout"}, ensure_ascii=False)
+    except _sqlite3.Error as exc:
+        return json.dumps(
+            {"ok": False, "error": "sql_error", "detail": str(exc)}, ensure_ascii=False
+        )
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps(
+            {"ok": False, "error": "sql_error", "detail": str(exc)}, ensure_ascii=False
+        )
+
+    return json.dumps(
+        {
+            "ok": True,
+            "db_name": params.db_name,
+            "columns": result["columns"],
+            "rows": result["rows"],
+            "row_count": result["row_count"],
+        },
+        ensure_ascii=False,
+        default=str,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Entry point
 # ═════════════════════════════════════════════════════════════════════════════
 

@@ -127,6 +127,161 @@ def test_mmr_rerank_fallback_to_rrf_when_no_vectors():
     assert ordered[1] == "x"
 
 
+def test_materialize_cosine_path_when_model_available(monkeypatch):
+    """HybridRetriever._materialize_results использует cosine MMR при наличии модели."""
+    from datetime import datetime, timezone
+
+    from src.core.memory_retrieval import HybridRetriever, SearchResult
+
+    r = HybridRetriever.__new__(HybridRetriever)  # без __init__, чтобы не трогать БД
+    r._rrf_k = 60
+    r._last_query = "что ставили на macos"
+    r._now = lambda: datetime.now(timezone.utc)
+
+    # Stub model: возвращает предсказуемые векторы (query ~ doc_0).
+    class _FakeModel:
+        def encode(self, texts):
+            out = []
+            for t in texts:
+                if "macos" in t:
+                    out.append(_np([1.0, 0.0, 0.0]))
+                elif "дубль" in t or "macos1" in t:
+                    out.append(_np([0.99, 0.0, 0.0]))
+                else:
+                    out.append(_np([0.0, 1.0, 0.0]))
+            return out
+
+    r._model = _FakeModel()
+    r._model_name = "fake"
+    # _ensure_model() вернёт stub.
+    monkeypatch.setenv("KRAB_RAG_MMR_ENABLED", "1")
+
+    debug_calls: list[dict] = []
+
+    def _fake_debug(event, **kw):
+        debug_calls.append({"event": event, **kw})
+
+    # Patch logger внутри модуля.
+    from src.core import memory_retrieval as mr
+
+    monkeypatch.setattr(mr.logger, "debug", _fake_debug)
+
+    # Создаём 3 SearchResult для MMR.
+    base = datetime.now(timezone.utc)
+    results = [
+        SearchResult("a", "c", "ставили krab на macos", base, 1.0),
+        SearchResult("b", "c", "почти дубль macos1", base, 0.9),
+        SearchResult("d", "c", "настройка voice gateway", base, 0.5),
+    ]
+
+    # Создаём stub conn + мок _fetch_chunks / _fetch_context / fused.
+    fused = {"a": 0.9, "b": 0.8, "d": 0.4}
+
+    # Мокаем внутренние методы, чтобы _materialize_results не лез в БД.
+    def _fake_fetch_chunks(conn, ids):
+        return {
+            r.message_id: {
+                "chunk_id": r.message_id,
+                "chat_id": r.chat_id,
+                "start_ts": r.timestamp.isoformat(),
+                "end_ts": r.timestamp.isoformat(),
+                "text_redacted": r.text_redacted,
+            }
+            for r in results
+            if r.message_id in ids
+        }
+
+    def _fake_fetch_context(conn, cid, with_context):
+        return cid, [], []
+
+    monkeypatch.setattr(HybridRetriever, "_fetch_chunks", staticmethod(_fake_fetch_chunks))
+    monkeypatch.setattr(HybridRetriever, "_fetch_context", staticmethod(_fake_fetch_context))
+
+    out = r._materialize_results(
+        conn=None,  # type: ignore[arg-type]
+        fused=fused,
+        top_k=2,
+        with_context=0,
+        decay_fn=lambda _age: 1.0,
+    )
+    assert len(out) <= 2
+    # Должен сработать cosine путь.
+    modes = [c.get("mode") for c in debug_calls if c["event"] == "memory_mmr_mode"]
+    assert "cosine" in modes
+
+
+def test_materialize_jaccard_fallback_when_model_none(monkeypatch):
+    """При self._model=None используется Jaccard fallback (логирует mode=jaccard)."""
+    from datetime import datetime, timezone
+
+    from src.core.memory_retrieval import HybridRetriever, SearchResult
+
+    r = HybridRetriever.__new__(HybridRetriever)
+    r._rrf_k = 60
+    r._last_query = ""
+    r._now = lambda: datetime.now(timezone.utc)
+    r._model = None
+    r._model_name = None  # _ensure_model() вернёт None
+
+    monkeypatch.setenv("KRAB_RAG_MMR_ENABLED", "1")
+
+    debug_calls: list[dict] = []
+
+    def _fake_debug(event, **kw):
+        debug_calls.append({"event": event, **kw})
+
+    from src.core import memory_retrieval as mr
+
+    monkeypatch.setattr(mr.logger, "debug", _fake_debug)
+
+    base = datetime.now(timezone.utc)
+    results = [
+        SearchResult("a", "c", "текст один", base, 1.0),
+        SearchResult("b", "c", "текст один дубль", base, 0.9),
+        SearchResult("d", "c", "совсем другое", base, 0.5),
+    ]
+
+    def _fake_fetch_chunks(conn, ids):
+        return {
+            r.message_id: {
+                "chunk_id": r.message_id,
+                "chat_id": r.chat_id,
+                "start_ts": r.timestamp.isoformat(),
+                "end_ts": r.timestamp.isoformat(),
+                "text_redacted": r.text_redacted,
+            }
+            for r in results
+            if r.message_id in ids
+        }
+
+    def _fake_fetch_context(conn, cid, with_context):
+        return cid, [], []
+
+    monkeypatch.setattr(HybridRetriever, "_fetch_chunks", staticmethod(_fake_fetch_chunks))
+    monkeypatch.setattr(HybridRetriever, "_fetch_context", staticmethod(_fake_fetch_context))
+
+    out = r._materialize_results(
+        conn=None,  # type: ignore[arg-type]
+        fused={"a": 0.9, "b": 0.8, "d": 0.4},
+        top_k=2,
+        with_context=0,
+        decay_fn=lambda _age: 1.0,
+    )
+    assert len(out) <= 2
+    modes = [c.get("mode") for c in debug_calls if c["event"] == "memory_mmr_mode"]
+    assert "jaccard" in modes
+
+
+def _np(values):
+    """Мини-shim: возвращает объект с .tolist() (имитирует np.ndarray.encode output)."""
+
+    class _Vec(list):
+        def tolist(self):
+            return list(self)
+
+    return _Vec(values)
+
+
 @pytest.fixture(autouse=True)
 def _reset_env():
     """Не даём env от одного теста течь в другой."""
