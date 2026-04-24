@@ -1621,6 +1621,75 @@ class KraabUserbot(
             return
         self.maintenance_task = asyncio.create_task(self._safe_maintenance())
 
+    async def _run_cron_prompt_and_send(self, chat_id: str, prompt: str) -> None:
+        """
+        W32: Cron job callback — пропускает prompt через LLM и отправляет
+        результат в Saved Messages владельца.
+
+        Раньше `_send_scheduled_message` был bound как cron sender, но он
+        просто слал raw prompt как текст. Для cron jobs нужен LLM-processing:
+        morning-brief/evening-recap формируют сводки, archive-growth/cost-budget
+        генерируют conditional alerts. LLM-путь obligatory.
+        """
+        try:
+            if not self.client or not self.client.is_connected:
+                logger.warning("cron_job_skip_no_telegram", prompt_preview=prompt[:80])
+                return
+
+            # Determine recipient: chat_id может быть "cron_native" — route to owner Saved Messages
+            owner_id = self.me.id if self.me else None
+            target_chat: int | str | None = None
+            if chat_id and chat_id != "cron_native" and re.fullmatch(r"-?\d+", str(chat_id or "")):
+                target_chat = int(str(chat_id))
+            elif owner_id:
+                target_chat = int(owner_id)
+
+            if target_chat is None:
+                logger.warning("cron_job_skip_no_target", prompt_preview=prompt[:80])
+                return
+
+            # LLM call через существующий router — reuse swarm-style adapter для one-shot
+            from .handlers.command_handlers import _AgentRoomRouterAdapter  # noqa: PLC0415
+
+            system_prompt = self._build_system_prompt_for_sender(
+                is_allowed_sender=True,
+                access_level="owner",
+            )
+            adapter = _AgentRoomRouterAdapter(
+                chat_id=f"cron:job:{owner_id or 'self'}",
+                system_prompt=system_prompt,
+                team_name=None,
+            )
+            # Collect full response from stream
+            parts: list[str] = []
+            async for chunk in adapter.stream(prompt):
+                if isinstance(chunk, str):
+                    parts.append(chunk)
+            full_reply = "".join(parts).strip()
+            if not full_reply:
+                logger.warning("cron_job_empty_llm_reply", prompt_preview=prompt[:80])
+                return
+
+            # NO_REPLY marker — cron jobs с conditional logic могут решить тихо
+            if "NO_REPLY" in full_reply[:50].upper():
+                logger.info("cron_job_silent_skip", prompt_preview=prompt[:80])
+                return
+
+            for part in self._split_message(full_reply):
+                await self.client.send_message(target_chat, part)
+            logger.info(
+                "cron_job_message_sent",
+                target=str(target_chat),
+                reply_len=len(full_reply),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "cron_job_llm_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                prompt_preview=prompt[:80],
+            )
+
     async def _send_scheduled_message(self, chat_id: str, text: str) -> None:
         """
         Отправляет сообщение из scheduler в Telegram-чат.
@@ -1812,6 +1881,11 @@ class KraabUserbot(
                     logger.info("swarm_scheduler_runtime_started")
 
             # Native cron scheduler — fallback когда OpenClaw CLI недоступен
+            # W32: cron health check выявил что bind_sender не вызывался →
+            # все 4 jobs были silent no-op (last_run_at обновлялся, но messages
+            # не отправлялись). Fix: bind callback который пропускает prompt
+            # через LLM и отправляет результат в Saved Messages owner'а.
+            cron_native_scheduler.bind_sender(self._run_cron_prompt_and_send)
             if not cron_native_scheduler.is_running:
                 cron_native_scheduler.start()
                 logger.info("cron_native_scheduler_runtime_started")
@@ -4632,6 +4706,20 @@ class KraabUserbot(
                 chat_id=chat_id,
             )
 
+            # Проверяем поглощённые follower-сообщения ДО P0-bypass — иначе
+            # DM-followup, уже вложенный в batched burst, запустится повторно.
+            if self._consume_batched_followup_message_id(
+                chat_id=chat_id,
+                message_id=str(getattr(message, "id", "") or ""),
+            ):
+                logger.info(
+                    "skip_batched_followup_message",
+                    chat_id=chat_id,
+                    message_id=str(getattr(message, "id", "") or ""),
+                    user=getattr(user, "username", None),
+                )
+                return
+
             if _msg_priority == Priority.P0_INSTANT:
                 # Не ждём lock — P0 обрабатывается немедленно.
                 logger.debug(
@@ -4643,17 +4731,6 @@ class KraabUserbot(
                 await self._process_message_serialized(**_process_kwargs)
             else:
                 async with self._get_chat_processing_lock(chat_id):
-                    if self._consume_batched_followup_message_id(
-                        chat_id=chat_id,
-                        message_id=str(getattr(message, "id", "") or ""),
-                    ):
-                        logger.info(
-                            "skip_batched_followup_message",
-                            chat_id=chat_id,
-                            message_id=str(getattr(message, "id", "") or ""),
-                            user=getattr(user, "username", None),
-                        )
-                        return
                     await self._process_message_serialized(**_process_kwargs)
 
         except KrabError as e:
