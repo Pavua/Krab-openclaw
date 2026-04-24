@@ -599,10 +599,31 @@ class HybridRetriever:
                 "SELECT key, value FROM vec_chunks_meta WHERE key IN ('model_name','model_dim');"
             ).fetchall()
         except sqlite3.OperationalError:
-            # Таблицы ещё нет (старая БД до C7). Безопаснее отключить
-            # vector path: rebuild_all() создаст meta и включит обратно.
-            logger.debug("memory_vec_meta_missing", action="fallback_to_fts_only")
-            return False
+            # Таблицы ещё нет (legacy-БД: open_archive() не вызывает
+            # create_schema() для существующих БД, поэтому _DDL_VEC_CHUNKS_META
+            # до первого embedder-прогона не применяется). Создаём идемпотентно
+            # и обрабатываем как "пустую meta": первый embed_all_unindexed()
+            # заполнит её. Это разблокирует vector path для БД, где векторы
+            # уже пре-индексированы bootstrap-скриптом до C7.
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS vec_chunks_meta (
+                        key   TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    ) WITHOUT ROWID;
+                    """
+                )
+                conn.commit()
+                logger.debug("memory_vec_meta_created", action="legacy_db_upgrade")
+                return True
+            except sqlite3.Error as exc:
+                logger.debug(
+                    "memory_vec_meta_create_failed",
+                    error=str(exc),
+                    action="fallback_to_fts_only",
+                )
+                return False
 
         if not meta_rows:
             # Таблица есть, но ещё пуста — embedder не прогонялся.

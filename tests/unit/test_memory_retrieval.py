@@ -1001,7 +1001,10 @@ class TestVecMetaGuardC7:
     def test_vec_meta_missing_graceful(self, tmp_path: Path) -> None:
         """
         vec_chunks_meta не существует (старая БД, pre-C7 schema) → guard
-        возвращает False, ретривер не падает.
+        создаёт таблицу идемпотентно и возвращает True (legacy auto-upgrade:
+        без этого БД с pre-C7 bootstrap остаются навсегда в FTS-only, т.к.
+        open_archive() не вызывает create_schema() для существующих БД).
+        Эквивалентно empty-meta case — первый embedder-прогон заполнит meta.
         """
         # Создаём archive.db со старой схемой (без vec_chunks_meta).
         paths = ArchivePaths.under(tmp_path / "legacy")
@@ -1042,8 +1045,18 @@ class TestVecMetaGuardC7:
         )
         conn2 = r._ensure_connection()
         assert conn2 is not None
-        # Таблицы нет → guard возвращает False, vec path выключен.
-        assert r._vec_available is False
+        # Legacy auto-upgrade: таблица создаётся, pure meta → vec path включён.
+        # Фактическая работа vec_search зависит от sqlite-vec extension; в CI
+        # без неё _vec_available может быть False — проверяем что таблица
+        # создалась в любом случае.
+        import sqlite3 as _sql
+
+        _c = _sql.connect(paths.db)
+        rows = _c.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_chunks_meta';"
+        ).fetchall()
+        _c.close()
+        assert rows, "vec_chunks_meta table must be auto-created on legacy DB"
         # Search() не падает — FTS-only всё равно работает (нет ошибок).
         assert r.search("anything") == []
         r.close()
