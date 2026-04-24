@@ -7793,14 +7793,46 @@ class WebApp:
 
         @self.app.get("/metrics")
         async def prometheus_metrics():
-            """Prometheus scraping endpoint (text format, version=0.0.4)."""
+            """Prometheus scraping endpoint (text format, version=0.0.4).
+
+            W32 fix: ранее endpoint отдавал только ручной `collect_metrics()`
+            text, игнорируя default REGISTRY из prometheus_client (где живут
+            новые Counter/Histogram — `krab_memory_retrieval_*`,
+            `krab_error_digest_fired_total`, `krab_swarm_tool_blocked_total`).
+            Теперь конкатенируем ручные метрики + `generate_latest()` из
+            prometheus_client default registry. Ensure все модули с counters
+            импортированы при boot — иначе Collector'ы не зарегистрированы.
+            """
             from fastapi.responses import PlainTextResponse
 
             from ..core.prometheus_metrics import collect_metrics
 
             try:
+                manual_text = collect_metrics()
+                # Force import модулей с новыми Prometheus counters — иначе
+                # regustry пустой если модули ещё не импортировались в рантайме.
+                try:
+                    import importlib
+
+                    for _mod in (
+                        "src.core.proactive_watch",  # krab_error_digest_fired_total
+                        "src.core.swarm_tool_allowlist",  # krab_swarm_tool_blocked_total
+                        "src.core.prometheus_metrics",  # memory retrieval
+                    ):
+                        try:
+                            importlib.import_module(_mod)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    from prometheus_client import REGISTRY, generate_latest
+
+                    prom_text = generate_latest(REGISTRY).decode("utf-8")
+                except ImportError:
+                    prom_text = ""
+                combined = manual_text
+                if prom_text:
+                    combined = f"{manual_text}\n{prom_text}"
                 return PlainTextResponse(
-                    collect_metrics(),
+                    combined,
                     media_type="text/plain; version=0.0.4",
                 )
             except Exception as e:
@@ -11293,6 +11325,129 @@ class WebApp:
             from ..core.memory_stats import collect_memory_stats
 
             return collect_memory_stats()
+
+        @self.app.get("/api/memory/phase2/status")
+        async def memory_phase2_status():
+            """Memory Phase 2 status: flag + Model2Vec + vec_chunks + retrieval breakdown.
+
+            Источники:
+              • env KRAB_RAG_PHASE2_ENABLED / KRAB_RAG_PHASE2_SHADOW — flag
+              • core.memory_stats.collect_memory_stats() — vec_chunks, JOIN%
+              • grep shadow-логов — retrieval mode counts, latency, shadow delta
+
+            Всегда возвращает 200 (graceful) с полем flag=disabled если Phase 2 выключен.
+            """
+            import os as _os
+            import pathlib as _pl
+            import re as _re
+            import time as _time
+            from collections import Counter
+
+            shadow_on = _os.environ.get("KRAB_RAG_PHASE2_SHADOW", "0") in ("1", "true", "True")
+            enabled = _os.environ.get("KRAB_RAG_PHASE2_ENABLED", "0") in ("1", "true", "True")
+            flag = "enabled" if enabled else ("shadow" if shadow_on else "disabled")
+
+            # Model2Vec state
+            model_loaded: bool | None = None
+            model_dim = 0
+            try:
+                from ..core import memory_phase2_model as _m2v  # type: ignore
+
+                model_loaded = bool(getattr(_m2v, "is_loaded", lambda: False)())
+                model_dim = int(getattr(_m2v, "dim", lambda: 256)())
+            except Exception:  # noqa: BLE001
+                model_loaded = None
+                model_dim = 256
+
+            # vec_chunks + JOIN match
+            vec_chunks = 0
+            vec_join_pct: float | None = None
+            try:
+                from ..core.memory_stats import collect_memory_stats
+
+                mstats = collect_memory_stats() or {}
+                archive = mstats.get("archive") or {}
+                vec_chunks = int(archive.get("vec") or archive.get("vec_chunks") or 0)
+                chunks = int(archive.get("chunks") or 0)
+                if chunks:
+                    vec_join_pct = round(100.0 * vec_chunks / chunks, 1)
+            except Exception:  # noqa: BLE001
+                pass
+
+            # Parse last hour of logs for retrieval mode + latency + shadow delta
+            modes: Counter = Counter()
+            lat_fts: list[float] = []
+            lat_vec: list[float] = []
+            lat_mmr: list[float] = []
+            lat_total: list[float] = []
+            shadow_changed = 0
+            shadow_total = 0
+            log_path = _pl.Path(
+                _os.environ.get("KRAB_LOG_PATH", _os.path.expanduser("~/.openclaw/logs/krab.log"))
+            )
+            if log_path.exists():
+                try:
+                    with log_path.open("rb") as fh:
+                        fh.seek(0, 2)
+                        size = fh.tell()
+                        fh.seek(max(0, size - 5 * 1024 * 1024))
+                        tail = fh.read().decode("utf-8", errors="ignore")
+                    _ = _time.time()
+                    mode_rx = _re.compile(r"retrieval_mode=(fts|vec|hybrid|none)")
+                    lat_rx = _re.compile(
+                        r"fts_ms=(\d+\.?\d*).*?vec_ms=(\d+\.?\d*).*?mmr_ms=(\d+\.?\d*).*?total_ms=(\d+\.?\d*)"
+                    )
+                    shadow_rx = _re.compile(r"shadow_top5_changed=(true|false|1|0)")
+                    for line in tail.splitlines()[-5000:]:
+                        m = mode_rx.search(line)
+                        if m:
+                            modes[m.group(1)] += 1
+                        lm = lat_rx.search(line)
+                        if lm:
+                            try:
+                                lat_fts.append(float(lm.group(1)))
+                                lat_vec.append(float(lm.group(2)))
+                                lat_mmr.append(float(lm.group(3)))
+                                lat_total.append(float(lm.group(4)))
+                            except Exception:  # noqa: BLE001
+                                pass
+                        sm = shadow_rx.search(line)
+                        if sm:
+                            shadow_total += 1
+                            if sm.group(1) in ("true", "1"):
+                                shadow_changed += 1
+                except Exception:  # noqa: BLE001
+                    pass
+
+            def _avg(xs: list[float]) -> int:
+                return int(sum(xs) / len(xs)) if xs else 0
+
+            latency_avg = {
+                "fts": _avg(lat_fts),
+                "vec": _avg(lat_vec),
+                "mmr": _avg(lat_mmr),
+                "total": _avg(lat_total),
+            }
+            retrieval_mode_hour = {
+                "fts": modes.get("fts", 0),
+                "vec": modes.get("vec", 0),
+                "hybrid": modes.get("hybrid", 0),
+                "none": modes.get("none", 0),
+            }
+            shadow_delta_pct: float | None = None
+            if shadow_total:
+                shadow_delta_pct = round(100.0 * shadow_changed / shadow_total, 1)
+
+            return {
+                "flag": flag,
+                "model_loaded": model_loaded,
+                "model_dim": model_dim,
+                "vec_chunks_count": vec_chunks,
+                "vec_join_pct": vec_join_pct,
+                "retrieval_mode_hour": retrieval_mode_hour,
+                "latency_avg": latency_avg,
+                "shadow_delta_pct": shadow_delta_pct,
+            }
 
         @self.app.get("/api/system/clock_drift")
         async def system_clock_drift():
