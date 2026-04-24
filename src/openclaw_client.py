@@ -2022,6 +2022,21 @@ class OpenClawClient:
         _dt = disable_tools or getattr(self, "_request_disable_tools", False)
         tools = [] if _dt else await mcp_manager.get_tool_manifest()
 
+        # Per-team manifest filter: если активен swarm-контекст, оставляем
+        # только разрешённые команде tools (см. core/swarm_tool_allowlist.py).
+        if tools:
+            try:
+                from .core.swarm_tool_allowlist import (
+                    filter_tools_for_team,
+                    get_current_team,
+                )
+
+                _team = get_current_team()
+                if _team:
+                    tools = filter_tools_for_team(tools, _team)
+            except Exception as _flt_exc:  # noqa: BLE001
+                logger.warning("swarm_tool_filter_failed", error=str(_flt_exc))
+
         # ФИКС 2026.3.x: новый OpenClaw gateway требует "openclaw" или "openclaw/<agentId>"
         # вместо прямого имени провайдер/модель. Gateway сам маршрутизирует запрос
         # через агентскую конфигурацию (agents.defaults.model.primary + fallbacks).

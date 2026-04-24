@@ -293,6 +293,27 @@ class MCPClientManager:
         """
         Вызывает инструмент по полному имени (server__tool) или нативному имени.
         """
+        # Per-team allowlist guard: если активен swarm-контекст, проверяем что
+        # tool разрешён команде. Silent strip + WARN + Prometheus метрика.
+        try:
+            from .core.swarm_tool_allowlist import (
+                get_current_team,
+                is_tool_allowed,
+                record_blocked_tool,
+            )
+
+            _team = get_current_team()
+            if _team and not is_tool_allowed(full_tool_name, _team):
+                record_blocked_tool(_team, full_tool_name)
+                logger.warning(
+                    "swarm_tool_blocked",
+                    team=_team,
+                    tool=full_tool_name,
+                )
+                return f"❌ Инструмент `{full_tool_name}` недоступен команде `{_team}`."
+        except Exception as _guard_exc:  # noqa: BLE001
+            logger.warning("swarm_tool_guard_failed", error=str(_guard_exc))
+
         if full_tool_name == "peekaboo":
             return await self._peekaboo_impl(arguments)
 

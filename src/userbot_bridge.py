@@ -1707,6 +1707,7 @@ class KraabUserbot(
                     return _AgentRoomRouterAdapter(
                         chat_id=f"swarm:scheduled:{team_name}",
                         system_prompt=system_prompt,
+                        team_name=team_name,
                     )
 
                 swarm_scheduler.bind(

@@ -355,6 +355,25 @@ def collect_metrics() -> str:
             )
         )
 
+    # === Swarm per-team tool blocks (silent strip) ===
+    try:
+        from src.core.swarm_tool_allowlist import (  # type: ignore[import-not-found]
+            get_blocked_tool_stats,
+        )
+
+        for (_team, _tool), _cnt in get_blocked_tool_stats().items():
+            lines.append(
+                _format_metric(
+                    "krab_swarm_tool_blocked_total",
+                    _cnt,
+                    labels={"team": _team[:40], "tool": _tool[:80]},
+                    help_text="Swarm per-team tool calls blocked by allowlist",
+                    mtype="counter",
+                )
+            )
+    except Exception:
+        pass
+
     # === Timestamps ===
     lines.append(
         _format_metric(

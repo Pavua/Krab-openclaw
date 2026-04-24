@@ -344,9 +344,18 @@ class _AgentRoomRouterAdapter:
     - адаптер связывает эти два слоя без изменения core-логики.
     """
 
-    def __init__(self, *, chat_id: str, system_prompt: str) -> None:
+    def __init__(
+        self,
+        *,
+        chat_id: str,
+        system_prompt: str,
+        team_name: str | None = None,
+    ) -> None:
         self.chat_id = chat_id
         self.system_prompt = system_prompt
+        # Имя команды свёрма — пробрасывается в per-team tool allowlist
+        # через ContextVar. None/"" → фильтр не применяется (backward-compat).
+        self.team_name = team_name or None
 
     async def route_query(self, prompt: str, skip_swarm: bool = False, **_: Any) -> str:
         """
@@ -359,14 +368,24 @@ class _AgentRoomRouterAdapter:
         # Увеличенный лимит: модели нужен бюджет на tool_calls JSON + финальный ответ.
         # 700 токенов слишком мало для tool call (200+ токенов на JSON аргументы).
         max_output_tokens = int(getattr(config, "SWARM_ROLE_MAX_OUTPUT_TOKENS", 4096) or 4096)
-        async for chunk in openclaw_client.send_message_stream(
-            message=prompt,
-            chat_id=self.chat_id,
-            system_prompt=self.system_prompt,
-            force_cloud=bool(getattr(config, "FORCE_CLOUD", False)),
-            max_output_tokens=max_output_tokens,
-        ):
-            chunks.append(str(chunk))
+
+        # Выставляем ContextVar с командой — он будет прочитан в
+        # `openclaw_client._openclaw_completion_once` и применён к manifest'у.
+        # Сброс в finally обязателен, иначе протечёт на не-swarm запросы.
+        from ..core.swarm_tool_allowlist import reset_current_team, set_current_team
+
+        _token = set_current_team(self.team_name)
+        try:
+            async for chunk in openclaw_client.send_message_stream(
+                message=prompt,
+                chat_id=self.chat_id,
+                system_prompt=self.system_prompt,
+                force_cloud=bool(getattr(config, "FORCE_CLOUD", False)),
+                max_output_tokens=max_output_tokens,
+            ):
+                chunks.append(str(chunk))
+        finally:
+            reset_current_team(_token)
         return "".join(chunks).strip()
 
 
@@ -1112,6 +1131,7 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
                 return _AgentRoomRouterAdapter(
                     chat_id=f"swarm:{chat_id}:{tn}",
                     system_prompt=system_prompt,
+                    team_name=tn,
                 )
 
             # Self-reflection singletons (optional — graceful degradation).
@@ -1192,6 +1212,7 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             return _AgentRoomRouterAdapter(
                 chat_id=f"swarm:{chat_id}:{team_name}",
                 system_prompt=system_prompt,
+                team_name=team_name,
             )
 
         roles = TEAM_REGISTRY.get(team_key) if team_key else None
