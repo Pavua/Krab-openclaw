@@ -7818,6 +7818,8 @@ class WebApp:
                         "src.core.proactive_watch",  # krab_error_digest_fired_total
                         "src.core.swarm_tool_allowlist",  # krab_swarm_tool_blocked_total
                         "src.core.prometheus_metrics",  # memory retrieval
+                        "src.core.auto_restart_policy",  # krab_auto_restart_attempts_total
+                        "src.core.llm_latency_tracker",  # krab_llm_route_latency_seconds
                     ):
                         try:
                             importlib.import_module(_mod)

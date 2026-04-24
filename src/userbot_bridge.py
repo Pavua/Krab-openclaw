@@ -3521,7 +3521,8 @@ class KraabUserbot(
             return
 
         # Счётчик обработанных сообщений за сессию (для !stats).
-        self._session_messages_processed += 1
+        # getattr-guard: при __new__-стабах в тестах атрибут может отсутствовать.
+        self._session_messages_processed = getattr(self, "_session_messages_processed", 0) + 1
 
         runtime_chat_id = self._build_runtime_chat_scope_id(
             chat_id=chat_id,
@@ -3742,6 +3743,18 @@ class KraabUserbot(
                             user_id=str(_uid_g),
                             username=_uname_g,
                         )
+                        # Prometheus counter: krab_guest_llm_skipped_total{reason}.
+                        try:
+                            from .core.prometheus_metrics import (  # noqa: PLC0415
+                                _GUEST_LLM_SKIPPED_COUNTER,
+                            )
+
+                            _reason_key = "not_owner_no_mention"
+                            _GUEST_LLM_SKIPPED_COUNTER[_reason_key] = (
+                                _GUEST_LLM_SKIPPED_COUNTER.get(_reason_key, 0) + 1
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
                         if bool(getattr(config, "FORWARD_UNKNOWN_INCOMING", True)):
                             asyncio.create_task(
                                 self._forward_guest_incoming_to_owner(

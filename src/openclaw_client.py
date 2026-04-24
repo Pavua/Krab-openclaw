@@ -2640,6 +2640,8 @@ class OpenClawClient:
         _txn_name = f"openclaw_{preferred_model or 'auto'}"
         _txn_cm = _sentry_txn(op="llm.call", name=_txn_name)
         _txn_cm.__enter__()
+        # LLM latency histogram: старт таймера; observe в finally ниже.
+        _llm_call_start_perf = time.perf_counter()
         try:
             _sentry_tag("chat_id", str(chat_id))
             _sentry_tag("model", str(preferred_model or "auto"))
@@ -3426,6 +3428,19 @@ class OpenClawClient:
                     model_manager.mark_request_finished()
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("model_manager_mark_request_finished_failed", error=str(exc))
+            # LLM latency histogram observe (provider+model из last_runtime_route).
+            try:
+                from .core.llm_latency_tracker import llm_latency_tracker
+
+                _duration = time.perf_counter() - _llm_call_start_perf
+                _route = self.get_last_runtime_route() or {}
+                llm_latency_tracker.observe(
+                    provider=str(_route.get("provider") or "unknown"),
+                    model=str(_route.get("model") or preferred_model or "unknown"),
+                    duration_s=float(_duration),
+                )
+            except Exception:  # noqa: BLE001
+                pass
             # Закрываем Sentry-транзакцию (graceful no-op если SDK отсутствует).
             try:
                 _txn_cm.__exit__(None, None, None)
