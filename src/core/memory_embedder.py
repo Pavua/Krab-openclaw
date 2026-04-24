@@ -34,6 +34,7 @@ import struct
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from structlog import get_logger
@@ -220,6 +221,10 @@ class MemoryEmbedder:
         chunks_skipped = total - len(rows)
 
         stats = self._process_rows(rows, model_load_sec=model_load_sec)
+        # C7: фиксируем metadata только если что-то реально проиндексировано.
+        # Идемпотентный no-op не перезаписывает indexed_at timestamp.
+        if stats.chunks_processed > 0:
+            self._write_vec_meta(conn)
         return EmbedStats(
             chunks_processed=stats.chunks_processed,
             chunks_skipped=chunks_skipped,
@@ -273,6 +278,9 @@ class MemoryEmbedder:
 
         chunks_skipped = len(ids) - len(rows)
         stats = self._process_rows(rows, model_load_sec=model_load_sec)
+        # C7: обновляем metadata если хотя бы один chunk был re-indexed.
+        if stats.chunks_processed > 0:
+            self._write_vec_meta(conn)
         return EmbedStats(
             chunks_processed=stats.chunks_processed,
             chunks_skipped=chunks_skipped,
@@ -353,6 +361,51 @@ class MemoryEmbedder:
         with self._conns_lock:
             self._all_conns.append(conn)
         return conn
+
+    def _write_vec_meta(self, conn: sqlite3.Connection) -> None:
+        """
+        C7: записывает метаданные текущей embedding-модели в vec_chunks_meta.
+
+        Таблица создаётся в create_schema() (memory_archive.py). Если её
+        нет (legacy-БД, bootstrap не прогонялся) — пытаемся создать и
+        повторить INSERT; любая ошибка проглатывается (retrieval-layer
+        graceful fallback в FTS-only режим).
+        """
+        rows = [
+            ("model_name", str(self._model_name)),
+            ("model_dim", str(self._dim)),
+            ("indexed_at", datetime.now(timezone.utc).isoformat()),
+        ]
+        try:
+            with self._write_lock:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO vec_chunks_meta(key, value) VALUES (?, ?);",
+                    rows,
+                )
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            # Таблица ещё не создана — пробуем создать и повторить.
+            try:
+                with self._write_lock:
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS vec_chunks_meta (
+                            key   TEXT PRIMARY KEY,
+                            value TEXT NOT NULL
+                        ) WITHOUT ROWID;
+                        """
+                    )
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO vec_chunks_meta(key, value) VALUES (?, ?);",
+                        rows,
+                    )
+                    conn.commit()
+            except sqlite3.Error as exc2:  # noqa: BLE001
+                logger.warning(
+                    "embedder_vec_meta_write_failed",
+                    error=str(exc),
+                    error_retry=str(exc2),
+                )
 
     def _ensure_model_loaded(self) -> float:
         """

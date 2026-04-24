@@ -143,6 +143,17 @@ CREATE TABLE IF NOT EXISTS indexer_state (
 ) WITHOUT ROWID;
 """
 
+# C7 Memory Phase 2: metadata о текущей embedding-модели для vec_chunks.
+# Позволяет _ensure_connection() понять, что модель поменялась, и
+# автоматически упасть в FTS-only режим пока не будет rebuild_all().
+# Ключи: "model_name", "model_dim", "indexed_at".
+_DDL_VEC_CHUNKS_META = """
+CREATE TABLE IF NOT EXISTS vec_chunks_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) WITHOUT ROWID;
+"""
+
 
 # ---------------------------------------------------------------------------
 # Публичный API.
@@ -192,6 +203,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
             _DDL_CHUNK_MESSAGES,
             _DDL_MESSAGES_FTS,
             _DDL_INDEXER_STATE,
+            _DDL_VEC_CHUNKS_META,
         ):
             cur.execute(stmt)
 
