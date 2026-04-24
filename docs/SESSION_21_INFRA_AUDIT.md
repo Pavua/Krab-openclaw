@@ -42,7 +42,7 @@
 ## Action items (priority-ordered)
 
 1. **[HIGH] New metrics not exported** — `memory_retrieval`, `error_digest`, `swarm_tool_blocked` missing from `/metrics` even after Krab restart. Verify Prometheus collector registration (likely in `src/core/prometheus_metrics.py` or module that owns the new counters) is imported on bootstrap; probable root cause is a dormant import in `src/bootstrap/runtime.py` or the new module never being instantiated.
-2. **[HIGH] `ai.krab.oauth_refresh` exit 127** — "command not found". Check plist `Program`/`ProgramArguments` path (likely stale venv or script moved); `launchctl print` для плагина.
+2. **[HIGH] `ai.krab.oauth_refresh` exit 127** — ~~"command not found"~~ **RESOLVED (2026-04-24)**: plist referenced `scripts/krab_oauth_refresh.sh` which never existed (not in git history, not in `scripts/launchagents/`). No code in `src/` references `oauth_refresh`; Google OAuth token refresh happens in-process via `google-auth` (see `src/core/provider_manager.py`). Fix: `launchctl bootout` + removed `~/Library/LaunchAgents/ai.krab.oauth_refresh.plist`. Phantom agent, no replacement needed.
 3. **[MED] MCP Hammerspoon SSE :8013 empty** — other MCPs return `event: endpoint`, 8013 returns 0 bytes. Plist says `waiting` (no active process). Launch on-demand may be broken; test with `curl -N` after warm request or check `com.krab.mcp-hammerspoon` stderr log.
 4. **[MED] MCP SIGTERM history** — yung-nagato and p0lrd both show exit `-15`. Respawned cleanly but check logs for OOM / watchdog kill pattern, especially under Session 20 load.
 5. **[LOW] `daily-evening-recap` cron** — re-verify after 20:00 local; if still `last_run=None` past scheduled slot, inspect scheduler filter.
