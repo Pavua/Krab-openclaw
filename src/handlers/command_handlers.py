@@ -91,7 +91,9 @@ async def _reply_tech(message: Message, bot: "KraabUserbot", text: str, **kwargs
     Предназначена для команд с техническим выводом (логи, cron и т.п.),
     которые не должны «засорять» групповые чаты.
     """
-    if message.chat.id < 0:
+    chat = getattr(message, "chat", None)
+    chat_id = getattr(chat, "id", 0) if chat is not None else 0
+    if chat_id < 0:
         # Уведомление в группе
         try:
             await message.reply("📬 Ответ в ЛС (тех-команда).")
@@ -425,7 +427,9 @@ async def handle_search(bot: "KraabUserbot", message: Message) -> None:
         raise UserInputError(user_message="🔍 Укажи запрос после флага.")
 
     # Изолированная сессия, чтобы не загрязнять основной контекст чата
-    session_id = f"search_{message.chat.id}"
+    _chat_for_session = getattr(message, "chat", None)
+    _chat_id_for_session = getattr(_chat_for_session, "id", 0) if _chat_for_session else 0
+    session_id = f"search_{_chat_id_for_session}"
 
     if raw_mode:
         # --- Режим raw: прямой Brave-поиск без AI ---

@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import structlog
 from pyrogram import filters
 
+from ..config import config as config  # noqa: PLC0414 - re-export для тестов (patch.object)
 from .access_control import is_owner_user_id
 from .swarm_team_prompts import get_team_system_prompt
 

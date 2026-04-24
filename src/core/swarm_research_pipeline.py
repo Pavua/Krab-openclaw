@@ -97,6 +97,9 @@ class SwarmResearchPipeline:
         *,
         router_factory: Callable[[str], object],
         swarm_bus: object,
+        openclaw_client: object | None = None,
+        task_board: object | None = None,
+        reflect: bool = False,
     ) -> str:
         """
         Запускает research pipeline.

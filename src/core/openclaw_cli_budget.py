@@ -22,29 +22,49 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 
 import structlog
 
 logger = structlog.get_logger(__name__)
 
 # Максимальное число одновременных transient CLI-вызовов openclaw.
-OPENCLAW_CLI_BUDGET: int = int(os.getenv("OPENCLAW_CLI_BUDGET", "3"))
+# Поддерживаем оба имени env-vars для совместимости.
+_BUDGET: int = int(os.getenv("OPENCLAW_CLI_SPAWN_BUDGET", os.getenv("OPENCLAW_CLI_BUDGET", "3")))
+OPENCLAW_CLI_BUDGET: int = _BUDGET
 
-_sem: asyncio.Semaphore | None = None
+_GLOBAL_SEM: asyncio.Semaphore | None = None
+_SYNC_SEM: threading.Semaphore | None = None
+_sem: asyncio.Semaphore | None = None  # legacy alias
+
+
+def get_global_semaphore() -> asyncio.Semaphore:
+    """Возвращает singleton asyncio.Semaphore для CLI бюджета."""
+    global _GLOBAL_SEM, _sem  # noqa: PLW0603
+    if _GLOBAL_SEM is None:
+        _GLOBAL_SEM = asyncio.Semaphore(_BUDGET)
+        _sem = _GLOBAL_SEM
+    return _GLOBAL_SEM
+
+
+def get_sync_semaphore() -> threading.Semaphore:
+    """Возвращает singleton threading.Semaphore (для синхронных вызовов)."""
+    global _SYNC_SEM  # noqa: PLW0603
+    if _SYNC_SEM is None:
+        _SYNC_SEM = threading.Semaphore(_BUDGET)
+    return _SYNC_SEM
 
 
 def _get_sem() -> asyncio.Semaphore:
-    """Ленивая инициализация семафора в event loop."""
-    global _sem  # noqa: PLW0603
-    if _sem is None:
-        _sem = asyncio.Semaphore(OPENCLAW_CLI_BUDGET)
-    return _sem
+    """Ленивая инициализация семафора в event loop (legacy)."""
+    return get_global_semaphore()
 
 
 def reset_semaphore(budget: int = OPENCLAW_CLI_BUDGET) -> None:
     """Пересоздаёт семафор (только для тестов или после изменения BUDGET)."""
-    global _sem  # noqa: PLW0603
-    _sem = asyncio.Semaphore(budget)
+    global _sem, _GLOBAL_SEM  # noqa: PLW0603
+    _GLOBAL_SEM = asyncio.Semaphore(budget)
+    _sem = _GLOBAL_SEM
 
 
 class _BudgetContext:
@@ -81,28 +101,36 @@ def budget_available() -> int:
 async def terminate_and_reap(
     proc: "asyncio.subprocess.Process",
     *,
-    timeout_sec: float = 5.0,
+    term_grace: float = 5.0,
+    kill_grace: float = 2.0,
+    timeout_sec: float | None = None,
 ) -> None:
     """Принудительно завершает subprocess и ждёт его смерти.
 
-    Сначала SIGTERM, если не умер за timeout -> SIGKILL.
-    Не поднимает исключений — безопасен в finally-блоках.
+    Сначала SIGTERM, ждёт term_grace секунд; если не умер -> SIGKILL,
+    ждёт kill_grace. Не поднимает исключений — безопасен в finally-блоках.
+
+    timeout_sec — legacy alias для term_grace.
     """
-    if proc.returncode is not None:
+    if timeout_sec is not None:
+        term_grace = timeout_sec
+    # Если returncode уже целое число — процесс уже завершён.
+    rc = getattr(proc, "returncode", None)
+    if isinstance(rc, int):
         return
     try:
         proc.terminate()
     except (ProcessLookupError, OSError):
         return
     try:
-        await asyncio.wait_for(proc.wait(), timeout=timeout_sec)
+        await asyncio.wait_for(proc.wait(), timeout=term_grace)
     except asyncio.TimeoutError:
         try:
             proc.kill()
         except (ProcessLookupError, OSError):
             pass
         try:
-            await asyncio.wait_for(proc.wait(), timeout=2.0)
+            await asyncio.wait_for(proc.wait(), timeout=kill_grace)
         except (asyncio.TimeoutError, Exception):  # noqa: BLE001
             pass
     except Exception:  # noqa: BLE001

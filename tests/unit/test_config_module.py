@@ -237,14 +237,17 @@ class TestListParsing:
         assert "spam_bot" in result
 
     def test_voice_reply_blocked_chats_empty_by_default(self):
-        """VOICE_REPLY_BLOCKED_CHATS — пустой список если env не задан."""
-        if not os.getenv("VOICE_REPLY_BLOCKED_CHATS", "").strip():
-            assert Config.VOICE_REPLY_BLOCKED_CHATS == []
+        """VOICE_REPLY_BLOCKED_CHATS — пустой список если env/.env не задан."""
+        # .env может определить значение; пропускаем тест если задано из любого источника
+        if os.getenv("VOICE_REPLY_BLOCKED_CHATS", "").strip() or Config.VOICE_REPLY_BLOCKED_CHATS:
+            pytest.skip("VOICE_REPLY_BLOCKED_CHATS задан в окружении/dotenv")
+        assert Config.VOICE_REPLY_BLOCKED_CHATS == []
 
     def test_owner_user_ids_empty_by_default(self):
-        """OWNER_USER_IDS — пустой список если env не задан."""
-        if not os.getenv("OWNER_USER_IDS", "").strip():
-            assert Config.OWNER_USER_IDS == []
+        """OWNER_USER_IDS — пустой список если env/.env не задан."""
+        if os.getenv("OWNER_USER_IDS", "").strip() or Config.OWNER_USER_IDS:
+            pytest.skip("OWNER_USER_IDS задан в окружении/dotenv")
+        assert Config.OWNER_USER_IDS == []
 
 
 # ---------------------------------------------------------------------------

@@ -80,8 +80,18 @@ def _wrap_error(exc: Exception) -> dict[str, Any]:
 
 
 def _run(coro: Any) -> Any:
-    """Запускает async-корутину из синхронного MCP tool."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Запускает async-корутину из синхронного MCP tool.
+
+    Robust к закрытому/отсутствующему event loop (тесты часто закрывают loop).
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("loop closed")
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 # --- Tools ---------------------------------------------------------------
