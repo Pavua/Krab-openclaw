@@ -23,6 +23,36 @@ import pytest
 from src.handlers.command_handlers import handle_weather
 
 # ---------------------------------------------------------------------------
+# Env isolation — пинним DEFAULT_WEATHER_CITY=Barcelona, чтобы тесты не
+# зависели от shell-окружения разработчика (где может быть Tokyo и т.п.)
+# и от содержимого .env файла, который load_dotenv подтягивает.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _pin_default_weather_city(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Config singleton уже инстанцирован с env на момент первого импорта,
+    поэтому помимо env-пина патчим атрибут на singleton'е, который видит
+    handler."""
+    from src.handlers import command_handlers as _ch
+
+    monkeypatch.setenv("DEFAULT_WEATHER_CITY", "Barcelona")
+    monkeypatch.setattr(_ch.config, "DEFAULT_WEATHER_CITY", "Barcelona")
+
+
+@pytest.fixture(autouse=True)
+def _stub_fetch_wttr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """wttr.in fast-path возвращает результат при реальной сети — тесты
+    ожидают fallback через openclaw_client. Пиним None по умолчанию."""
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    monkeypatch.setattr(
+        "src.handlers.command_handlers._fetch_wttr",
+        _AsyncMock(return_value=None),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Хелперы
 # ---------------------------------------------------------------------------
 
@@ -464,20 +494,25 @@ class TestDefaultWeatherCityConfig:
         assert len(config.DEFAULT_WEATHER_CITY) > 0
 
     def test_default_weather_city_по_умолчанию_barcelona(self) -> None:
-        """По умолчанию (без env-переменной) значение 'Barcelona'."""
+        """По умолчанию (без env-переменной и без .env) значение 'Barcelona'."""
         import os
         from importlib import reload
+        from unittest.mock import patch
 
-        # Сохраняем текущий env
+        # Сохраняем текущий env и отключаем load_dotenv, чтобы reload
+        # не подтянул .env (где может быть DEFAULT_WEATHER_CITY=Tokyo).
         original = os.environ.pop("DEFAULT_WEATHER_CITY", None)
         try:
-            import src.config as config_module
+            with patch("dotenv.load_dotenv", lambda *a, **kw: False):
+                import src.config as config_module
 
-            reload(config_module)
-            assert config_module.Config.DEFAULT_WEATHER_CITY == "Barcelona"
+                reload(config_module)
+                assert config_module.Config.DEFAULT_WEATHER_CITY == "Barcelona"
         finally:
             if original is not None:
                 os.environ["DEFAULT_WEATHER_CITY"] = original
+            import src.config as config_module
+
             reload(config_module)
 
     def test_default_weather_city_override_через_env(self) -> None:
