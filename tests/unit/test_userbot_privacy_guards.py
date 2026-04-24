@@ -156,7 +156,8 @@ def test_build_system_prompt_for_non_owner_uses_safe_prompt(monkeypatch) -> None
     )
     monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", True, raising=False)
     prompt = bot._build_system_prompt_for_sender(is_allowed_sender=False)
-    assert prompt == "SAFE_PROMPT_TEST"
+    assert prompt.startswith("SAFE_PROMPT_TEST")
+    assert "ЗАЩИТА ОТ ИНЪЕКЦИЙ ПРОМПТА" in prompt
 
 
 def test_build_system_prompt_for_partial_access_uses_partial_prompt(monkeypatch) -> None:
@@ -169,7 +170,8 @@ def test_build_system_prompt_for_partial_access_uses_partial_prompt(monkeypatch)
     )
     monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", True, raising=False)
     prompt = bot._build_system_prompt_for_sender(is_allowed_sender=False, access_level="partial")
-    assert prompt == "PARTIAL_PROMPT_TEST"
+    assert prompt.startswith("PARTIAL_PROMPT_TEST")
+    assert "ЗАЩИТА ОТ ИНЪЕКЦИЙ ПРОМПТА" in prompt
 
 
 def test_build_system_prompt_for_owner_includes_openclaw_workspace_bundle(monkeypatch) -> None:
