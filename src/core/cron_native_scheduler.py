@@ -74,7 +74,13 @@ class CronNativeScheduler:
             await asyncio.sleep(_POLL_INTERVAL)
 
     async def _tick(self) -> None:
-        """Один цикл: проверяет jobs и запускает просроченные."""
+        """Один цикл: проверяет jobs и запускает просроченные.
+
+        Triggers fire ровно когда due_ts фактически наступил (due_ts ≤ now),
+        без early-pick на _POLL_INTERVAL вперёд. Это устраняет calendar-boundary
+        drift (e.g. Sunday 23:59:30 → Monday 00:00 cron — early pick раньше
+        мог триггерить job до полуночи).
+        """
         now = time.time()
         jobs = cron_native_store.list_jobs()
         for job in jobs:
@@ -84,25 +90,19 @@ class CronNativeScheduler:
             due_ts = cron_native_store.next_due(job)
             if due_ts is None:
                 continue
-            # Проверяем: next_due ≤ now + poll_interval (чтобы не пропустить)
-            # и job не был запущен в течение последних 50 секунд
+            # Trigger только когда due_ts фактически due. Cooldown на 1 poll-interval
+            # защищает от двойного срабатывания при дрожании next_due вокруг now.
             last = self._last_fired.get(job_id, 0.0)
-            if due_ts <= now + _POLL_INTERVAL and (now - last) > 50:
-                # Штампуем due_ts (точное время срабатывания), не текущий now —
-                # иначе cooldown будет считаться от момента peek, а не от fire.
+            if due_ts <= now and (now - last) > _POLL_INTERVAL:
                 self._last_fired[job_id] = due_ts
-                asyncio.ensure_future(self._run_job(job, due_ts))
+                asyncio.ensure_future(self._run_job(job))
 
-    async def _run_job(self, job: dict, due_ts: float | None = None) -> None:
-        """Выполняет один job: ждёт due_ts, потом вызывает sender с промптом."""
+    async def _run_job(self, job: dict) -> None:
+        """Выполняет один job: вызывает sender с промптом."""
         job_id = str(job.get("id") or "?")
         prompt = str(job.get("prompt") or "")
         if not prompt:
             return
-        # Ждём точного момента срабатывания — устраняет calendar-boundary misfires
-        # (Monday 00:00 peek на Sunday 23:59:45 → sleep 15s → fire ровно в 00:00).
-        if due_ts is not None:
-            await asyncio.sleep(max(0.0, due_ts - time.time()))
         logger.info("cron_native_job_firing", job_id=job_id, cron_spec=job.get("cron_spec"))
         try:
             if self._sender:
