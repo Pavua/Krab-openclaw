@@ -290,3 +290,42 @@ async def test_handle_blocklist_owner_only():
 
     with pytest.raises(UserInputError):
         await handle_blocklist(bot, message)
+
+
+# ---------------------------------------------------------------------------
+# H6: legacy-ключи команд (тишина → silence) миграция при load
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_russian_key_migration(tmp_path: Path):
+    """Если в сохранённом конфиге есть «тишина» — при load зеркалим в «silence»."""
+    bl_file = tmp_path / "command_blocklist.json"
+    bl_file.write_text(
+        json.dumps({"-100555": ["тишина"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    with patch("src.core.command_blocklist._DEFAULT_CONFIG", {}):
+        bl = CommandBlocklist(state_dir=tmp_path, blocklist_file=bl_file)
+
+    # Оба ключа теперь блокируют
+    assert bl.is_blocked(-100555, "silence") is True
+    assert bl.is_blocked(-100555, "тишина") is True
+
+    # Миграция персиста на диск
+    on_disk = json.loads(bl_file.read_text(encoding="utf-8"))
+    assert "silence" in on_disk["-100555"]
+    assert "тишина" in on_disk["-100555"]
+
+
+def test_legacy_migration_idempotent(tmp_path: Path):
+    """Если уже есть и «тишина», и «silence» — повторная миграция ничего не ломает."""
+    bl_file = tmp_path / "command_blocklist.json"
+    bl_file.write_text(
+        json.dumps({"-100777": ["тишина", "silence"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    with patch("src.core.command_blocklist._DEFAULT_CONFIG", {}):
+        bl = CommandBlocklist(state_dir=tmp_path, blocklist_file=bl_file)
+    entries = bl.list_blocks(-100777)
+    assert entries.count("silence") == 1
+    assert entries.count("тишина") == 1

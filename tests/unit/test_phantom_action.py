@@ -7,6 +7,7 @@ tests/unit/test_phantom_action.py
   B) forward_request_to_owner — реальная отправка DM
   C) LLMTextProcessingMixin._apply_phantom_action_guard — post-processor
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
@@ -55,6 +56,41 @@ class TestIsPhantomForwardPromise:
 
     def test_владельцу_уже_передал(self):
         assert is_phantom_forward_promise("Владельцу уже передал все детали.") is True
+
+    # -- H1: precision reduction (composite scoring) ------------------------
+
+    def test_phantom_detected_on_multiple_markers(self):
+        """Отправил + fabricated messageId без tool_calls → phantom (weak≥2)."""
+        text = "Отправил сообщение в telegram chat. messageId: 1455"
+        assert is_phantom_forward_promise(text) is True
+
+    def test_legit_confirmation_after_tool_call(self):
+        """Тот же текст, но tool_calls=[telegram_send_message] → НЕ phantom."""
+        text = "Отправил сообщение в telegram chat. messageId: 1455"
+        assert is_phantom_forward_promise(text, tool_calls_made=["telegram_send_message"]) is False
+
+    def test_legit_tech_discussion_single_marker(self):
+        """Одиночный messageId в техническом обсуждении — не phantom."""
+        assert is_phantom_forward_promise("Используй messageId 123 для reply в Bot API.") is False
+
+    def test_legit_single_otpravil_no_phantom(self):
+        """«Отправил сообщение в chat» без других маркеров — не phantom."""
+        assert is_phantom_forward_promise("Отправил сообщение в chat позже.") is False
+
+    def test_phantom_still_caught_triple(self):
+        """«Доставка подтверждена» + chat NNN + messageId — composite ≥ 2 → phantom."""
+        text = "Доставка подтверждена. chat 312, messageId 1455."
+        assert is_phantom_forward_promise(text) is True
+
+    def test_forward_tool_call_suppresses_strong(self):
+        """Даже strong-фраза при реальном forward_request_to_owner → не phantom."""
+        assert (
+            is_phantom_forward_promise(
+                "Я передал владельцу ваш запрос.",
+                tool_calls_made=["forward_request_to_owner"],
+            )
+            is False
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -139,8 +175,10 @@ class TestForwardRequestToOwner:
         mock_me.id = 1
         mock_client.get_me = AsyncMock(return_value=mock_me)
         captured = []
+
         async def capture_send(chat_id, text):
             captured.append(text)
+
         mock_client.send_message = capture_send
 
         await forward_request_to_owner(
@@ -160,21 +198,38 @@ class TestForwardRequestToOwner:
 
 class ConcreteProcessor(LLMTextProcessingMixin):
     """Конкретная реализация для тестирования методов mixin."""
+
     # class-level паттерны (минимальные заглушки)
     _reply_to_tag_pattern = __import__("re").compile(r"\[\[reply_to:[^\]]*\]\]")
     _think_block_pattern = __import__("re").compile(r"<think>.*?</think>", __import__("re").DOTALL)
-    _final_block_pattern = __import__("re").compile(r"<final>(.*?)</final>", __import__("re").DOTALL)
+    _final_block_pattern = __import__("re").compile(
+        r"<final>(.*?)</final>", __import__("re").DOTALL
+    )
     _think_final_tag_pattern = __import__("re").compile(r"</?(?:think|final)>")
-    _tool_response_block_pattern = __import__("re").compile(r"<tool_response>.*?</tool_response>", __import__("re").DOTALL)
-    _llm_transport_tokens_pattern = __import__("re").compile(r"<\|im_start\|>.*?<\|im_end\|>", __import__("re").DOTALL)
-    _plaintext_reasoning_intro_pattern = __import__("re").compile(r"^(think|thinking|thought):", __import__("re").IGNORECASE)
+    _tool_response_block_pattern = __import__("re").compile(
+        r"<tool_response>.*?</tool_response>", __import__("re").DOTALL
+    )
+    _llm_transport_tokens_pattern = __import__("re").compile(
+        r"<\|im_start\|>.*?<\|im_end\|>", __import__("re").DOTALL
+    )
+    _plaintext_reasoning_intro_pattern = __import__("re").compile(
+        r"^(think|thinking|thought):", __import__("re").IGNORECASE
+    )
     _plaintext_reasoning_step_pattern = __import__("re").compile(r"^\d+\.")
-    _plaintext_reasoning_meta_pattern = __import__("re").compile(r"^(step|note):", __import__("re").IGNORECASE)
-    _agentic_scratchpad_line_pattern = __import__("re").compile(r"^(wait|ready|let's go)\b", __import__("re").IGNORECASE)
+    _plaintext_reasoning_meta_pattern = __import__("re").compile(
+        r"^(step|note):", __import__("re").IGNORECASE
+    )
+    _agentic_scratchpad_line_pattern = __import__("re").compile(
+        r"^(wait|ready|let's go)\b", __import__("re").IGNORECASE
+    )
     _agentic_scratchpad_command_pattern = __import__("re").compile(r"^\$\s+\w+")
     _split_chunk_header_pattern = __import__("re").compile(r"^\[Часть \d+/\d+\]")
-    _deferred_intent_pattern = __import__("re").compile(r"\b(через|завтра|позже)\b", __import__("re").IGNORECASE)
-    _think_capture_pattern = __import__("re").compile(r"<think>(.*?)</think>", __import__("re").DOTALL)
+    _deferred_intent_pattern = __import__("re").compile(
+        r"\b(через|завтра|позже)\b", __import__("re").IGNORECASE
+    )
+    _think_capture_pattern = __import__("re").compile(
+        r"<think>(.*?)</think>", __import__("re").DOTALL
+    )
 
 
 class TestApplyPhantomActionGuard:

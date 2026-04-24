@@ -55,6 +55,33 @@ class CommandBlocklist:
     # Персистентность
     # ------------------------------------------------------------------
 
+    # Legacy-ключи команд, переименованных в актуальные (source → target).
+    # При load мигрируем значения в новый ключ, сохраняя старый как alias.
+    _LEGACY_COMMAND_ALIASES: dict[str, str] = {
+        "тишина": "silence",
+    }
+
+    def _migrate_legacy_keys(self) -> bool:
+        """Скопировать legacy command-ключи (тишина→silence) в per-chat списки.
+
+        Returns True если что-то мигрировали (→ надо persist).
+        """
+        changed = False
+        for chat_key, cmds in list(self._data.items()):
+            if not isinstance(cmds, list):
+                continue
+            for legacy, modern in self._LEGACY_COMMAND_ALIASES.items():
+                if legacy in cmds and modern not in cmds:
+                    cmds.append(modern)
+                    changed = True
+                    logger.info(
+                        "command_blocklist_legacy_migrated",
+                        chat=chat_key,
+                        legacy=legacy,
+                        modern=modern,
+                    )
+        return changed
+
     def _load(self) -> None:
         """Загрузить с диска; при отсутствии файла — записать defaults.
 
@@ -79,6 +106,9 @@ class CommandBlocklist:
         merged.update(loaded)  # loaded перекрывает defaults только для своих ключей
         self._data = merged
 
+        # Migrate legacy command-ключи (например «тишина» → «silence»)
+        migrated = self._migrate_legacy_keys()
+
         # Если файл отсутствовал или не содержал defaults — персистируем
         needs_persist = not self._blocklist_file.exists()
         if not needs_persist:
@@ -86,7 +116,7 @@ class CommandBlocklist:
                 if key not in loaded:
                     needs_persist = True
                     break
-        if needs_persist:
+        if needs_persist or migrated:
             self._persist()
 
     def _persist(self) -> None:

@@ -32,7 +32,7 @@ Public API:
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterable
 
 from .logger import get_logger
 
@@ -42,12 +42,11 @@ if TYPE_CHECKING:
 logger = get_logger("forward_to_owner")
 
 # ---------------------------------------------------------------------------
-# Паттерн для детекции phantom-фраз
+# Паттерны для детекции phantom-фраз
 # ---------------------------------------------------------------------------
 
-# Фразы, которые LLM использует как "pseudo-action" без реального tool call.
-# Используются и post-processor'ом, и тестами.
-_PHANTOM_FORWARD_PHRASES: list[str] = [
+# STRONG: явные phantom-фразы «передал владельцу» — одного достаточно.
+_PHANTOM_STRONG_PHRASES: list[str] = [
     r"передал\s+владельцу",
     r"передал\s+хозяину",
     r"уведомил\s+владельца",
@@ -58,33 +57,101 @@ _PHANTOM_FORWARD_PHRASES: list[str] = [
     r"notified\s+(?:the\s+)?owner",
     r"отправил\s+(?:тебе|вам|ему)\s+уведомление",
     r"владельцу\s+(?:уже\s+)?(?:передал|сообщил|отправил)",
-    # W31: после live-теста — LLM фабриковал messageId/chat ID и формулировки
-    # типа «Доставка подтверждена». Эти паттерны ловят phantom-confirmations.
-    r"доставка\s+подтверждена",
-    r"delivery\s+confirmed",
-    r"messageId\s*[:=]?\s*\d+",
-    r"message[\s_]*id\s*[:=]?\s*\d+",
-    # Начало ответа с «Отправил» + детальная «отчётность» — классический галлюцин.
-    r"^\s*отправил\b[^.]{0,80}(?:сообщени|телеграм|telegram|chat)",
-    r"^\s*sent\b[^.]{0,80}(?:message|telegram|chat)",
 ]
 
+# WEAK: маркеры «фабрикованной отчётности» — по отдельности могут быть
+# легитимными (техническое обсуждение Telegram API, ответ «Отправил сообщение
+# в чат X» после реального tool call). Phantom только при distinct-match ≥ 2.
+# Каждая запись — (group_name, pattern). Паттерны внутри одной группы считаются
+# одним weak-сигналом (чтобы дубли типа messageId/message_id не давали composite
+# на одиночном упоминании).
+_PHANTOM_WEAK_GROUPS: list[tuple[str, str]] = [
+    ("delivery_confirmed", r"доставка\s+подтверждена"),
+    ("delivery_confirmed", r"delivery\s+confirmed"),
+    ("message_id", r"messageId\s*[:=]?\s*\d+"),
+    ("message_id", r"message[\s_]*id\s*[:=]?\s*\d+"),
+    ("sent_report", r"^\s*отправил\b[^.]{0,80}(?:сообщени|телеграм|telegram|chat)"),
+    ("sent_report", r"^\s*sent\b[^.]{0,80}(?:message|telegram|chat)"),
+    ("chat_id_literal", r"\bchat(?:[_\s-]*id)?\s*[:=]?\s*-?\d{3,}"),
+]
+_PHANTOM_WEAK_PHRASES: list[str] = [p for _g, p in _PHANTOM_WEAK_GROUPS]
+
+# Совместимость: полный список для legacy-импорта
+_PHANTOM_FORWARD_PHRASES: list[str] = _PHANTOM_STRONG_PHRASES + _PHANTOM_WEAK_PHRASES
+
+_PHANTOM_STRONG_RES = [re.compile(p, re.IGNORECASE | re.UNICODE) for p in _PHANTOM_STRONG_PHRASES]
+_PHANTOM_WEAK_RES: list[tuple[str, "re.Pattern[str]"]] = [
+    (group, re.compile(p, re.IGNORECASE | re.UNICODE)) for group, p in _PHANTOM_WEAK_GROUPS
+]
+
+# Legacy combined regex — сохраняем для внешних импортов
 _PHANTOM_RE = re.compile(
     "|".join(_PHANTOM_FORWARD_PHRASES),
     re.IGNORECASE | re.UNICODE,
 )
 
+# Tool calls, which, будучи реально выполненными, означают что это НЕ phantom.
+_REAL_FORWARD_TOOLS: frozenset[str] = frozenset(
+    {
+        "telegram_send_message",
+        "forward_request_to_owner",
+        "telegram_edit_message",
+    }
+)
 
-def is_phantom_forward_promise(text: str) -> bool:
+
+def is_phantom_forward_promise(
+    text: str,
+    *,
+    tool_calls_made: Iterable[str] | None = None,
+) -> bool:
     """
-    Возвращает True если text содержит phantom-фразу «передал владельцу» (и варианты).
+    Возвращает True если text содержит phantom-фразу о передаче владельцу —
+    без реального выполнения tool.
 
-    Используется post-processor'ом в LLMTextProcessingMixin._apply_phantom_action_guard
-    для перехвата ответов, где LLM обещает действие которое не совершило.
+    Precision rules:
+      1. Если в `tool_calls_made` есть любой из `_REAL_FORWARD_TOOLS` —
+         это не phantom (real forward уже произошёл).
+      2. Strong-phrase (прямое «передал владельцу») — достаточно одной.
+      3. Weak-patterns (messageId, «Отправил сообщение в chat N», «доставка
+         подтверждена») — phantom только при composite score ≥ 2.
     """
     if not text:
         return False
-    return bool(_PHANTOM_RE.search(text))
+
+    # Real tool call → не phantom
+    if tool_calls_made:
+        tcalls = {str(t).strip().lower() for t in tool_calls_made if t}
+        if tcalls & {t.lower() for t in _REAL_FORWARD_TOOLS}:
+            return False
+
+    strong_hits: list[str] = [r.pattern for r in _PHANTOM_STRONG_RES if r.search(text)]
+    if strong_hits:
+        logger.info(
+            "phantom_guard_matched",
+            kind="strong",
+            patterns=strong_hits,
+            text_preview=text[:120],
+        )
+        return True
+
+    weak_groups_hit: set[str] = set()
+    weak_hits: list[str] = []
+    for group, pattern_re in _PHANTOM_WEAK_RES:
+        if pattern_re.search(text):
+            weak_groups_hit.add(group)
+            weak_hits.append(pattern_re.pattern)
+    if len(weak_groups_hit) >= 2:
+        logger.info(
+            "phantom_guard_matched",
+            kind="composite",
+            groups=sorted(weak_groups_hit),
+            patterns=weak_hits,
+            text_preview=text[:120],
+        )
+        return True
+
+    return False
 
 
 async def forward_request_to_owner(

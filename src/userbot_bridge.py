@@ -550,8 +550,12 @@ class KraabUserbot(
             def check_access(_, __, m):
                 if not m.from_user:
                     return False
-                # Per-chat blocklist — silent skip (не логировать как ошибку)
-                if command_blocklist.is_blocked(m.chat.id, command_name):
+                # Per-chat blocklist — silent skip (не логировать как ошибку).
+                # H6: для "silence" проверяем и legacy-ключ "тишина" (ACL skew).
+                _blocklist_keys = (command_name,)
+                if command_name == "silence":
+                    _blocklist_keys = ("silence", "тишина")
+                if any(command_blocklist.is_blocked(m.chat.id, key) for key in _blocklist_keys):
                     logger.debug(
                         "command_blocklist_skip",
                         command=command_name,
