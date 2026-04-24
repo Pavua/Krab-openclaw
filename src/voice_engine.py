@@ -82,12 +82,19 @@ async def text_to_speech(
             temp_mp3,
             "-c:a",
             "libopus",
+            # 48k vs 32k: ощутимо чище звук на динамике iPhone, разница в размере
+            # для 20-сек voice ≈ +40 КБ — приемлемо для Telegram voice message.
             "-b:a",
-            "32k",
+            "48k",
             "-vbr",
             "on",
             "-compression_level",
             "10",
+            # Моно 24 kHz — оптимум для речи Opus, экономит битрейт без потери ясности.
+            "-ac",
+            "1",
+            "-ar",
+            "24000",
             output_ogg,
         ]
 

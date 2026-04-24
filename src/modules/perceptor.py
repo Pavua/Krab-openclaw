@@ -127,9 +127,10 @@ class Perceptor:
         try:
             import mlx_whisper  # type: ignore[import-untyped]
 
-            result = mlx_whisper.transcribe(
-                audio_path, path_or_hf_repo="mlx-community/whisper-turbo"
-            )
+            # Используем self._mlx_model (env MLX_WHISPER_MODEL), а не hardcoded turbo:
+            # раньше это значение игнорировалось и owner не мог сменить fallback модель
+            # без правки кода. small-mlx — sane default для RU/EN на M-серии.
+            result = mlx_whisper.transcribe(audio_path, path_or_hf_repo=self._mlx_model)
             text = str(result.get("text") or "").strip()
             logger.info("perceptor_mlx_whisper_ok", chars=len(text))
             return text
