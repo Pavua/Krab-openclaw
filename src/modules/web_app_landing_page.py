@@ -268,7 +268,7 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
         </div>
 
         <footer>
-            Krab v8 · Opus 4.6 + Gemini 3.1 Pro · Session 4
+            Krab v8 · <span id="footer-model">—</span> · Session 4
         </footer>
     </div>
 
@@ -303,7 +303,10 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
 
         function updateUI(data) {
             if (data.last_runtime_route && data.last_runtime_route.model) {
-                document.getElementById('model-name').textContent = data.last_runtime_route.model;
+                const liveModel = data.last_runtime_route.model;
+                document.getElementById('model-name').textContent = liveModel;
+                const footerModel = document.getElementById('footer-model');
+                if (footerModel) footerModel.textContent = liveModel;
             }
 
             if (data.telegram) {
