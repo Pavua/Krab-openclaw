@@ -553,3 +553,72 @@ class TestStats:
         assert first is second
         assert is_indexer_running() is False
         _reset_singleton_for_tests()  # cleanup
+
+
+class TestDedicatedEmbedExecutor:
+    """C5: dedicated ThreadPoolExecutor для embedder (persistent connection)."""
+
+    def test_embed_executor_initialized(self, worker: MemoryIndexerWorker) -> None:
+        """Executor создан с max_workers=1 и правильным prefix."""
+        import concurrent.futures
+
+        assert isinstance(worker._embed_executor, concurrent.futures.ThreadPoolExecutor)
+        assert worker._embed_executor._max_workers == 1
+        # prefix должен начинаться с krab_embed (внутреннее поле CPython).
+        prefix = getattr(worker._embed_executor, "_thread_name_prefix", "")
+        assert prefix.startswith("krab_embed")
+
+    @pytest.mark.asyncio
+    async def test_embed_uses_dedicated_executor(self, worker: MemoryIndexerWorker) -> None:
+        """_maybe_embed_chunks должен передавать _embed_executor в run_in_executor."""
+        fake_embedder = MagicMock()
+        fake_embedder.embed_specific = MagicMock(return_value=None)
+        worker._embedder = fake_embedder
+
+        captured: dict[str, object] = {}
+
+        loop = asyncio.get_event_loop()
+        real_run_in_executor = loop.run_in_executor
+
+        def _spy(executor, func, *args):  # type: ignore[no-untyped-def]
+            captured["executor"] = executor
+            captured["func"] = func
+            return real_run_in_executor(executor, func, *args)
+
+        import unittest.mock
+
+        with unittest.mock.patch.object(loop, "run_in_executor", side_effect=_spy):
+            await worker._maybe_embed_chunks(["chunk_1", "chunk_2"])
+
+        assert captured.get("executor") is worker._embed_executor
+        assert captured.get("func") is fake_embedder.embed_specific
+        fake_embedder.embed_specific.assert_called_once_with(["chunk_1", "chunk_2"])
+
+    @pytest.mark.asyncio
+    async def test_embed_executor_shutdown_on_stop(self, worker: MemoryIndexerWorker) -> None:
+        """stop() должен вызвать shutdown() на dedicated executor."""
+        import unittest.mock
+
+        with unittest.mock.patch.object(
+            worker._embed_executor, "shutdown", wraps=worker._embed_executor.shutdown
+        ) as spy_shutdown:
+            await worker.start()
+            await worker.stop(drain=False, timeout=1.0)
+
+        spy_shutdown.assert_called_once()
+        # Убеждаемся, что вызвано с правильными параметрами.
+        _, kwargs = spy_shutdown.call_args
+        assert kwargs.get("wait") is False
+        assert kwargs.get("cancel_futures") is True
+
+    @pytest.mark.asyncio
+    async def test_embedder_close_called_on_stop(self, worker: MemoryIndexerWorker) -> None:
+        """stop() должен вызвать embedder.close() если он есть."""
+        fake_embedder = MagicMock()
+        fake_embedder.close = MagicMock(return_value=None)
+        worker._embedder = fake_embedder
+
+        await worker.start()
+        await worker.stop(drain=False, timeout=1.0)
+
+        fake_embedder.close.assert_called_once()

@@ -11,6 +11,7 @@ MemoryIndexerWorker — Phase 4 Memory Layer (Track E).
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import hashlib
 import sqlite3
 from dataclasses import dataclass, field
@@ -130,6 +131,17 @@ class MemoryIndexerWorker:
         self._builders: dict[str, ChunkBuilder] = {}
         # Watermark cache: chat_id → last indexed message_id (для idempotency).
         self._watermark_cache: dict[str, str] = {}
+        # C5: dedicated single-thread executor для embedder — гарантирует,
+        # что все вызовы embed_specific идут в ОДИН и тот же OS thread →
+        # threading.local SQLite connection + sqlite-vec загружаются один раз.
+        # asyncio.to_thread использует общий threadpool, который ротирует
+        # workers, из-за чего connection пересоздаётся на каждом вызове.
+        self._embed_executor: concurrent.futures.ThreadPoolExecutor = (
+            concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="krab_embed",
+            )
+        )
 
     async def start(self) -> None:
         """Запускает worker: создаёт queue и consumer task."""
@@ -174,7 +186,28 @@ class MemoryIndexerWorker:
                 await self._consumer_task
             except (asyncio.CancelledError, Exception):
                 pass
+        # C5: закрываем embedder connection + shutdown dedicated executor.
+        if self._embedder is not None:
+            close_fn = getattr(self._embedder, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("memory_indexer_embedder_close_failed", error=str(exc))
+        try:
+            self._embed_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_indexer_embed_executor_shutdown_failed", error=str(exc))
         logger.info("memory_indexer_stopped")
+
+    def __del__(self) -> None:
+        # Best-effort cleanup на случай если stop() не был вызван.
+        executor = getattr(self, "_embed_executor", None)
+        if executor is not None:
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:  # noqa: BLE001
+                pass
 
     async def enqueue(self, pyrofork_message: Any) -> bool:
         """Non-blocking enqueue. Returns False on deny/overflow/empty."""
@@ -606,7 +639,14 @@ class MemoryIndexerWorker:
                 self._stats.embed_disabled = True
                 return
         try:
-            await asyncio.to_thread(self._embedder.embed_specific, chunk_ids)
+            # C5: используем dedicated executor, чтобы переиспользовать один
+            # и тот же OS thread → persistent sqlite connection + sqlite-vec.
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                self._embed_executor,
+                self._embedder.embed_specific,
+                chunk_ids,
+            )
             self._stats.embeddings_committed += len(chunk_ids)
         except Exception as exc:
             self._stats.bump_failed("embed")
