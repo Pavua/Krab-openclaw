@@ -161,6 +161,68 @@ class TestReciprocalRankFusion:
 
 
 # ---------------------------------------------------------------------------
+# C3: per-source веса в RRF + env helper _rrf_vector_weight().
+# ---------------------------------------------------------------------------
+
+
+class TestRRFWeights:
+    def test_rrf_default_weights_equal(self) -> None:
+        """weights=None → идентично default-поведению (backward-compat)."""
+        no_w = reciprocal_rank_fusion(["a", "b", "c"], ["b", "d"], k=60)
+        with_w = reciprocal_rank_fusion(["a", "b", "c"], ["b", "d"], k=60, weights=[1.0, 1.0])
+        assert no_w == with_w
+
+    def test_rrf_higher_vector_weight(self) -> None:
+        """weights=[1.0, 2.0] → vec-only кандидаты ранжируются выше fts-only."""
+        fts_list = ["f1", "shared", "f2"]
+        vec_list = ["v1", "shared", "v2"]
+        fused = reciprocal_rank_fusion(fts_list, vec_list, k=60, weights=[1.0, 2.0])
+        # v1 (rank 1 в vec×2.0) должен обойти f1 (rank 1 в fts×1.0).
+        assert fused["v1"] > fused["f1"]
+        # shared получает вклад из обоих — максимум.
+        assert fused["shared"] > fused["v1"]
+        # v2 (rank 3×2.0) > f2 (rank 3×1.0).
+        assert fused["v2"] > fused["f2"]
+
+    def test_rrf_weights_length_mismatch_fallback(self) -> None:
+        """Некорректная длина weights → игнорируется, equal-weights."""
+        baseline = reciprocal_rank_fusion(["a", "b"], ["b", "c"], k=60)
+        mismatch = reciprocal_rank_fusion(["a", "b"], ["b", "c"], k=60, weights=[1.0, 2.0, 3.0])
+        assert baseline == mismatch
+
+    def test_rrf_single_list_with_weights_backward_compat(self) -> None:
+        """Legacy FTS-only вызов — default weights работают корректно."""
+        result = reciprocal_rank_fusion(["a", "b", "c"], k=60)
+        assert list(result.keys()) == ["a", "b", "c"]
+        assert result["a"] > result["b"] > result["c"]
+
+
+class TestRRFVectorWeightHelper:
+    def test_rrf_vector_weight_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("KRAB_RAG_RRF_VECTOR_WEIGHT", raising=False)
+        assert _rrf_vector_weight() == 1.0
+
+    def test_rrf_vector_weight_custom(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("KRAB_RAG_RRF_VECTOR_WEIGHT", "2.5")
+        assert _rrf_vector_weight() == 2.5
+
+    def test_rrf_vector_weight_clamped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """env=10.0 → clamp до верхней границы 5.0."""
+        monkeypatch.setenv("KRAB_RAG_RRF_VECTOR_WEIGHT", "10.0")
+        assert _rrf_vector_weight() == 5.0
+
+    def test_rrf_vector_weight_clamped_lower(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """env=-1.0 → clamp до 0.0."""
+        monkeypatch.setenv("KRAB_RAG_RRF_VECTOR_WEIGHT", "-1.0")
+        assert _rrf_vector_weight() == 0.0
+
+    def test_rrf_vector_weight_invalid_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """env=abc → fallback 1.0."""
+        monkeypatch.setenv("KRAB_RAG_RRF_VECTOR_WEIGHT", "abc")
+        assert _rrf_vector_weight() == 1.0
+
+
+# ---------------------------------------------------------------------------
 # Decay.
 # ---------------------------------------------------------------------------
 

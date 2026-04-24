@@ -239,9 +239,11 @@ class HybridRetriever:
         model_name: str | None = "minishlab/M2V_multilingual_output",
         rrf_k: int = 60,
         now: Optional[callable] = None,  # type: ignore[type-arg]
+        model_dim: int | None = 256,
     ) -> None:
         self._paths = archive_paths or ArchivePaths.default()
         self._model_name = model_name
+        self._model_dim = model_dim
         self._rrf_k = rrf_k
         self._now = now or (lambda: datetime.now(timezone.utc))
 
