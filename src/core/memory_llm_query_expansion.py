@@ -165,7 +165,16 @@ async def expand_query_llm(
                 GeminiRerankProvider,
                 default_provider,
             )
+        except (ImportError, ModuleNotFoundError):
+            # ImportError — это bug: модуль должен быть в проекте.
+            # Не маскируем, а пробрасываем с явным логом для диагностики.
+            logger.error(
+                "memory_query_expansion_provider_import_failed",
+                module="src.core.gemini_rerank_provider",
+            )
+            raise
 
+        try:
             # default_provider возвращает Pro-версию; для expansion нужен Flash.
             # Переопределяем модель через прямую конструкцию, если API-ключ доступен.
             base_provider = default_provider()
@@ -181,8 +190,12 @@ async def expand_query_llm(
                 model=_EXPANSION_MODEL,
                 timeout=timeout_s(),
             )
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("memory_query_expansion_provider_init_failed", error=str(exc))
+        except Exception as exc:  # noqa: BLE001 - provider init best-effort
+            logger.warning(
+                "memory_query_expansion_provider_init_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
             return baseline
 
     prompt = _build_prompt(q)
@@ -191,7 +204,24 @@ async def expand_query_llm(
     except asyncio.TimeoutError:
         logger.warning("memory_query_expansion_timeout", query_len=len(q))
         return baseline
-    except Exception as exc:  # noqa: BLE001
+    except (ConnectionError, OSError) as exc:
+        # Известные сетевые ошибки — ожидаемый fallback-кейс.
+        logger.warning(
+            "memory_query_expansion_network_error",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return baseline
+    except (json.JSONDecodeError, ValueError) as exc:
+        # LLM вернул мусор / провайдер не смог распарсить — ok, fallback.
+        logger.warning(
+            "memory_query_expansion_parse_error",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return baseline
+    except Exception as exc:  # noqa: BLE001 - last-resort fallback
+        # Неожиданная ошибка — WARN (не debug!), чтобы было видно в логах.
         logger.warning(
             "memory_query_expansion_llm_error",
             error=str(exc),

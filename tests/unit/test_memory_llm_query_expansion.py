@@ -117,6 +117,31 @@ def test_malformed_json_fallback(monkeypatch):
     assert out == ["краб"]
 
 
+def test_import_error_not_silent(monkeypatch):
+    """ImportError провайдера не должен молча проглатываться — это programming bug."""
+    import sys
+
+    monkeypatch.setenv("KRAB_RAG_QUERY_EXPANSION_ENABLED", "1")
+    monkeypatch.setenv("KRAB_RAG_QUERY_EXPANSION_MIN_TOKENS", "5")
+
+    # Сохраняем оригинал и подменяем на модуль, который бросает ImportError при обращении.
+    original = sys.modules.get("src.core.gemini_rerank_provider")
+
+    class _BrokenModule:
+        def __getattr__(self, name):
+            raise ImportError(f"simulated missing symbol: {name}")
+
+    sys.modules["src.core.gemini_rerank_provider"] = _BrokenModule()  # type: ignore[assignment]
+    try:
+        with pytest.raises(ImportError):
+            _run(expand_query_llm("краб"))  # provider=None → late-bind → ImportError
+    finally:
+        if original is not None:
+            sys.modules["src.core.gemini_rerank_provider"] = original
+        else:
+            sys.modules.pop("src.core.gemini_rerank_provider", None)
+
+
 def test_empty_query():
     """Пустой запрос → пустой список."""
     assert _run(expand_query_llm("")) == []

@@ -659,10 +659,32 @@ class HybridRetriever:
                             top_k=top_k,
                         )
                         logger.debug("memory_mmr_mode", mode="cosine", docs=len(doc_texts))
-                    except Exception as exc:  # noqa: BLE001 — cosine best-effort.
-                        logger.debug(
+                    except MemoryError:
+                        # Критично: нехватка памяти — не маскируем, пусть падает вверх.
+                        raise
+                    except (AttributeError, ImportError, ModuleNotFoundError) as exc:
+                        # Модель не загружена / API изменилось → Jaccard fallback.
+                        logger.warning(
+                            "memory_mmr_cosine_model_unavailable",
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                            fallback="jaccard",
+                        )
+                        ordered_ids = []
+                    except ValueError as exc:
+                        # Shape mismatch в encode() — знакомый кейс.
+                        logger.warning(
+                            "memory_mmr_cosine_shape_error",
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                            fallback="jaccard",
+                        )
+                        ordered_ids = []
+                    except Exception as exc:  # noqa: BLE001 - cosine best-effort
+                        logger.warning(
                             "memory_mmr_cosine_failed",
                             error=str(exc),
+                            error_type=type(exc).__name__,
                             fallback="jaccard",
                         )
                         ordered_ids = []
