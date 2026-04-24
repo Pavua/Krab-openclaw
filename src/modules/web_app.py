@@ -11375,14 +11375,15 @@ class WebApp:
                     "ok": False,
                     "error": "model required (e.g. 'auto', 'local', 'cloud', model_id)",
                 }
-            if model == "auto":
-                _mm.set_provider("auto")
-            elif model == "local":
-                _mm.set_provider("local")
-            elif model == "cloud":
-                _mm.set_provider("cloud")
-            else:
-                _mm.set_model(model)
+            try:
+                if model in {"auto", "local", "cloud"}:
+                    _mm.set_provider(model)
+                else:
+                    _mm.set_model(model)
+            except ValueError as exc:
+                # Некорректный ID модели — отдаём 400, чтобы dashboard мог
+                # отличить пользовательскую ошибку от runtime-сбоя.
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             return {
                 "ok": True,
                 "model": model,
