@@ -92,9 +92,7 @@ async def test_diag_owner_returns_full_summary(monkeypatch: pytest.MonkeyPatch) 
             "retrieval_mode": "hybrid",
             "latency": {"fts_p50": 16, "vec_p50": 12, "mmr_p50": 5},
         },
-        "/api/ops/alerts": {
-            "active": [{"code": "RuntimeError", "message": "Queue 3 events"}]
-        },
+        "/api/ops/alerts": {"active": [{"code": "RuntimeError", "message": "Queue 3 events"}]},
         "/api/inbox/status": {"open_items": 3, "stale_items": 0},
         "/api/openclaw/cron/jobs": {
             "jobs": [
@@ -102,8 +100,47 @@ async def test_diag_owner_returns_full_summary(monkeypatch: pytest.MonkeyPatch) 
                 {"name": "cost-budget-midday", "last_fire": "13:00", "fires_today": 1},
             ]
         },
+        "/api/memory/phase2/status": {
+            "flag": "shadow",
+            "model_loaded": True,
+            "model_dim": 256,
+            "vec_chunks_count": 72328,
+            "vec_join_pct": 100.0,
+            "retrieval_mode_hour": {"fts": 15, "vec": 8, "hybrid": 7, "none": 0},
+            "latency_avg": {"fts": 16, "vec": 12, "mmr": 5, "total": 34},
+            "shadow_delta_pct": 38.0,
+        },
     }
     monkeypatch.setattr(mod.httpx, "AsyncClient", lambda **_: _FakeClient(routes))
+    # Stub Sentry + Security collectors (parallel tasks)
+    monkeypatch.setattr(
+        mod,
+        "_diag_fetch_sentry",
+        AsyncMock(
+            return_value={
+                "unresolved": 12,
+                "unresolved_by_project": {"python-fastapi": 8, "krab-ear-agent": 2},
+                "top_groups": [
+                    {"title": "RuntimeError:Queue", "count": 66},
+                    {"title": "SQLite locked", "count": 15},
+                ],
+                "auto_resolved_today": 30,
+                "trace_sample_rate": "10%",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_diag_collect_security",
+        AsyncMock(
+            return_value={
+                "phantom_guard_matched": 0,
+                "command_blocklist_skip": 12,
+                "operator_pii_sanitized": 0,
+                "swarm_tool_blocked": 0,
+            }
+        ),
+    )
 
     bot = _make_bot()
     msg = _make_message()
@@ -129,6 +166,19 @@ async def test_diag_owner_returns_full_summary(monkeypatch: pytest.MonkeyPatch) 
     # LM Studio в health отмечен как ❌
     assert "❌" in text
     assert "LM Studio" in text
+    # Memory Phase 2 секция (shadow mode)
+    assert "Memory Phase 2" in text
+    assert "shadow" in text
+    assert "72328" in text
+    assert "38" in text  # shadow_delta_pct
+    # Sentry секция
+    assert "Sentry" in text
+    assert "Unresolved: 12" in text
+    assert "RuntimeError" in text
+    # Security секция
+    assert "Security" in text
+    assert "Phantom guard: 0" in text
+    assert "Command blocklist silent skips: 12" in text
 
 
 @pytest.mark.asyncio
@@ -159,8 +209,11 @@ async def test_diag_partial_outage_graceful(monkeypatch: pytest.MonkeyPatch) -> 
         "/api/ops/alerts": {"active": []},
         "/api/inbox/status": {"open_items": 0, "stale_items": 0},
         "/api/openclaw/cron/jobs": {"jobs": []},
+        "/api/memory/phase2/status": {"flag": "disabled"},
     }
     monkeypatch.setattr(mod.httpx, "AsyncClient", lambda **_: _FakeClient(routes))
+    monkeypatch.setattr(mod, "_diag_fetch_sentry", AsyncMock(return_value=None))
+    monkeypatch.setattr(mod, "_diag_collect_security", AsyncMock(return_value=None))
 
     bot = _make_bot()
     msg = _make_message()

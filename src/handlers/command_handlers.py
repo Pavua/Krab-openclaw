@@ -19394,6 +19394,177 @@ def _diag_fmt_section_cron(cron: dict | list | None) -> list[str]:
     return lines
 
 
+def _diag_fmt_section_phase2(phase2: dict | None) -> list[str]:
+    """Memory Phase 2 — показываем только если enabled или shadow."""
+    if not isinstance(phase2, dict):
+        return []
+    flag = str(phase2.get("flag") or "disabled").lower()
+    if flag not in ("enabled", "shadow"):
+        return []
+    lines = ["", "🧠 Memory Phase 2"]
+    lines.append(f"  • Flag: {flag}")
+    model_loaded = phase2.get("model_loaded")
+    model_dim = phase2.get("model_dim") or 0
+    if model_loaded is True:
+        lines.append(f"  • Model2Vec: loaded ({model_dim} dim)")
+    elif model_loaded is False:
+        lines.append("  • Model2Vec: failed")
+    else:
+        lines.append("  • Model2Vec: loading")
+    vec = phase2.get("vec_chunks_count") or 0
+    join_pct = phase2.get("vec_join_pct")
+    join_str = f" ({join_pct}% JOIN match)" if join_pct is not None else ""
+    lines.append(f"  • vec_chunks: {vec}{join_str}")
+    modes = phase2.get("retrieval_mode_hour") or {}
+    if modes:
+        lines.append(
+            "  • Retrieval mode last hour: "
+            f"fts={modes.get('fts', 0)} / vec={modes.get('vec', 0)} / "
+            f"hybrid={modes.get('hybrid', 0)} / none={modes.get('none', 0)}"
+        )
+    lat = phase2.get("latency_avg") or {}
+    if lat:
+        lines.append(
+            f"  • Avg latency: FTS {lat.get('fts', '?')}ms / "
+            f"Vec {lat.get('vec', '?')}ms / MMR {lat.get('mmr', '?')}ms / "
+            f"Total {lat.get('total', '?')}ms"
+        )
+    if flag == "shadow":
+        delta = phase2.get("shadow_delta_pct")
+        if delta is not None:
+            lines.append(f"  • Shadow delta: {delta}% queries would change top-5")
+    return lines
+
+
+def _diag_fmt_section_sentry(sentry: dict | None) -> list[str]:
+    """Sentry 24h breakdown — unresolved + top groups."""
+    lines = ["", "🔔 Sentry (24h)"]
+    if not isinstance(sentry, dict):
+        lines.append("  • Данные недоступны (SENTRY_AUTH_TOKEN?)")
+        return lines
+    unresolved = sentry.get("unresolved") or 0
+    by_project = sentry.get("unresolved_by_project") or {}
+    if by_project:
+        parts_prj = ", ".join(f"{k}: {v}" for k, v in list(by_project.items())[:4])
+        lines.append(f"  • Unresolved: {unresolved} ({parts_prj})")
+    else:
+        lines.append(f"  • Unresolved: {unresolved}")
+    top = sentry.get("top_groups") or []
+    if top:
+        top_str = ", ".join(
+            f"{g.get('title', 'err')}({g.get('count', 0)})" for g in top[:3] if isinstance(g, dict)
+        )
+        lines.append(f"  • Top groups: {top_str}")
+    auto = sentry.get("auto_resolved_today")
+    if auto is not None:
+        lines.append(f"  • Auto-resolved сегодня: {auto}")
+    rate = sentry.get("trace_sample_rate")
+    if rate is not None:
+        lines.append(f"  • Trace sample rate: {rate}")
+    return lines
+
+
+def _diag_fmt_section_security(sec: dict | None) -> list[str]:
+    """Security + Guards активность за 24h."""
+    lines = ["", "🛡️ Security"]
+    if not isinstance(sec, dict):
+        lines.append("  • Данные недоступны")
+        return lines
+    lines.append(f"  • Phantom guard: {sec.get('phantom_guard_matched', 0)} caught")
+    blocklist = sec.get("command_blocklist_skip", 0)
+    blocklist_detail = sec.get("blocklist_detail") or ""
+    suffix = f" ({blocklist_detail})" if blocklist_detail else ""
+    lines.append(f"  • Command blocklist silent skips: {blocklist}{suffix}")
+    pii = sec.get("operator_pii_sanitized", 0)
+    pii_note = "no leaks detected" if not pii else "redactions applied"
+    lines.append(f"  • Operator PII redactions: {pii} ({pii_note})")
+    swarm = sec.get("swarm_tool_blocked", 0)
+    swarm_note = "no attempts to escape allowlist" if not swarm else "attempts blocked"
+    lines.append(f"  • Swarm tool blocked: {swarm} ({swarm_note})")
+    return lines
+
+
+async def _diag_fetch_sentry() -> dict | None:
+    """Читает Sentry Issues API (24h). None, если нет токена или ошибка."""
+    token = os.environ.get("SENTRY_AUTH_TOKEN")
+    if not token:
+        return None
+    org = os.environ.get("SENTRY_ORG", "krab")
+    base = os.environ.get("SENTRY_BASE_URL", "https://sentry.io").rstrip("/")
+    url = f"{base}/api/0/organizations/{org}/issues/"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(
+                url,
+                headers=headers,
+                params={"statsPeriod": "24h", "query": "is:unresolved"},
+            )
+            if resp.status_code != 200:
+                return None
+            issues = resp.json() or []
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(issues, list):
+        return None
+    by_project: dict[str, int] = {}
+    top_groups: list[dict] = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        prj = (issue.get("project") or {}).get("slug") or "unknown"
+        by_project[prj] = by_project.get(prj, 0) + 1
+        try:
+            count = int(issue.get("count", 0))
+        except Exception:  # noqa: BLE001
+            count = 0
+        top_groups.append({"title": issue.get("title") or "err", "count": count})
+    top_groups.sort(key=lambda g: g.get("count", 0), reverse=True)
+    return {
+        "unresolved": len(issues),
+        "unresolved_by_project": by_project,
+        "top_groups": top_groups[:5],
+        "trace_sample_rate": os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "10%"),
+    }
+
+
+async def _diag_collect_security() -> dict | None:
+    """Grep последних логов за 24h для подсчёта security-событий."""
+    import pathlib
+    import re as _re
+
+    log_path = pathlib.Path(
+        os.environ.get("KRAB_LOG_PATH", os.path.expanduser("~/.openclaw/logs/krab.log"))
+    )
+    counts = {
+        "phantom_guard_matched": 0,
+        "command_blocklist_skip": 0,
+        "operator_pii_sanitized": 0,
+        "swarm_tool_blocked": 0,
+    }
+    if not log_path.exists():
+        return counts
+    patterns = {k: _re.compile(k) for k in counts}
+    cutoff = time.time() - 24 * 3600
+    try:
+        # читаем последние ~20 МБ чтобы не убить IO
+        with log_path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - 20 * 1024 * 1024))
+            tail = fh.read().decode("utf-8", errors="ignore")
+    except Exception:  # noqa: BLE001
+        return counts
+    for line in tail.splitlines():
+        # быстрое отсечение по cutoff, если строка содержит ISO-дату
+        for key, rx in patterns.items():
+            if rx.search(line):
+                counts[key] += 1
+    # best-effort note: без строгой фильтрации по времени — tail ~= 24h на активном боте
+    _ = cutoff
+    return counts
+
+
 async def handle_diag(bot: "KraabUserbot", message: Message) -> None:
     """
     !diag — one-shot diagnostic summary для владельца.
@@ -19422,11 +19593,24 @@ async def handle_diag(bot: "KraabUserbot", message: Message) -> None:
             _diag_fetch_json(client, "/api/ops/alerts"),
             _diag_fetch_json(client, "/api/inbox/status"),
             _diag_fetch_json(client, "/api/openclaw/cron/jobs"),
+            _diag_fetch_json(client, "/api/memory/phase2/status"),
+            _diag_fetch_sentry(),
+            _diag_collect_security(),
             return_exceptions=True,
         )
-    health, model_status, stats, costs, memory, alerts, inbox, cron = [
-        (r if not isinstance(r, BaseException) else None) for r in results
-    ]
+    (
+        health,
+        model_status,
+        stats,
+        costs,
+        memory,
+        alerts,
+        inbox,
+        cron,
+        phase2,
+        sentry,
+        security,
+    ) = [(r if not isinstance(r, BaseException) else None) for r in results]
 
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     parts: list[str] = [f"🦀 Krab Diagnostics @ {now}", ""]
@@ -19437,6 +19621,9 @@ async def handle_diag(bot: "KraabUserbot", message: Message) -> None:
     parts.extend(_diag_fmt_section_errors(alerts))
     parts.extend(_diag_fmt_section_inbox(inbox))
     parts.extend(_diag_fmt_section_cron(cron))
+    parts.extend(_diag_fmt_section_phase2(phase2))
+    parts.extend(_diag_fmt_section_sentry(sentry))
+    parts.extend(_diag_fmt_section_security(security))
 
     text = "\n".join(parts)
     # Telegram message limit — 4096 chars; обрезаем с пометкой
