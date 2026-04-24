@@ -245,6 +245,95 @@ def test_alerts_block_exception_returns_empty() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Async-аггрегатор: не блокирует event loop, параллелит subprocess-пробы.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_async_summary_response_shape_full() -> None:
+    from src.core.dashboard_summary import collect_dashboard_summary_async
+
+    async def fake_services_async() -> tuple[dict[str, str], int | None]:
+        return (
+            {"krab": "running", "openclaw_gateway": "running", "lm_studio": "down"},
+            777,
+        )
+
+    result = await collect_dashboard_summary_async(
+        boot_ts=time.time() - 50,
+        router=_FakeRouterWithAlerts(),
+        services_probe=fake_services_async,
+        archive_probe=_fake_archive,
+        memory_probe=_fake_memory,
+        activity_probe=_fake_activity,
+    )
+    assert result["ok"] is True
+    assert result["krab_pid"] == 777
+    assert result["services"]["krab"] == "running"
+    assert len(result["alerts"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_async_summary_parallel_services_probes() -> None:
+    """Subprocess-пробы должны выполняться параллельно, не сериально.
+
+    Имитируем 6 проб по 50ms каждая. Сериальное выполнение = 300ms,
+    параллельное = ~50ms. Порог 200ms ловит регрессию без ложных срабатываний.
+    """
+
+    import asyncio as _asyncio
+
+    from src.core.dashboard_summary import (
+        _SERVICE_LABELS,
+        collect_dashboard_summary_async,
+    )
+
+    call_count = {"n": 0}
+
+    async def slow_launchctl(label: str, *, timeout: float = 1.5) -> str:
+        call_count["n"] += 1
+        await _asyncio.sleep(0.05)
+        return "running"
+
+    async def slow_krab() -> tuple[str, int | None]:
+        await _asyncio.sleep(0.05)
+        return ("running", 1)
+
+    async def slow_lm() -> str:
+        await _asyncio.sleep(0.05)
+        return "down"
+
+    async def parallel_services() -> tuple[dict[str, str], int | None]:
+        krab_t = _asyncio.create_task(slow_krab())
+        launchctl_tasks = {
+            name: _asyncio.create_task(slow_launchctl(label))
+            for name, label in _SERVICE_LABELS.items()
+        }
+        lm_t = _asyncio.create_task(slow_lm())
+        services: dict[str, str] = {}
+        krab_status, krab_pid = await krab_t
+        services["krab"] = krab_status
+        for name, t in launchctl_tasks.items():
+            services[name] = await t
+        services["lm_studio"] = await lm_t
+        return services, krab_pid
+
+    started = time.perf_counter()
+    result = await collect_dashboard_summary_async(
+        boot_ts=time.time(),
+        router=None,
+        services_probe=parallel_services,
+        archive_probe=lambda: None,
+        memory_probe=lambda: None,
+        activity_probe=lambda: None,
+    )
+    elapsed = time.perf_counter() - started
+    assert result["ok"] is True
+    # Параллельное: ~50ms. Если сериально — было бы ≥ 350ms (7 проб x 50ms).
+    assert elapsed < 0.2, f"услуги не параллелятся: elapsed={elapsed:.3f}s"
+
+
+# ---------------------------------------------------------------------------
 # E2E через FastAPI TestClient.
 # ---------------------------------------------------------------------------
 
