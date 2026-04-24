@@ -93,6 +93,7 @@ from .handlers import (
     handle_cronstatus,
     handle_debug,
     handle_del,
+    handle_diag,
     handle_diagnose,
     handle_digest,
     handle_e2e_smoke,
@@ -825,6 +826,13 @@ class KraabUserbot(
         )
         async def wrap_version(c, m):
             await run_cmd(handle_version, m)
+
+        @self.client.on_message(
+            filters.command("diag", prefixes=prefixes) & _make_command_filter("diag"),
+            group=-1,
+        )
+        async def wrap_diag(c, m):
+            await run_cmd(handle_diag, m)
 
         @self.client.on_message(
             filters.command("stats", prefixes=prefixes) & _make_command_filter("stats"),

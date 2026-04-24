@@ -19220,3 +19220,227 @@ async def handle_setpanelauth(bot: "KraabUserbot", message: Message) -> None:
         await message.delete()
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# !diag — одна команда с полной картиной runtime-состояния для владельца
+# ---------------------------------------------------------------------------
+
+
+def _diag_panel_base() -> str:
+    """Базовый URL owner panel. Используется KRAB_PANEL_URL для тестов/override."""
+    return os.environ.get("KRAB_PANEL_URL", "http://127.0.0.1:8080").rstrip("/")
+
+
+async def _diag_fetch_json(
+    client: "httpx.AsyncClient", path: str, *, timeout: float = 2.5
+) -> dict | list | None:
+    """Безопасно GET json; возвращает None при любой ошибке (graceful degradation)."""
+    try:
+        resp = await client.get(_diag_panel_base() + path, timeout=timeout)
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _diag_fmt_section_infra(bot: "KraabUserbot", health: dict | None) -> list[str]:
+    """Infrastructure секция: uptime + ключевые порты/процессы."""
+    lines: list[str] = ["🖥 Infrastructure"]
+    try:
+        elapsed = time.time() - bot._session_start_time
+        lines.append(f"  • Krab uptime: {_format_uptime_str(elapsed)}")
+    except Exception:  # noqa: BLE001
+        lines.append("  • Krab uptime: N/A")
+
+    services = [
+        ("OpenClaw Gateway", "openclaw_gateway", 18789),
+        ("MCP yung-nagato", "mcp_yung_nagato", 8011),
+        ("MCP p0lrd", "mcp_p0lrd", 8012),
+        ("LM Studio", "lm_studio", 1234),
+        ("Cloudflared", "cloudflared", None),
+    ]
+    data = (health or {}).get("services") if isinstance(health, dict) else None
+    for label, key, port in services:
+        status = "⚠️ unknown"
+        if isinstance(data, dict):
+            svc = data.get(key) or {}
+            if svc.get("ok") is True:
+                status = "✅"
+            elif svc.get("ok") is False:
+                status = "❌"
+            detail = svc.get("detail") or svc.get("status") or ""
+            suffix = f" :{port}" if port else ""
+            if detail:
+                lines.append(f"  • {label}: {status}{suffix} ({detail})")
+                continue
+        suffix = f" :{port}" if port else ""
+        lines.append(f"  • {label}: {status}{suffix}")
+    return lines
+
+
+def _diag_fmt_section_model(model_status: dict | None) -> list[str]:
+    """Model routing — активная модель, tier, последний роутинг."""
+    lines = ["", "📊 Model routing"]
+    if not isinstance(model_status, dict):
+        lines.append("  • Данные недоступны")
+        return lines
+    active = model_status.get("active") or model_status.get("model") or "unknown"
+    tier = model_status.get("tier") or model_status.get("cloud_tier") or "n/a"
+    last_route = model_status.get("last_route") or model_status.get("last_route_ago") or "n/a"
+    lines.append(f"  • Active: {active}")
+    lines.append(f"  • Tier: {tier}")
+    lines.append(f"  • Last route: {last_route}")
+    return lines
+
+
+def _diag_fmt_section_traffic(stats: dict | None, costs: dict | None) -> list[str]:
+    """Трафик + стоимость за час."""
+    lines = ["", "💬 Traffic (1h)"]
+    if isinstance(stats, dict):
+        lines.append(
+            f"  • Messages processed: {stats.get('messages_1h', stats.get('messages', 0))}"
+        )
+        lines.append(f"  • LLM calls: {stats.get('llm_calls_1h', stats.get('llm_calls', 0))}")
+        lines.append(f"  • Swarm rounds: {stats.get('swarm_rounds_1h', 0)}")
+    else:
+        lines.append("  • Статистика недоступна")
+    if isinstance(costs, dict):
+        spent = costs.get("spent") or costs.get("today") or 0
+        budget = costs.get("budget") or costs.get("limit") or 0
+        pct = 0
+        try:
+            pct = int((float(spent) / float(budget)) * 100) if float(budget) else 0
+        except Exception:  # noqa: BLE001
+            pass
+        lines.append(f"  • Cost: ${spent} / ${budget} budget ({pct}%)")
+    return lines
+
+
+def _diag_fmt_section_memory(mem: dict | None) -> list[str]:
+    """Memory: archive size, retrieval режим, latency."""
+    lines = ["", "🧠 Memory"]
+    if not isinstance(mem, dict):
+        lines.append("  • Данные недоступны")
+        return lines
+    archive = mem.get("archive") or {}
+    size_mb = archive.get("size_mb") or mem.get("archive_size_mb") or 0
+    chunks = archive.get("chunks") or mem.get("chunks") or 0
+    vec = archive.get("vec") or mem.get("vec") or chunks
+    lines.append(f"  • Archive.db: {size_mb} MB ({chunks} chunks / {vec} vec)")
+    mode = mem.get("retrieval_mode") or "hybrid"
+    lines.append(f"  • Retrieval mode: {mode}")
+    lat = mem.get("latency") or {}
+    if lat:
+        lines.append(
+            f"  • Latency P50 — FTS: {lat.get('fts_p50', '?')}ms / "
+            f"Vec: {lat.get('vec_p50', '?')}ms / MMR: {lat.get('mmr_p50', '?')}ms"
+        )
+    return lines
+
+
+def _diag_fmt_section_errors(alerts: dict | list | None) -> list[str]:
+    """Ошибки / Sentry / digest."""
+    lines = ["", "⚠️ Errors (last 24h)"]
+    if isinstance(alerts, dict):
+        active = alerts.get("active") or alerts.get("alerts") or []
+    elif isinstance(alerts, list):
+        active = alerts
+    else:
+        active = None
+    if active is None:
+        lines.append("  • Данные недоступны")
+        return lines
+    lines.append(f"  • Active alerts: {len(active)}")
+    if active:
+        top = active[0] if isinstance(active[0], dict) else {}
+        code = top.get("code") or top.get("name") or "alert"
+        msg = top.get("message") or top.get("summary") or ""
+        lines.append(f"  • Top: {code} — {msg[:80]}")
+    return lines
+
+
+def _diag_fmt_section_inbox(inbox: dict | None) -> list[str]:
+    """Inbox items."""
+    lines = ["", "📬 Inbox"]
+    if not isinstance(inbox, dict):
+        lines.append("  • Данные недоступны")
+        return lines
+    lines.append(f"  • Open items: {inbox.get('open_items', 0)}")
+    lines.append(f"  • Stale (>24h): {inbox.get('stale_items', 0)}")
+    return lines
+
+
+def _diag_fmt_section_cron(cron: dict | list | None) -> list[str]:
+    """Cron jobs — сегодняшние fires."""
+    lines = ["", "✅ Cron (today)"]
+    jobs: list[dict] = []
+    if isinstance(cron, dict):
+        raw = cron.get("jobs") or cron.get("items") or []
+        if isinstance(raw, list):
+            jobs = [j for j in raw if isinstance(j, dict)]
+    elif isinstance(cron, list):
+        jobs = [j for j in cron if isinstance(j, dict)]
+    if not jobs:
+        lines.append("  • Нет активных cron-задач")
+        return lines
+    for job in jobs[:6]:
+        name = job.get("name") or job.get("id") or "job"
+        last = job.get("last_fire") or job.get("last_run") or "—"
+        fires = job.get("fires_today") or job.get("runs_today") or 0
+        fires_str = f" (×{fires})" if fires else ""
+        lines.append(f"  • {name}: {last}{fires_str}")
+    return lines
+
+
+async def handle_diag(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !diag — one-shot diagnostic summary для владельца.
+
+    Собирает: infra health, model routing, traffic/cost, memory stats, errors,
+    inbox, cron. Запросы к owner panel параллельные (~500ms суммарно).
+    Owner-only.
+    """
+    # Owner-only guard
+    try:
+        access_profile = bot._get_access_profile(message.from_user)
+    except Exception:  # noqa: BLE001
+        access_profile = None
+    if access_profile is None or access_profile.level != AccessLevel.OWNER:
+        await message.reply("🔒 `!diag` — только для владельца.")
+        return
+
+    # Параллельные GET к owner panel для скорости (~500ms вместо 5s sequential)
+    async with httpx.AsyncClient(timeout=2.5) as client:
+        results = await asyncio.gather(
+            _diag_fetch_json(client, "/api/health/lite"),
+            _diag_fetch_json(client, "/api/model/status"),
+            _diag_fetch_json(client, "/api/stats"),
+            _diag_fetch_json(client, "/api/costs/budget"),
+            _diag_fetch_json(client, "/api/memory/stats"),
+            _diag_fetch_json(client, "/api/ops/alerts"),
+            _diag_fetch_json(client, "/api/inbox/status"),
+            _diag_fetch_json(client, "/api/openclaw/cron/jobs"),
+            return_exceptions=True,
+        )
+    health, model_status, stats, costs, memory, alerts, inbox, cron = [
+        (r if not isinstance(r, BaseException) else None) for r in results
+    ]
+
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    parts: list[str] = [f"🦀 Krab Diagnostics @ {now}", ""]
+    parts.extend(_diag_fmt_section_infra(bot, health))
+    parts.extend(_diag_fmt_section_model(model_status))
+    parts.extend(_diag_fmt_section_traffic(stats, costs))
+    parts.extend(_diag_fmt_section_memory(memory))
+    parts.extend(_diag_fmt_section_errors(alerts))
+    parts.extend(_diag_fmt_section_inbox(inbox))
+    parts.extend(_diag_fmt_section_cron(cron))
+
+    text = "\n".join(parts)
+    # Telegram message limit — 4096 chars; обрезаем с пометкой
+    if len(text) > 4000:
+        text = text[:3990] + "\n…(обрезано)"
+    # parse_mode=None — безопаснее для ru-текста со спецсимволами
+    await message.reply(text, parse_mode=None)

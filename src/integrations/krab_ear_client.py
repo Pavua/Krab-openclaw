@@ -6,6 +6,9 @@
 1) Проверять живость локального backend (`/health`) для единого ecosystem health.
 2) Изолировать детали подключения к Krab Ear (URL/таймаут) от web/runtime слоя.
 3) Предоставлять такой же контракт `health_check()` как у остальных клиентов.
+4) Cross-project distributed tracing (Sentry): пробрасывать `sentry-trace`
+   и `baggage` в Ear backend через HTTP headers и IPC params. Это связывает
+   issues между python-fastapi (Main Krab) и krab-ear-backend в Sentry UI.
 """
 
 from __future__ import annotations
@@ -22,6 +25,44 @@ import httpx
 from ..core.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _get_sentry_trace_headers() -> dict[str, str]:
+    """Возвращает dict с `sentry-trace` и `baggage` для propagation.
+
+    Graceful: если sentry_sdk не установлен или нет активного span — пустой dict.
+    Это позволяет cross-project trace linking без hard-dependency на SDK.
+    """
+    headers: dict[str, str] = {}
+    try:
+        import sentry_sdk  # type: ignore[import-not-found]
+    except ImportError:
+        return headers
+
+    try:
+        # Публичный API (SDK 2.x): get_traceparent / get_baggage на модуле.
+        traceparent = (
+            sentry_sdk.get_traceparent() if hasattr(sentry_sdk, "get_traceparent") else None
+        )
+        baggage = sentry_sdk.get_baggage() if hasattr(sentry_sdk, "get_baggage") else None
+    except Exception:  # noqa: BLE001
+        traceparent = None
+        baggage = None
+
+    if not traceparent:
+        # Fallback через tracing_utils (некоторые версии SDK).
+        try:
+            from sentry_sdk.tracing_utils import get_traceparent as _get_tp  # type: ignore
+
+            traceparent = _get_tp()
+        except Exception:  # noqa: BLE001
+            traceparent = None
+
+    if traceparent:
+        headers["sentry-trace"] = traceparent
+    if baggage:
+        headers["baggage"] = baggage
+    return headers
 
 
 class KrabEarClient:
@@ -63,6 +104,9 @@ class KrabEarClient:
         Контракт взят из KrabEar backend/service.py:
         - метод: `ping`
         - формат: JSON line (`\\n`-terminated).
+
+        Cross-project tracing: Sentry trace headers прокидываются через
+        `params._trace` (Ear backend должен прочитать и передать в continue_trace).
         """
         if not self.socket_path.exists():
             return False, "socket_missing"
@@ -74,7 +118,11 @@ class KrabEarClient:
                 asyncio.open_unix_connection(path=str(self.socket_path)),
                 timeout=self.timeout_sec,
             )
-            request = {"id": "health", "method": "ping", "params": {}}
+            params: dict[str, Any] = {}
+            trace_headers = _get_sentry_trace_headers()
+            if trace_headers:
+                params["_trace"] = trace_headers
+            request = {"id": "health", "method": "ping", "params": params}
             writer.write((json.dumps(request, ensure_ascii=False) + "\n").encode("utf-8"))
             await writer.drain()
 
@@ -100,10 +148,23 @@ class KrabEarClient:
                     pass
 
     async def _fetch_health_payload(self) -> tuple[int, dict[str, Any]]:
-        """Возвращает `(http_status, payload)` для `/health`."""
+        """Возвращает `(http_status, payload)` для `/health`.
+
+        Cross-project tracing: пробрасывает `sentry-trace` и `baggage` headers,
+        чтобы Ear backend (при настроенном FastApiIntegration) склеил span-tree.
+        А также тегирует вызов как `target_service=krab-ear` для фильтрации.
+        """
         url = f"{self.base_url}/health"
+        headers = _get_sentry_trace_headers()
+        # Отметим target_service на активной Sentry-span, чтобы было фильтруемо.
+        try:
+            import sentry_sdk  # type: ignore[import-not-found]
+
+            sentry_sdk.set_tag("target_service", "krab-ear")
+        except Exception:  # noqa: BLE001
+            pass
         async with httpx.AsyncClient(timeout=self.timeout_sec) as client:
-            response = await client.get(url)
+            response = await client.get(url, headers=headers or None)
             payload: dict[str, Any] = {}
             content_type = str(response.headers.get("content-type", "")).lower()
             if "application/json" in content_type:

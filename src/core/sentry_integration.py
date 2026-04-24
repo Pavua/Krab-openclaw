@@ -198,6 +198,9 @@ def init_sentry() -> bool:
             send_default_pii=False,
         )
         sentry_sdk.set_tag("agent_kin", "krab")
+        # Константа для cross-project distributed tracing: все события Main Krab
+        # помечены service=krab-main. Ear backend ставит service=krab-ear.
+        sentry_sdk.set_tag("service", "krab-main")
         session_id = _read_current_session_id()
         if session_id:
             sentry_sdk.set_tag("session", session_id)

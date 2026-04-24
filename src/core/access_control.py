@@ -61,6 +61,7 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "read",
         "write",
         "agent",
+        "diag",
         "diagnose",
         "help",
         "remind",
@@ -273,6 +274,8 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "reset",
         # Wave 22-F: запуск бенчмарков (subprocess), только владелец
         "bench",
+        # !diag — полный runtime snapshot для владельца
+        "diag",
     }
 )
 
