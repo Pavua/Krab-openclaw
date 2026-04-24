@@ -1,293 +1,75 @@
-# Changelog
+# Changelog — 2026-04-24
 
-All notable changes to Krab project documented here.
+_Since `3cb0276` — 48 commits_
 
-Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versioning: Semantic (MAJOR.MINOR.PATCH).
+## Features
 
-## [Unreleased]
+- feat(mcp): dev-loop tools pack — integrated restore ([1819a4c](https://github.com/Pavua/Krab-openclaw/commit/1819a4c042d065f1cca004c4196cf49c5dbfa579))
+- feat(sentry): Performance Monitoring — trace LLM + memory retrieval spans ([5be4ad3](https://github.com/Pavua/Krab-openclaw/commit/5be4ad39983c346632c7153f7db649ed1fce61bf))
+- feat(perf): C4 MMR vec-cache + Sentry Performance Monitoring ([7161885](https://github.com/Pavua/Krab-openclaw/commit/71618855ce9fe166ae855bee87b6ce09a1b5bf0c)) — Sentry: [PYTHON-FASTAPI-5D](https://sentry.io/organizations/krab/issues/?query=PYTHON-FASTAPI-5D)
+- feat(cmd): !diag — one-shot diagnostic summary for owner ([7c445e0](https://github.com/Pavua/Krab-openclaw/commit/7c445e0a804fcbc39197f26f50d819a4ca0dae50))
+- feat(ops): git post-commit hook — auto push + Sentry auto-resolve + optional e2e ([59b2430](https://github.com/Pavua/Krab-openclaw/commit/59b2430a331d9a0d751a03d8b110476cc7fb1f08)) — Sentry: [PYTHON-FASTAPI-XX](https://sentry.io/organizations/krab/issues/?query=PYTHON-FASTAPI-XX)
+- feat(observability): install prometheus-client + Grafana dashboard JSON ([03ddb78](https://github.com/Pavua/Krab-openclaw/commit/03ddb78847fe4f71044ddde1e2ffeb95f768a7b5))
+- feat(memory): C7 - vec_chunks_meta DDL + embedder writes (follow-up) ([2065c69](https://github.com/Pavua/Krab-openclaw/commit/2065c69724fe2aa36b6cf53ae060fb3de0ffa180))
+- feat(memory): C6 - Prometheus metrics for retrieval mode + latency ([2df5bcf](https://github.com/Pavua/Krab-openclaw/commit/2df5bcf58536cc3d84c6c0f8aeae6a8582fee00f))
+- feat(memory): C3 - RRF vector weight parametrization + helper ([16cfc4d](https://github.com/Pavua/Krab-openclaw/commit/16cfc4d8ea16d7cd05ad28f6f6d8d6423cf85e11))
+- feat(memory): C1 - _vector_search() real implementation + feature flag ([e14e457](https://github.com/Pavua/Krab-openclaw/commit/e14e457b300940e386f1bc3de2dafed155ecc5bc))
+- feat(mcp): Apple Notes + iMessage + Reminders + Calendar tools ([ffbfd30](https://github.com/Pavua/Krab-openclaw/commit/ffbfd30b00fad431d02abc83284c2ade02a3ee8d))
+- feat(mcp+memory): db_query tool + cosine MMR on-the-fly encode ([258f777](https://github.com/Pavua/Krab-openclaw/commit/258f777897520df8dabfd6b8af2939030fa019ce))
+- feat(ops): populate cron jobs + enable all swarm listeners ([4170284](https://github.com/Pavua/Krab-openclaw/commit/4170284b9ec91d26982a3b122531ba5aea01d4d3))
+- feat(mcp): filesystem + git + system + http + time tools ([aa7cf30](https://github.com/Pavua/Krab-openclaw/commit/aa7cf303fa305bd1e65bb3eb61fffaac3c32efc4))
+- feat(ops): gateway watchdog + error_digest first-run delay ([a24adcd](https://github.com/Pavua/Krab-openclaw/commit/a24adcd65ac8ad4641a1889c7534ca33514ecd16))
+- feat(memory): MMR diversity + query expansion (P2 carry-over) ([675da20](https://github.com/Pavua/Krab-openclaw/commit/675da20f476c582783a7bd6be15e2fbe3fb37c83))
+- feat(ops): activate workspace_backup + log_rotation launchagents ([4904cc2](https://github.com/Pavua/Krab-openclaw/commit/4904cc21ccdeec46a7eacfadd3523802d48d8427))
+- feat(swarm): per-team tool allowlist ([8d58c5d](https://github.com/Pavua/Krab-openclaw/commit/8d58c5da2d8d50db44f2b27d4b24108f115834c8))
+- feat(alerts): self-healing Cloudflare Tunnel + Sentry webhook sync ([4ec5a3b](https://github.com/Pavua/Krab-openclaw/commit/4ec5a3b5f136f038cee35971dbda7f70345b1f9e))
+- feat(sentry): setup_sentry_alerts.py — one-shot автоматизация alert rules ([1363209](https://github.com/Pavua/Krab-openclaw/commit/13632096678ea01333cb6f9ec8b28edca367d792))
+- feat(sentry): /api/hooks/sentry endpoint + formatter — Telegram alerts from Sentry webhooks ([64cbe27](https://github.com/Pavua/Krab-openclaw/commit/64cbe27ac209e869338585a44908e3d38d7edfed))
 
-Nothing queued yet — see `.remember/next_session.md` for Session 14 scope.
+## Bug Fixes
 
-## [10.4.0] — 2026-04-19 — Session 13: Chado architecture live + Wave 21-29 stability batch
+- fix(bridge): W32 hotfix v2 — blocklist singleton (was module import AttributeError silent fail) ([03b9e0d](https://github.com/Pavua/Krab-openclaw/commit/03b9e0ded176894050b0b38850a72680180d2eef)) — Sentry: [PYTHON-FASTAPI-5E](https://sentry.io/organizations/krab/issues/?query=PYTHON-FASTAPI-5E)
+- fix(memory): Phase 2 smoke validation findings ([4dd63a1](https://github.com/Pavua/Krab-openclaw/commit/4dd63a154b9cf25034f309488351cde1ce9a56f8))
+- fix(pyrogram): apply WAL + busy_timeout pragma to prevent SQLite locked ([47404df](https://github.com/Pavua/Krab-openclaw/commit/47404df7716d235d23a122a6d64d064c48e83c1b)) — Sentry: [PYTHON-FASTAPI-5A](https://sentry.io/organizations/krab/issues/?query=PYTHON-FASTAPI-5A)
+- fix(model): /api/model/switch endpoint — use correct ModelManager API ([99ed09e](https://github.com/Pavua/Krab-openclaw/commit/99ed09e2e1b89cebdd95e9c60c0d89fb6232fe1f))
+- fix(bridge): W32 — queue event-loop rebinding prevents RuntimeError after restart ([38a801f](https://github.com/Pavua/Krab-openclaw/commit/38a801f50148549cb29aec3427c56c45e94ad2f4))
+- fix(memory): MemoryEmbedder thread-safe SQLite connection via threading.local ([ad7e453](https://github.com/Pavua/Krab-openclaw/commit/ad7e453bcaaa304cfcbf869efe7cdbca8f9f8d40))
+- fix(bridge): W32 — !status spam loop in How2AI (critical prod regression) ([8b8b383](https://github.com/Pavua/Krab-openclaw/commit/8b8b3832beec305602a77d81817db18568cde1a2))
+- fix(guard+acl): phantom precision + ACL key migration тишина→silence ([3951980](https://github.com/Pavua/Krab-openclaw/commit/3951980986e11adec1e5772a80ae915dd2b61652))
+- fix(ops+tests): shell scripts status enforcement + swarm ContextVar concurrency tests ([68877a2](https://github.com/Pavua/Krab-openclaw/commit/68877a29c59b3b25f36ffcf051a701008307afe2))
+- fix(memory): narrow BLE001 exceptions + WARN level for silent failures ([99c059d](https://github.com/Pavua/Krab-openclaw/commit/99c059d591c78511971b690cbd165bbea1ec9aca))
+- fix(mcp): db_query proper SQL gate — sqlite3.complete_statement + comment stripping ([28968b0](https://github.com/Pavua/Krab-openclaw/commit/28968b03243fc7c9eae3d1b78e08546b41ddf4ae))
+- fix(sentry): hard-require SENTRY_WEBHOOK_SECRET + auto-generate at boot ([8737999](https://github.com/Pavua/Krab-openclaw/commit/87379998c7144627e0cb4012a790ab088936f31c))
+- fix(mcp): SSRF guard + content-type check in http_fetch ([edc656e](https://github.com/Pavua/Krab-openclaw/commit/edc656e57cb74ed19259b682fec8727bc06ff417))
+- fix(bridge): register !version + !silence handlers — E2E regression fix ([bf75cf2](https://github.com/Pavua/Krab-openclaw/commit/bf75cf2d48258b5f65bb9f98e4a6d8d227bb1d59))
+- fix(digest): error_digest_loop 6h→24h + Prometheus metric krab_error_digest_fired_total ([4487045](https://github.com/Pavua/Krab-openclaw/commit/4487045c8ff0abf98f84820137f89e4cd0ab4255))
+- fix(digest): weekly fires on startup, nightly_summary wired to bootstrap ([a4b0114](https://github.com/Pavua/Krab-openclaw/commit/a4b011433fa4113efb9f8c2100c6e32699d24c8d))
+- fix(phantom-guard): + messageId/delivery-confirmed patterns after live-test regression ([d6f62ac](https://github.com/Pavua/Krab-openclaw/commit/d6f62ac52c12061944eec2cf2b77fb1b05cf466a))
 
-### Added
+## Performance
 
-- **Chado multi-message architecture** (Waves 17-20):
-  - `ChatWindow` per-chat context + LRU eviction
-  - `MessagePriorityDispatcher` (P0/P1/P2 queue)
-  - `ChatFilterConfig` per-chat modes (`!listen [active|mention-only|muted]`)
-  - `KrabIdentity` + `GroupIdentity` self-awareness helpers (Chado blueprint)
-  - `MessageBatcher` per-chat backpressure handling
+- perf(memory): C4 - MMR vec-cache reads pre-computed embeddings (10× MMR speedup) ([935184f](https://github.com/Pavua/Krab-openclaw/commit/935184f96198b5d1cabf070384122a995e7d214d))
+- perf(memory): pre-warm Model2Vec always on bootstrap (fixes 1.8s cold) ([cc9829b](https://github.com/Pavua/Krab-openclaw/commit/cc9829bee24fd29cc96201673d64bad10726edff))
+- perf(memory): C5 - dedicated ThreadPoolExecutor for embedder (persistent connection) ([757edc4](https://github.com/Pavua/Krab-openclaw/commit/757edc4956ff687f5491712df84df7d48c5f9a99))
 
-- **Memory Phase 2** LIVE (Wave 17-19):
-  - Model2Vec embeddings + sqlite-vec hybrid search
-  - `/api/memory/stats` endpoint
-  - `!archive stats/growth` subcommands (archive growth daily snapshot)
-  - Memory query expansion with synonyms (RU+EN)
+## Documentation
 
-- **Stability & monitoring** (Waves 21-26):
-  - Auto-reactions module recovery (`src/core/auto_reactions.py`)
-  - LaunchAgent weekly maintenance (VACUUM + log rotation)
-  - Archive growth monitor + daily snapshots
-  - Extended `!uptime` command
-  - Prometheus alerts YAML (14 alerts total: ArchiveDbSizeCritical, CommandHandlerErrors, KrabDown, LLMErrorRateHigh, MemoryQueryLatencyHigh, MessageBatcherBackpressure, TelegramRateLimited + 7 new)
-  - Chat filters user guide
-  - Async task_board load (event loop stall fix)
-  - `/api/dashboard/summary` single-call aggregator
-  - Stagger swarm startup 1.5s + warmup gate
-  - `/api/system/clock_drift` endpoint
-  - MCP e2e verify probe
-  - Archive.db VACUUM + log rotation
-  - Per-dir ruff config
+- docs(audit): Session 21 infrastructure status snapshot ([5e02ce0](https://github.com/Pavua/Krab-openclaw/commit/5e02ce034cdd56af8c953ee0ddd71e24996e9c05))
+- docs(memory): Phase 2 implementation plan (8 commits, feature-flagged) ([28a3602](https://github.com/Pavua/Krab-openclaw/commit/28a3602c67802ca3993e2c6c8986ac7b94a5e94c))
+- docs: Memory Phase 2 activation + sqlite-vec desync diagnosis ([01a650e](https://github.com/Pavua/Krab-openclaw/commit/01a650e2ea3ddfddf1bbe7c5a51a7cb4bdccd9d5))
+- docs(swarm): tool-per-team scoping implementation plan ([10e00ef](https://github.com/Pavua/Krab-openclaw/commit/10e00ef5bafb62feb962c63bb38417f013218060))
 
-- **Refinements** (Waves 27-29):
-  - Routing fix: `USERBOT_KNOWN_COMMANDS` frozenset
-  - `sync_docs.py` composite regen (204 endpoints / 154 handlers auto-sync to CLAUDE.md)
-  - Swarm research_pipeline profile + non-blocking persist
-  - `/api/commands/usage/top` endpoint
-  - Memory adaptive rerank opt-in (env `MEMORY_ADAPTIVE_RERANK_ENABLED`)
-  - Dashboard V4 spec finalized
-  - `!bench _safe_reply` safety sweep (18 calls fixed)
-  - p0lrd bootstrap probe — export ready
-  - `!cron BROKEN` diagnosis (OpenClaw CLI freeze → Session 14)
-  - sqlite-vec FTS5/vec_chunks repair script
-  - `!memory rebuild` command (WIP)
-  - 7 orphan agent worktrees removed (-600MB)
-  - Regression test for `handle_confirm/handle_bench`
+## Tests
 
-### Fixed
+- test(security): comprehensive tests for operator_info_guard + sentry_webhook_formatter ([8c21c5a](https://github.com/Pavua/Krab-openclaw/commit/8c21c5a027840d6f6e0fa66837f139a86b888b0f))
+- test(e2e): MCP-based smoke harness for W26/W31 regressions ([808a508](https://github.com/Pavua/Krab-openclaw/commit/808a508021f445eef1f58098845e30bde1ddc9a6))
 
-- **!bench _safe_reply** — 18 unsafe reply calls (react/cron_quick/listen) corrected to safe-reply protocol (`e.g., 29-G`)
-- **Swarm startup race** — stagger 1.5s + warmup gate prevents cascade (Wave 25)
-- **Event loop stall** — async task_board load refactored (Wave 24)
-- **Routing** — USERBOT_KNOWN_COMMANDS now frozenset (Wave 27)
-- **how2ai diagnosis** — not blocked, flaky OpenClaw root cause (29-I)
+## Uncategorized
 
-### Changed
+- docs(audit) + fix(cron): routines profit audit + silence 1230 warn/session spam ([f85646c](https://github.com/Pavua/Krab-openclaw/commit/f85646c7076bfe86708d9699174622dbd5b2e84a))
 
-- **CLAUDE.md** auto-sync via `sync_docs.py` (204 endpoints / 154 handlers, ~10x faster regen)
-- **Swarm research** — non-blocking persist + profile instrumentation
-- **Archive monitoring** — daily snapshot + growth stats exposed (`!archive stats/growth`)
+## Stats
 
-### Tests
-
-- **+240+ new tests** (estimated across stability modules, memory Phase 2 e2e, adapter regression, cron/bench safety)
-- **Prometheus coverage** — 14 alerts + 8 metrics fully covered
-- Total: **~7700 tests** (up from ~7465)
-
-### Commits (29+)
-
-Spans Wave 17-29 (post-reboot). Full scope via `git log --oneline` for waves 17-29.
-
-### Known issues carried to Session 14
-
-- p0lrd Telegram Export >24h (still exporting, старый аккаунт)
-- OpenClaw CLI freeze (detected in 29-I, diagnosis needed)
-- 27 orphan worktrees (prune post-session)
-
----
-
-## [10.3.0] — 2026-04-18 — Session 12: Chado-inspired Proactivity + Voice Phase 1.4 + Identity fixes
-
-### Added
-
-- **Chado-inspired reactive architecture** (multi-message priority + per-chat awareness):
-  - `src/core/chat_window_manager.py` — per-chat ChatWindow (LRU eviction, context preservation)
-  - `src/core/message_priority_dispatcher.py` — priority queue (P0 instant / P1 normal / P2 low)
-  - `src/core/chat_filter_config.py` — per-chat mode (active / mention-only / muted) + `!listen [mode]` command
-  - `src/core/krab_identity.py` — self-identity helpers, mention detection (RU + EN + emoji + username patterns)
-  - `src/core/group_identity.py` — "🦀 Краб: " prefix в group replies (fixes Chado identity issue)
-  - `src/core/message_batcher.py` — per-chat backpressure batching
-
-- **Voice Gateway Phase 1.4** (`src/integrations/voice_channel_handler.py`):
-  - VoiceChannelHandler + VoiceSession abstraction
-  - Brain proxy для голосовых команд (MCP tool relay)
-  - MCP voice tools registration + real-time voice dispatch
-  - Voice profiling (speaker embedding similarity for caller recognition)
-
-- **Structured Reflector** (pydantic JSON schema `src/core/swarm_self_reflection.py`):
-  - `ReflectionOutput` + `FollowUpItem` Pydantic models
-  - `structured_reflect()` — Haiku-optimized JSON introspection
-  - Auto-enqueue follow-ups → reminders_queue или task_board
-
-- **New Telegram commands:**
-  - `!listen [active|mention-only|muted]` — per-chat chat mode toggle
-  - `!confirm`, `!reset`, `!recall`, `!remind` (from Session 11)
-  - `!model info` — model routing explanation
-  - `!stats ecosystem` — ecosystem health snapshot
-
-### Fixed
-
-- **!reset fast-path** — ACL registry missing `"reset"` в USERBOT_KNOWN_COMMANDS → routed through LLM (50s delay). Now direct handler, <1s response. (`933fcd4`)
-- **Krab self-identity** — system_prompt said "владелец @yung_nagato" (wrong — Krab is yung_nagato). Now correctly identifies self vs owner. (`85cf998`, `7089201`)
-- **Krab mention trigger** — `_is_trigger` only matched "краб" в start. Now matches anywhere via word boundary regex (fixes multi-message threading). (`85cf998`)
-- **Group chat identity** — Краб replied без prefix. Now sends "🦀 Краб: " prefix in groups (fixes confusion in Chado/multi-user chats). (`2fed6f6`)
-
-### Changed
-
-- **parse_mode="markdown"** (session 11 change, confirmed in testing).
-- **qwen3-30b-a3b-2507** fallback routing activated (PR #20 cherry-pick) (`0aaceac`).
-- **Reminders persistence** — verified across Krab restart (6 integration tests) (`39c6e21`).
-
-### Tests
-
-- **+30 new tests** (estimate: voice_channel, chat_window, message_priority, filter_config, identity fixes).
-- Voice Phase 1.4: channel 100%, handler 87%, session mgmt 92%.
-- Identity: self-recognition 100%, mention detection 95%, group prefix 100%.
-- Reminders: persistence 100%, queue ordering 98%.
-
-### Commits (7)
-
-Spans `0881081..HEAD`:
-```
-18e7de2 merge: !reset fast-path ACL fix (Wave 16-E)
-933fcd4 fix(commands): !reset fast-path — direct handler registration (was routing via LLM)
-0aaceac feat(model): qwen3-30b-a3b-2507 routing + LRU eviction (PR #20 v2 via cherry-pick)
-3c4700d merge: structured reflector JSON schema (Wave 16-H, Chado blueprint)
-2c3d5f3 feat(reflection): structured JSON schema + reminders queue integration (Chado blueprint)
-6de6fff docs(claude-md): document voice_channel module (Phase 1.4) (#19)
-0e7b979 feat(voice): voice_channel_handler + brain proxy + MCP voice tools (VA Phase 1.4) (#18)
-```
-
-### Known issues carried to Session 13
-
-- Voice Gateway real-time dispatch latency >200ms (queueing investigation needed)
-- Per-chat ChatWindow eviction race condition under high concurrency (4k+ messages/min)
-- Mention regex false positives on Cyrillic kerning edge cases
-
----
-
-## [10.2.0] — 2026-04-17 — Session 11: Proactivity + Memory Layer Phase 2 + Feature polish
-
-### Added
-- **Memory Layer Phase 2** end-to-end:
-  - Model2Vec embeddings pipeline — 9131 chunks encoded в 1.9s
-  - sqlite-vec virtual table for vector search
-  - Hybrid FTS5+semantic Reciprocal Rank Fusion re-ranker (`src/core/memory_hybrid_reranker.py`)
-  - `/api/memory/search` endpoint (fts/semantic/hybrid modes)
-  - `!recall <query>` command в Telegram
-  - `krab_memory_search` + `krab_memory_stats` MCP tools
-- **Proactivity Level 2** — Reminders Queue (`src/core/reminders_queue.py`):
-  - Time-based reminders ("через 2 часа ...")
-  - Event-based reminders ("когда в чате X появится тема Y")
-  - Wired в `userbot_bridge` startup + event hook в `_process_message`
-  - `!remind <spec>` command + parser (RU+EN natural language)
-- **Proactivity Level 3** — Self-reflection pipeline (`src/core/swarm_self_reflection.py`):
-  - Post-task LLM reflection parses insights/unresolved/followups
-  - Followups auto-enqueued в task_board или reminders_queue
-- **Proactivity Level 1** — Per-chat cron UX:
-  - Human-friendly cron spec parser (`src/core/cron_spec_parser.py`) RU+EN
-  - `!cron quick "каждый день в 10:00" "prompt"` subcommand
-  - Fixed: `!cron` handler never registered в dispatcher (dead code restored)
-- **New Telegram commands:** `!recall`, `!remind`, `!cron quick`, `!model info`, `!stats ecosystem`
-- **Dashboard V4 backend:** `/api/session10/summary` endpoint + Gemini 3.1 Pro frontend spec
-- **Dedicated Chrome launcher** активирован в Krab startup (opt-in через env)
-- **Provider auto-failover** (`src/core/provider_failover.py`) — N consecutive failures → switch to fallback
-- **Prometheus `/metrics` endpoint** без deps на prometheus_client
-- **Typing keepalive** context manager (`src/userbot/typing_keepalive.py`) с explicit cancel
-- **Auto-restart policy** расширен с launchctl "not loaded" detection
-- **Markdown escape helper** (`src/core/markdown_escape.py`) + default `parse_mode=markdown` в `_safe_reply`/`_safe_edit`
-- **Weekly maintenance script** (`scripts/maintenance_weekly.py`) — VACUUM + log rotation
-- **CI health report** aggregator (`scripts/ci_health_report.py`)
-- **Stale worktrees cleanup** utility (`scripts/cleanup_stale_worktrees.py`)
-- **CHANGELOG auto-appender** (`scripts/changelog_append.py`)
-
-### Fixed
-- **codex-cli stagnation cancel** verified live во время 17.04 outage (Wave 2 code работает)
-- **Gateway "not loaded"** recovery через launchctl bootstrap (incident 17.04)
-- **Chrome prompts** — disable `chrome-devtools` + `playwright` MCP в `~/.claude.json`, kill workspace Chrome, user manually disabled `chrome://inspect` toggle
-- **`handle_cron` dispatcher** — never registered, теперь connects `!cron` к filter
-- **`auto_restart_manager`/`is_auto_restart_enabled`** backward compat aliases для `proactive_watch` import
-
-### Changed
-- **PIIRedactor** — URL skip для CARD matches (Twitter status IDs), ASCII art skip for PHONE
-- **Memory validator patterns** — WEAK/STRONG split against decoration bypass + 9 new synonyms
-- **`!stats`** — добавлен `ecosystem` subcommand (alias `eco`, `health`)
-- **`!memory`** — добавлен `stats` subcommand
-
-### Tests
-- **+200+ new unit tests** (estimated)
-- Memory Layer coverage: **89% → 94%** (3 modules >85%)
-- `src/core/logger.py`: 48% → **100%**
-- `src/core/openclaw_task_poller.py`: 50% → **100%**
-- Integration tests для Session 10 endpoints + E2E memory chain
-- Smoke tests: retrieval (0.5-0.9ms FTS), semantic search (1.2s cold / ~50ms warm)
-
-### Security
-- **Memory Injection Validator** medium fixes merged (allowlist tuning, NFKC normalization, 9 synonyms, audit logging)
-- Owner check unified через ACL (removed env-based OWNER_USER_IDS risk)
-
-### Docs
-- `.remember/session_11_rollup.md` — interim rollup
-- `.remember/session_11_feature_requests.md` — user feedback (parse_mode md, proactivity 2-level, `!model info`)
-- `docs/DASHBOARD_V4_SESSION10_FRONTEND_SPEC.md` — 329 lines spec для Gemini
-- `CLAUDE.md` — новые endpoints (`/metrics`, `/api/memory/search`, `/api/chrome/dedicated/*`)
-
-### Commits (58+)
-Spans `95d1754..HEAD`. Full list via `git log --oneline 95d1754..HEAD`.
-
-### Known issues carried to Session 12
-- p0lrd Telegram Export >24h (still exporting, старый аккаунт)
-- 27 locked worktrees (parent Claude Code PID holds — prune после session end)
-- Main Chrome CDP `:9222` disabled (user action), dedicated Chrome активирован
-
----
-
-## [10.1.0] — 2026-04-17 — Session 10: Security Hardening + Memory Layer Bootstrap
-
-### Added
-- **Memory Injection Validator** (`src/core/memory_validator.py`) — blocks persistent injection через `!remember` до `!confirm <hash>`. 38 тестов. Разделено на WEAK (requires allowlist) и STRONG (always block) patterns. NFKC normalization против ZWSP/homoglyph bypass. (`92325ce`, `3b12543`, `bada9f4`)
-- `!confirm <hash>` command — owner-only, подтверждает staged memory write. (`92325ce`)
-- `!reset [--all] [--layer=...] [--dry-run] [--force]` — aggressive очистка 4 слоёв: Krab cache, OpenClaw in-memory sessions, Gemini prompt cache nonce, archive.db (opt-in). Progress-messages для больших `--all`. (`842d999`, `a0bb15e`, `7eae51e`)
-- **Correlation ID** через structlog contextvars — `request_id` binds в `_process_message`, auto-prop через `asyncio.create_task`, forwarded as `X-Request-ID` к Gateway. (`44c94c2`, `7975b35`)
-- **Tool call indicator** в buffered mode — `🔧 Активно: tool_name(...)` + `⏳ В очереди: ...` в progress notice. (`b040243`, `edb54a8`)
-- **Auto-restart policy** (`src/core/auto_restart_policy.py`) — rate-limited restart для Gateway + MCP servers. Exponential cooldown, max 3 attempts/hour, owner notification. Default `AUTO_RESTART_ENABLED=false`. (`a273f79`, `d720032`)
-- **Dedicated Chrome auto-launch** (`src/integrations/dedicated_chrome.py`) — isolated profile `/tmp/krab-chrome`, opt-in через `DEDICATED_CHROME_ENABLED`. Owner panel endpoints `/api/chrome/dedicated/{status,launch}`. (`88b6e0f`, `9e6b74a`)
-- **codex-cli stagnation cancel** — detect >120s без `last_event_at` → real `asyncio.CancelledError` + user notice. Threshold via `LLM_STAGNATION_THRESHOLD_SEC` env. (`887c484`)
-- **Memory Layer Phase 1** — Yung_nagato bootstrap via `bootstrap_memory.py`: 42 708 messages / 9 099 chunks / 26 chats → `~/.openclaw/krab_memory/archive.db` (42 МБ). **92 PII redactions** (67 emails, 16 cards, 4 phones, 3 HF API keys, 2 SOL).
-- `/api/ecosystem/health` extended с `session_10` block (memory validator stats, archive.db state, dedicated Chrome, auto-restart, gemini nonce). (`91652cd`, `dbbda3f`)
-- Integration tests для Session 10 endpoints (`3ec05c1`), retrieval smoke test (`fde38c1`).
-
-### Fixed
-- **PIIRedactor false positives** — CARD matches внутри URLs (Twitter status IDs) skipped; PHONE skips ASCII art repeated-digit runs. (`09dd4d0`, `ed9d3ce`)
-- **Prompt injection sandwich** — owner-check унифицирован с ACL pattern (было: env-based OWNER_USER_IDS → self-lockout risk). (`3b12543`)
-- **!reset review issues** — Gemini nonce update existing session, double-count fix, dry-run archive hint, audit log. (`a0bb15e`, `7eae51e`, `d0afbaf`)
-- **Merge conflicts** — `openclaw_task_poller.py` + `llm_flow.py` (stagnation + tool indicator совместно).
-
-### Changed
-- **Memory validator patterns** — расширено с 9 synonyms (RU+EN): постоянно, отныне, по умолчанию, constantly, continuously, from now on, append to every, prepend to all. (`bada9f4`, `d73b973`)
-- **Memory validator allowlist** — убрано "use" (too broad), window 50→30 chars, WEAK/STRONG split против decoration bypass.
-
-### Security
-- **Memory injection attack surface** закрыт через validator + `!confirm` gate.
-- **NFKC normalization** блокирует Unicode bypass (ZWSP, fullwidth, homoglyphs).
-- **Audit logging** для всех memory validator events.
-- **Chrome MCP disabled** (`~/.claude.json`) — снижение attack surface от CDP prompts.
-
-### Docs
-- `IMPROVEMENTS.md` — Session 10 rollup (+86 lines). (`0e9b0f9`, `3a5d388`)
-- `CLAUDE.md` — Session 10 status section + 2 new commands + test stats. (`0e9b0f9`)
-- `.remember/next_session.md` — Session 11 handoff.
-- `.remember/session_11_start_prompt.md` — Session 11 start prompt.
-
-### Tests
-- **+155 new unit tests** (Session 10 modules: memory_validator 38, reset 33, auto_restart 17, dedicated_chrome 19, correlation_id 9, stagnation 22, tool_indicator 10, ecosystem_health +17).
-- Integration tests: `tests/integration/test_session10_endpoints.py` (7 pass + 4 skip для non-registered endpoints). (`3ec05c1`, `92ed3dc`)
-- Retrieval smoke test (`scripts/smoke_test_memory_retrieval.py`): FTS5 0.5-0.9 мс per query, 32 chunks with PII placeholders verified. (`fde38c1`, `5c07928`)
-- Ruff auto-fix unused imports в memory_* modules. (`12bd6e0`)
-- Total: **~7465 tests**, up from ~7365 (+100 fresh).
-
-### Commits (28)
-`92325ce`, `3b12543`, `a273f79`, `887c484`, `88b6e0f`, `0e9b0f9`, `b040243`, `44c94c2`, `842d999`, `a0bb15e`, `668b3c2`, `edb54a8`, `d720032`, `7975b35`, `9e6b74a`, `3a5d388`, `12bd6e0`, `fde38c1`, `3ec05c1`, `bada9f4`, `7eae51e`, `5c07928`, `92ed3dc`, `d73b973`, `d0afbaf`, `09dd4d0`, `91652cd`, `ed9d3ce`, `dbbda3f`.
-
-### Known issues carried to Session 11
-- p0lrd Telegram Export bootstrap pending (экспорт в процессе).
-- Chrome "Allow remote debugging?" prompts — MCP servers disabled, extension-based source suspected.
-- 4 `ecosystem_health` tests fail due `sys.modules` mock caching (non-blocking).
-
----
-
-## [Prior Sessions]
-
-See `IMPROVEMENTS.md` для full history (Sessions 1–9).
+- 48 commits
+- 1 authors: Pavua
+- +13724 LOC, -379 LOC

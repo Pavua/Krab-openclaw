@@ -538,7 +538,160 @@ class HybridRetriever:
             total_ms=round(total_elapsed * 1000, 1),
         )
 
+        # Phase 2 shadow-reads: fire-and-forget сравнение FTS-only vs Hybrid.
+        # Когда KRAB_RAG_PHASE2_ENABLED=0 (production), но KRAB_RAG_PHASE2_SHADOW=1
+        # — запускаем vector search в background ТОЛЬКО для логирования. Результат
+        # пользователю НЕ возвращается. Это безопасный способ собрать 24-48h данные
+        # (recall delta, latency, anomalies) до реального toggle Phase 2.
+        if (
+            os.getenv("KRAB_RAG_PHASE2_SHADOW", "0") == "1"
+            and os.getenv("KRAB_RAG_PHASE2_ENABLED", "0") != "1"
+        ):
+            try:
+                top5_fts = [r.message_id for r in results[:5]]
+                # fts_latency_ms уже посчитан выше как время первого phase.
+                fts_latency_ms = round((_vec_start - _fts_start) * 1000, 1)
+                self._schedule_shadow_compare(
+                    conn=conn,
+                    query=query,
+                    chat_id=chat_id,
+                    fts_ids=fts_ids,
+                    top5_fts=top5_fts,
+                    top_k=top_k,
+                    with_context=with_context,
+                    decay_mode=decay_mode,
+                    fts_latency_ms=fts_latency_ms,
+                )
+            except Exception as exc:  # noqa: BLE001 - shadow best-effort
+                logger.warning("memory_phase2_shadow_schedule_failed", error=str(exc))
+
         return results
+
+    def _schedule_shadow_compare(
+        self,
+        conn: sqlite3.Connection,
+        query: str,
+        chat_id: Optional[str],
+        fts_ids: list[str],
+        top5_fts: list[str],
+        top_k: int,
+        with_context: int,
+        decay_mode: str,
+        fts_latency_ms: float,
+    ) -> None:
+        """Планирует shadow-сравнение через asyncio.create_task (fire-and-forget).
+
+        Если event loop не запущен — выполняет sync inline (в тестах / sync callers).
+        """
+        coro = self._shadow_compare(
+            conn=conn,
+            query=query,
+            chat_id=chat_id,
+            fts_ids=fts_ids,
+            top5_fts=top5_fts,
+            top_k=top_k,
+            with_context=with_context,
+            decay_mode=decay_mode,
+            fts_latency_ms=fts_latency_ms,
+        )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None and loop.is_running():
+            loop.create_task(coro)
+        else:
+            # Нет активного loop'а — выполняем синхронно (тесты, CLI).
+            try:
+                asyncio.run(coro)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("memory_phase2_shadow_sync_run_failed", error=str(exc))
+
+    async def _shadow_compare(
+        self,
+        conn: sqlite3.Connection,
+        query: str,
+        chat_id: Optional[str],
+        fts_ids: list[str],
+        top5_fts: list[str],
+        top_k: int,
+        with_context: int,
+        decay_mode: str,
+        fts_latency_ms: float,
+    ) -> None:
+        """Shadow-версия vector + RRF — только для логирования.
+
+        Временно выставляет KRAB_RAG_PHASE2_ENABLED=1, вызывает _vector_search(),
+        делает RRF с теми же весами и сравнивает top-5 с FTS-only результатом.
+        НЕ трогает self._last_query / возвращаемые results.
+        """
+        try:
+            if not self._vec_available or not self._model_name:
+                return
+
+            _vec_start = time.perf_counter()
+            # _vector_search() сам проверяет KRAB_RAG_PHASE2_ENABLED — временно
+            # включаем для shadow вызова.
+            prev_flag = os.environ.get("KRAB_RAG_PHASE2_ENABLED", "0")
+            os.environ["KRAB_RAG_PHASE2_ENABLED"] = "1"
+            try:
+                vec_ids_shadow = self._vector_search(conn, query, chat_id, limit=top_k * 4)
+            finally:
+                if prev_flag == "0":
+                    os.environ["KRAB_RAG_PHASE2_ENABLED"] = prev_flag
+            vec_latency_ms = round((time.perf_counter() - _vec_start) * 1000, 1)
+
+            if vec_ids_shadow:
+                fused_shadow = reciprocal_rank_fusion(
+                    fts_ids,
+                    vec_ids_shadow,
+                    k=self._rrf_k,
+                    weights=[1.0, _rrf_vector_weight()],
+                )
+            else:
+                fused_shadow = reciprocal_rank_fusion(fts_ids, k=self._rrf_k)
+
+            # Top-5 hybrid: сортируем fused по score и маппим chunk_id на message_id
+            # (берём первое message_id из chunk_messages).
+            top5_hybrid_chunk_ids = [
+                cid for cid, _ in sorted(fused_shadow.items(), key=lambda kv: -kv[1])[:5]
+            ]
+            top5_hybrid: list[str] = []
+            if top5_hybrid_chunk_ids:
+                placeholders = ",".join("?" * len(top5_hybrid_chunk_ids))
+                try:
+                    conn.row_factory = sqlite3.Row
+                    rows = conn.execute(
+                        f"""
+                        SELECT chunk_id, MIN(message_id) AS mid FROM chunk_messages
+                        WHERE chunk_id IN ({placeholders})
+                        GROUP BY chunk_id;
+                        """,  # noqa: S608
+                        top5_hybrid_chunk_ids,
+                    ).fetchall()
+                    mid_by_cid = {r["chunk_id"]: r["mid"] for r in rows}
+                    top5_hybrid = [mid_by_cid.get(cid, cid) for cid in top5_hybrid_chunk_ids]
+                except sqlite3.OperationalError:
+                    top5_hybrid = list(top5_hybrid_chunk_ids)
+
+            logger.info(
+                "memory_phase2_shadow_compare",
+                query_preview=query[:60],
+                chat_id=str(chat_id) if chat_id else None,
+                fts_hits=len(fts_ids),
+                vec_hits=len(vec_ids_shadow),
+                shadow_merged=len(fused_shadow),
+                would_change_top5=top5_fts != top5_hybrid,
+                latency_fts_ms=fts_latency_ms,
+                latency_vec_ms=vec_latency_ms,
+                model_mode="shadow",
+            )
+        except Exception as exc:  # noqa: BLE001 - shadow failure is non-fatal
+            logger.warning(
+                "memory_phase2_shadow_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
     def _maybe_expand_query(self, query: str) -> list[str]:
         """

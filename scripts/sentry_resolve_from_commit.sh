@@ -32,6 +32,7 @@ if [ -z "$ORG" ]; then
 fi
 
 RC=0
+RESOLVED_IDS=()
 
 for SHORT_ID in "$@"; do
     # PUT /api/0/organizations/{org}/issues/?shortIdLookup=1 — resolve by shortId
@@ -48,6 +49,7 @@ for SHORT_ID in "$@"; do
     case "$STATUS" in
         200|202|204)
             echo "  resolved: $SHORT_ID"
+            RESOLVED_IDS+=("$SHORT_ID")
             ;;
         404)
             # shortId не найден в org — не считаем фатальной ошибкой
@@ -59,5 +61,19 @@ for SHORT_ID in "$@"; do
             ;;
     esac
 done
+
+# Добавляем backlink-комментарий в resolved issues с git SHA (если задан).
+COMMIT_SHA="${RESOLVING_COMMIT_SHA:-}"
+if [ -z "$COMMIT_SHA" ] && command -v git >/dev/null 2>&1; then
+    COMMIT_SHA=$(git rev-parse HEAD 2>/dev/null || true)
+fi
+
+if [ ${#RESOLVED_IDS[@]} -gt 0 ] && [ -n "$COMMIT_SHA" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    BACKLINK="${SCRIPT_DIR}/sentry_add_commit_backlinks.sh"
+    if [ -x "$BACKLINK" ]; then
+        "$BACKLINK" "$COMMIT_SHA" "${RESOLVED_IDS[@]}" || RC=1
+    fi
+fi
 
 exit $RC
