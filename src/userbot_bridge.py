@@ -3469,18 +3469,30 @@ class KraabUserbot(
                 # отключает её), сообщение попадало сюда и генерировало deny-reply
                 # с текстом «!status доступна только…» — spam-бот ловил в нём
                 # подстроку !status → loop в группе How2AI.
+                # W32 hotfix (v2): использовать уже импортированный singleton
+                # из top-level (строка 38), а не импорт модуля — предыдущая
+                # версия падала AttributeError в silent `except Exception: pass`
+                # → blocklist check НЕ срабатывал → spam-loop повторился.
                 try:
-                    from .core import command_blocklist as _cblist  # noqa: PLC0415
-
-                    if _cblist.is_blocked(message.chat.id, cmd_word):
-                        logger.debug(
+                    _blocklist_keys = (cmd_word,)
+                    if cmd_word == "silence":
+                        _blocklist_keys = ("silence", "тишина")
+                    if any(
+                        command_blocklist.is_blocked(message.chat.id, key)
+                        for key in _blocklist_keys
+                    ):
+                        logger.info(
                             "command_blocklist_skip_fallback",
                             command=cmd_word,
                             chat=message.chat.id,
                         )
                         return
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as _cb_exc:  # noqa: BLE001
+                    logger.warning(
+                        "command_blocklist_check_failed",
+                        command=cmd_word,
+                        error=str(_cb_exc),
+                    )
                 if not access_profile.can_execute_command(cmd_word, self._known_commands):
                     # W32 — не отвечаем ботам / сообщениям на наши reply:
                     # это часто триггер loop с другими спам-ботами группы.
