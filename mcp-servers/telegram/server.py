@@ -25,9 +25,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
+import re
 import subprocess
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -65,6 +68,10 @@ _KRAB_EAR_SOCKET = Path(
     os.getenv("KRAB_EAR_SOCKET_PATH", "~/Library/Application Support/KrabEar/krabear.sock")
 ).expanduser()
 _WHISPER_MODEL = os.getenv("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo")
+
+# ── Logger ────────────────────────────────────────────────────────────────────
+
+_dev_logger = logging.getLogger("krab_mcp.dev_loop")
 
 # ── Singleton бридж ────────────────────────────────────────────────────────────
 
@@ -2577,6 +2584,542 @@ async def calendar_create_event(params: _CalendarCreateInput) -> str:
         if _detect_tcc_denied(msg):
             return json.dumps(_tcc_error("Calendar", msg), ensure_ascii=False)
         return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── DEV-LOOP TOOLS (Sentry / E2E / Log tail / Deploy) ────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Эти инструменты позволяют Claude-агенту закрывать dev-loop самостоятельно:
+#   - проверить Sentry на свежие ошибки
+#   - резолвить issue'ы после фикса
+#   - запустить e2e smoke против живого Краба
+#   - посмотреть хвост launchd-логов (с фильтрами)
+#   - выполнить push → restart → health-wait → e2e одной командой
+#
+# SECURITY: krab_sentry_resolve и krab_deploy_and_verify — destructive.
+# Логируем user-intent через _dev_logger.warning(), graceful degradation
+# при отсутствии env/CLI.
+
+_SENTRY_API_BASE = "https://de.sentry.io/api/0"
+_SENTRY_ORG = os.getenv("SENTRY_ORG_SLUG", "po-zm")
+_DEFAULT_SENTRY_PROJECTS = ("python-fastapi", "krab-ear-agent", "krab-ear-backend")
+_KRAB_LAUNCHD_LOG = _PROJECT_ROOT / "logs" / "krab_launchd.out.log"
+_E2E_SMOKE_SCRIPT = _PROJECT_ROOT / "scripts" / "e2e_mcp_smoke.py"
+_START_LAUNCHER = Path("/Users/pablito/Antigravity_AGENTS/new start_krab.command")
+_STOP_LAUNCHER = Path("/Users/pablito/Antigravity_AGENTS/new Stop Krab.command")
+_ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+
+def _strip_ansi(line: str) -> str:
+    return _ANSI_RE.sub("", line)
+
+
+class _SentryStatusInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project: str = Field(
+        default="",
+        description="Slug проекта Sentry. Пусто → прогон по default-списку (python-fastapi, krab-ear-agent, krab-ear-backend).",
+    )
+    statsPeriod: str = Field(  # noqa: N815 — keep Sentry API naming
+        default="24h", description="Окно статистики (например 1h, 24h, 7d)."
+    )
+    limit: int = Field(default=10, ge=1, le=100, description="Максимум issue'ов на проект.")
+
+
+class _SentryResolveInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    shortIds: list[str] = Field(  # noqa: N815 — keep Sentry API naming
+        ..., min_length=1, description="Список shortId (например ['PYTHON-FASTAPI-1'])."
+    )
+    project: str = Field(
+        default="", description="Slug проекта; если пусто — пробуем дефолтный список."
+    )
+
+
+class _RunE2EInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: int = Field(default=312322764, description="Owner chat_id для smoke (info-only).")
+    force: bool = Field(default=True, description="Передать --force в skрипт если он поддержан.")
+
+
+class _LogTailInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pattern: str = Field(default=".*", description="Regex-фильтр по строке.")
+    level: str = Field(
+        default="warn+error",
+        description="'all' | 'warn' | 'error' | 'warn+error' — уровни включения.",
+    )
+    n: int = Field(default=50, ge=1, le=500, description="Сколько последних совпадений вернуть.")
+
+
+class _DeployVerifyInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    skip_tests: bool = Field(default=False, description="Не запускать e2e после рестарта.")
+
+
+async def _sentry_get_issues(
+    client: httpx.AsyncClient, project: str, stats_period: str, limit: int, token: str
+) -> tuple[int, list[dict[str, Any]]]:
+    url = f"{_SENTRY_API_BASE}/projects/{_SENTRY_ORG}/{project}/issues/"
+    params = {"statsPeriod": stats_period, "query": "is:unresolved", "limit": str(limit)}
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = await client.get(url, params=params, headers=headers, timeout=15.0)
+    resp.raise_for_status()
+    data = resp.json() or []
+    return resp.status_code, data
+
+
+@mcp.tool(
+    name="krab_sentry_status",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def krab_sentry_status(params: _SentryStatusInput) -> str:
+    """Сводка unresolved issue'ов из Sentry (org po-zm) за указанный период.
+
+    Если `project` не задан — пробегается по дефолтному списку
+    (python-fastapi, krab-ear-agent, krab-ear-backend) и агрегирует результаты.
+
+    Args:
+        params.project: slug проекта (опционально)
+        params.statsPeriod: окно (default 24h)
+        params.limit: сколько топ-issue на проект (default 10)
+
+    Returns:
+        str: JSON {"ok", "count_total", "by_project": {...}, "top": [...]}
+    """
+    token = os.getenv("SENTRY_AUTH_TOKEN", "").strip()
+    if not token:
+        return json.dumps(
+            {"ok": False, "error": "SENTRY_AUTH_TOKEN_missing", "hint": "добавь токен в .env"},
+            ensure_ascii=False,
+        )
+
+    projects = (params.project,) if params.project else _DEFAULT_SENTRY_PROJECTS
+    by_project: dict[str, dict[str, Any]] = {}
+    top: list[dict[str, Any]] = []
+    count_total = 0
+
+    try:
+        async with httpx.AsyncClient() as client:
+            for proj in projects:
+                try:
+                    _, issues = await _sentry_get_issues(
+                        client, proj, params.statsPeriod, params.limit, token
+                    )
+                except httpx.HTTPStatusError as exc:
+                    by_project[proj] = {"error": f"HTTP {exc.response.status_code}"}
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    by_project[proj] = {"error": str(exc)}
+                    continue
+                by_project[proj] = {"count": len(issues)}
+                count_total += len(issues)
+                for issue in issues:
+                    top.append(
+                        {
+                            "project": proj,
+                            "shortId": issue.get("shortId"),
+                            "count": issue.get("count"),
+                            "title": issue.get("title"),
+                            "culprit": issue.get("culprit"),
+                            "permalink": issue.get("permalink"),
+                        }
+                    )
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    # top sorted by count desc, bounded
+    top.sort(key=lambda x: int(x.get("count") or 0), reverse=True)
+    top = top[: params.limit]
+    return json.dumps(
+        {
+            "ok": True,
+            "count_total": count_total,
+            "by_project": by_project,
+            "top": top,
+            "statsPeriod": params.statsPeriod,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+@mcp.tool(
+    name="krab_sentry_resolve",
+    annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True},
+)
+async def krab_sentry_resolve(params: _SentryResolveInput) -> str:
+    """Резолвит указанные Sentry issue'ы (шаг shortId → numeric id → PUT status=resolved).
+
+    ВНИМАНИЕ: destructive. Действие закрывает issue'ы в production-аккаунте.
+    Логируется через logger.warning для аудит-трейла.
+
+    Args:
+        params.shortIds: список shortId (например ['PYTHON-FASTAPI-42']).
+        params.project: опционально slug — иначе пробуем в дефолтном списке.
+
+    Returns:
+        str: JSON {"ok", "resolved_count", "resolved": [...], "failed": [...]}
+    """
+    _dev_logger.warning(
+        "krab_sentry_resolve invoked user-intent: project=%s shortIds=%s",
+        params.project or "auto",
+        params.shortIds,
+    )
+    token = os.getenv("SENTRY_AUTH_TOKEN", "").strip()
+    if not token:
+        return json.dumps({"ok": False, "error": "SENTRY_AUTH_TOKEN_missing"}, ensure_ascii=False)
+
+    projects = (params.project,) if params.project else _DEFAULT_SENTRY_PROJECTS
+    target = {sid.strip().upper(): None for sid in params.shortIds if sid.strip()}
+    resolved: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            # 1) находим numeric id для каждого shortId
+            for proj in projects:
+                if all(v is not None for v in target.values()):
+                    break
+                try:
+                    _, issues = await _sentry_get_issues(client, proj, "30d", 100, token)
+                except Exception as exc:  # noqa: BLE001
+                    _dev_logger.warning("sentry list failed for %s: %s", proj, exc)
+                    continue
+                for issue in issues:
+                    sid = (issue.get("shortId") or "").upper()
+                    if sid in target and target[sid] is None:
+                        target[sid] = {"id": issue.get("id"), "project": proj}
+
+            # 2) группируем по project + bulk resolve
+            by_proj: dict[str, list[str]] = {}
+            for sid, meta in target.items():
+                if not meta or not meta.get("id"):
+                    failed.append({"shortId": sid, "error": "not_found"})
+                else:
+                    by_proj.setdefault(meta["project"], []).append(meta["id"])
+
+            for proj, ids in by_proj.items():
+                url = f"{_SENTRY_API_BASE}/projects/{_SENTRY_ORG}/{proj}/issues/"
+                query = [("id", i) for i in ids]
+                try:
+                    resp = await client.put(
+                        url,
+                        params=query,
+                        headers=headers,
+                        json={"status": "resolved"},
+                    )
+                    if 200 <= resp.status_code < 300:
+                        for i in ids:
+                            # найдём shortId обратно
+                            sid = next(
+                                (s for s, m in target.items() if m and m.get("id") == i),
+                                i,
+                            )
+                            resolved.append({"shortId": sid, "project": proj})
+                    else:
+                        failed.append(
+                            {"project": proj, "error": f"HTTP {resp.status_code}", "ids": ids}
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    failed.append({"project": proj, "error": str(exc), "ids": ids})
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    return json.dumps(
+        {
+            "ok": not failed or bool(resolved),
+            "resolved_count": len(resolved),
+            "resolved": resolved,
+            "failed": failed,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def _parse_e2e_output(output: str) -> dict[str, Any]:
+    """Извлекает из stdout e2e_mcp_smoke счётчики и список кейсов."""
+    passed = failed = 0
+    cases: list[dict[str, str]] = []
+    # pattern "PASS  name" / "FAIL  name"
+    for line in output.splitlines():
+        clean = _strip_ansi(line).strip()
+        m = re.match(r"^(PASS|FAIL)\s+([\w\-_.]+)", clean)
+        if m:
+            status = m.group(1).lower()
+            cases.append({"name": m.group(2), "status": status})
+            if status == "pass":
+                passed += 1
+            else:
+                failed += 1
+        # summary "Итого: 8/10 passed" (fallback)
+        ms = re.search(r"Итого:\s+(\d+)/(\d+)\s+passed", clean)
+        if ms and passed == 0:
+            passed = int(ms.group(1))
+            failed = int(ms.group(2)) - passed
+    return {"passed": passed, "failed": failed, "cases": cases}
+
+
+@mcp.tool(
+    name="krab_run_e2e",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False},
+)
+async def krab_run_e2e(params: _RunE2EInput) -> str:
+    """Запускает scripts/e2e_mcp_smoke.py против живого Краба.
+
+    Использует venv/bin/python, hard timeout 300s. Парсит stdout
+    и возвращает счётчики passed/failed + список кейсов + путь к отчёту.
+
+    Args:
+        params.chat_id: owner chat_id (info-only; скрипт фиксирован на 312322764).
+        params.force: если True — попытаемся передать --force (игнорируется, если скрипт не поддерживает).
+
+    Returns:
+        str: JSON {"ok", "passed", "failed", "duration_s", "cases": [...], "report_path"}
+    """
+    if not _E2E_SMOKE_SCRIPT.exists():
+        return json.dumps(
+            {"ok": False, "error": f"script not found: {_E2E_SMOKE_SCRIPT}"},
+            ensure_ascii=False,
+        )
+    python_bin = _PROJECT_ROOT / "venv" / "bin" / "python"
+    cmd = [str(python_bin), str(_E2E_SMOKE_SCRIPT), "--verbose"]
+    # chat_id / force прокидываем только если их знает CLI (best-effort).
+    # Текущий e2e_mcp_smoke.py их не поддерживает → оставляем как info-поля.
+
+    t0 = time.monotonic()
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                cmd, capture_output=True, text=True, timeout=300, cwd=str(_PROJECT_ROOT)
+            ),
+        )
+    except subprocess.TimeoutExpired:
+        return json.dumps(
+            {"ok": False, "error": "timeout_300s", "duration_s": 300.0}, ensure_ascii=False
+        )
+    except FileNotFoundError as exc:
+        return json.dumps({"ok": False, "error": f"python not found: {exc}"}, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    duration = round(time.monotonic() - t0, 2)
+    output = (result.stdout or "") + "\n" + (result.stderr or "")
+    parsed = _parse_e2e_output(output)
+    report_path = _PROJECT_ROOT / "docs" / "E2E_RESULTS_LATEST.md"
+    return json.dumps(
+        {
+            "ok": result.returncode == 0,
+            "exit_code": result.returncode,
+            "passed": parsed["passed"],
+            "failed": parsed["failed"],
+            "duration_s": duration,
+            "cases": parsed["cases"],
+            "report_path": str(report_path) if report_path.exists() else "",
+            "chat_id": params.chat_id,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+@mcp.tool(
+    name="krab_log_tail",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def krab_log_tail(params: _LogTailInput) -> str:
+    """Грепает хвост logs/krab_launchd.out.log с фильтром по уровню + regex.
+
+    Level flags:
+      - 'all': всё
+      - 'warn': только WARNING/WARN
+      - 'error': только ERROR/CRITICAL/Traceback
+      - 'warn+error' (default): оба
+
+    Args:
+        params.pattern: regex-подстрока (default '.*').
+        params.level: 'all' | 'warn' | 'error' | 'warn+error'.
+        params.n: сколько последних совпадений (1–500, default 50).
+
+    Returns:
+        str: JSON {"ok", "log_path", "lines": [...], "count": N}
+    """
+    log_path = _KRAB_LAUNCHD_LOG
+    if not log_path.exists():
+        return json.dumps({"ok": False, "error": f"log not found: {log_path}"}, ensure_ascii=False)
+    try:
+        pattern_re = re.compile(params.pattern, re.IGNORECASE)
+    except re.error as exc:
+        return json.dumps({"ok": False, "error": f"invalid regex: {exc}"}, ensure_ascii=False)
+
+    level = params.level.lower()
+    want_warn = level in ("warn", "warn+error", "all")
+    want_error = level in ("error", "warn+error", "all")
+    want_all = level == "all"
+
+    level_markers_warn = ("WARNING", "WARN ")
+    level_markers_error = ("ERROR", "CRITICAL", "Traceback", "Exception")
+
+    try:
+        content = log_path.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    matched: list[str] = []
+    for raw in content.splitlines():
+        line = _strip_ansi(raw)
+        if not pattern_re.search(line):
+            continue
+        if want_all:
+            matched.append(line)
+            continue
+        hit_warn = want_warn and any(m in line for m in level_markers_warn)
+        hit_error = want_error and any(m in line for m in level_markers_error)
+        if hit_warn or hit_error:
+            matched.append(line)
+
+    tail = matched[-params.n :]
+    return json.dumps(
+        {
+            "ok": True,
+            "log_path": str(log_path),
+            "level": level,
+            "pattern": params.pattern,
+            "count": len(tail),
+            "lines": tail,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+async def _git_push_current_branch() -> dict[str, Any]:
+    """Делает git push origin <current-branch>, возвращает metadata."""
+    try:
+        proc = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=str(_PROJECT_ROOT),
+            ),
+        )
+        branch = proc.stdout.strip() or "unknown"
+        push = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                ["git", "push", "origin", branch],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=str(_PROJECT_ROOT),
+            ),
+        )
+        return {
+            "branch": branch,
+            "exit_code": push.returncode,
+            "output": (push.stdout + push.stderr).strip()[-800:],
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc)}
+
+
+async def _run_launcher(path: Path, timeout: int = 60) -> dict[str, Any]:
+    if not path.exists():
+        return {"ok": False, "error": f"launcher missing: {path}"}
+    try:
+        proc = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                ["/bin/bash", str(path)], capture_output=True, text=True, timeout=timeout
+            ),
+        )
+        return {
+            "ok": proc.returncode == 0,
+            "exit_code": proc.returncode,
+            "output": (proc.stdout + proc.stderr).strip()[-400:],
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+async def _wait_for_up(max_seconds: int = 120) -> dict[str, Any]:
+    url = f"{_KRAB_WEB_BASE}/api/health/lite"
+    t0 = time.monotonic()
+    async with httpx.AsyncClient(timeout=3.0) as client:
+        while time.monotonic() - t0 < max_seconds:
+            try:
+                r = await client.get(url)
+                if r.status_code == 200:
+                    return {"ok": True, "elapsed_s": round(time.monotonic() - t0, 1)}
+            except Exception:
+                pass
+            await asyncio.sleep(2.0)
+    return {"ok": False, "error": "timeout", "waited_s": max_seconds}
+
+
+@mcp.tool(
+    name="krab_deploy_and_verify",
+    annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False},
+)
+async def krab_deploy_and_verify(params: _DeployVerifyInput) -> str:
+    """One-shot deploy: git push → Stop Krab → start Krab → wait UP → e2e (опц.).
+
+    ВНИМАНИЕ: destructive. Рестартует production-userbot. Логируется.
+    Graceful: при отсутствии launcher/CLI возвращает partial report (не падает).
+
+    Args:
+        params.skip_tests: пропустить e2e после рестарта.
+
+    Returns:
+        str: JSON {"ok", "push", "stop", "start", "health", "e2e", "suggestions"}
+    """
+    _dev_logger.warning(
+        "krab_deploy_and_verify invoked user-intent: skip_tests=%s", params.skip_tests
+    )
+
+    report: dict[str, Any] = {"suggestions": []}
+    report["push"] = await _git_push_current_branch()
+    report["stop"] = await _run_launcher(_STOP_LAUNCHER, timeout=60)
+    # маленькая пауза между stop и start чтобы launchd отпустил порт
+    await asyncio.sleep(3.0)
+    report["start"] = await _run_launcher(_START_LAUNCHER, timeout=60)
+    report["health"] = await _wait_for_up(max_seconds=120)
+
+    if params.skip_tests:
+        report["e2e"] = {"skipped": True}
+    else:
+        if not report["health"].get("ok"):
+            report["e2e"] = {"skipped": True, "reason": "health_not_up"}
+            report["suggestions"].append(
+                "Health не поднялся за 120s — проверь logs/krab_launchd.out.log через krab_log_tail"
+            )
+        else:
+            e2e_raw = await krab_run_e2e(_RunE2EInput())
+            try:
+                e2e_data = json.loads(e2e_raw)
+            except Exception:
+                e2e_data = {"ok": False, "error": "parse_failed"}
+            report["e2e"] = e2e_data
+            if not e2e_data.get("ok"):
+                report["suggestions"].append(
+                    "e2e failed — смотри cases[].status=fail и report_path для деталей"
+                )
+
+    ok = (
+        report["push"].get("exit_code") == 0
+        and report["start"].get("ok")
+        and report["health"].get("ok")
+        and (report["e2e"].get("skipped") or report["e2e"].get("ok"))
+    )
+    report["ok"] = bool(ok)
+    return json.dumps(report, ensure_ascii=False, indent=2)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
