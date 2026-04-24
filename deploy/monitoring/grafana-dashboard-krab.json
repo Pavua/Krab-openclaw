@@ -82,7 +82,7 @@
       "id": 10,
       "type": "stat",
       "title": "Krab uptime",
-      "description": "time() - process_start_time_seconds. Сбрасывается при рестарте userbot.",
+      "description": "time() - krab_process_start_time_seconds. Сбрасывается при рестарте userbot.",
       "datasource": {
         "type": "prometheus",
         "uid": "Prometheus"
@@ -133,7 +133,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "time() - process_start_time_seconds{job=\"krab_owner_panel\"}"
+          "expr": "time() - krab_process_start_time_seconds{job=\"krab_owner_panel\"}"
         }
       ]
     },

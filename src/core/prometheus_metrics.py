@@ -17,6 +17,9 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Процесс стартовал в этот момент (unix ts). Используется для krab uptime gauge.
+_PROCESS_START_TIME: float = time.time()
+
 # Счётчик использований adaptive rerank (mutable singleton для hot-path инкремента).
 _ADAPTIVE_RERANK_COUNTER: list[int] = [0]
 
@@ -404,6 +407,13 @@ def collect_metrics() -> str:
             "krab_metrics_generated_at",
             int(time.time()),
             help_text="Metrics generation timestamp",
+        )
+    )
+    lines.append(
+        _format_metric(
+            "krab_process_start_time_seconds",
+            _PROCESS_START_TIME,
+            help_text="Unix timestamp когда процесс owner panel стартовал",
         )
     )
 
