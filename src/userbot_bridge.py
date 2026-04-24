@@ -1660,12 +1660,11 @@ class KraabUserbot(
                 system_prompt=system_prompt,
                 team_name=None,
             )
-            # Collect full response from stream
-            parts: list[str] = []
-            async for chunk in adapter.stream(prompt):
-                if isinstance(chunk, str):
-                    parts.append(chunk)
-            full_reply = "".join(parts).strip()
+            # W32 hotfix: _AgentRoomRouterAdapter exposes route_query (returns
+            # full string), not .stream(). Predecessor implementation called
+            # adapter.stream() → AttributeError → cron_job_llm_failed silent.
+            # route_query is async and returns the assembled response.
+            full_reply = (await adapter.route_query(prompt)).strip()
             if not full_reply:
                 logger.warning("cron_job_empty_llm_reply", prompt_preview=prompt[:80])
                 return
