@@ -7540,6 +7540,74 @@ class WebApp:
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+        @self.app.post("/api/hooks/sentry")
+        async def sentry_webhook(
+            payload: dict[str, Any] = Body(default_factory=dict),
+            request: Request = None,
+        ):
+            """Приём webhook-ов от Sentry Alert Rules → Telegram Saved Messages.
+
+            Аутентификация: `X-Sentry-Signature-256` HMAC-SHA256 от raw body
+            с секретом `SENTRY_WEBHOOK_SECRET`. Если секрет не задан —
+            принимаем всё (удобно для первичной настройки/тестов).
+
+            Форматирование: `format_sentry_alert(payload)` — лаконичный
+            markdown с level, title, env, events, users, permalink.
+            Доставка: в чат `OPENCLAW_ALERT_TARGET` или owner (OWNER_USER_IDS[0]).
+            """
+            import hashlib
+            import hmac
+
+            from ..core.sentry_webhook_formatter import format_sentry_alert
+
+            # HMAC verification (если secret задан)
+            secret = os.getenv("SENTRY_WEBHOOK_SECRET", "").strip()
+            if secret and request is not None:
+                raw_body = await request.body()
+                received_sig = (
+                    request.headers.get("x-sentry-signature-256")
+                    or request.headers.get("sentry-hook-signature")
+                    or ""
+                )
+                expected = hmac.new(
+                    secret.encode("utf-8"),
+                    raw_body,
+                    hashlib.sha256,
+                ).hexdigest()
+                if not hmac.compare_digest(received_sig, expected):
+                    raise HTTPException(status_code=401, detail="bad_signature")
+
+            text = format_sentry_alert(payload)
+            if not text:
+                return {"ok": True, "skipped": "unsupported_payload"}
+
+            # Куда слать: env OPENCLAW_ALERT_TARGET → owner → error
+            chat_id = (os.getenv("OPENCLAW_ALERT_TARGET") or "").strip()
+            if not chat_id:
+                owner_ids = getattr(config, "OWNER_USER_IDS", []) or []
+                if owner_ids:
+                    chat_id = str(owner_ids[0])
+            if not chat_id:
+                raise HTTPException(status_code=503, detail="no_alert_target")
+
+            userbot = self.deps.get("kraab_userbot")
+            if userbot is None or not getattr(userbot, "client", None):
+                # Fallback: сохраняем в log — alert не пропадёт совсем
+                logger.warning("sentry_webhook_no_userbot", text_preview=text[:200])
+                raise HTTPException(status_code=503, detail="userbot_not_ready")
+
+            try:
+                await userbot.client.send_message(chat_id, text)
+                logger.info(
+                    "sentry_webhook_delivered",
+                    chat_id=chat_id,
+                    level=payload.get("data", {}).get("event", {}).get("level"),
+                )
+                return {"ok": True, "chat_id": chat_id, "length": len(text)}
+            except Exception as exc:
+                logger.error("sentry_webhook_send_failed", error=str(exc))
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+
         @self.app.get("/api/stats")
         async def get_stats():
             router = self.deps["router"]
