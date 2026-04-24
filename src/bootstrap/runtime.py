@@ -98,28 +98,53 @@ async def _start_web_panel(
 
 async def _warmup_memory_embeddings() -> None:
     """
-    Background embedder warmup: idempotent ``MemoryEmbedder.embed_all_unindexed()``.
+    Background embedder warmup: pre-warm Model2Vec + optional ``embed_all_unindexed()``.
 
     Почему отдельный background-task:
     - bootstrap не должен блокироваться на тяжёлой операции эмбеддинга;
     - 72k chunks уже эмбеддены (repaired W20), bootstrap возвращает ~100ms
       идемпотентно; но новые chunks появляются между рестартами — incremental.
-    - feature-flagged через ``KRAB_RAG_PHASE2_ENABLED`` (default "0") — до
-      включения Phase 2 runtime даже не импортирует embedder.
     - graceful: любое исключение логируется, task никогда не поднимает.
+
+    Две фазы:
+      1. Pre-warm модели (всегда) — mmap StaticModel + dummy encode. Не зависит
+         от ``KRAB_RAG_PHASE2_ENABLED``: модель нужна и для MMR rerank в FTS
+         режиме, а toggle flag=1 должен давать мгновенный hybrid query
+         (<100ms), а не холодные 1.8s из-за lazy mmap.
+      2. Embed unindexed chunks — только если ``KRAB_RAG_PHASE2_ENABLED=1``.
     """
     try:
         # Дать Krab полностью подняться перед heavy operation (userbot+web
         # уже должны обслуживать трафик, чтобы HF/Model2Vec загрузка не била
         # по первой волне запросов).
         await asyncio.sleep(30.0)
+
+        # 1. PRE-WARM (всегда) — mmap модели в RAM.
+        try:
+            from ..core.memory_embedder import MemoryEmbedder  # noqa: PLC0415
+
+            embedder = MemoryEmbedder()
+            # Форсим lazy load модели + dummy encode — прогрев mmap реальный.
+            embedder._ensure_model_loaded()
+            if embedder._model is not None:
+                embedder._model.encode(["warmup"])
+            logger.info(
+                "memory_model_prewarmed",
+                dim=getattr(embedder, "_dim", None),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "memory_model_prewarm_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return
+
+        # 2. EMBED UNINDEXED (только при включённом Phase 2).
         if os.getenv("KRAB_RAG_PHASE2_ENABLED", "0") != "1":
             logger.debug("memory_bootstrap_embed_skip", reason="phase2_disabled")
             return
 
-        from ..core.memory_embedder import MemoryEmbedder  # noqa: PLC0415
-
-        embedder = MemoryEmbedder()
         # Timeout 10 минут — 72k chunks уже эмбеддены (~1s reality), запас
         # на случай появления большого incremental после простоя.
         stats = await asyncio.wait_for(
