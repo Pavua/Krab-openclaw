@@ -135,7 +135,7 @@ src/
     memory_retrieval_scores.py — скоры поиска памяти (session 17)
     memory_doctor.py    — диагностика и авторемонт индекса памяти (session 17)
   handlers/
-    command_handlers.py — 175+ команд, _AgentRoomRouterAdapter
+    command_handlers.py — 105+ команд (auto-counted), _AgentRoomRouterAdapter
   integrations/
     tor_bridge.py       — Tor SOCKS5 proxy (httpx + Playwright)
     browser_bridge.py   — CDP подключение к Chrome
@@ -256,7 +256,7 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 
 - **Phase 7: 100%**, Memory Phase 2: **LIVE in production** (`KRAB_RAG_PHASE2_ENABLED=1` + `KRAB_RAG_PHASE2_SHADOW=1` в `.env`)
 - **Sessions 20+21+22**: 88 commits на ветке `fix/daily-review-20260421`
-- **257 API endpoints** (live: `/api/endpoints`), 151+ prod команд, ~6826+ тестов (Wave 11/12 cleanup: 324 → 17 failures, -95%)
+- **249 API endpoints** (live: `/api/endpoints`), 105+ prod команд, 9991 тестов collected (Wave 11/12 cleanup: 324 → 17 failures, -95%)
 
 ### Session 22 highlights
 - **Memory Phase 2 LIVE**: hybrid retrieval (FTS5 + vec_chunks RRF + MMR diversity), recall@5 +37.67 verified, 10× MMR speedup через vec-cache
@@ -523,7 +523,7 @@ Endpoints session 6 (добавлены):
 | `/api/thinking/set` | POST | Включить/выключить thinking |
 | `/api/depth/status` | GET | Текущий уровень глубины reasoning |
 
-Endpoints session 7 (добавлены, ~180+ итого):
+Endpoints session 7 (добавлены, ~249 итого после Session 22):
 
 | Endpoint | Метод | Описание |
 |----------|-------|----------|
@@ -675,10 +675,11 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | Session 6 | 3633 |
 | Session 7 | ~6826+ |
 | Session 17 | ~7226+ (+400 новых: memory doctor/rerank/heatmap, skill_scope, cross_ai_review) |
+| Session 22 | 9991 (collected, после Wave 11/12 cleanup) |
 
 <!-- BEGIN:auto-endpoints -->
 
-### Auto-generated endpoints table (238 маршрутов)
+### Auto-generated endpoints table (249 маршрутов)
 
 | Endpoint | Метод |
 |----------|-------|
@@ -705,12 +706,17 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/chrome/dedicated/status` | GET |
 | `/api/commands` | GET |
 | `/api/commands/usage` | GET |
+| `/api/commands/usage/top` | GET |
 | `/api/commands/{name}` | GET |
 | `/api/context/checkpoint` | POST |
 | `/api/context/latest` | GET |
 | `/api/context/transition-pack` | POST |
 | `/api/costs/budget` | GET |
+| `/api/costs/by-tier` | GET |
+| `/api/costs/by_chat` | GET |
+| `/api/costs/codex-quota` | GET |
 | `/api/costs/history` | GET |
+| `/api/costs/hourly` | GET |
 | `/api/costs/report` | GET |
 | `/api/ctx` | GET |
 | `/api/dashboard/summary` | GET |
@@ -722,7 +728,10 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/ecosystem/health/export` | GET |
 | `/api/endpoints` | GET |
 | `/api/health` | GET |
+| `/api/health/deep` | GET |
 | `/api/health/lite` | GET |
+| `/api/hooks/sentry` | POST |
+| `/api/hooks/sentry/secret/rotate` | POST |
 | `/api/inbox/create` | POST |
 | `/api/inbox/events` | GET |
 | `/api/inbox/items` | GET |
@@ -735,8 +744,10 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/krab/restart_userbot` | POST |
 | `/api/krab_ear/status` | GET |
 | `/api/links` | GET |
+| `/api/memory/heatmap` | GET |
 | `/api/memory/indexer` | GET |
 | `/api/memory/indexer/flush` | POST |
+| `/api/memory/phase2/status` | GET |
 | `/api/memory/search` | GET |
 | `/api/memory/stats` | GET |
 | `/api/message_batcher/stats` | GET |
@@ -774,6 +785,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/openclaw/cron/jobs` | GET |
 | `/api/openclaw/cron/jobs/create` | POST |
 | `/api/openclaw/cron/jobs/remove` | POST |
+| `/api/openclaw/cron/jobs/run_now` | POST |
 | `/api/openclaw/cron/jobs/toggle` | POST |
 | `/api/openclaw/cron/status` | GET |
 | `/api/openclaw/deep-check` | GET |
@@ -797,6 +809,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/ops/maintenance/prune` | POST |
 | `/api/ops/metrics` | GET |
 | `/api/ops/models` | POST |
+| `/api/ops/openclaw-procs` | GET |
 | `/api/ops/report` | GET |
 | `/api/ops/report/export` | GET |
 | `/api/ops/runtime_snapshot` | GET |
@@ -810,6 +823,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/provisioning/preview/{draft_id}` | GET |
 | `/api/provisioning/templates` | GET |
 | `/api/queue` | GET |
+| `/api/reactions/incoming` | GET |
 | `/api/reactions/stats` | GET |
 | `/api/runtime/chat-session/clear` | POST |
 | `/api/runtime/handoff` | GET |
@@ -825,6 +839,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/stats/caches` | GET |
 | `/api/swarm/artifacts` | GET |
 | `/api/swarm/artifacts/cleanup` | POST |
+| `/api/swarm/delegations/active` | GET |
 | `/api/swarm/events` | GET |
 | `/api/swarm/listeners` | GET |
 | `/api/swarm/listeners/toggle` | POST |
@@ -885,46 +900,63 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/voice/runtime` | GET |
 | `/api/voice/runtime/update` | POST |
 | `/api/voice/toggle` | POST |
+| `/commands` | GET |
+| `/costs` | GET |
+| `/inbox` | GET |
+| `/legacy/commands` | GET |
+| `/legacy/costs` | GET |
+| `/legacy/inbox` | GET |
+| `/legacy/ops` | GET |
+| `/legacy/settings` | GET |
+| `/legacy/swarm` | GET |
+| `/legacy/translator` | GET |
 | `/metrics` | GET |
-| `/api/ecosystem/comparison` | GET |
-| `/api/memory/heatmap` | GET |
-| `/api/memory/doctor` | GET |
-| `/api/memory/indexer/backfill` | POST |
-| `/api/swarm/channels/status` | GET |
-| `/api/memory/coverage-audit` | GET |
+| `/nano_theme.css` | GET |
+| `/ops` | GET |
+| `/prototypes/nano/nano_theme.css` | GET |
+| `/prototypes/{page}` | GET |
+| `/settings` | GET |
+| `/stats` | GET |
+| `/swarm` | GET |
+| `/translator` | GET |
+| `/v4` | GET |
+| `/v4/` | GET |
+| `/v4/chat` | GET |
+| `/v4/commands` | GET |
+| `/v4/costs` | GET |
+| `/v4/inbox` | GET |
+| `/v4/liquid-glass.css` | GET |
+| `/v4/ops` | GET |
+| `/v4/research` | GET |
+| `/v4/settings` | GET |
+| `/v4/swarm` | GET |
+| `/v4/theme-toggle.js` | GET |
+| `/v4/translator` | GET |
 
 <!-- END:auto-endpoints -->
 
 <!-- BEGIN:auto-commands -->
 
-### Auto-generated handlers (151 prod + beta: !mem, !chado, !filter)
+### Auto-generated handlers (105 команд из userbot_bridge.py)
 
-`!acl`, `!afk`, `!agent`, `!alias`, `!archive`, `!ask`
-`!audio_message`, `!autodel`, `!b64`, `!backup`, `!bench`, `!blocked`
-`!bookmark`, `!browser`, `!budget`, `!calc`, `!cap`, `!catchup`
-`!chatban`, `!chatinfo`, `!chatmute`, `!claude_cli`, `!clear`, `!codex`
-`!collect`, `!color`, `!config`, `!confirm`, `!contacts`, `!context`
-`!convert`, `!costs`, `!cron`, `!cronstatus`, `!currency`, `!debug`
-`!decrypt`, `!define`, `!del`, `!diagnose`, `!dice`, `!diff`
-`!digest`, `!dns`, `!emoji`, `!encrypt`, `!eval`, `!explain`
-`!export`, `!fix`, `!fwd`, `!gemini_cli`, `!grep`, `!hash`
-`!health`, `!help`, `!history`, `!hs`, `!id`, `!img`
-`!inbox`, `!invite`, `!ip`, `!json`, `!len`, `!link`
-`!listen`, `!log`, `!ls`, `!macos`, `!mark`, `!media`
-`!members`, `!memo`, `!memory`, `!model`, `!monitor`, `!new_chat_members`
-`!news`, `!note`, `!notify`, `!ocr`, `!opencode`, `!panel`
-`!paste`, `!pin`, `!ping`, `!poll`, `!profile`, `!purge`
-`!qr`, `!quiz`, `!quote`, `!rand`, `!rate`, `!react`
-`!read`, `!reasoning`, `!recall`, `!regex`, `!remember`, `!remind`
-`!reminders`, `!report`, `!reset`, `!restart`, `!rewrite`, `!rm_remind`
-`!role`, `!run`, `!say`, `!schedule`, `!scope`, `!screenshot`
-`!search`, `!sed`, `!set`, `!shop`, `!silence`, `!slowmode`
-`!snippet`, `!spam`, `!stats`, `!status`, `!sticker`, `!stopwatch`
-`!summary`, `!swarm`, `!sysinfo`, `!tag`, `!template`, `!time`
-`!timer`, `!todo`, `!top`, `!translate`, `!translate_auto`, `!translator`
-`!tts`, `!typing`, `!unarchive`, `!unpin`, `!uptime`, `!urban`
-`!version`, `!voice`, `!watch`, `!weather`, `!web`, `!welcome`
-`!who`, `!whois`, `!write`, `!yt`
+`!access`, `!acl`, `!agent`, `!alias`, `!archive`, `!ask`
+`!autodel`, `!backup`, `!bench`, `!block`, `!blocklist`, `!browser`
+`!budget`, `!cap`, `!catchup`, `!chatban`, `!claude_cli`, `!clear`
+`!clear_session`, `!codex`, `!collect`, `!config`, `!context`, `!costs`
+`!cronstatus`, `!debug`, `!del`, `!diag`, `!diagnose`, `!digest`
+`!e`, `!emoji`, `!eval`, `!explain`, `!export`, `!fix`
+`!forget`, `!fwd`, `!gemini`, `!grep`, `!health`, `!help`
+`!hs`, `!id`, `!inbox`, `!ls`, `!mac`, `!memo`
+`!memory`, `!model`, `!models`, `!monitor`, `!news`, `!note`
+`!notify`, `!opencode`, `!panel`, `!pin`, `!poll`, `!proactivity`
+`!purge`, `!qr`, `!quiz`, `!rate`, `!react`, `!read`
+`!reasoning`, `!recall`, `!remember`, `!remind`, `!reminders`, `!report`
+`!restart`, `!rewrite`, `!rm_remind`, `!role`, `!say`, `!schedule`
+`!scope`, `!screenshot`, `!search`, `!set`, `!shop`, `!stats`
+`!status`, `!stopwatch`, `!summary`, `!swarm`, `!sysinfo`, `!timer`
+`!todo`, `!translate`, `!translator`, `!trust`, `!unarchive`, `!unblock`
+`!unpin`, `!uptime`, `!version`, `!voice`, `!watch`, `!web`
+`!who`, `!whois`, `!write`
 
 Beta (Session 17): `!mem` — быстрый поиск по архиву памяти; `!chado` — chado-sync агент (W5.4); `!filter` — фильтрация сообщений по паттерну
 
@@ -932,10 +964,10 @@ Beta (Session 17): `!mem` — быстрый поиск по архиву пам
 
 <!-- BEGIN:auto-metrics -->
 
-### Auto-generated Prometheus (8 алертов, 8 метрик)
+### Auto-generated Prometheus (11 алертов, 21 метрик)
 
-Alerts: `ArchiveDbSizeCritical`, `ArchiveDbSizeWarning`, `CommandHandlerErrors`, `KrabDown`, `LLMErrorRateHigh`, `MemoryQueryLatencyHigh`, `MessageBatcherBackpressure`, `TelegramRateLimited`
+Alerts: `ArchiveChunksStalled`, `ArchiveDbSizeCritical`, `ArchiveDbSizeWarning`, `ChatFilterModeMuteDominant`, `CommandInvocationSpike`, `KrabAutoRestartSpiking`, `KrabDown`, `LLMRouteLatencyHigh`, `MemoryValidatorConfirmFailedSpike`, `MemoryValidatorPendingHigh`, `RemindersQueueBacklog`
 
-Metrics: `krab_alerts`, `krab_archive_db_size_bytes`, `krab_command_errors_total`, `krab_critical`, `krab_llm_errors_total`, `krab_memory_query_duration_seconds_bucket`, `krab_message_batcher_queue_depth`, `krab_telegram_flood_wait_total`
+Metrics: `krab_archive_chunks_embedded_total`, `krab_archive_db_size_bytes`, `krab_auto_restart_attempts_total`, `krab_chat_filter_modes_total`, `krab_chat_windows_active`, `krab_chat_windows_capacity`, `krab_chat_windows_evicted_total`, `krab_chat_windows_total_messages`, `krab_command_invocations_total`, `krab_guest_llm_skipped_total`, `krab_llm_route_latency_seconds`, `krab_llm_route_ok`, `krab_memory_adaptive_rerank_used_total`, `krab_memory_retrieval_latency_seconds`, `krab_memory_retrieval_mode_total`, `krab_memory_validator_pending`, `krab_metrics_generated_at`, `krab_process_start_time_seconds`, `krab_reminders_pending_total`, `krab_stealth_detection_total`, `krab_swarm_tool_blocked_total`
 
 <!-- END:auto-metrics -->
