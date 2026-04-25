@@ -95,6 +95,15 @@ groups:
           summary: "LLM route p95 latency > 10s"
           description: "Provider {{ $labels.provider }} / {{ $labels.model }} отвечает медленно"
 
+      - alert: VecQueryLatencyHigh
+        expr: histogram_quantile(0.95, rate(krab_vec_query_duration_seconds_bucket[10m])) > 0.1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "vec query p95 > 100ms — consider HNSW migration"
+          description: "Linear scan latency growing. Current vector count likely > 250k."
+
       - alert: KrabAutoRestartSpiking
         expr: rate(krab_auto_restart_attempts_total[10m]) > 0.1
         for: 10m

@@ -47,9 +47,18 @@ try:
         ["phase"],
         buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
     )
+    # sqlite-vec MATCH latency — trigger для миграции на HNSW.
+    # При p95 > 100ms (~250k vectors на M4 Max) — пора уходить с linear scan.
+    _vec_query_duration_seconds = _Histogram(
+        "krab_vec_query_duration_seconds",
+        "Latency of sqlite-vec MATCH queries (linear scan over vec_chunks)",
+        ["k"],
+        buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
+    )
 except Exception:  # noqa: BLE001 - prometheus_client optional
     _memory_retrieval_mode_total = None  # type: ignore[assignment]
     _memory_retrieval_latency_seconds = None  # type: ignore[assignment]
+    _vec_query_duration_seconds = None  # type: ignore[assignment]
 
 
 def _sanitize_label(value: str) -> str:

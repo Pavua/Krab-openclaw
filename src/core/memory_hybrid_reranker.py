@@ -134,20 +134,37 @@ def _semantic_search(
     if q_blob is None:
         return []
 
+    # Observe sqlite-vec MATCH latency (HNSW migration trigger при p95 > 100ms).
+    _vec_hist = None
     try:
-        cur = conn.execute(
-            """
-            SELECT c.chunk_id, v.distance
-            FROM vec_chunks AS v
-            JOIN chunks AS c ON c.rowid = v.rowid
-            WHERE v.vector MATCH ?
-              AND k = ?
-            ORDER BY v.distance;
-            """,
-            (q_blob, limit),
-        )
+        from src.core.prometheus_metrics import _vec_query_duration_seconds
+
+        _vec_hist = _vec_query_duration_seconds
+    except Exception:  # noqa: BLE001 - prometheus_client optional
+        _vec_hist = None
+
+    try:
+        if _vec_hist is not None:
+            ctx = _vec_hist.labels(k=str(limit)).time()
+        else:
+            from contextlib import nullcontext
+
+            ctx = nullcontext()
+        with ctx:
+            cur = conn.execute(
+                """
+                SELECT c.chunk_id, v.distance
+                FROM vec_chunks AS v
+                JOIN chunks AS c ON c.rowid = v.rowid
+                WHERE v.vector MATCH ?
+                  AND k = ?
+                ORDER BY v.distance;
+                """,
+                (q_blob, limit),
+            )
+            rows = cur.fetchall()
         results = []
-        for chunk_id, dist in cur.fetchall():
+        for chunk_id, dist in rows:
             sim = max(0.0, 1.0 - float(dist) / 2.0)
             results.append((chunk_id, sim))
         return results
