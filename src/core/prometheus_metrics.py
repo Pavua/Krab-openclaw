@@ -27,6 +27,23 @@ _ADAPTIVE_RERANK_COUNTER: list[int] = [0]
 # Словарь reason → count. Инкрементируется из userbot_bridge._process_message_serialized.
 _GUEST_LLM_SKIPPED_COUNTER: dict[str, int] = {}
 
+# Telegram FloodWait counter (alert TelegramRateLimited).
+# Словарь caller → count. Инкрементируется из error_handler.safe_handler и
+# других мест где ловится FloodWait. caller — free-form идентификатор
+# (имя handler'а или "voice_profile.refresh"). Pre-registered с пустым
+# словарём → /metrics всегда отдаёт # TYPE строку, alert не «мёртвый».
+_TELEGRAM_FLOOD_WAIT_COUNTER: dict[str, int] = {}
+
+
+def inc_telegram_flood_wait(caller: str) -> None:
+    """Инкремент krab_telegram_flood_wait_total{caller=...}.
+
+    Безопасно вызывать из любого FloodWait-handler'а. Не бросает, не I/O.
+    """
+    key = (caller or "unknown")[:80]
+    _TELEGRAM_FLOOD_WAIT_COUNTER[key] = _TELEGRAM_FLOOD_WAIT_COUNTER.get(key, 0) + 1
+
+
 # === C6: Memory retrieval метрики (prometheus_client). ===
 # Регистрируем один раз на уровне модуля. Если prometheus_client отсутствует —
 # объекты становятся None, а вызывающий код (memory_retrieval.search) делает
@@ -378,6 +395,18 @@ def collect_metrics() -> str:
                 )
     except Exception:
         pass
+
+    # === Telegram FloodWait (alert TelegramRateLimited) ===
+    # Pre-register HELP/TYPE даже если счётчик пустой — чтобы alert
+    # `increase(krab_telegram_flood_wait_total[15m])` не считался "no data".
+    lines.append("# HELP krab_telegram_flood_wait_total Telegram FloodWait incidents by caller")
+    lines.append("# TYPE krab_telegram_flood_wait_total counter")
+    if not _TELEGRAM_FLOOD_WAIT_COUNTER:
+        lines.append('krab_telegram_flood_wait_total{caller="none"} 0')
+    else:
+        for _fw_caller, _fw_count in _TELEGRAM_FLOOD_WAIT_COUNTER.items():
+            label_str = f'caller="{_sanitize_label(_fw_caller)}"'
+            lines.append(f"krab_telegram_flood_wait_total{{{label_str}}} {_fw_count}")
 
     # === Guest LLM skip (security ACL) ===
     for _skip_reason, _skip_count in _GUEST_LLM_SKIPPED_COUNTER.items():

@@ -331,6 +331,12 @@ class VoiceProfileMixin:
                     chat_id=target,
                     error=str(exc),
                 )
+                try:
+                    from src.core.prometheus_metrics import inc_telegram_flood_wait
+
+                    inc_telegram_flood_wait("voice_profile.chat_capability_refresh")
+                except Exception:  # noqa: BLE001
+                    pass
             # Остальное (ChannelPrivate, ChatAdminRequired, PeerIdInvalid,
             # ValueError на приватках с ID, etc.) — ожидаемо → debug.
             # Это именно тот класс ошибок для которого debug severity правильная.

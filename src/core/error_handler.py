@@ -57,6 +57,13 @@ def safe_handler(func):
                 f"Handler НЕ будет повторён для предотвращения рекурсии."
             )
             _error_counts["FloodWait"] = _error_counts.get("FloodWait", 0) + 1
+            # Prometheus: krab_telegram_flood_wait_total{caller=<handler>}.
+            try:
+                from src.core.prometheus_metrics import inc_telegram_flood_wait
+
+                inc_telegram_flood_wait(func.__name__)
+            except Exception:  # noqa: BLE001 — metrics не должны ломать handler
+                pass
             await asyncio.sleep(wait_time)
             # НЕ вызываем func повторно! Пользователь просто отправит команду заново.
 

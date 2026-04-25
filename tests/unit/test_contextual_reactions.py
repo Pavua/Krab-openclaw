@@ -82,10 +82,17 @@ def test_mode_off_returns_none():
 
 
 def test_gratitude_with_random_below_rate():
-    """Благодарность + random < rate → возвращает 👍 или 🙏."""
-    with patch("src.core.auto_reactions.random.random", return_value=0.0):  # всегда ниже rate
+    """Благодарность + random < rate → возвращает 👍, 🙏 или ❤️.
+
+    Детерминируем через patch random.choice (раньше assert был на 2 emoji,
+    но реализация выбирает из 3 — random.choice flake-ил тест по seed).
+    """
+    with (
+        patch("src.core.auto_reactions.random.random", return_value=0.0),  # всегда ниже rate
+        patch("src.core.auto_reactions.random.choice", side_effect=lambda seq: seq[0]),
+    ):
         result = ar.pick_contextual_emoji("спасибо большое!", mode="contextual")
-    assert result in ("👍", "🙏")
+    assert result in ("👍", "🙏", "❤️")
 
 
 def test_gratitude_always_reacts_regardless_of_rate():
