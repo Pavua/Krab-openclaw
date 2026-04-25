@@ -64,6 +64,7 @@ import asyncio
 import os
 import sqlite3
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Iterable, Optional
@@ -301,6 +302,15 @@ class HybridRetriever:
         self._vec_available: bool = False
         # Последний query — нужен для cosine MMR в _materialize_results().
         self._last_query: str = ""
+        # LRU-кеш для embed query: same query → same vector без повторного encode.
+        # Model2Vec encode на M4 Max ~0.02ms (warm), но защита от регрессий,
+        # тёплый путь для частых повторных запросов и cold-call mitigation.
+        # Размер 1000 — ~1MB при 256 float32 элементах. Используем OrderedDict
+        # как простой LRU: move_to_end при hit, popitem(last=False) при overflow.
+        self._query_vec_cache: "OrderedDict[str, list[float]]" = OrderedDict()
+        self._query_vec_cache_max: int = 1000
+        self._query_vec_cache_hits: int = 0
+        self._query_vec_cache_misses: int = 0
 
     # ------------------------------------------------------------------
     # Публичный API.
@@ -843,6 +853,35 @@ class HybridRetriever:
             return False
         return True
 
+    def _encode_query_cached(self, model: object, query: str) -> list[float]:
+        """
+        Encode query через Model2Vec с LRU-кешем.
+
+        Same `query` → same vector без повторного `model.encode()`. Hit O(1)
+        через OrderedDict.move_to_end; eviction LRU-тип (popitem(last=False)).
+        Возвращает list[float] (а не numpy array) — serialize_f32 принимает оба,
+        и list дешевле для tobytes-fallback.
+        """
+        cached = self._query_vec_cache.get(query)
+        if cached is not None:
+            self._query_vec_cache.move_to_end(query)
+            self._query_vec_cache_hits += 1
+            return cached
+        # Miss: encode и положим в cache.
+        vec = model.encode([query])[0]  # type: ignore[attr-defined]
+        # tolist() — гарантированно serializable; для cosine MMR-cache
+        # downstream будет .tolist() всё равно.
+        try:
+            vec_list = vec.tolist()
+        except AttributeError:
+            vec_list = list(vec)
+        self._query_vec_cache[query] = vec_list
+        self._query_vec_cache_misses += 1
+        # LRU eviction: drop oldest при overflow.
+        if len(self._query_vec_cache) > self._query_vec_cache_max:
+            self._query_vec_cache.popitem(last=False)
+        return vec_list
+
     def _ensure_model(self) -> object | None:
         """Late-import Model2Vec. Возвращает model или None если недоступна."""
         if self._model is not None:
@@ -957,7 +996,7 @@ class HybridRetriever:
             return []
 
         try:
-            q_vec = model.encode([query])[0]  # type: ignore[attr-defined]
+            q_vec = self._encode_query_cached(model, query)
             q_blob = serialize_f32(q_vec)
         except Exception as exc:  # noqa: BLE001 - encode best-effort
             logger.warning("memory_vec_search_encode_failed", error=str(exc))
