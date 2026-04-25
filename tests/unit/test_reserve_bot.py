@@ -581,3 +581,57 @@ class TestFloodWaitHandling:
             state = json.loads(flood_state_file.read_text(encoding="utf-8"))
             assert state == {}
 
+
+# ------------------------------------------------------------------
+# _load_flood_state / _save_flood_state — устойчивость к битым файлам / I/O
+# ------------------------------------------------------------------
+
+
+class TestFloodStatePersistence:
+    """Покрывает edge cases _load_flood_state / _save_flood_state."""
+
+    def test_load_flood_state_handles_corrupted_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Битый JSON в state файле → пустой dict, без исключений."""
+        state_file = tmp_path / "reserve_bot_flood.json"
+        state_file.write_text("not json{", encoding="utf-8")
+        monkeypatch.setattr("src.reserve_bot._FLOOD_STATE_FILE", state_file)
+
+        from src.reserve_bot import _load_flood_state
+
+        assert _load_flood_state() == {}
+
+    def test_load_flood_state_returns_empty_when_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Отсутствующий файл → {} без exception."""
+        monkeypatch.setattr(
+            "src.reserve_bot._FLOOD_STATE_FILE", tmp_path / "does_not_exist.json"
+        )
+
+        from src.reserve_bot import _load_flood_state
+
+        assert _load_flood_state() == {}
+
+    def test_save_flood_state_swallows_io_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """PermissionError в write_text не должен ломать вызывающего."""
+        monkeypatch.setattr(
+            "src.reserve_bot._FLOOD_STATE_FILE", tmp_path / "ro" / "flood.json"
+        )
+
+        def _raise_perm(*_args: object, **_kwargs: object) -> None:
+            raise PermissionError("readonly fs")
+
+        monkeypatch.setattr("pathlib.Path.write_text", _raise_perm)
+
+        from src.reserve_bot import _save_flood_state
+
+        # Не должно бросать
+        _save_flood_state({"attempts": 1, "next_allowed_at": 12345.0})
+

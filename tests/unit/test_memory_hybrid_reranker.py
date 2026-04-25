@@ -253,3 +253,59 @@ def test_fts_search_returns_empty_on_missing_table():
 def test_rrf_k_constant():
     """Проверяем дефолтное значение k."""
     assert RRF_K == 60
+
+
+# ---------------------------------------------------------------------------
+# _semantic_search — наблюдение sqlite-vec MATCH latency через histogram.
+# ---------------------------------------------------------------------------
+
+
+def test_vec_query_histogram_records_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_semantic_search должен звать _vec_query_duration_seconds.labels(k=...).time()."""
+    from unittest.mock import MagicMock
+
+    from src.core.memory_hybrid_reranker import _semantic_search
+
+    # Мокаем histogram source — _semantic_search импортирует его локально
+    mock_ctx = MagicMock()
+    mock_ctx.__enter__ = MagicMock(return_value=None)
+    mock_ctx.__exit__ = MagicMock(return_value=False)
+    mock_timer = MagicMock(return_value=mock_ctx)
+    mock_labels = MagicMock(return_value=MagicMock(time=mock_timer))
+    mock_hist = MagicMock(labels=mock_labels)
+    monkeypatch.setattr(
+        "src.core.prometheus_metrics._vec_query_duration_seconds", mock_hist
+    )
+
+    # Заставим _load_sqlite_vec вернуть True, и подсунем conn где SELECT 1 FROM
+    # vec_chunks работает, а затем основной query вернёт пустоту через
+    # OperationalError → ранний exit, но histogram .time() уже взят.
+    monkeypatch.setattr(
+        "src.core.memory_hybrid_reranker._load_sqlite_vec", lambda _conn: True
+    )
+    # Заглушка _encode_query — не дёргаем model2vec в тестах
+    monkeypatch.setattr(
+        "src.core.memory_hybrid_reranker._encode_query", lambda _q: b"\x00" * 1024
+    )
+
+    conn = sqlite3.connect(":memory:")
+    # vec_chunks как обычная таблица — для SELECT 1 LIMIT 1 пройдёт
+    conn.execute("CREATE TABLE vec_chunks(rowid INTEGER, vector BLOB)")
+    # chunks тоже — главный query упадёт на MATCH (sqlite-vec не загружен) →
+    # OperationalError → return [], но context manager уже activated
+    conn.execute("CREATE TABLE chunks(rowid INTEGER, chunk_id TEXT)")
+    conn.commit()
+
+    result = _semantic_search(conn, "query text", limit=10)
+    conn.close()
+
+    # Главное: histogram.labels(k="10").time() был вызван
+    mock_labels.assert_called_with(k="10")
+    mock_timer.assert_called_once()
+    # И context manager отработал (enter+exit) — observation зафиксирована
+    mock_ctx.__enter__.assert_called_once()
+    mock_ctx.__exit__.assert_called_once()
+    # Result — пустой (sqlite-vec MATCH недоступен в :memory:)
+    assert result == []
