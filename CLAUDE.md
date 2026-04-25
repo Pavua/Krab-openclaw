@@ -252,17 +252,39 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - **Handoff** — после изменений обновляй memory и IMPROVEMENTS.md
 - **Проверяй после правок**: `pytest tests/ -q`, `ruff check src/`
 
-## Phase 7 статус (21.04.2026)
+## Phase 7 статус (25.04.2026 — Session 22 close)
 
-- **Phase 7: 100%** (session 17 финализировала: Memory Layer Phase 2, cross-AI review, skill discovery, !mem/!chado/!filter, 238 endpoints)
-- Готово: ErrorDigest, WeeklyDigest, Research Pipeline, AlertSystem, Cost Budget Alerts, TaskBoard, CommandRegistry, 151 prod команд, 238 API endpoints, Memory heatmap/doctor/rerank
-- Session 17 новое: sender_context, operator_info_guard, memory_llm_rerank, gemini_rerank_provider, skill_scope, cross_ai_review, skill_discovery_check, mention_detector, fingerprint_http, human_like, stealth_metrics, memory_retrieval_scores, memory_doctor
+- **Phase 7: 100%**, Memory Phase 2: **LIVE in production** (`KRAB_RAG_PHASE2_ENABLED=1` + `KRAB_RAG_PHASE2_SHADOW=1` в `.env`)
+- **Sessions 20+21+22**: 88 commits на ветке `fix/daily-review-20260421`
+- **257 API endpoints** (live: `/api/endpoints`), 151+ prod команд, ~6826+ тестов (Wave 11/12 cleanup: 324 → 17 failures, -95%)
+
+### Session 22 highlights
+- **Memory Phase 2 LIVE**: hybrid retrieval (FTS5 + vec_chunks RRF + MMR diversity), recall@5 +37.67 verified, 10× MMR speedup через vec-cache
+- **Cron pipeline FIXED** end-to-end (был silent no-op): `cron_native_scheduler` bind LLM-processing sender + numeric chat_id + 90s timeout + `adapter.route_query()` (вместо несуществующего `.stream()`) + context-augmented prompts (sub-30s exec, без tool-calls)
+- **Sentry pipeline live** — Performance traces (LLM + memory spans), email + webhook → Telegram, `userbot_not_ready` → 503+Retry-After (no spam during boot, -80 events expected)
+- **MCP tool expansion**: 44 tools — filesystem/git/system/http (SSRF-guarded)/time/db_query + Apple Notes/iMessage/Reminders/Calendar + dev-loop pack
+- **9 LaunchAgents active**: ai.krab.core, ai.openclaw.gateway, mcp-yung-nagato, mcp-p0lrd, mcp-hammerspoon, cloudflared-tunnel, cloudflared-sentry-sync, workspace-backup, log-rotation, inbox-watcher, gateway-watchdog
+- **Grafana**: dashboard imported `http://localhost:3000/d/krab-main` (admin/krab_local), 18 panels verified
+- **Models**: GPT-5.5 / GPT-5.5-pro / Opus 4.7 / DeepSeek V4 family добавлены в `models.json`; UI panel hardcoded model names removed across V4
+- **Wake-up message**: 60min rate limit (no more startup spam в Saved Messages)
+- **message_batcher**: preserve buffered messages during LLM processing (no drops)
+
+### Wave 12 backlog (Session 23)
+- Cron LLM output quality (короткие/обрезанные ответы — нужно поднять reasoning depth)
+- DB-locked retest after WAL+busy_timeout pragma fix
+- sqlite-vec `vec_chunks_meta` desync (carry-over)
+- KrabEar hanging investigation
+- LM Studio 401 — local fallback restore
+- FTS5 watcher + auto-rebuild
+- Named Cloudflare Tunnel (still on quick-tunnel ephemeral URL)
 
 ## Ссылки
 
+- `docs/SESSION_22_FINAL_REPORT.md` — финальный отчёт сессии 22 (88 commits)
+- `docs/SESSION_21_FINAL_REPORT.md` — отчёт сессии 21
+- `docs/PHASE2_MIGRATION_GUIDE.md` — Phase 2 activation procedure
 - `IMPROVEMENTS.md` — архитектурный бэклог и глобальное видение
 - `docs/MASTER_PLAN_VNEXT_RU.md` — мастер-план проекта
-- `docs/DASHBOARD_REDESIGN_SPEC.md` — спецификация frontend-дашборда (сессия 7)
 - `.remember/next_session.md` — handoff следующей сессии
 - Memory: `~/.claude/projects/-Users-pablito-Antigravity-AGENTS-----/memory/`
 
