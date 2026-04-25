@@ -40,7 +40,7 @@
 
 1. **Cron LLM output quality** — короткие/обрезанные ответы; нужно поднять reasoning depth (low → medium)
 2. **DB-locked retest** — WAL+busy_timeout pragma применён, нужна 24h production observation
-3. **sqlite-vec `vec_chunks_meta` desync** — Session 13 carry-over (Wave 29-N)
+3. ~~**sqlite-vec `vec_chunks_meta` desync** — Session 13 carry-over~~ → **РЕЗОЛВНУТО (misdiagnosis):** vec_chunks_meta это vec0 internal config (key, value), не chunk metadata. Реальное состояние через `scripts/memory_doctor.py` — chunks=72358 ↔ vec_chunks=72358 ↔ FTS5=72358, 0 orphans. ALL CHECKS PASSED.
 4. **KrabEar hanging** — STT pipeline иногда зависает, нужна диагностика
 5. **LM Studio 401** — local fallback broken (long-standing carry-over)
 6. **FTS5 watcher** — нет auto-detect/rebuild при corruption
@@ -51,7 +51,7 @@
 
 1. **Cron LLM quality** — поднять reasoning depth для evening-recap, verify читабельный output
 2. **DB-locked 24h soak observation** — production regression check после WAL fix
-3. **vec-optimization** — `vec_chunks_meta` desync resolution; sqlite-vec upgrade
+3. ~~**vec-optimization**~~ → **DONE:** memory_doctor.py добавлен; misdiagnosis закрыт. Реальный TODO: HNSW index для sqlite-vec (current ~14ms на 72k vectors через linear scan)
 4. **KrabEar diagnostics** — instrument STT hang, найти root-cause
 5. **Wave 12 final cleanup** — закрыть 17 остаточных test failures
 6. **LM Studio 401** — auth handshake inspection, restore local fallback tier
