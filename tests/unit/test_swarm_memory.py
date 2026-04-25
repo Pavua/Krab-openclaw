@@ -183,22 +183,22 @@ class TestSwarmMemoryCorruptedFile:
 class TestSwarmMemoryAsyncLoad:
     """Wave 22-H: async-ified load + elapsed_ms instrumentation."""
 
-    def test_load_logs_elapsed_ms(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
-        """_load логирует elapsed_ms после успешной загрузки."""
+    def test_load_logs_elapsed_ms(self, tmp_path: Path, capfd: pytest.CaptureFixture[str]):
+        """_load логирует elapsed_ms после успешной загрузки.
+
+        structlog в Krab сконфигурирован на ConsoleRenderer → stdout, а не stdlib
+        propagation, поэтому caplog не видит события. Проверяем через capfd.
+        """
         import json
-        import logging
 
         path = tmp_path / "mem.json"
         path.write_text(json.dumps({"coders": []}), encoding="utf-8")
 
-        with caplog.at_level(logging.INFO, logger="src.core.swarm_memory"):
-            SwarmMemory(state_path=path)
+        SwarmMemory(state_path=path)
 
-        # Проверяем что событие залогировано
-        loaded_records = [
-            r for r in caplog.records if "swarm_memory_loaded" in r.getMessage()
-        ]
-        assert loaded_records
+        out = capfd.readouterr().out
+        assert "swarm_memory_loaded" in out
+        assert "elapsed_ms=" in out
 
     def test_load_async_completes(self, tmp_path: Path):
         """load_async() перезагружает state через thread."""

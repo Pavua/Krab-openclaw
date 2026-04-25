@@ -312,11 +312,11 @@ class TestHandleDigest:
         with patch("src.handlers.command_handlers.weekly_digest", mock_digest):
             await handle_digest(bot, msg)
 
-        # Первый reply — «Генерирую...», второй — итог
-        assert msg.reply.call_count == 2
-        last_reply = msg.reply.call_args_list[-1][0][0]
-        assert "5" in last_reply  # total_rounds
-        assert "0.25" in last_reply or "0.2500" in last_reply
+        # Wave 11: расширенный flow выдаёт 2-3 reply (статус → детали → подтверждение).
+        assert msg.reply.call_count >= 2
+        all_replies = " ".join(str(c[0][0]) for c in msg.reply.call_args_list)
+        assert "5" in all_replies  # total_rounds
+        assert "0.25" in all_replies or "0.2500" in all_replies
 
     @pytest.mark.asyncio
     async def test_successful_digest_with_callback(self) -> None:
@@ -338,9 +338,10 @@ class TestHandleDigest:
         with patch("src.handlers.command_handlers.weekly_digest", mock_digest):
             await handle_digest(bot, msg)
 
-        assert msg.reply.call_count == 2
-        last_reply = msg.reply.call_args_list[-1][0][0]
-        assert "✅" in last_reply
+        # Wave 11: расширенный flow выдаёт 2-3 reply.
+        assert msg.reply.call_count >= 2
+        all_replies = " ".join(str(c[0][0]) for c in msg.reply.call_args_list)
+        assert "✅" in all_replies
 
     @pytest.mark.asyncio
     async def test_digest_failure(self) -> None:

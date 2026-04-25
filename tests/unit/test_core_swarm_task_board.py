@@ -455,11 +455,14 @@ class TestAsyncLoadInstrumentation:
     """Wave 22-H: async-ified load + elapsed_ms instrumentation."""
 
     def test_load_logs_elapsed_ms(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+        self, tmp_path: Path, capfd: pytest.CaptureFixture[str]
     ) -> None:
-        """_load логирует elapsed_ms после успешной загрузки."""
+        """_load логирует elapsed_ms после успешной загрузки.
+
+        Wave 11: structlog в Krab сконфигурирован на ConsoleRenderer → stdout,
+        поэтому проверяем stdout через capfd, а не caplog.
+        """
         import json
-        import logging
 
         path = tmp_path / "board.json"
         # 200 задач = размер prod state-файла
@@ -480,15 +483,11 @@ class TestAsyncLoadInstrumentation:
         }
         path.write_text(json.dumps(sample), encoding="utf-8")
 
-        with caplog.at_level(logging.INFO, logger="src.core.swarm_task_board"):
-            b = SwarmTaskBoard(state_path=path)
+        b = SwarmTaskBoard(state_path=path)
 
         assert len(b._tasks) == 200  # type: ignore[attr-defined]
-        # Лог должен содержать поле elapsed_ms
-        loaded_records = [
-            r for r in caplog.records if "swarm_task_board_loaded" in r.getMessage()
-        ]
-        assert loaded_records, "swarm_task_board_loaded event not logged"
+        out = capfd.readouterr().out
+        assert "swarm_task_board_loaded" in out, "swarm_task_board_loaded event not logged"
 
     def test_load_missing_file_logs_zero_total(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture

@@ -207,10 +207,11 @@ class TestTranslateText:
 
     @pytest.mark.asyncio
     async def test_clear_session_called_after_translation(self):
-        """clear_session вызывается после перевода для очистки истории."""
+        """clear_session вызывается до и после перевода (single-shot, без истории)."""
         client = self._make_client(["Hola"])
         await translate_text("Hello", "en", "es", openclaw_client=client)
-        client.clear_session.assert_called_once()
+        # clear_session вызывается дважды: pre-clear (skip history lookup) + post-clear (single-shot)
+        assert client.clear_session.call_count == 2
 
     @pytest.mark.asyncio
     async def test_custom_chat_id_passed_to_stream(self):

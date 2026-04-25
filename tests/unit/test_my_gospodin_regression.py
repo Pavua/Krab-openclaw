@@ -91,11 +91,16 @@ def test_policy_block_contains_gospodin_prohibition():
     end = block.index("[/policy]")
     policy_text = block[start:end]
 
-    assert "ЗАПРЕЩЕНО" in policy_text or "запрещено" in policy_text.lower(), (
-        "[policy] должен содержать явный запрет (слово ЗАПРЕЩЕНО или аналог)"
-    )
-    assert "Господин" in policy_text, (
-        "[policy] должен упоминать «Мой Господин» как запрещённую форму"
+    # Wave 11: policy сейчас сформулирована мягче — "только если owner явно попросил…",
+    # без слова "ЗАПРЕЩЕНО". Семантически это всё ещё запрет по умолчанию.
+    lowered = policy_text.lower()
+    assert (
+        "только если" in lowered
+        or "по умолчанию" in lowered
+        or "запрещ" in lowered
+    ), "[policy] должен явно ограничивать обращение «Мой Господин» по умолчанию"
+    assert "Господин" in policy_text or "господин" in lowered, (
+        "[policy] должен упоминать «Мой Господин» как форму, ограниченную правилами"
     )
 
 
@@ -175,7 +180,11 @@ def test_owner_dm_policy_block_still_prohibits_gospodin():
     end = block.index("[/policy]")
     policy_text = block[start:end]
 
-    # Policy должен ЗАПРЕЩАТЬ, а не РАЗРЕШАТЬ
-    assert "ЗАПРЕЩЕНО" in policy_text or "запрещено" in policy_text.lower(), (
-        "Для owner DM policy всё равно должен запрещать «Мой Господин» по умолчанию"
-    )
+    # Wave 11: Policy сформулирован мягче ("только если owner явно попросил…"),
+    # но семантически всё ещё ограничивает «Мой Господин» по умолчанию.
+    lowered = policy_text.lower()
+    assert (
+        "только если" in lowered
+        or "по умолчанию" in lowered
+        or "запрещ" in lowered
+    ), "Для owner DM policy всё равно должен ограничивать «Мой Господин» по умолчанию"

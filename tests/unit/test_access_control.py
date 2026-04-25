@@ -122,6 +122,7 @@ def test_full_profile_cannot_execute_owner_only_commands(
     profile = resolve_access_profile(user_id=55, username="trusted", self_user_id=777)
 
     assert profile.level == AccessLevel.FULL
+    # Wave 11: 'diag' добавлен в OWNER_ONLY_COMMANDS (расширение admin scope).
     assert OWNER_ONLY_COMMANDS == {
         "access",
         "acl",
@@ -144,6 +145,7 @@ def test_full_profile_cannot_execute_owner_only_commands(
         "profile",
         "reset",
         "bench",
+        "diag",
     }
     assert profile.can_execute_command("status", set(USERBOT_KNOWN_COMMANDS)) is True
     assert profile.can_execute_command("acl", set(USERBOT_KNOWN_COMMANDS)) is False

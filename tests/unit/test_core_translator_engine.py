@@ -87,7 +87,9 @@ class TestTranslateText:
         assert result.tgt_lang == "ru"
         assert result.latency_ms >= 0
         assert result.model_id == "google/gemini-3-flash"
-        mock_client.clear_session.assert_called_once_with("translator_mvp")
+        # Wave 11: clear_session вызывается дважды (pre-clear для skip history + post-clear).
+        assert mock_client.clear_session.call_count == 2
+        mock_client.clear_session.assert_called_with("translator_mvp")
 
     @pytest.mark.asyncio
     async def test_strips_quotes(self) -> None:
@@ -120,7 +122,9 @@ class TestTranslateText:
             openclaw_client=mock_client,
             chat_id="custom_session",
         )
-        mock_client.clear_session.assert_called_once_with("custom_session")
+        # Wave 11: clear_session вызывается дважды (pre-clear + post-clear).
+        assert mock_client.clear_session.call_count == 2
+        mock_client.clear_session.assert_called_with("custom_session")
 
 
 # ------------------------------------------------------------------

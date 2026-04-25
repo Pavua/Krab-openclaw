@@ -214,6 +214,13 @@ def test_deferred_action_guard_noop_when_scheduler_enabled(monkeypatch) -> None:
 
 def test_sync_scheduler_runtime_starts_when_enabled_and_connected(monkeypatch) -> None:
     """Scheduler должен запускаться при enabled + активном Telegram-клиенте."""
+    # Wave 11: явно отключаем SWARM_AUTONOMOUS_ENABLED — другие тесты могут оставить
+    # его включённым в config, что приведёт к попытке запустить swarm scheduler
+    # с реальными deps и сломает чистый _sync_scheduler_runtime() flow.
+    monkeypatch.setattr(
+        userbot_bridge_module.config, "SWARM_AUTONOMOUS_ENABLED", False, raising=False
+    )
+
     bot = _make_bot_stub()
     bot.client = SimpleNamespace(is_connected=True)
 

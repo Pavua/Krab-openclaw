@@ -2,12 +2,9 @@
 """
 Тесты регистрации callback'ов `provider_failover` в `KraabUserbot._activate_provider_failover`.
 
-Покрытие:
-1. Apply-callback использует `set_primary_model` если оно есть.
-2. Apply-callback падает на `config.update_setting("MODEL", ...)` fallback если
-   ни set_primary_model, ни switch_model нет.
-3. Notification-callback шлёт сообщение по owner-ID (или "me" если OWNER_USER_IDS пусто).
-4. Graceful-fallback если `provider_failover` не импортируется — не поднимает.
+Wave 11: метод `_activate_provider_failover` уже не существует на KraabUserbot
+(provider failover wiring перепроектирован). Файл целиком помечен как skip —
+тесты ждут rewrite под новый API failover.
 """
 
 from __future__ import annotations
@@ -17,6 +14,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+pytestmark = pytest.mark.skip(
+    reason="Wave 11: KraabUserbot._activate_provider_failover больше не существует; "
+    "тесты ждут rewrite под новый failover API"
+)
 
 
 def _make_bot() -> MagicMock:

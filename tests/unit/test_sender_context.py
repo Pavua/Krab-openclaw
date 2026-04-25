@@ -87,11 +87,13 @@ def _make_private_message(
 
 
 def test_build_context_block_contains_tags() -> None:
-    """Блок начинается с [context] и заканчивается [/context]."""
+    """Блок начинается с [context] и содержит [/context] (за ним идёт [policy]…[/policy])."""
     msg = _make_message()
     block = build_context_block(msg, is_owner=False)
     assert block.startswith("[context]")
-    assert block.strip().endswith("[/context]")
+    # Wave 11: после [/context] добавляется persona-policy блок [policy]…[/policy].
+    assert "[/context]" in block
+    assert block.strip().endswith("[/policy]")
 
 
 def test_build_context_block_contains_sender_user_id() -> None:

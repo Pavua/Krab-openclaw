@@ -2623,10 +2623,15 @@ def test_restart_userbot_requires_web_key_and_restarts_runtime(monkeypatch):
     """Legacy watchdog endpoint должен требовать web-key и реально перезапускать userbot."""
     monkeypatch.setenv("WEB_API_KEY", "secret")
     fake_userbot = _FakeUserbot(startup_state="running", client_connected=True)
-    client = TestClient(_make_app(kraab_userbot=fake_userbot).app)
+    web_app = _make_app(kraab_userbot=fake_userbot)
+    client = TestClient(web_app.app)
 
     forbidden = client.post("/api/krab/restart_userbot")
     assert forbidden.status_code == 403
+
+    # Wave 11: rate limiter (5 min cooldown) проставляется ДО auth-чека.
+    # Сбрасываем timestamp, чтобы второй вызов прошёл без 'rate_limited'.
+    web_app._last_restart_userbot_ts = 0
 
     resp = client.post(
         "/api/krab/restart_userbot",
