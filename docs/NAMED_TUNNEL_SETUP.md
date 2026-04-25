@@ -9,16 +9,35 @@
 
 ---
 
-## Текущее состояние (на момент написания)
+## Текущее состояние (verified 25.04.2026, pre-flight)
 
 - `cloudflared` установлен: `/opt/homebrew/bin/cloudflared`
-- Папка `~/.cloudflared/` **пуста** — `cert.pem` отсутствует, т.е. **не authenticated**
-- Активен quick tunnel через `scripts/launchagents/ai.krab.cloudflared-tunnel.plist`
+- Папка `~/.cloudflared/` **пуста** — `cert.pem` отсутствует, **не authenticated**
+- Активен quick tunnel через `~/Library/LaunchAgents/ai.krab.cloudflared-tunnel.plist`
 - Self-heal: `scripts/cf_tunnel_sync.sh` + `ai.krab.cloudflared-sentry-sync.plist`
+- Готов named-tunnel plist: `scripts/launchagents/ai.krab.cloudflared-named-tunnel.plist`
+- Готов config template: `deploy/cloudflare/config.yml.template`
+- **NEW:** Готов 1-click activation script: `scripts/activate_named_tunnel.sh`
 
 ---
 
-## Шаги (требуют пользователя)
+## TL;DR — 1-click activation (после login)
+
+```bash
+# Шаг 1 — единственный ручной шаг (OAuth, ~30 сек, нельзя автоматизировать):
+cloudflared tunnel login
+
+# Шаг 2 — всё остальное автоматически:
+bash scripts/activate_named_tunnel.sh krab-alerts.<your-zone>.com
+```
+
+Скрипт сам: создаст tunnel, сгенерирует config, привяжет DNS, попытается обновить
+Sentry webhook (если `SENTRY_TOKEN`/`SENTRY_ORG` в env), снимет quick tunnel +
+sentry-sync, поднимет named LaunchAgent, выведет smoke-команду.
+
+---
+
+## Шаги (требуют пользователя — manual reference)
 
 ### 1. Authenticate cloudflared (1 click в браузере)
 
@@ -135,6 +154,7 @@ Cloudflare Dashboard → Zero Trust → Access → Applications → Add Applicat
 
 ## Связанные файлы
 
+- `scripts/activate_named_tunnel.sh` — **1-click activation после login** (final)
 - `scripts/launchagents/ai.krab.cloudflared-named-tunnel.plist` — готовый LaunchAgent
 - `deploy/cloudflare/config.yml.template` — шаблон конфига
 - `docs/PANEL_EXPOSURE.md` — общий обзор вариантов внешнего доступа
