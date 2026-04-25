@@ -60,15 +60,32 @@ for SHORT_ID in "$@"; do
     PAYLOAD=$(python3 -c "import json,sys; print(json.dumps({'text': f'Fixed in commit {sys.argv[1]}: {sys.argv[2]}'}))" \
         "$COMMIT_SHA" "$COMMIT_URL")
 
+    # FIX (2026-04-25): /api/0/issues/{id}/comments/ returns 404.
+    # Correct path is /api/0/organizations/{org}/issues/{id}/comments/ → 201.
     STATUS=$(curl -sS -o /tmp/sentry_backlink_resp.$$ -w "%{http_code}" \
-        -X POST "${BASE_URL}/api/0/issues/${ISSUE_ID}/comments/" \
+        -X POST "${BASE_URL}/api/0/organizations/${ORG}/issues/${ISSUE_ID}/comments/" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
         -d "$PAYLOAD" 2>/dev/null || echo "000")
 
     case "$STATUS" in
         200|201|202)
-            echo "  backlink ok: $SHORT_ID → $COMMIT_SHA"
+            # Verify response body — should contain "id" field (created comment id)
+            COMMENT_ID=$(python3 -c "
+import sys, json
+try:
+    with open('/tmp/sentry_backlink_resp.$$') as f:
+        d = json.load(f)
+    print(d.get('id') or '')
+except Exception:
+    pass
+" 2>/dev/null)
+            if [ -n "$COMMENT_ID" ]; then
+                echo "  backlink ok: $SHORT_ID → $COMMIT_SHA (comment_id=$COMMENT_ID)"
+            else
+                echo "  backlink unverified: $SHORT_ID HTTP $STATUS but no comment_id in response"
+                RC=1
+            fi
             ;;
         *)
             BODY=$(head -c 200 /tmp/sentry_backlink_resp.$$ 2>/dev/null || true)
