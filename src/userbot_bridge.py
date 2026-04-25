@@ -2426,11 +2426,34 @@ class KraabUserbot(
             status_emoji = "✅" if is_claw_ready else "⚠️"
             status_text = "Online" if is_claw_ready else "Gateway Unreachable (Check logs)"
 
-            await self.client.send_message(
-                "me",
-                f"🦀 **Krab System Online**\nGateway: {status_emoji} {status_text}\nReady to serve.",
-            )
-            logger.info("wake_up_message_sent", gateway_ready=is_claw_ready)
+            # W32: rate-limit wake-up message — раньше каждый restart спамил
+            # Saved Messages owner'а ("🦀 Krab System Online ..."). Если было
+            # >5 рестартов за день, owner получает 5 spam сообщений. Suppress
+            # if previous wake_up sent <60min ago.
+            from pathlib import Path as _Path
+
+            _wake_marker = _Path("/tmp/krab_last_wakeup.ts")
+            try:
+                last_ts = float(_wake_marker.read_text().strip()) if _wake_marker.exists() else 0
+            except (OSError, ValueError):
+                last_ts = 0
+            now_ts = time.time()
+            if now_ts - last_ts >= 3600:
+                await self.client.send_message(
+                    "me",
+                    f"🦀 **Krab System Online**\nGateway: {status_emoji} {status_text}\nReady to serve.",
+                )
+                try:
+                    _wake_marker.write_text(str(now_ts))
+                except OSError:
+                    pass
+                logger.info("wake_up_message_sent", gateway_ready=is_claw_ready)
+            else:
+                logger.info(
+                    "wake_up_message_suppressed",
+                    reason="rate_limit_60min",
+                    elapsed_min=round((now_ts - last_ts) / 60, 1),
+                )
         except Exception as e:
             logger.error("wake_up_failed", error=str(e))
 
