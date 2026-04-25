@@ -2091,8 +2091,10 @@ class OpenClawClient:
             _rid = _get_ctxvars().get("request_id")
             if _rid:
                 _extra_headers = {"X-Request-ID": str(_rid)}
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # Чисто инструментация (X-Request-ID header). Не отправляем в Sentry,
+            # чтобы не плодить noise; debug для локального трейса при необходимости.
+            logger.debug("openclaw_request_id_extract_failed", error=str(exc))
         try:
             response = await self._http_client.post(
                 f"{self.base_url}/v1/chat/completions",
@@ -2281,8 +2283,19 @@ class OpenClawClient:
                 try:
                     if not bool(model_manager._is_chat_capable_local_model(model_id, info)):  # noqa: SLF001
                         continue
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "openclaw_local_chat_capable_probe_failed",
+                        model_id=model_id,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                    try:
+                        import sentry_sdk
+
+                        sentry_sdk.capture_exception(exc)
+                    except Exception:  # noqa: BLE001
+                        pass
             if has_photo and not bool(getattr(info, "supports_vision", False)):
                 continue
             local_candidates.append((model_id, info))
@@ -2647,8 +2660,10 @@ class OpenClawClient:
             _sentry_tag("model", str(preferred_model or "auto"))
             _sentry_tag("force_cloud", "1" if force_cloud else "0")
             _sentry_tag("has_images", "1" if images else "0")
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # Sentry tagging — чистая инструментация; debug чтобы не дублировать
+            # самих себя в Sentry при сбое тегирования.
+            logger.debug("openclaw_sentry_tag_failed", error=str(exc))
 
         self._request_disable_tools = disable_tools
         self._active_tool_calls.clear()
@@ -3119,8 +3134,20 @@ class OpenClawClient:
                                 reason="vision_addon_missing",
                                 ttl_sec=1800.0,
                             )
-                        except Exception:
-                            pass
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "openclaw_local_model_exclude_failed",
+                                model=attempt_model,
+                                reason="vision_addon_missing",
+                                error=str(exc),
+                                error_type=type(exc).__name__,
+                            )
+                            try:
+                                import sentry_sdk
+
+                                sentry_sdk.capture_exception(exc)
+                            except Exception:  # noqa: BLE001
+                                pass
 
                     alt_local = ""
                     if (

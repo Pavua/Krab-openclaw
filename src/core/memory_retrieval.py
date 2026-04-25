@@ -97,8 +97,8 @@ def _inc_mode(mode: str) -> None:
 
         if _memory_retrieval_mode_total is not None:
             _memory_retrieval_mode_total.labels(mode=mode).inc()
-    except Exception:  # noqa: BLE001 - инструментация best-effort
-        pass
+    except Exception as exc:  # noqa: BLE001 - инструментация best-effort
+        logger.debug("memory_retrieval_mode_metric_failed", mode=mode, error=str(exc))
 
 
 def _observe_phase(phase: str, seconds: float) -> None:
@@ -111,8 +111,8 @@ def _observe_phase(phase: str, seconds: float) -> None:
 
         if _memory_retrieval_latency_seconds is not None:
             _memory_retrieval_latency_seconds.labels(phase=phase).observe(seconds)
-    except Exception:  # noqa: BLE001 - инструментация best-effort
-        pass
+    except Exception as exc:  # noqa: BLE001 - инструментация best-effort
+        logger.debug("memory_retrieval_latency_metric_failed", phase=phase, error=str(exc))
 
 
 def _compute_mode(vec_hits: int, fts_hits: int) -> str:
@@ -484,8 +484,8 @@ class HybridRetriever:
                     from src.core.prometheus_metrics import _ADAPTIVE_RERANK_COUNTER
 
                     _ADAPTIVE_RERANK_COUNTER[0] += 1
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("memory_adaptive_rerank_counter_failed", error=str(exc))
             except Exception as exc:  # noqa: BLE001
                 import traceback as _tb
 
@@ -516,8 +516,10 @@ class HybridRetriever:
                     from src.core.gemini_rerank_provider import default_provider as _grp_default
 
                     _rerank_provider = _grp_default()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    # Fallback: rerank без Gemini-провайдера. Не Sentry — Phase 2
+                    # downgrade ожидаемо (provider может быть disabled in env).
+                    logger.warning("memory_llm_rerank_provider_unavailable", error=str(exc))
                 reranked_cands = asyncio.get_event_loop().run_until_complete(
                     llm_rerank(query, candidates, top_k=top_k, provider=_rerank_provider)
                 )
@@ -1282,8 +1284,8 @@ class HybridRetriever:
         _observe_phase("mmr", time.perf_counter() - _mmr_start)
         try:
             _mmr_span_cm.__exit__(None, None, None)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("memory_mmr_span_close_failed", error=str(exc))
 
         return final[:top_k]
 

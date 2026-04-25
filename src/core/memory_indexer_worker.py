@@ -297,7 +297,23 @@ class MemoryIndexerWorker:
         """Загружает indexer_state.last_message_id per chat для skip replay."""
         try:
             conn = open_archive(self._paths, create_if_missing=False)
-        except (FileNotFoundError, Exception):
+        except FileNotFoundError:
+            # Архив ещё не создан — норма на cold start.
+            return
+        except Exception as exc:  # noqa: BLE001
+            # Любая другая ошибка → cache пуст → indexer будет replay'ить
+            # всё заново. Это не data loss, но producer заметной нагрузки на БД.
+            logger.warning(
+                "memory_indexer_watermark_open_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            try:
+                import sentry_sdk
+
+                sentry_sdk.capture_exception(exc)
+            except Exception:  # noqa: BLE001
+                pass
             return
         try:
             rows = conn.execute("SELECT chat_id, last_message_id FROM indexer_state;").fetchall()

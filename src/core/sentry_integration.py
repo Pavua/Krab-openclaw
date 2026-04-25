@@ -1,15 +1,13 @@
 """
 Sentry runtime error tracking для Krab.
 
-Session 16: подключение к Sentry проекту po-zm/krab через DSN в .env.
-Фильтрует PII (токены, ключи, phone numbers) перед отправкой events.
-После init — captured exceptions автоматически летят в Sentry; MCP Seer может
-их анализировать: `mcp__sentry__analyze_issue_with_seer`.
-
-Design decisions:
-- Lazy init: только если SENTRY_DSN не пустой (dev может работать без трекинга).
-- Sample rates по умолчанию 10% для traces/profiles — минимальный impact на CPU.
-- `before_send` redact — защита от утечки secrets через stack traces.
+DEPRECATED (2026-04-25): production boot path использует
+`src/bootstrap/sentry_init.py:init_sentry()` (вызов в `src/main.py:62`).
+Здесь оставлены утилиты `capture_exception` / `capture_message` /
+`_read_current_session_id`, которые могут пригодиться call-site'ам и
+существующим тестам. Сам `init_sentry()` ниже — НЕ подключён к boot path
+и оставлен только для backward compatibility тестов; новые интеграции
+добавляй в `bootstrap/sentry_init.py`.
 """
 
 from __future__ import annotations
