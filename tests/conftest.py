@@ -157,6 +157,43 @@ def _canonical_config_class():
         return None
 
 
+def _canonical_config_singleton():
+    try:
+        import src.userbot_bridge as _ub  # noqa: PLC0415
+
+        return _ub.config
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# Wave 13: список модулей, которые делают `from ...config import config` на
+# top-level. После importlib.reload(src.config) новая `src.config.config` —
+# другой инстанс, но эти модули продолжают держать стейл-ссылку.
+# Чистим перед каждым тестом, переопределяя `module.config = canonical`.
+_MODULES_HOLDING_CONFIG: tuple[str, ...] = (
+    "src.userbot_bridge",
+    "src.handlers.command_handlers",
+    "src.bootstrap.env_and_lock",
+    "src.modules.web_app",
+    "src.modules.web_app_lmstudio",
+    "src.web_app.lmstudio_api",
+    "src.openclaw_client",
+    "src.cache_manager",
+    "src.memory_engine",
+    "src.model_manager",
+    "src.search_engine",
+    "src.voice_engine",
+    "src.web_session",
+    "src.userbot.access_control",
+    "src.userbot.background_tasks",
+    "src.userbot.llm_flow",
+    "src.userbot.runtime_status",
+    "src.userbot.session",
+    "src.userbot.voice_profile",
+    "src.userbot.auto_translate",
+)
+
+
 @pytest.fixture(autouse=True)
 def _reset_krab_global_state() -> Iterator[None]:
     """
@@ -204,6 +241,35 @@ def _reset_krab_global_state() -> Iterator[None]:
                     setattr(_C, _k, _v)
                 except (AttributeError, TypeError):
                     pass
+
+    # -- pre-test: Wave 13 — re-bind стейл `config` references --
+    # После importlib.reload(src.config) или после того как тест создал новую
+    # Config()-инстанс, модули, импортнувшие `from ...config import config`
+    # на top-level, держат стейл-ссылку. monkeypatch на каноническом инстансе
+    # их не достигает. Принудительно переопределяем `module.config = canonical`.
+    _canon_singleton = _canonical_config_singleton()
+    if _canon_singleton is not None:
+        for _mod_name in _MODULES_HOLDING_CONFIG:
+            _mod = sys.modules.get(_mod_name)
+            if _mod is None:
+                continue
+            try:
+                if getattr(_mod, "config", None) is not _canon_singleton:
+                    _mod.config = _canon_singleton  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
+        # Также синхронизируем сам src.config.config
+        try:
+            import src.config as _src_cfg_mod  # noqa: PLC0415
+
+            if getattr(_src_cfg_mod, "config", None) is not _canon_singleton:
+                _src_cfg_mod.config = _canon_singleton
+            # И src.config.Config = канонический класс
+            _canon_cls = type(_canon_singleton)
+            if getattr(_src_cfg_mod, "Config", None) is not _canon_cls:
+                _src_cfg_mod.Config = _canon_cls
+        except Exception:  # noqa: BLE001
+            pass
 
     # -- pre-test: чистим instance-атрибуты config singleton --
     # (monkeypatch предыдущего теста мог оставить instance-shadow на
