@@ -122,6 +122,41 @@ _ENV_PRESERVE_PREFIXES: tuple[str, ...] = (
 _STRUCTLOG_CONFIG_ORIGINAL: dict = structlog.get_config().copy()
 
 
+# ---------------------------------------------------------------------------
+# Wave 12: snapshot ВСЕХ class-level Config атрибутов.
+# Тесты используют Config.update_setting(...) или прямое присваивание
+# Config.X = value, обходящее monkeypatch. Без полного snapshot мутации
+# class-attrs протекают между файлами и ломают get_set_value / is_valid /
+# notify_status / lmstudio etc.
+# ---------------------------------------------------------------------------
+def _snapshot_config_class_attrs() -> dict[str, Any]:
+    try:
+        # Берём канонический класс через singleton userbot_bridge.config —
+        # он переживает importlib.reload(src.config).
+        import src.userbot_bridge as _ub  # noqa: PLC0415
+
+        _C = type(_ub.config)
+        return {
+            k: getattr(_C, k)
+            for k in vars(_C)
+            if not k.startswith("_") and k.isupper()
+        }
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+_CONFIG_CLASS_SNAPSHOT: dict[str, Any] = _snapshot_config_class_attrs()
+
+
+def _canonical_config_class():
+    try:
+        import src.userbot_bridge as _ub  # noqa: PLC0415
+
+        return type(_ub.config)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @pytest.fixture(autouse=True)
 def _reset_krab_global_state() -> Iterator[None]:
     """
@@ -159,6 +194,55 @@ def _reset_krab_global_state() -> Iterator[None]:
         else:
             os.environ[key] = str(val)
 
+    # -- pre-test: восстанавливаем Config class attrs из snapshot --
+    # Используем КАНОНИЧЕСКИЙ класс через userbot_bridge.config (переживает reload).
+    if _CONFIG_CLASS_SNAPSHOT:
+        _C = _canonical_config_class()
+        if _C is not None:
+            for _k, _v in _CONFIG_CLASS_SNAPSHOT.items():
+                try:
+                    setattr(_C, _k, _v)
+                except (AttributeError, TypeError):
+                    pass
+
+    # -- pre-test: чистим instance-атрибуты config singleton --
+    # (monkeypatch предыдущего теста мог оставить instance-shadow на
+    # Config singleton — см. подробное объяснение в post-test секции).
+    # Чистим ВСЕ известные ссылки на singleton, потому что после
+    # importlib.reload(src.config) разные модули держат разные экземпляры.
+    _cfg_singletons_seen: set[int] = set()
+    try:
+        import src.config as _src_cfg_mod  # noqa: PLC0415
+
+        candidates = []
+        if hasattr(_src_cfg_mod, "config"):
+            candidates.append(_src_cfg_mod.config)
+        try:
+            import src.userbot_bridge as _ub_mod  # noqa: PLC0415
+
+            if hasattr(_ub_mod, "config"):
+                candidates.append(_ub_mod.config)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from src.handlers import command_handlers as _ch_mod  # noqa: PLC0415
+
+            if hasattr(_ch_mod, "config"):
+                candidates.append(_ch_mod.config)
+        except Exception:  # noqa: BLE001
+            pass
+        for _cfg in candidates:
+            if id(_cfg) in _cfg_singletons_seen:
+                continue
+            _cfg_singletons_seen.add(id(_cfg))
+            for _k in [k for k in list(vars(_cfg).keys()) if not k.startswith("__")]:
+                try:
+                    delattr(_cfg, _k)
+                except (AttributeError, TypeError):
+                    pass
+    except Exception:  # noqa: BLE001
+        pass
+
     yield
 
     # -- post-test: восстанавливаем structlog снова --
@@ -181,6 +265,20 @@ def _reset_krab_global_state() -> Iterator[None]:
             os.environ.pop(key, None)
         else:
             os.environ[key] = str(val)
+
+    # -- post-test: восстанавливаем Config class attrs из snapshot --
+    if _CONFIG_CLASS_SNAPSHOT:
+        try:
+            from src.config import Config as _C  # noqa: PLC0415
+
+            for _k, _v in _CONFIG_CLASS_SNAPSHOT.items():
+                try:
+                    if getattr(_C, _k, _SENTINEL) is not _v:
+                        setattr(_C, _k, _v)
+                except (AttributeError, TypeError):
+                    pass
+        except Exception:  # noqa: BLE001
+            pass
 
     # -- post-test: сброс module-level синглтонов --
 
@@ -236,6 +334,29 @@ def _reset_krab_global_state() -> Iterator[None]:
         _telegram_send_queue._queues.clear()
         _telegram_send_queue._workers.clear()
         _telegram_send_queue._slowmode_last_sent.clear()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Wave 12: главная утечка между файлами — `config` singleton (Config()).
+    # Тесты используют `monkeypatch.setattr(config, "X", ...)` или
+    # `patch("...command_handlers.config.X", ...)`, которые СОЗДАЮТ instance-attr
+    # на singleton. После teardown monkeypatch/patch значение восстанавливается,
+    # но как INSTANCE-атрибут, который теперь маскирует CLASS-атрибут Config.X.
+    # Следующие тесты, которые делают `Config.X = ...` (class-level), не видят
+    # эффекта — instance shadow перекрывает.
+    # Решение: после каждого теста удаляем все instance-атрибуты с config.
+    try:
+        from src.config import config as _cfg_singleton  # noqa: PLC0415
+
+        # Сохраняем только служебные dunder/private атрибуты, чистим прочее.
+        _instance_attrs = [
+            k for k in list(vars(_cfg_singleton).keys()) if not k.startswith("__")
+        ]
+        for _k in _instance_attrs:
+            try:
+                delattr(_cfg_singleton, _k)
+            except (AttributeError, TypeError):
+                pass
     except Exception:  # noqa: BLE001
         pass
 
