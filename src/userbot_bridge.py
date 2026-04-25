@@ -1817,6 +1817,7 @@ class KraabUserbot(
                 "cron_job_message_sent",
                 target=str(target_chat),
                 reply_len=len(full_reply),
+                reply_preview=full_reply[:160],
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
