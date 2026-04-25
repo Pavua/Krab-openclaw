@@ -7544,7 +7544,19 @@ class WebApp:
                 raise HTTPException(status_code=400, detail="chat_id_required")
             userbot = self.deps.get("kraab_userbot")
             if userbot is None or not getattr(userbot, "client", None):
-                raise HTTPException(status_code=503, detail="userbot_not_ready")
+                # Возвращаем JSONResponse напрямую (не raise), чтобы Sentry
+                # не ловил это как ошибку во время startup (boot 15-30s).
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "ok": False,
+                        "error": "userbot_not_ready",
+                        "detail": "userbot_not_ready",
+                    },
+                    headers={"Retry-After": "10"},
+                )
             try:
                 await userbot.client.send_message(chat_id, text)
                 return {"ok": True, "chat_id": chat_id}
@@ -7620,9 +7632,21 @@ class WebApp:
 
             userbot = self.deps.get("kraab_userbot")
             if userbot is None or not getattr(userbot, "client", None):
-                # Fallback: сохраняем в log — alert не пропадёт совсем
+                # Fallback: сохраняем в log — alert не пропадёт совсем.
+                # Возвращаем JSONResponse напрямую (не raise), чтобы Sentry
+                # не ловил это как ошибку во время startup.
                 logger.warning("sentry_webhook_no_userbot", text_preview=text[:200])
-                raise HTTPException(status_code=503, detail="userbot_not_ready")
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "ok": False,
+                        "error": "userbot_not_ready",
+                        "detail": "userbot_not_ready",
+                    },
+                    headers={"Retry-After": "10"},
+                )
 
             try:
                 await userbot.client.send_message(chat_id, text)
