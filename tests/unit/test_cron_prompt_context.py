@@ -69,8 +69,8 @@ async def test_run_cron_prompt_augments_with_context_before_llm() -> None:
     with (
         patch.object(
             bridge,
-            "_build_system_prompt_for_sender",
-            return_value="system",
+            "_build_cron_system_prompt",
+            return_value="cron system",
         ),
         patch.object(
             bridge,
@@ -101,7 +101,7 @@ async def test_run_cron_prompt_no_reply_short_circuits() -> None:
 
     fake_adapter = SimpleNamespace(route_query=AsyncMock(return_value="NO_REPLY"))
     with (
-        patch.object(bridge, "_build_system_prompt_for_sender", return_value="system"),
+        patch.object(bridge, "_build_cron_system_prompt", return_value="cron system"),
         patch.object(bridge, "_build_cron_context", new=AsyncMock(return_value="ctx")),
         patch(
             "src.handlers.command_handlers._AgentRoomRouterAdapter",
@@ -127,7 +127,7 @@ async def test_run_cron_prompt_falls_back_when_context_build_fails() -> None:
     fake_adapter = SimpleNamespace(route_query=fake_route)
 
     with (
-        patch.object(bridge, "_build_system_prompt_for_sender", return_value="system"),
+        patch.object(bridge, "_build_cron_system_prompt", return_value="cron system"),
         patch.object(
             bridge,
             "_build_cron_context",
@@ -143,3 +143,34 @@ async def test_run_cron_prompt_falls_back_when_context_build_fails() -> None:
 
     # Контекст не добавился, но prompt прошёл as-is
     assert captured["value"] == "raw prompt body"
+
+
+def test_build_cron_system_prompt_minimal_and_no_tools() -> None:
+    """Cron system_prompt должен быть короткий и не упоминать tools."""
+    p = KraabUserbot._build_cron_system_prompt()
+    assert len(p) < 500, f"cron prompt too long: {len(p)}"
+    assert "NO_REPLY" in p
+    # Запрет на tool calls должен быть явно прописан (negative instruction)
+    low = p.lower()
+    assert "никаких tool" in low or "no tool" in low
+
+
+@pytest.mark.asyncio
+async def test_run_cron_prompt_silent_skip_on_gateway_placeholder() -> None:
+    """Если LLM/gateway вернул 'No response from OpenClaw.' — silent skip."""
+    bridge = _make_bridge()
+
+    fake_adapter = SimpleNamespace(
+        route_query=AsyncMock(return_value="No response from OpenClaw.")
+    )
+    with (
+        patch.object(bridge, "_build_cron_system_prompt", return_value="cron system"),
+        patch.object(bridge, "_build_cron_context", new=AsyncMock(return_value="ctx")),
+        patch(
+            "src.handlers.command_handlers._AgentRoomRouterAdapter",
+            return_value=fake_adapter,
+        ),
+    ):
+        await bridge._run_cron_prompt_and_send("cron_native", "check")
+
+    bridge.client.send_message.assert_not_awaited()

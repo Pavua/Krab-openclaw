@@ -1621,6 +1621,28 @@ class KraabUserbot(
             return
         self.maintenance_task = asyncio.create_task(self._safe_maintenance())
 
+    @staticmethod
+    def _build_cron_system_prompt() -> str:
+        """
+        Минимальный system_prompt для cron-path.
+
+        Зачем отдельный: полный owner-prompt (`_build_system_prompt_for_sender`) грузит
+        workspace bundle + injection defense + role-инструкции и **регистрирует tools**.
+        У CLI-провайдеров (codex-cli/gpt-5.4) это приводило к tool-chain попыткам и
+        gateway возвращал плейсхолдер `No response from OpenClaw.` (26 chars) когда
+        text payload оставался пустым после tool calls.
+
+        Контракт: ≤500 chars, никаких упоминаний tools, NO_REPLY как escape hatch.
+        """
+        return (
+            "Ты — Krab cron-помощник. На вход — RUNTIME CONTEXT снапшот и задача. "
+            "Отвечай в один shot, кратко (≤6 строк), на русском. "
+            "Используй только данные из RUNTIME CONTEXT — никаких tool calls, "
+            "history_search, cost_lookup, inbox_status и т.п. "
+            "Если по контексту нечего сообщить владельцу — ответь ровно `NO_REPLY` "
+            "(одним токеном, без пояснений). Не извиняйся, не приветствуй."
+        )
+
     async def _build_cron_context(self) -> str:
         """
         Собирает компактный snapshot runtime-данных для prefix-инъекции в cron prompts.
@@ -1742,10 +1764,10 @@ class KraabUserbot(
             # LLM call через существующий router — reuse swarm-style adapter для one-shot
             from .handlers.command_handlers import _AgentRoomRouterAdapter  # noqa: PLC0415
 
-            system_prompt = self._build_system_prompt_for_sender(
-                is_allowed_sender=True,
-                access_level="owner",
-            )
+            # Минимальный cron-prompt (см. _build_cron_system_prompt). Полный owner-prompt
+            # с workspace bundle + tool registration ломал CLI-провайдеры → пустой ответ →
+            # gateway возвращал "No response from OpenClaw." (26 chars).
+            system_prompt = self._build_cron_system_prompt()
             # W32 hotfix v3: chat_id MUST be numeric (target_chat = owner_id),
             # не synthetic string "cron:job:..." — иначе openclaw_client hangs
             # in memory_adapter trying to load history for non-existent chat.
@@ -1773,6 +1795,15 @@ class KraabUserbot(
             ).strip()
             if not full_reply:
                 logger.warning("cron_job_empty_llm_reply", prompt_preview=prompt[:80])
+                return
+
+            # Gateway placeholder = empty response → silent skip (не спамим Saved Messages)
+            if "no response from openclaw" in full_reply.lower():
+                logger.warning(
+                    "cron_job_gateway_placeholder",
+                    prompt_preview=prompt[:80],
+                    reply_preview=full_reply[:120],
+                )
                 return
 
             # NO_REPLY marker — cron jobs с conditional logic могут решить тихо
