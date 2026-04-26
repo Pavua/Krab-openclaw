@@ -189,6 +189,52 @@ def test_restart_userbot_requires_auth() -> None:
     assert resp.status_code == 403
 
 
+def test_restart_userbot_rate_limited_on_second_call() -> None:
+    """Wave SS: второй вызов в окне 5 минут возвращает rate_limited."""
+    kraab = _FakeKraabWithRestart()
+    app = _make_app(kraab=kraab)
+    c = TestClient(app.app)
+    with patch.dict("os.environ", {"WEB_API_KEY": WEB_KEY}):
+        first = c.post("/api/krab/restart_userbot", headers=AUTH_HEADERS)
+        assert first.status_code == 200
+        assert first.json()["ok"] is True
+
+        # Второй вызов сразу — должен попасть под cooldown.
+        second = c.post("/api/krab/restart_userbot", headers=AUTH_HEADERS)
+    assert second.status_code == 200
+    data = second.json()
+    assert data["ok"] is False
+    assert data["error"] == "rate_limited"
+    assert "cooldown" in data["detail"]
+
+
+def test_restart_userbot_falls_back_to_stop_start_when_no_restart_method() -> None:
+    """Wave SS: если у userbot нет .restart(), используется stop()/start()."""
+
+    class _FakeKraabStopStart(_FakeKraab):
+        """userbot с start/stop, но без restart()."""
+
+        stop_called: int = 0
+        start_called: int = 0
+
+        async def start(self) -> None:
+            self.start_called += 1
+
+        async def stop(self) -> None:
+            self.stop_called += 1
+
+    kraab = _FakeKraabStopStart()
+    c = _client(kraab=kraab)
+    with patch.dict("os.environ", {"WEB_API_KEY": WEB_KEY}):
+        resp = c.post("/api/krab/restart_userbot", headers=AUTH_HEADERS)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["action"] == "restart_userbot"
+    assert kraab.stop_called == 1
+    assert kraab.start_called == 1
+
+
 # ---------------------------------------------------------------------------
 # POST /api/notify
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ System router — Phase 2 Wave Y + Wave AA extraction (Session 25).
 - POST /api/runtime/chat-session/clear — Wave AA: очистка runtime chat-session
 - POST /api/runtime/repair-active-shared-permissions — Wave QQ: нормализация прав в `Краб-active`
 - POST /api/runtime/recover — Wave QQ: recovery playbook (repair + sync + tier/probe)
+- POST /api/krab/restart_userbot — Wave SS: перезапуск userbot c rate-limit (legacy watchdog)
 
 Helper-методы WebApp (``_runtime_operator_profile``,
 ``_build_stats_router_payload``, ``_resolve_local_runtime_truth``)
@@ -27,7 +28,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 
 from ._context import RouterContext
 
@@ -442,6 +443,110 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
             "steps": steps,
             "runtime_after": runtime_after,
             "cloud_runtime": cloud_runtime,
+        }
+
+    # ── /api/krab/restart_userbot (Wave SS) ─────────────────────────────────
+
+    @router.post("/api/krab/restart_userbot")
+    async def restart_userbot(
+        request: Request,
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """
+        Перезапускает только Telegram userbot без полного runtime switchover.
+
+        Зачем нужен отдельный endpoint:
+        - legacy watchdog уже умеет дёргать именно этот маршрут;
+        - перезапуск userbot легче и безопаснее, чем полный restart всего Krab;
+        - закрывает split-state, когда web panel жива, а userbot деградировал.
+        """
+        import structlog
+
+        _logger = structlog.get_logger("system_router")
+
+        # W32: лог caller (IP + User-Agent) чтобы поймать restart-loop источник.
+        client_host = request.client.host if request.client else "unknown"
+        user_agent = request.headers.get("user-agent", "n/a")
+        referer = request.headers.get("referer", "n/a")
+        _logger.warning(
+            "restart_userbot_endpoint_called",
+            client_ip=client_host,
+            user_agent=user_agent[:120],
+            referer=referer[:120],
+        )
+
+        # W32 v3: rate limit — max 1 restart per 5 min. Защита от restart loop.
+        import time as _time
+
+        get_last_ts = ctx.get_dep("restart_userbot_get_last_ts_helper")
+        set_last_ts = ctx.get_dep("restart_userbot_set_last_ts_helper")
+
+        now_ts = _time.time()
+        last_restart_ts = float(get_last_ts() if callable(get_last_ts) else 0) or 0.0
+        cooldown_sec = 300
+        if now_ts - last_restart_ts < cooldown_sec:
+            remaining = int(cooldown_sec - (now_ts - last_restart_ts))
+            _logger.warning(
+                "restart_userbot_rate_limited",
+                client_ip=client_host,
+                cooldown_remaining_sec=remaining,
+            )
+            return {
+                "ok": False,
+                "error": "rate_limited",
+                "detail": f"cooldown {remaining}s (max 1 per {cooldown_sec}s)",
+            }
+        if callable(set_last_ts):
+            set_last_ts(now_ts)
+
+        ctx.assert_write_access(x_krab_web_key, token)
+        kraab_userbot = ctx.get_dep("kraab_userbot")
+        if (
+            not kraab_userbot
+            or not hasattr(kraab_userbot, "start")
+            or not hasattr(kraab_userbot, "stop")
+        ):
+            return {
+                "ok": False,
+                "error": "userbot_restart_unavailable",
+                "detail": "kraab_userbot не поддерживает start/stop для restart endpoint",
+            }
+
+        before_state: dict = {}
+        if hasattr(kraab_userbot, "get_runtime_state"):
+            try:
+                before_state = dict(kraab_userbot.get_runtime_state() or {})
+            except Exception:  # noqa: BLE001
+                before_state = {}
+
+        try:
+            if hasattr(kraab_userbot, "restart"):
+                await kraab_userbot.restart(reason="web_api_restart_userbot")
+            else:
+                await kraab_userbot.stop()
+                await kraab_userbot.start()
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("runtime_restart_userbot_failed", error=str(exc))
+            return {
+                "ok": False,
+                "error": "restart_failed",
+                "detail": str(exc),
+                "before": before_state,
+            }
+
+        after_state: dict = {}
+        if hasattr(kraab_userbot, "get_runtime_state"):
+            try:
+                after_state = dict(kraab_userbot.get_runtime_state() or {})
+            except Exception:  # noqa: BLE001
+                after_state = {}
+
+        return {
+            "ok": True,
+            "action": "restart_userbot",
+            "before": before_state,
+            "after": after_state,
         }
 
     return router

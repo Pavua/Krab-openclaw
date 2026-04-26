@@ -895,6 +895,20 @@ class WebApp:
             lambda value, default=False: WebApp._bool_env(value, default),
         )
 
+        # Phase 2 Wave SS (Session 25): inject helpers для extraction
+        # /api/krab/restart_userbot в system_router. Stateful timestamp
+        # (`_last_restart_userbot_ts`) хранится на WebApp instance —
+        # тесты читают/сбрасывают его напрямую (`web_app._last_restart_userbot_ts = 0`),
+        # поэтому через late-bound get/set helpers сохраняем backwards-compat.
+        deps_dict.setdefault(
+            "restart_userbot_get_last_ts_helper",
+            lambda: getattr(self, "_last_restart_userbot_ts", 0),
+        )
+        deps_dict.setdefault(
+            "restart_userbot_set_last_ts_helper",
+            lambda ts: setattr(self, "_last_restart_userbot_ts", ts),
+        )
+
         return RouterContext(
             deps=deps_dict,
             project_root=self._project_root(),
@@ -9711,102 +9725,10 @@ class WebApp:
                 },
             }
 
-        @self.app.post("/api/krab/restart_userbot")
-        async def restart_userbot(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Перезапускает только Telegram userbot без полного runtime switchover.
-
-            Зачем нужен отдельный endpoint:
-            - legacy watchdog уже умеет дёргать именно этот маршрут;
-            - перезапуск userbot легче и безопаснее, чем полный restart всего Krab;
-            - это закрывает split-state, когда web panel жива, но transport userbot деградировал.
-            """
-            # W32: лог caller (IP + User-Agent) чтобы поймать restart-loop источник.
-            # Каждые 30-40с эндпоинт дёргается, но launchd watchdogs ничего не зовут.
-            client_host = request.client.host if request.client else "unknown"
-            user_agent = request.headers.get("user-agent", "n/a")
-            referer = request.headers.get("referer", "n/a")
-            logger.warning(
-                "restart_userbot_endpoint_called",
-                client_ip=client_host,
-                user_agent=user_agent[:120],
-                referer=referer[:120],
-            )
-
-            # W32 v3: rate limit — max 1 restart per 5 min. Защита от restart loop.
-            # Observed caller python-httpx/0.28.1 долбил endpoint каждые 30-40s,
-            # ломая swarm SQLite sessions. Legitimate watchdog срабатывает <1/h.
-            import time as _time
-
-            now_ts = _time.time()
-            last_restart_ts = getattr(self, "_last_restart_userbot_ts", 0)
-            cooldown_sec = 300
-            if now_ts - last_restart_ts < cooldown_sec:
-                remaining = int(cooldown_sec - (now_ts - last_restart_ts))
-                logger.warning(
-                    "restart_userbot_rate_limited",
-                    client_ip=client_host,
-                    cooldown_remaining_sec=remaining,
-                )
-                return {
-                    "ok": False,
-                    "error": "rate_limited",
-                    "detail": f"cooldown {remaining}s (max 1 per {cooldown_sec}s)",
-                }
-            self._last_restart_userbot_ts = now_ts
-
-            self._assert_write_access(x_krab_web_key, token)
-            kraab_userbot = self.deps.get("kraab_userbot")
-            if (
-                not kraab_userbot
-                or not hasattr(kraab_userbot, "start")
-                or not hasattr(kraab_userbot, "stop")
-            ):
-                return {
-                    "ok": False,
-                    "error": "userbot_restart_unavailable",
-                    "detail": "kraab_userbot не поддерживает start/stop для restart endpoint",
-                }
-
-            before_state = {}
-            if hasattr(kraab_userbot, "get_runtime_state"):
-                try:
-                    before_state = dict(kraab_userbot.get_runtime_state() or {})
-                except Exception:
-                    before_state = {}
-
-            try:
-                if hasattr(kraab_userbot, "restart"):
-                    await kraab_userbot.restart(reason="web_api_restart_userbot")
-                else:
-                    await kraab_userbot.stop()
-                    await kraab_userbot.start()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("runtime_restart_userbot_failed", error=str(exc))
-                return {
-                    "ok": False,
-                    "error": "restart_failed",
-                    "detail": str(exc),
-                    "before": before_state,
-                }
-
-            after_state = {}
-            if hasattr(kraab_userbot, "get_runtime_state"):
-                try:
-                    after_state = dict(kraab_userbot.get_runtime_state() or {})
-                except Exception:
-                    after_state = {}
-
-            return {
-                "ok": True,
-                "action": "restart_userbot",
-                "before": before_state,
-                "after": after_state,
-            }
+        # /api/krab/restart_userbot — extracted в system_router.py (Phase 2 Wave SS,
+        # Session 25). Helpers `restart_userbot_get_last_ts_helper` /
+        # `restart_userbot_set_last_ts_helper` инжектируются через
+        # _make_router_context, маппятся на `self._last_restart_userbot_ts`.
 
         # Phase 2: Command API parity — все owner controls через REST, не только Telegram
 
