@@ -396,3 +396,97 @@ async def test_restart_status_launchctl_stopped() -> None:
 
     text = message.reply.await_args.args[0]
     assert "Stopped" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 2 Wave 10 (Session 27): system_commands re-exports
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestPhase2Wave10ReExports:
+    """Гарантирует, что после извлечения system_commands.py все символы доступны
+    через src.handlers.command_handlers (тесты, _AgentRoomRouterAdapter,
+    external code импортируют через старый namespace)."""
+
+    def test_handlers_re_exported(self):
+        """Handlers видны через command_handlers и идентичны в обоих модулях."""
+        from src.handlers import command_handlers as _ch
+        from src.handlers.commands import system_commands as _sc
+
+        for name in (
+            "handle_status",
+            "handle_sysinfo",
+            "handle_uptime",
+            "handle_panel",
+            "handle_version",
+            "handle_restart",
+            "handle_diagnose",
+            "handle_debug",
+            "handle_health",
+            "handle_stats",
+            "handle_ip",
+            "handle_dns",
+            "handle_ping",
+            "handle_log",
+            "handle_diag",
+        ):
+            assert hasattr(_ch, name), f"command_handlers missing {name}"
+            assert hasattr(_sc, name), f"system_commands missing {name}"
+            # Re-export проксирует тот же объект
+            assert getattr(_ch, name) is getattr(_sc, name)
+
+    def test_helpers_re_exported(self):
+        """Private helpers тоже видны через command_handlers (используются в тестах)."""
+        from src.handlers import command_handlers as _ch
+        from src.handlers.commands import system_commands as _sc
+
+        for name in (
+            "_format_uptime_str",
+            "_render_stats_panel",
+            "_format_ecosystem_report",
+            "_handle_stats_ecosystem",
+            "_health_deep_report",
+            "_get_local_ip",
+            "_get_public_ip",
+            "_read_log_tail_subprocess",
+            "_KRAB_LOG_PATH",
+            "_LOG_MAX_INLINE_SIZE",
+            "_LOG_TEXT_MAX_LINES",
+            "_diag_panel_base",
+            "_diag_fetch_json",
+            "_diag_fmt_section_infra",
+            "_diag_fmt_section_model",
+            "_diag_fmt_section_traffic",
+            "_diag_fmt_section_memory",
+            "_diag_fmt_section_errors",
+            "_diag_fmt_section_inbox",
+            "_diag_fmt_section_cron",
+            "_diag_fmt_section_phase2",
+            "_diag_fmt_section_sentry",
+            "_diag_fmt_section_security",
+            "_diag_fetch_sentry",
+            "_diag_collect_security",
+        ):
+            assert hasattr(_ch, name), f"command_handlers missing {name}"
+            assert hasattr(_sc, name), f"system_commands missing {name}"
+            assert getattr(_ch, name) is getattr(_sc, name)
+
+    def test_landmines_remain_in_command_handlers(self):
+        """``_swarm_status_deep_report`` и ``_split_text_for_telegram`` НЕ переехали:
+        тесты test_swarm_status_deep патчат через namespace command_handlers, а
+        _split_text_for_telegram используется множеством handlers вне system."""
+        from src.handlers import command_handlers as _ch
+
+        assert hasattr(_ch, "_swarm_status_deep_report")
+        assert hasattr(_ch, "_split_text_for_telegram")
+        # Они должны быть определены ИМЕННО в command_handlers (не re-export):
+        assert _ch._swarm_status_deep_report.__module__.endswith("command_handlers")
+        assert _ch._split_text_for_telegram.__module__.endswith("command_handlers")
+
+    def test_format_uptime_str_works(self):
+        """Sanity check: _format_uptime_str форматирует секунды в "Nд Mч Kм"."""
+        from src.handlers.command_handlers import _format_uptime_str
+
+        assert _format_uptime_str(0) == "0м"
+        assert _format_uptime_str(3661) == "1ч 1м"
+        assert _format_uptime_str(90061) == "1д 1ч 1м"
