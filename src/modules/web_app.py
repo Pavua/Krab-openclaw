@@ -11412,23 +11412,8 @@ class WebApp:
                 boot = self._boot_ts
             return {"ok": True, "uptime_sec": round(_t.time() - boot), "boot_ts": boot}
 
-        @self.app.get("/api/system/info")
-        async def system_info():
-            """Системная информация о хосте."""
-            import platform
-
-            import psutil
-
-            return {
-                "ok": True,
-                "hostname": platform.node(),
-                "platform": platform.platform(),
-                "python": platform.python_version(),
-                "cpu_count": psutil.cpu_count(),
-                "ram_total_gb": round(psutil.virtual_memory().total / (1024**3), 1),
-                "ram_used_pct": psutil.virtual_memory().percent,
-                "disk_used_pct": psutil.disk_usage("/").percent,
-            }
+        # /api/system/info: extracted в src/modules/web_routers/meta_router.py
+        # (Session 25). См. include_router ниже.
 
         @self.app.get("/api/memory/stats")
         async def memory_stats():
@@ -11560,18 +11545,11 @@ class WebApp:
                 "shadow_delta_pct": shadow_delta_pct,
             }
 
-        @self.app.get("/api/system/clock_drift")
-        async def system_clock_drift():
-            """Дрейф системных часов относительно NTP (диагностика Pyrogram msg_id)."""
-            from ..core.clock_drift_check import check_clock_drift
+        # /api/system/clock_drift: extracted в src/modules/web_routers/meta_router.py
+        # (Session 25, объединено с /api/system/info в одном meta-router).
+        from .web_routers.meta_router import router as _meta_router
 
-            result = await check_clock_drift()
-            return {
-                "local_ts": result.local_ts,
-                "ntp_offset_sec": result.ntp_offset_sec,
-                "status": result.status,
-                "message": result.message,
-            }
+        self.app.include_router(_meta_router)
 
         @self.app.get("/api/dashboard/summary")
         async def dashboard_summary():
