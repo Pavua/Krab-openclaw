@@ -662,6 +662,15 @@ class WebApp:
             lambda **kwargs: _sys.modules[__name__]._run_openclaw_model_autoswitch(**kwargs),
         )
 
+        # Phase 2 Wave JJ (Session 25): inject openclaw CLI runner helper для
+        # POST endpoints cron/jobs/{create,toggle,remove}. Late-bound через
+        # lambda — позволяет тестам монкей-патчить WebApp._run_openclaw_cli
+        # после инициализации.
+        deps_dict.setdefault(
+            "openclaw_cli_runner_helper",
+            lambda *args, **kwargs: self._run_openclaw_cli(*args, **kwargs),
+        )
+
         # Phase 2 Wave GG (Session 25): inject helpers для thinking/depth + model
         # provider-action / local load-default+unload в model_router.
         # Late-bound через lambda — позволяет тестам монкей-патчить
@@ -8774,181 +8783,14 @@ class WebApp:
 
         self.app.include_router(_build_inbox_router(self._make_router_context()))
 
-        @self.app.post("/api/openclaw/cron/jobs/create")
-        async def openclaw_cron_job_create(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Создаёт recurring cron job через нативный `openclaw cron add`."""
-            self._assert_write_access(x_krab_web_key, token)
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="cron_create_body_required")
+        # /api/openclaw/cron/jobs/create: extracted в src/modules/web_routers/openclaw_router.py
+        # (Phase 2 Wave JJ, Session 25). См. include_router рядом с openclaw_router.
 
-            name = str(body.get("name") or "").strip()
-            every = str(body.get("every") or "").strip()
-            task_kind = str(body.get("task_kind") or "system").strip().lower()
-            payload_text = str(body.get("payload_text") or "").strip()
-            session_target = str(body.get("session_target") or "main").strip().lower()
-            wake_mode = str(body.get("wake_mode") or "now").strip().lower()
-            agent_id = str(body.get("agent_id") or "main").strip()
-            thinking = str(body.get("thinking") or "").strip().lower()
-            model = str(body.get("model") or "").strip()
-            description = str(body.get("description") or "").strip()
+        # /api/openclaw/cron/jobs/toggle: extracted в src/modules/web_routers/openclaw_router.py
+        # (Phase 2 Wave JJ, Session 25). См. include_router рядом с openclaw_router.
 
-            if not name:
-                raise HTTPException(status_code=400, detail="cron_name_required")
-            if not every:
-                raise HTTPException(status_code=400, detail="cron_every_required")
-            if not payload_text:
-                raise HTTPException(status_code=400, detail="cron_payload_required")
-            if task_kind not in {"system", "agent"}:
-                raise HTTPException(status_code=400, detail="cron_task_kind_invalid")
-            if session_target not in {"main", "isolated"}:
-                raise HTTPException(status_code=400, detail="cron_session_target_invalid")
-            if wake_mode not in {"now", "next-heartbeat"}:
-                raise HTTPException(status_code=400, detail="cron_wake_mode_invalid")
-
-            command: list[str] = [
-                "cron",
-                "add",
-                "--json",
-                "--name",
-                name,
-                "--every",
-                every,
-                "--session",
-                session_target,
-                "--wake",
-                wake_mode,
-            ]
-            if description:
-                command.extend(["--description", description])
-            if bool(body.get("disabled")):
-                command.append("--disabled")
-            if bool(body.get("announce")):
-                command.append("--announce")
-            if task_kind == "agent":
-                command.extend(["--agent", agent_id or "main", "--message", payload_text])
-                if thinking:
-                    command.extend(["--thinking", thinking])
-                if model:
-                    command.extend(["--model", model])
-            else:
-                command.extend(["--system-event", payload_text])
-
-            create_result = await self._run_openclaw_cli(
-                *command,
-                timeout=45.0,
-                expect_json=True,
-            )
-            if not create_result.get("ok"):
-                return {
-                    "ok": False,
-                    "error": create_result.get("error") or "cron_create_failed",
-                    "detail": create_result.get("detail")
-                    or create_result.get("raw")
-                    or "Не удалось создать recurring job",
-                }
-
-            snapshot = await self._collect_openclaw_cron_snapshot(include_all=True)
-            if not snapshot.get("ok"):
-                return snapshot
-            return {
-                "ok": True,
-                "created": create_result.get("data") or {},
-                "summary": snapshot.get("summary") or {},
-                "jobs": snapshot.get("jobs") or [],
-                "status": snapshot.get("status") or {},
-            }
-
-        @self.app.post("/api/openclaw/cron/jobs/toggle")
-        async def openclaw_cron_job_toggle(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Включает или выключает recurring job через OpenClaw CLI."""
-            self._assert_write_access(x_krab_web_key, token)
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="cron_toggle_body_required")
-            job_id = str(body.get("id") or "").strip()
-            enabled = body.get("enabled")
-            if not job_id:
-                raise HTTPException(status_code=400, detail="cron_id_required")
-            if not isinstance(enabled, bool):
-                raise HTTPException(status_code=400, detail="cron_enabled_bool_required")
-
-            command = ["cron", "enable" if enabled else "disable", job_id]
-            toggle_result = await self._run_openclaw_cli(
-                *command,
-                timeout=35.0,
-                expect_json=False,
-            )
-            if not toggle_result.get("ok"):
-                return {
-                    "ok": False,
-                    "error": toggle_result.get("error") or "cron_toggle_failed",
-                    "detail": toggle_result.get("detail")
-                    or toggle_result.get("raw")
-                    or "Не удалось изменить состояние recurring job",
-                }
-
-            snapshot = await self._collect_openclaw_cron_snapshot(include_all=True)
-            if not snapshot.get("ok"):
-                return snapshot
-            return {
-                "ok": True,
-                "detail": toggle_result.get("raw") or "",
-                "summary": snapshot.get("summary") or {},
-                "jobs": snapshot.get("jobs") or [],
-                "status": snapshot.get("status") or {},
-            }
-
-        @self.app.post("/api/openclaw/cron/jobs/remove")
-        async def openclaw_cron_job_remove(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Удаляет recurring job через OpenClaw CLI."""
-            self._assert_write_access(x_krab_web_key, token)
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="cron_remove_body_required")
-            job_id = str(body.get("id") or "").strip()
-            if not job_id:
-                raise HTTPException(status_code=400, detail="cron_id_required")
-
-            remove_result = await self._run_openclaw_cli(
-                "cron",
-                "rm",
-                "--json",
-                job_id,
-                timeout=35.0,
-                expect_json=True,
-            )
-            if not remove_result.get("ok"):
-                return {
-                    "ok": False,
-                    "error": remove_result.get("error") or "cron_remove_failed",
-                    "detail": remove_result.get("detail")
-                    or remove_result.get("raw")
-                    or "Не удалось удалить recurring job",
-                }
-
-            snapshot = await self._collect_openclaw_cron_snapshot(include_all=True)
-            if not snapshot.get("ok"):
-                return snapshot
-            return {
-                "ok": True,
-                "removed": remove_result.get("data") or {},
-                "summary": snapshot.get("summary") or {},
-                "jobs": snapshot.get("jobs") or [],
-                "status": snapshot.get("status") or {},
-            }
+        # /api/openclaw/cron/jobs/remove: extracted в src/modules/web_routers/openclaw_router.py
+        # (Phase 2 Wave JJ, Session 25). См. include_router рядом с openclaw_router.
 
         @self.app.post("/api/openclaw/cron/jobs/run_now")
         async def cron_native_run_now(
@@ -12311,39 +12153,10 @@ class WebApp:
         # Subprocess helper hoisted в module-level _run_openclaw_model_autoswitch
         # и инжектируется через openclaw_model_autoswitch_helper в _make_router_context.
 
-        @self.app.post("/api/openclaw/model-autoswitch/apply")
-        async def openclaw_model_autoswitch_apply(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-            profile: str = Query(default=""),
-        ):
-            """Применяет autoswitch runtime-конфига OpenClaw (write endpoint)."""
-            self._assert_write_access(x_krab_web_key, token)
-            body: dict[str, Any] = {}
-            try:
-                body_raw = await request.json()
-                if isinstance(body_raw, dict):
-                    body = body_raw
-            except Exception:
-                body = {}
-
-            body_profile = str(body.get("profile") or "").strip()
-            body_toggle_raw = body.get("toggle")
-            body_toggle = False
-            if isinstance(body_toggle_raw, bool):
-                body_toggle = body_toggle_raw
-            elif body_toggle_raw is not None:
-                body_toggle = str(body_toggle_raw).strip().lower() in {"1", "true", "yes", "on"}
-
-            effective_profile = body_profile or profile
-            effective_toggle = body_toggle or (not effective_profile)
-            payload = _run_openclaw_model_autoswitch(
-                dry_run=False,
-                profile=effective_profile,
-                toggle=effective_toggle,
-            )
-            return {"ok": True, "autoswitch": payload}
+        # /api/openclaw/model-autoswitch/apply: extracted в
+        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave JJ, Session 25).
+        # Subprocess helper hoisted в module-level _run_openclaw_model_autoswitch
+        # и инжектируется через openclaw_model_autoswitch_helper в _make_router_context.
 
         @self.app.get("/api/openclaw/control-compat/status")
         async def openclaw_control_compat_status():

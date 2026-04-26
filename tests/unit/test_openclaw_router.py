@@ -673,3 +673,224 @@ def test_openclaw_model_compat_probe_async_helper() -> None:
     )
     assert body["ok"] is True
     assert body["probe"]["async_ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# Wave JJ: cron POST endpoints + model-autoswitch/apply
+# ---------------------------------------------------------------------------
+
+
+def _build_ctx_wave_jj(
+    *,
+    cli_helper: object | None = None,
+    cron_helper: object | None = None,
+    autoswitch_helper: object | None = None,
+) -> RouterContext:
+    """Контекст с Wave JJ helpers."""
+    deps: dict = {}
+    if cli_helper is not None:
+        deps["openclaw_cli_runner_helper"] = cli_helper
+    if cron_helper is not None:
+        deps["openclaw_cron_snapshot_helper"] = cron_helper
+    if autoswitch_helper is not None:
+        deps["openclaw_model_autoswitch_helper"] = autoswitch_helper
+    return RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+
+
+_VALID_CREATE_BODY = {
+    "name": "test-job",
+    "every": "1h",
+    "task_kind": "system",
+    "payload_text": "ping",
+}
+
+
+def test_cron_create_success_via_router() -> None:
+    """POST /api/openclaw/cron/jobs/create через helper injection."""
+    seen: dict = {}
+
+    async def _cli(*args, **kwargs):
+        seen["args"] = args
+        seen["kwargs"] = kwargs
+        return {"ok": True, "exit_code": 0, "raw": "{}", "data": {"id": "j-1"}}
+
+    async def _snap(*, include_all: bool = True):
+        return {"ok": True, "summary": {"total": 1}, "jobs": [{"id": "j-1"}], "status": {}}
+
+    body = (
+        _client(_build_ctx_wave_jj(cli_helper=_cli, cron_helper=_snap))
+        .post("/api/openclaw/cron/jobs/create", json=_VALID_CREATE_BODY)
+        .json()
+    )
+    assert body["ok"] is True
+    assert body["created"] == {"id": "j-1"}
+    assert body["jobs"] == [{"id": "j-1"}]
+    # Verify CLI args composed correctly
+    assert "cron" in seen["args"] and "add" in seen["args"]
+    assert "--name" in seen["args"]
+    assert "test-job" in seen["args"]
+
+
+def test_cron_create_missing_name_400() -> None:
+    """POST cron/create без name → 400."""
+    resp = _client(_build_ctx_wave_jj()).post(
+        "/api/openclaw/cron/jobs/create",
+        json={"every": "1h", "task_kind": "system", "payload_text": "ping"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "cron_name_required"
+
+
+def test_cron_create_invalid_task_kind_400() -> None:
+    resp = _client(_build_ctx_wave_jj()).post(
+        "/api/openclaw/cron/jobs/create",
+        json={**_VALID_CREATE_BODY, "task_kind": "weird"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "cron_task_kind_invalid"
+
+
+def test_cron_create_helper_unavailable() -> None:
+    """Без CLI helper — мягкая ошибка."""
+    body = (
+        _client(_build_ctx_wave_jj())
+        .post("/api/openclaw/cron/jobs/create", json=_VALID_CREATE_BODY)
+        .json()
+    )
+    assert body["ok"] is False
+    assert body["error"] == "helper_unavailable"
+
+
+def test_cron_create_cli_failed_propagates() -> None:
+    async def _cli(*args, **kwargs):
+        return {"ok": False, "error": "openclaw_timeout", "detail": "x", "raw": ""}
+
+    body = (
+        _client(_build_ctx_wave_jj(cli_helper=_cli))
+        .post("/api/openclaw/cron/jobs/create", json=_VALID_CREATE_BODY)
+        .json()
+    )
+    assert body["ok"] is False
+    assert body["error"] == "openclaw_timeout"
+
+
+def test_cron_toggle_success_enable() -> None:
+    seen: dict = {}
+
+    async def _cli(*args, **kwargs):
+        seen["args"] = args
+        return {"ok": True, "exit_code": 0, "raw": "enabled"}
+
+    async def _snap(*, include_all: bool = True):
+        return {"ok": True, "summary": {}, "jobs": [], "status": {}}
+
+    body = (
+        _client(_build_ctx_wave_jj(cli_helper=_cli, cron_helper=_snap))
+        .post("/api/openclaw/cron/jobs/toggle", json={"id": "j-1", "enabled": True})
+        .json()
+    )
+    assert body["ok"] is True
+    assert "cron" in seen["args"] and "enable" in seen["args"] and "j-1" in seen["args"]
+
+
+def test_cron_toggle_disable_command() -> None:
+    seen: dict = {}
+
+    async def _cli(*args, **kwargs):
+        seen["args"] = args
+        return {"ok": True, "exit_code": 0, "raw": "disabled"}
+
+    async def _snap(*, include_all: bool = True):
+        return {"ok": True, "summary": {}, "jobs": [], "status": {}}
+
+    _client(_build_ctx_wave_jj(cli_helper=_cli, cron_helper=_snap)).post(
+        "/api/openclaw/cron/jobs/toggle", json={"id": "j-1", "enabled": False}
+    ).json()
+    assert "disable" in seen["args"]
+
+
+def test_cron_toggle_enabled_must_be_bool_400() -> None:
+    resp = _client(_build_ctx_wave_jj()).post(
+        "/api/openclaw/cron/jobs/toggle", json={"id": "j-1", "enabled": "yes"}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "cron_enabled_bool_required"
+
+
+def test_cron_toggle_missing_id_400() -> None:
+    resp = _client(_build_ctx_wave_jj()).post(
+        "/api/openclaw/cron/jobs/toggle", json={"enabled": True}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "cron_id_required"
+
+
+def test_cron_remove_success() -> None:
+    async def _cli(*args, **kwargs):
+        assert "rm" in args
+        return {"ok": True, "exit_code": 0, "raw": "{}", "data": {"removed": "j-1"}}
+
+    async def _snap(*, include_all: bool = True):
+        return {"ok": True, "summary": {}, "jobs": [], "status": {}}
+
+    body = (
+        _client(_build_ctx_wave_jj(cli_helper=_cli, cron_helper=_snap))
+        .post("/api/openclaw/cron/jobs/remove", json={"id": "j-1"})
+        .json()
+    )
+    assert body["ok"] is True
+    assert body["removed"] == {"removed": "j-1"}
+
+
+def test_cron_remove_missing_id_400() -> None:
+    resp = _client(_build_ctx_wave_jj()).post("/api/openclaw/cron/jobs/remove", json={})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "cron_id_required"
+
+
+def test_autoswitch_apply_with_body_profile() -> None:
+    seen: dict = {}
+
+    def _helper(*, dry_run: bool, profile: str, toggle: bool):
+        seen.update(dry_run=dry_run, profile=profile, toggle=toggle)
+        return {"applied": True}
+
+    body = (
+        _client(_build_ctx_wave_jj(autoswitch_helper=_helper))
+        .post(
+            "/api/openclaw/model-autoswitch/apply",
+            json={"profile": "local-first"},
+        )
+        .json()
+    )
+    assert body["ok"] is True
+    assert body["autoswitch"] == {"applied": True}
+    assert seen == {"dry_run": False, "profile": "local-first", "toggle": False}
+
+
+def test_autoswitch_apply_toggle_true_when_no_profile() -> None:
+    """Без profile — toggle всегда True (raw toggle behavior)."""
+    seen: dict = {}
+
+    def _helper(*, dry_run: bool, profile: str, toggle: bool):
+        seen.update(dry_run=dry_run, profile=profile, toggle=toggle)
+        return {"toggled": True}
+
+    _client(_build_ctx_wave_jj(autoswitch_helper=_helper)).post(
+        "/api/openclaw/model-autoswitch/apply", json={}
+    ).json()
+    assert seen["toggle"] is True
+    assert seen["profile"] == ""
+
+
+def test_autoswitch_apply_helper_unavailable() -> None:
+    resp = _client(_build_ctx_wave_jj()).post(
+        "/api/openclaw/model-autoswitch/apply", json={"profile": "x"}
+    )
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "helper_unavailable"
