@@ -5,17 +5,17 @@ Health router — Phase 2 Wave X extraction (Session 25).
 Объединяет health и ecosystem read-only endpoints:
 - GET /api/health                 — единый health для web-панели (uses EcosystemHealthService)
 - GET /api/health/lite            — fast liveness (runtime_lite snapshot)
+- GET /api/health/deep            — расширенная диагностика (12 секций, Session 24)
 - GET /api/v1/health              — versioned health для внешних мониторов
 - GET /api/ecosystem/health       — расширенный health 3-проектной экосистемы
 - GET /api/ecosystem/health/debug — raw collector output для diagnose
 - GET /api/ecosystem/health/export — экспорт ecosystem health в JSON file
 
-NOTE: ``/api/health/deep`` НЕ extract'нут (Wave X conservative scope).
-Этот endpoint critical (Session 24 commit 8f0da60 расширил с 8→12 секций
-+ Sentry/MCP/CF tunnel/error_rate). Existing tests:
-``test_api_health_deep.py``, ``test_health_deep_session24.py``,
-``test_health_deep_orphans.py`` используют full WebApp instance.
-Перенос отложен до follow-up wave с dedicated test refactor.
+Wave CC (Session 25): /api/health/deep extracted. Existing tests
+(``test_api_health_deep.py``, ``test_health_deep_session24.py``,
+``test_health_deep_orphans.py``) патчат
+``src.core.health_deep_collector.collect_health_deep`` напрямую,
+поэтому extraction safe — функция импортируется внутри handler'а.
 
 Контракт ответов сохранён 1:1 с inline definitions из web_app.py.
 
@@ -129,6 +129,23 @@ def build_health_router(ctx: RouterContext) -> APIRouter:
         if _rate_limiter_stats is not None:
             result["telegram_rate_limiter"] = _rate_limiter_stats
         return result
+
+    # ── /api/health/deep ────────────────────────────────────────────────────
+
+    @router.get("/api/health/deep")
+    async def get_health_deep() -> dict:
+        """Расширенная диагностика Краба — структурированный JSON для Dashboard V4.
+
+        Зеркало !health deep (Wave 29-EE), но возвращает dict вместо markdown.
+        Включает: krab process, openclaw, lm_studio, archive_db,
+        reminders, memory_validator, sigterm_recent_count, system,
+        + Session 24 (8f0da60): sentry, mcp_servers, cf_tunnel, error_rate_5m.
+        """
+        from ...core.health_deep_collector import collect_health_deep
+
+        userbot = ctx.get_dep("userbot")
+        session_start = getattr(userbot, "_session_start_time", None) if userbot else None
+        return await collect_health_deep(session_start_time=session_start)
 
     # ── /api/v1/health ──────────────────────────────────────────────────────
 

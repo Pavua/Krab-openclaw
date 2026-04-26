@@ -261,3 +261,36 @@ def test_ecosystem_health_export_returns_file(tmp_path, monkeypatch) -> None:
     assert ops_dir.exists()
     files = list(ops_dir.glob("ecosystem_health_web_*.json"))
     assert len(files) == 1
+
+
+# ---------------------------------------------------------------------------
+# /api/health/deep — Phase 2 Wave CC (Session 25)
+# ---------------------------------------------------------------------------
+
+
+def test_get_health_deep_calls_collector_with_session_start() -> None:
+    """Endpoint вызывает collect_health_deep с session_start_time из userbot."""
+    from unittest.mock import AsyncMock
+
+    class _Userbot:
+        _session_start_time = 1234.5
+
+    client = _make_client(deps_overrides={"userbot": _Userbot()})
+    fake = AsyncMock(return_value={"krab": {"uptime_sec": 1}, "system": {}})
+    with patch("src.core.health_deep_collector.collect_health_deep", new=fake):
+        resp = client.get("/api/health/deep")
+    assert resp.status_code == 200
+    assert resp.json()["krab"]["uptime_sec"] == 1
+    fake.assert_called_once_with(session_start_time=1234.5)
+
+
+def test_get_health_deep_no_userbot_passes_none() -> None:
+    """Без userbot endpoint всё равно работает (session_start=None)."""
+    from unittest.mock import AsyncMock
+
+    client = _make_client(deps_overrides={"userbot": None})
+    fake = AsyncMock(return_value={"krab": {}, "system": {}})
+    with patch("src.core.health_deep_collector.collect_health_deep", new=fake):
+        resp = client.get("/api/health/deep")
+    assert resp.status_code == 200
+    fake.assert_called_once_with(session_start_time=None)
