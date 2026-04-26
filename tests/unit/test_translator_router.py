@@ -713,10 +713,21 @@ def _build_wave_ii_ctx(
         return sid, {"runtime": "lite"}, {"sessions": {"current_session_id": sid}}
 
     async def _mobile_action_response(
-        *, action, gateway_result, runtime_lite=None, current_control_plane=None
+        *,
+        action,
+        gateway_result,
+        runtime_lite=None,
+        current_control_plane=None,
+        current_readiness=None,
     ):
         captured["mobile_action_calls"].append(
-            (action, dict(gateway_result), runtime_lite, current_control_plane)
+            {
+                "action": action,
+                "gateway_result": dict(gateway_result),
+                "runtime_lite": runtime_lite,
+                "current_control_plane": current_control_plane,
+                "current_readiness": current_readiness,
+            }
         )
         return {
             "ok": True,
@@ -777,6 +788,7 @@ def _build_wave_ii_ctx(
         "translator_resolve_session_context_helper": _resolve,
         "translator_mobile_action_response_helper": _mobile_action_response,
         "translator_mobile_gateway_error_detail_helper": _mobile_err_detail,
+        "translator_gateway_error_detail_helper": _mobile_err_detail,
         "translator_control_plane_snapshot": _control_plane_snapshot,
         "translator_mobile_readiness_snapshot": _mobile_readiness_snapshot,
         "translator_session_inspector_snapshot": _session_inspector,
@@ -910,9 +922,124 @@ def test_wave_ii_post_endpoints_require_write_access(monkeypatch) -> None:
         "/api/translator/mobile/bind",
         "/api/translator/mobile/remove",
         "/api/translator/session/escalate",
+        "/api/translator/mobile/trial-prep",
     ):
         resp = client.post(path, json={})
         assert resp.status_code == 403, f"{path} should require write access"
+
+
+# ---------------------------------------------------------------------------
+# Wave WW — /api/translator/mobile/trial-prep orchestration
+# ---------------------------------------------------------------------------
+
+
+def test_mobile_trial_prep_requires_device_id(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeMobileGateway()
+    ctx, _cap = _build_wave_ii_ctx(gateway=gw)
+    # выключаем fallback — selected_device_id пустой ⇒ 400
+    async def _empty_mobile(*, runtime_lite=None, current_control_plane=None):
+        return {"devices": {"selected_device_id": "", "items": []}}
+
+    ctx.deps["translator_mobile_readiness_snapshot"] = _empty_mobile  # type: ignore[attr-defined]
+    resp = _client(ctx).post("/api/translator/mobile/trial-prep", json={})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "device_id_required_for_trial_prep"
+
+
+def test_mobile_trial_prep_full_flow_register_start_bind(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeMobileGateway()
+    ctx, cap = _build_wave_ii_ctx(gateway=gw)
+    # Empty control_plane ⇒ нет current_session_id ⇒ start_session должен сработать
+    async def _empty_cp(*, runtime_lite=None):
+        return {"sessions": {"current_session_id": ""}}
+
+    async def _empty_mobile(*, runtime_lite=None, current_control_plane=None):
+        return {"devices": {"selected_device_id": "", "items": []}}
+
+    ctx.deps["translator_control_plane_snapshot"] = _empty_cp  # type: ignore[attr-defined]
+    ctx.deps["translator_mobile_readiness_snapshot"] = _empty_mobile  # type: ignore[attr-defined]
+
+    resp = _client(ctx).post(
+        "/api/translator/mobile/trial-prep",
+        json={"device_id": "IPHONE-NEW", "voip_push_token": "tok"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["action"] == "prepare_mobile_trial"
+    assert data["performed_steps"] == ["device_registered", "session_created", "device_bound"]
+    methods = [c[0] for c in gw.calls]
+    assert methods == ["register_mobile_device", "start_session", "bind_mobile_device"]
+    # device_id нормализуется в lower
+    assert gw.calls[-1][1] == ("iphone-new",)
+    # current_readiness прокинулся в action_response
+    last_call = cap["mobile_action_calls"][-1]
+    assert last_call["current_readiness"] is not None
+
+
+def test_mobile_trial_prep_skips_register_when_device_known_and_session_exists(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeMobileGateway()
+    ctx, _cap = _build_wave_ii_ctx(gateway=gw)
+    # Device уже в registry + session есть ⇒ только bind
+    async def _mobile_with_known(*, runtime_lite=None, current_control_plane=None):
+        return {
+            "devices": {
+                "selected_device_id": "iphone-known",
+                "items": [{"device_id": "iphone-known"}],
+            }
+        }
+
+    ctx.deps["translator_mobile_readiness_snapshot"] = _mobile_with_known  # type: ignore[attr-defined]
+
+    resp = _client(ctx).post("/api/translator/mobile/trial-prep", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    # Только bind выполнен (device known & session exists in default control_plane)
+    assert data["performed_steps"] == ["device_bound"]
+    methods = [c[0] for c in gw.calls]
+    assert methods == ["bind_mobile_device"]
+
+
+def test_mobile_trial_prep_register_failure_returns_503(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeMobileGateway(ok=False, error="apns_unauthorized")
+    ctx, _cap = _build_wave_ii_ctx(gateway=gw)
+    resp = _client(ctx).post(
+        "/api/translator/mobile/trial-prep",
+        json={"device_id": "iphone-x"},
+    )
+    assert resp.status_code == 503
+    assert "apns_unauthorized" in resp.json()["detail"]
+
+
+def test_mobile_trial_prep_bind_failure_returns_503(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+
+    class _BindFailGateway(_FakeMobileGateway):
+        async def bind_mobile_device(self, device_id, **kwargs):
+            self.calls.append(("bind_mobile_device", (device_id,), kwargs))
+            return {"ok": False, "error": "bind_target_unreachable"}
+
+    gw = _BindFailGateway()
+    ctx, _cap = _build_wave_ii_ctx(gateway=gw)
+    resp = _client(ctx).post(
+        "/api/translator/mobile/trial-prep",
+        json={"device_id": "iphone-1"},
+    )
+    assert resp.status_code == 503
+    assert "bind_target_unreachable" in resp.json()["detail"]
+
+
+def test_mobile_trial_prep_body_must_be_dict(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    ctx, _cap = _build_wave_ii_ctx()
+    resp = _client(ctx).post("/api/translator/mobile/trial-prep", json=["not", "dict"])
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "translator_mobile_trial_prep_body_required"
 
 
 # ---------------------------------------------------------------------------

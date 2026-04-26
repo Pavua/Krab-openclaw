@@ -1006,6 +1006,171 @@ def build_translator_router(ctx: RouterContext) -> APIRouter:
             )
         )
 
+    @router.post("/api/translator/mobile/trial-prep")
+    async def translator_mobile_trial_prep(
+        request: Request,
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ):
+        """Подготавливает companion-trial одним owner-driven flow.
+
+        Сценарий:
+        1) берём device из body или из mobile snapshot;
+        2) при необходимости делаем upsert регистрации;
+        3) если active session ещё нет — создаём `mobile` session;
+        4) привязываем device к session;
+        5) отдаём единый truthful snapshot после orchestration.
+        """
+        ctx.assert_write_access(x_krab_web_key, token)
+        _require_helpers(
+            "translator_gateway_client_helper",
+            "translator_readiness_snapshot",
+            "translator_control_plane_snapshot",
+            "translator_mobile_readiness_snapshot",
+            "translator_mobile_action_response_helper",
+            "translator_mobile_gateway_error_detail_helper",
+            "translator_gateway_error_detail_helper",
+        )
+        voice_gateway = ctx.get_dep("translator_gateway_client_helper")()
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(
+                status_code=400, detail="translator_mobile_trial_prep_body_required"
+            )
+
+        runtime_lite = await ctx.collect_runtime_lite()
+        readiness = await _await_if_needed(
+            ctx.get_dep("translator_readiness_snapshot")(runtime_lite=runtime_lite)
+        )
+        control_plane = await _await_if_needed(
+            ctx.get_dep("translator_control_plane_snapshot")(runtime_lite=runtime_lite)
+        )
+        mobile_readiness = await _await_if_needed(
+            ctx.get_dep("translator_mobile_readiness_snapshot")(
+                runtime_lite=runtime_lite,
+                current_control_plane=control_plane,
+            )
+        )
+
+        requested_device_id = str(body.get("device_id") or "").strip().lower()
+        selected_device_id = (
+            str(((mobile_readiness.get("devices") or {}).get("selected_device_id") or ""))
+            .strip()
+            .lower()
+        )
+        device_id = requested_device_id or selected_device_id
+        if not device_id:
+            raise HTTPException(status_code=400, detail="device_id_required_for_trial_prep")
+
+        existing_devices = (
+            [
+                dict(item)
+                for item in ((mobile_readiness.get("devices") or {}).get("items") or [])
+                if isinstance(item, dict)
+            ]
+            if isinstance(mobile_readiness.get("devices"), dict)
+            else []
+        )
+        known_device = next(
+            (
+                item
+                for item in existing_devices
+                if str(item.get("device_id") or "").strip().lower() == device_id
+            ),
+            None,
+        )
+
+        performed_steps: list[str] = []
+        last_gateway_result: dict[str, Any] = {
+            "ok": True,
+            "device_id": device_id,
+        }
+
+        if requested_device_id or known_device is None:
+            register_result = await voice_gateway.register_mobile_device(
+                device_id=device_id,
+                voip_push_token=str(body.get("voip_push_token") or "").strip(),
+                apns_environment=str(body.get("apns_environment") or "development").strip()
+                or "development",
+                app_version=str(body.get("app_version") or "").strip(),
+                locale=str(body.get("locale") or "ru").strip() or "ru",
+                preferred_source_lang=str(body.get("preferred_source_lang") or "auto").strip()
+                or "auto",
+                preferred_target_lang=str(body.get("preferred_target_lang") or "ru").strip()
+                or "ru",
+                notify_default=bool(body.get("notify_default", True)),
+            )
+            if not register_result.get("ok"):
+                err_helper = ctx.get_dep("translator_mobile_gateway_error_detail_helper")
+                status_code, detail = err_helper(
+                    register_result,
+                    fallback="translator_mobile_trial_register_failed",
+                )
+                raise HTTPException(status_code=status_code, detail=detail)
+            last_gateway_result = register_result
+            performed_steps.append("device_registered")
+
+        session_id = (
+            str(body.get("session_id") or "").strip()
+            or str(((control_plane.get("sessions") or {}).get("current_session_id") or "")).strip()
+        )
+        if not session_id:
+            start_result = await voice_gateway.start_session(
+                source=str(body.get("source") or "mobile").strip() or "mobile",
+                translation_mode=str(body.get("translation_mode") or "auto_to_ru").strip()
+                or "auto_to_ru",
+                notify_mode=str(body.get("notify_mode") or "auto_on").strip() or "auto_on",
+                tts_mode=str(body.get("tts_mode") or "hybrid").strip() or "hybrid",
+                src_lang=str(body.get("src_lang") or "auto").strip() or "auto",
+                tgt_lang=str(body.get("tgt_lang") or "ru").strip() or "ru",
+                meta={
+                    "label": str(body.get("label") or "Companion Trial").strip()
+                    or "Companion Trial",
+                    "prepared_via": "owner_mobile_trial_prep",
+                    "device_id": device_id,
+                },
+            )
+            if not start_result.get("ok"):
+                err_helper = ctx.get_dep("translator_gateway_error_detail_helper")
+                status_code, detail = err_helper(
+                    start_result,
+                    fallback="translator_mobile_trial_start_failed",
+                )
+                raise HTTPException(status_code=status_code, detail=detail)
+            session_id = str(start_result.get("session_id") or "").strip()
+            last_gateway_result = {
+                "ok": True,
+                "device_id": device_id,
+                "session_id": session_id,
+                "result": start_result.get("result")
+                if isinstance(start_result.get("result"), dict)
+                else {},
+            }
+            performed_steps.append("session_created")
+
+        bind_result = await voice_gateway.bind_mobile_device(device_id, session_id=session_id)
+        if not bind_result.get("ok"):
+            err_helper = ctx.get_dep("translator_mobile_gateway_error_detail_helper")
+            status_code, detail = err_helper(
+                bind_result,
+                fallback="translator_mobile_trial_bind_failed",
+            )
+            raise HTTPException(status_code=status_code, detail=detail)
+        last_gateway_result = bind_result
+        performed_steps.append("device_bound")
+
+        response = await _await_if_needed(
+            ctx.get_dep("translator_mobile_action_response_helper")(
+                action="prepare_mobile_trial",
+                gateway_result=last_gateway_result,
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+            )
+        )
+        if isinstance(response, dict):
+            response["performed_steps"] = performed_steps
+        return response
+
     @router.post("/api/translator/session/escalate")
     async def translator_session_escalate(
         request: Request,
