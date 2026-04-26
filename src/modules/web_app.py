@@ -12,7 +12,6 @@ import copy
 import hashlib
 import io
 import json
-import mimetypes
 import os
 import re
 import shlex
@@ -31,7 +30,7 @@ if TYPE_CHECKING:
 import httpx
 import structlog
 import uvicorn
-from fastapi import Body, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
+from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -355,6 +354,25 @@ class WebApp:
         deps_dict.setdefault(
             "channel_capabilities_snapshot_helper",
             self._channel_capabilities_snapshot,
+        )
+
+        # Phase 2 Wave V (Session 25): inject assistant-router helpers
+        # (capabilities snapshot + attachment pipeline) без self-bind на WebApp.
+        deps_dict.setdefault(
+            "assistant_capabilities_snapshot_helper",
+            self._assistant_capabilities_snapshot,
+        )
+        deps_dict.setdefault(
+            "assistant_attachment_max_bytes_helper",
+            self._web_attachment_max_bytes,
+        )
+        deps_dict.setdefault(
+            "assistant_attachment_sanitize_name_helper",
+            self._sanitize_attachment_name,
+        )
+        deps_dict.setdefault(
+            "assistant_attachment_build_prompt_helper",
+            self._build_attachment_prompt,
         )
 
         return RouterContext(
@@ -12976,70 +12994,14 @@ class WebApp:
         # /api/archive/growth: extracted в src/modules/web_routers/monitoring_router.py
         # (Session 25 Phase 2 Wave E). См. include_router рядом с runtime_status_router.
 
-        @self.app.post("/api/assistant/attachment")
-        async def assistant_attachment_upload(
-            file: UploadFile = File(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Загружает вложение для web-assistant и возвращает prompt-snippet.
-            Поддерживает текст/PDF/DOCX (извлечение текста best effort),
-            а также изображения/видео/архивы (метаданные + локальный путь).
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            black_box = self.deps.get("black_box")
+        # /api/assistant/capabilities + /api/assistant/attachment:
+        # extracted в src/modules/web_routers/assistant_router.py
+        # (Phase 2 Wave V, Session 25). Helpers инжектируются через deps
+        # в _make_router_context. /api/assistant/query и /api/assistant/stream
+        # остаются inline (намеренно, см. assistant_router.py docstring).
+        from .web_routers.assistant_router import build_assistant_router as _build_assistant
 
-            if not file:
-                raise HTTPException(status_code=400, detail="assistant_attachment_file_required")
-            original_name = str(file.filename or "").strip()
-            if not original_name:
-                raise HTTPException(
-                    status_code=400, detail="assistant_attachment_filename_required"
-                )
-
-            raw = await file.read()
-            if not raw:
-                raise HTTPException(status_code=400, detail="assistant_attachment_empty_file")
-
-            max_bytes = self._web_attachment_max_bytes()
-            if len(raw) > max_bytes:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"assistant_attachment_too_large: max={max_bytes} bytes",
-                )
-
-            safe_name = self._sanitize_attachment_name(original_name)
-            guessed_type = mimetypes.guess_type(safe_name)[0] or ""
-            content_type = str(file.content_type or guessed_type or "application/octet-stream")
-
-            uploads_dir = Path("artifacts/web_uploads")
-            uploads_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            short_hash = hashlib.sha256(raw).hexdigest()[:10]
-            stored_name = f"{ts}_{short_hash}_{safe_name}"
-            stored_path = uploads_dir / stored_name
-            stored_path.write_bytes(raw)
-
-            attachment = self._build_attachment_prompt(
-                file_name=safe_name,
-                content_type=content_type,
-                raw_bytes=raw,
-                stored_path=stored_path,
-            )
-
-            if black_box and hasattr(black_box, "log_event"):
-                black_box.log_event(
-                    "web_assistant_attachment",
-                    f"name={safe_name} type={content_type} size={len(raw)} kind={attachment.get('kind')}",
-                )
-
-            return {"ok": True, "attachment": attachment}
-
-        @self.app.get("/api/assistant/capabilities")
-        async def assistant_capabilities():
-            """Возвращает возможности web-native assistant режима."""
-            return self._assistant_capabilities_snapshot()
+        self.app.include_router(_build_assistant(self._make_router_context()))
 
         @self.app.post("/api/assistant/query")
         async def assistant_query(
