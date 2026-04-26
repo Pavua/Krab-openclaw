@@ -153,6 +153,75 @@ async def test_session_info_json_user_session():
 
 
 @pytest.mark.asyncio
+async def test_send_message_peer_id_invalid_returns_structured_error():
+    """PeerIdInvalid → structured error с hint, не raise (Session 25)."""
+    from telegram_bridge import TelegramBridge
+
+    bridge = TelegramBridge()
+
+    class _PeerIdInvalid(Exception):
+        """Mimic Pyrogram PeerIdInvalid (subclass-checked by name)."""
+
+        def __init__(self, msg: str = "Peer id invalid") -> None:
+            super().__init__(msg)
+
+    _PeerIdInvalid.__name__ = "PeerIdInvalid"
+
+    fake_client = _FakeClient()
+
+    async def _send_failing(*args, **kwargs):
+        raise _PeerIdInvalid()
+
+    async def _get_chat_failing(_):
+        raise _PeerIdInvalid()
+
+    fake_client.send_message = _send_failing  # type: ignore[method-assign]
+    fake_client.get_chat = _get_chat_failing  # type: ignore[method-assign]
+    bridge._client = fake_client  # type: ignore[assignment]
+
+    result = await bridge.send_message(123456, "hi")
+    assert result["ok"] is False
+    assert result["error_code"] == "peer_id_invalid"
+    assert "hint" in result
+    assert "username" in result["hint"].lower() or "общ" in result["hint"]
+    assert result["chat_id"] == 123456
+
+
+@pytest.mark.asyncio
+async def test_send_message_peer_resolves_after_get_chat():
+    """PeerIdInvalid на send → get_chat populates cache → retry success."""
+    from telegram_bridge import TelegramBridge
+
+    bridge = TelegramBridge()
+    call_count = {"send": 0}
+
+    class _PeerIdInvalid(Exception):
+        pass
+
+    _PeerIdInvalid.__name__ = "PeerIdInvalid"
+
+    async def _send_with_retry(*args, **kwargs):
+        call_count["send"] += 1
+        if call_count["send"] == 1:
+            raise _PeerIdInvalid("Peer id invalid")
+        return _FakeMessage()
+
+    async def _get_chat_ok(_):
+        return type("Chat", (), {"id": 123})()
+
+    fake_client = _FakeClient()
+    fake_client.send_message = _send_with_retry  # type: ignore[method-assign]
+    fake_client.get_chat = _get_chat_ok  # type: ignore[method-assign]
+    bridge._client = fake_client  # type: ignore[assignment]
+
+    result = await bridge.send_message(123, "hi")
+    # После retry — успешный msg dict (без ok=False)
+    assert call_count["send"] == 2
+    assert "id" in result
+    assert result.get("ok") is not False
+
+
+@pytest.mark.asyncio
 async def test_session_info_json_bot_warns():
     """is_bot=True → возвращает warning с инструкцией для re-auth."""
     import json as _json

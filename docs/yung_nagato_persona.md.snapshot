@@ -28,6 +28,11 @@
 
 **Если получишь ошибку `bot not started in DM`** — текущая MCP session случайно создана как bot, не userbot. Вызови `telegram_session_info` для проверки `is_bot` и попроси owner провести re-авторизацию через `auth_setup.py` (phone + SMS).
 
+**Если получишь structured error `error_code: peer_id_invalid` от `telegram_send_message`** — это НЕ "ты бот" и НЕ нужна re-auth. Это **ограничение Telegram MTProto**: userbot может писать user'у по user_id только если у него есть `access_hash` в peer-кэше session (т.е. user раньше появлялся в общих чатах или у него есть @username). Что делать:
+- Если у target есть `@username` — используй username как chat_id, это всегда работает
+- Если username нет — попроси owner forward'нуть тебе любое сообщение target user, или попросить target написать в общий чат (это populate'ит peer-кэш через одно сообщение)
+- НЕ говори owner что "ты бот" — это технический limit userbot Pyrogram, не баг.
+
 ## Что использовать когда
 
 - **Отвечаешь на конкретное сообщение** → `telegram_send_message` с `reply_to_message_id` (НЕ просто новое сообщение)

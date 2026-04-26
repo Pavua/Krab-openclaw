@@ -267,8 +267,55 @@ class TelegramBridge:
                 kwargs["parse_mode"] = _resolve_parse_mode(parse_mode)
             if disable_web_page_preview:
                 kwargs["disable_web_page_preview"] = True
-            msg = await client.send_message(chat_id, text, **kwargs)
-            return _msg_to_dict(msg)
+
+            # Auto-resolve attempt: если chat_id числовой и peer не в кэше,
+            # try get_chat для populate access_hash. Безопасный no-op если
+            # peer уже знаком. См. Session 25 lesson:
+            # https://docs.pyrogram.org/topics/peer-id-invalid
+            try:
+                msg = await client.send_message(chat_id, text, **kwargs)
+                return _msg_to_dict(msg)
+            except Exception as exc:  # noqa: BLE001
+                exc_name = type(exc).__name__
+                exc_text = str(exc).lower()
+                # Pyrogram peer-id-invalid сценарии:
+                # - PeerIdInvalid (subclass of BadRequest)
+                # - "Peer id invalid" в message
+                # - "PEER_ID_INVALID" RPC error code
+                is_peer_invalid = (
+                    "peeridinvalid" in exc_name.lower()
+                    or "peer id invalid" in exc_text
+                    or "peer_id_invalid" in exc_text
+                    or "chat not found" in exc_text
+                )
+                if not is_peer_invalid:
+                    raise
+
+                # Fallback: попробовать get_chat для populate cache
+                try:
+                    await client.get_chat(chat_id)
+                    msg = await client.send_message(chat_id, text, **kwargs)
+                    return _msg_to_dict(msg)
+                except Exception as retry_exc:  # noqa: BLE001
+                    # Structured error с hint вместо raise — LLM получит
+                    # понятное сообщение что делать.
+                    return {
+                        "ok": False,
+                        "error_code": "peer_id_invalid",
+                        "error": str(retry_exc) or str(exc),
+                        "hint": (
+                            "Userbot не может писать пользователю по user_id "
+                            "если у него нет username и он никогда не появлялся "
+                            "в общих чатах с этой session. Решения: "
+                            "(1) попроси target user отправить любое сообщение "
+                            "в общий чат с тобой; "
+                            "(2) если у user есть @username — используй его как "
+                            "chat_id вместо числового user_id; "
+                            "(3) forward'ни любое его сообщение чтобы populate "
+                            "peer cache."
+                        ),
+                        "chat_id": chat_id,
+                    }
 
         return await self._run_client_call(_op)
 
