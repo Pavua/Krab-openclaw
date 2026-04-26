@@ -7867,32 +7867,13 @@ class WebApp:
 
         # ── Memory Indexer API (phase 4) ─────────────────────────────────────
 
-        @self.app.get("/api/memory/indexer")
-        async def memory_indexer_stats():
-            """Снимок IndexerStats для owner panel."""
-            try:
-                from ..core.memory_indexer_worker import get_indexer
-            except ImportError:
-                return {"error": "indexer_unavailable"}
-            stats = get_indexer().get_stats()
-            return {
-                "is_running": stats.is_running,
-                "started_at": stats.started_at.isoformat() if stats.started_at else None,
-                "queue_size": stats.queue_size,
-                "queue_maxsize": stats.queue_maxsize,
-                "enqueued_total": stats.enqueued_total,
-                "processed_total": stats.processed_total,
-                "chunks_committed": stats.chunks_committed,
-                "embeddings_committed": stats.embeddings_committed,
-                "skipped": dict(stats.skipped),
-                "dropped_queue_full": stats.dropped_queue_full,
-                "failed": dict(stats.failed),
-                "last_flush_at": stats.last_flush_at.isoformat() if stats.last_flush_at else None,
-                "last_flush_duration_sec": stats.last_flush_duration_sec,
-                "builders_active": stats.builders_active,
-                "restarts": stats.restarts,
-                "embed_disabled": stats.embed_disabled,
-            }
+        # /api/memory/indexer: extracted в src/modules/web_routers/memory_router.py
+        # (Session 25 Phase 2 Wave B). См. include_router ниже.
+        # /api/memory/stats: extracted в src/modules/web_routers/memory_router.py
+        # (Session 25 Phase 2 Wave B). См. include_router ниже.
+        from .web_routers.memory_router import router as _memory_router
+
+        self.app.include_router(_memory_router)
 
         @self.app.post("/api/memory/indexer/flush")
         async def memory_indexer_flush():
@@ -11309,12 +11290,8 @@ class WebApp:
         # /api/system/info: extracted в src/modules/web_routers/meta_router.py
         # (Session 25). См. include_router ниже.
 
-        @self.app.get("/api/memory/stats")
-        async def memory_stats():
-            """Статистика Memory Layer для Dashboard V4."""
-            from ..core.memory_stats import collect_memory_stats
-
-            return collect_memory_stats()
+        # /api/memory/stats: extracted в src/modules/web_routers/memory_router.py
+        # (Session 25 Phase 2 Wave B). include_router выше.
 
         @self.app.get("/api/memory/phase2/status")
         async def memory_phase2_status():
