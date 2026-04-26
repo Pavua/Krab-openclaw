@@ -8453,15 +8453,6 @@ class WebApp:
                 "Expires": "0",
             }
 
-        # / + /nano_theme.css + /prototypes/nano/nano_theme.css:
-        # extracted в src/modules/web_routers/pages_router.py
-        # (Phase 2 Wave XX, Session 25 — final architectural extraction).
-        # Все HTML page routes (landing, V4, legacy, prototypes, redirects)
-        # переехали в pages_router. См. include_router ниже.
-
-        # /api/notify: extracted в src/modules/web_routers/misc_router.py
-        # (Phase 2 Wave RR, Session 25). См. include_router ниже.
-
         @self.app.post("/api/hooks/sentry")
         async def sentry_webhook(
             payload: dict[str, Any] = Body(default_factory=dict),
@@ -8585,17 +8576,6 @@ class WebApp:
                 ),
             }
 
-        # /api/stats: extracted в system_router.py (Phase 2 Wave Y).
-        # См. include_router рядом с другими wave Y endpoints.
-
-        # /api/message_batcher/stats, /api/chat_windows/stats:
-        # extracted в src/modules/web_routers/runtime_status_router.py
-        # (Session 25 Phase 2 Wave D). См. include_router рядом с meta_router.
-
-        # /api/health, /api/health/lite, /api/health/deep: extracted в
-        # src/modules/web_routers/health_router.py.
-        # Phase 2 Wave X (health/lite/v1 + ecosystem) и Wave CC (deep, Session 25).
-
         # ── Prometheus metrics ───────────────────────────────────────────────
 
         @self.app.get("/metrics")
@@ -8650,27 +8630,12 @@ class WebApp:
 
         # ── Memory Indexer API (phase 4) ─────────────────────────────────────
 
-        # /api/memory/indexer: extracted в src/modules/web_routers/memory_router.py
-        # (Session 25 Phase 2 Wave B). См. include_router ниже.
-        # /api/memory/stats: extracted в src/modules/web_routers/memory_router.py
-        # (Session 25 Phase 2 Wave B). См. include_router ниже.
-        # /api/memory/indexer/flush: extracted в memory_router.py (Wave S, factory).
-        # /api/memory/search: extracted в memory_router.py (Wave BB, factory).
-        # /api/memory/heatmap: extracted в memory_router.py (Wave BB, factory).
         from .web_routers.memory_router import build_memory_router as _build_memory_router
 
         self.app.include_router(_build_memory_router(self._make_router_context()))
 
         # ── Stats Dashboard (session 4+, Gemini 3.1 Pro frontend) ──────────
 
-        # /api/stats/caches: extracted в system_router.py (Phase 2 Wave Y).
-        # См. include_router рядом с другими wave Y endpoints.
-
-        # All HTML page routes (/, /stats, /v4/*, /legacy/*, /prototypes/{page},
-        # /costs, /inbox, /swarm, /translator, /ops, /settings, /commands,
-        # /v4/* → primary 301 redirects, /v4 static CSS+JS, /nano_theme.css)
-        # extracted в src/modules/web_routers/pages_router.py
-        # (Phase 2 Wave XX, Session 25 — final architectural extraction).
         from .web_routers.pages_router import build_pages_router as _build_pages_router
 
         self.app.include_router(_build_pages_router(self._make_router_context()))
@@ -8961,61 +8926,9 @@ class WebApp:
         # Перенесено в ``web_routers.browser_router`` (Phase 2 Wave U,
         # Session 25). См. include_router ниже после блока /api/chrome/.
 
-        # /api/transcriber/status extracted в
-        # src/modules/web_routers/misc_router.py (Phase 2 Wave Z, Session 25).
-        # См. include_router рядом с health_router.
-
-        # /api/voice/runtime, /api/voice/runtime/update, /api/krab_ear/status —
-        # extracted в src/modules/web_routers/voice_router.py
-        # (Session 25 Phase 2 Wave L). См. include_router ниже.
-
-        # /api/openclaw/cron/status, /api/openclaw/cron/jobs — extracted в
-        # src/modules/web_routers/openclaw_router.py (Session 25 Phase 2 Wave DD)
-        # через openclaw_cron_snapshot_helper в _make_router_context.
-
-        # /api/inbox/* (GET status/items/stale-*, /api/notifications/count, POST
-        # update/stale-*/remediate, create) — extracted в
-        # src/modules/web_routers/inbox_router.py (Session 25 Phase 2 Wave O).
         from .web_routers.inbox_router import build_inbox_router as _build_inbox_router
 
         self.app.include_router(_build_inbox_router(self._make_router_context()))
-
-        # /api/openclaw/cron/jobs/create: extracted в src/modules/web_routers/openclaw_router.py
-        # (Phase 2 Wave JJ, Session 25). См. include_router рядом с openclaw_router.
-
-        # /api/openclaw/cron/jobs/toggle: extracted в src/modules/web_routers/openclaw_router.py
-        # (Phase 2 Wave JJ, Session 25). См. include_router рядом с openclaw_router.
-
-        # /api/openclaw/cron/jobs/remove: extracted в src/modules/web_routers/openclaw_router.py
-        # (Phase 2 Wave JJ, Session 25). См. include_router рядом с openclaw_router.
-
-        # /api/openclaw/cron/jobs/run_now: extracted в src/modules/web_routers/openclaw_router.py
-        # (Phase 2 Wave VV, Session 25). Использует cron_native_store.list_jobs() +
-        # cron_native_scheduler._run_job (fire-and-forget). См. include_router рядом
-        # с openclaw_router ниже.
-
-        # /api/policy: extracted в capabilities_router.py (Phase 2 Wave R, Session 25).
-        # См. include_router рядом с policy_router.
-
-        # /api/policy/matrix: extracted в policy_router.py
-        # (Phase 2 Wave I, Session 25 — RouterContext-based extraction).
-        # См. include_router рядом с extras_router.
-
-        # /api/queue + /api/ctx: extracted в runtime_inspect_router.py
-        # (Phase 2 Wave G, Session 25 — RouterContext-based extraction).
-        # См. include_router рядом с extras_router.
-
-        # /api/reactions/stats, /api/mood/{chat_id} extracted в
-        # src/modules/web_routers/misc_router.py (Phase 2 Wave Z, Session 25).
-        # См. include_router рядом с health_router.
-        # /api/reactions/incoming: extracted в monitoring_router (Wave E).
-
-        # /api/links: extracted в extras_router.py (Phase 2 Wave F, Session 25).
-        # See include_router в общем блоке version/extras ниже.
-
-        # /api/openclaw/runtime-config — extracted в
-        # src/modules/web_routers/openclaw_router.py (Session 25 Phase 2 Wave DD)
-        # через openclaw_runtime_config_snapshot_helper в _make_router_context.
 
         @self.app.post("/api/context/checkpoint")
         async def context_checkpoint(
@@ -9101,79 +9014,11 @@ class WebApp:
                 else None,
             }
 
-        # /api/runtime/operator-profile: extracted в system_router.py
-        # (Phase 2 Wave Y, Session 25). См. include_router ниже.
-
-        # /api/runtime/repair-active-shared-permissions: extracted в
-        # src/modules/web_routers/system_router.py (Phase 2 Wave QQ, Session 25).
-        # Helpers: ``active_shared_root_helper``,
-        # ``active_shared_permission_health_helper``,
-        # ``normalize_shared_worktree_permissions_helper``
-        # инжектируются через _make_router_context.
-
         # /api/capabilities/registry + /api/channels/capabilities: extracted
         # в capabilities_router.py (Phase 2 Wave R, Session 25).
         # См. include_router рядом с policy_router.
 
-        # /api/translator/readiness — extracted в translator_router.py (Phase 2 Wave Q).
-        # /api/translator/status — extracted в translator_router.py (Phase 2 Wave K).
-
-        # /api/translator/session/toggle — extracted в translator_router.py (Phase 2 Wave S).
-        # /api/translator/auto — extracted в translator_router.py (Phase 2 Wave S).
-        # /api/translator/lang — extracted в translator_router.py (Phase 2 Wave S).
-        # /api/translator/history — extracted в translator_router.py (Phase 2 Wave K).
-        # /api/translator/translate — extracted в translator_router.py (Phase 2 Wave S).
-
-        # /api/translator/bootstrap — extracted в translator_router.py (Phase 2 Wave PP).
-        # /api/translator/control-plane — extracted в translator_router.py (Phase 2 Wave Q).
-        # /api/translator/session-inspector — extracted в translator_router.py (Phase 2 Wave Q).
-        # /api/translator/mobile-readiness — extracted в translator_router.py (Phase 2 Wave Q).
-        # /api/translator/delivery-matrix — extracted в translator_router.py (Phase 2 Wave Q).
-        # /api/translator/live-trial-preflight — extracted в translator_router.py (Phase 2 Wave PP).
-        # /api/translator/mobile/onboarding — extracted в translator_router.py (Phase 2 Wave PP).
-
-        # /api/translator/mobile/onboarding/export: extracted в
-        # src/modules/web_routers/translator_router.py (Phase 2 Wave RR, Session 25).
-        # Helpers инжектируются через write_json_file_helper +
-        # translator_*_snapshot helpers (Wave PP) в _make_router_context.
-
-        # Phase 2 Wave HH (Session 25): /api/translator/session/{start,policy,action,
-        # runtime-tune,quick-phrase,summary} extracted в translator_router.py
-        # через helper injection (translator_*_helper, vg_subscriber_*_helper).
-        # Phase 2 Wave II (Session 25): /api/translator/session/escalate extracted в
-        # translator_router.py через inbox_service_upsert_owner_task_helper +
-        # translator_session_inspector_snapshot helpers.
-
-        # Phase 2 Wave II (Session 25): /api/translator/mobile/{register,bind,remove}
-        # extracted в translator_router.py через helper injection.
-        # Phase 2 Wave WW (Session 25): /api/translator/mobile/trial-prep extracted
-        # в translator_router.py — orchestration scenario с условной регистрацией +
-        # start_session + bind, использует все mobile/runtime helpers (уже инжектированы).
-
-        # /api/translator/mobile/bind — extracted в translator_router.py (Phase 2 Wave II).
-        # /api/translator/mobile/remove — extracted в translator_router.py (Phase 2 Wave II).
-        # /api/translator/mobile/trial-prep — extracted в translator_router.py (Phase 2 Wave WW).
-
-        # /api/runtime/handoff — extracted в system_router.py (Phase 2 Wave UU,
-        # Session 25). Helpers `runtime_handoff_safe_client_health_helper`,
-        # `runtime_handoff_latest_path_by_glob_helper`,
-        # `runtime_handoff_git_snapshot_helper`,
-        # `runtime_handoff_mask_secret_helper` инжектируются через
-        # `_make_router_context`. Reuses Wave Q/R helpers
-        # (translator_readiness_snapshot, capability_registry_snapshot_helper,
-        # runtime_operator_profile_helper) и Wave QQ `bool_env_helper`.
-
-        # /api/krab/restart_userbot — extracted в system_router.py (Phase 2 Wave SS,
-        # Session 25). Helpers `restart_userbot_get_last_ts_helper` /
-        # `restart_userbot_set_last_ts_helper` инжектируются через
-        # _make_router_context, маппятся на `self._last_restart_userbot_ts`.
-
         # Phase 2: Command API parity — все owner controls через REST, не только Telegram
-
-        # /api/voice/toggle — extracted в voice_router.py (Phase 2 Wave L, Session 25).
-        # См. include_router рядом с другими voice endpoints.
-
-        # /api/translator/languages — extracted в translator_router.py (Phase 2 Wave K).
 
         # /api/swarm/teams + 7 других read-only swarm endpoints вынесены в
         # src/modules/web_routers/swarm_router.py (Session 25 Phase 2 Wave C).
@@ -9182,23 +9027,13 @@ class WebApp:
 
         self.app.include_router(_swarm_router)
 
-        # /api/v1/health: extracted в src/modules/web_routers/health_router.py
-        # (Session 25 Phase 2 Wave X).
-
-        # /api/runtime/summary: extracted в system_router.py (Phase 2 Wave Y).
-        # См. include_router ниже.
         from .web_routers.system_router import build_system_router as _build_system_router
 
         self.app.include_router(_build_system_router(self._make_router_context()))
 
-        # /api/commands*: extracted в src/modules/web_routers/commands_router.py
-        # (Session 25 Phase 2 Wave A). 4 endpoints: list, usage, usage/top, get_by_name.
         from .web_routers.commands_router import router as _commands_router
 
         self.app.include_router(_commands_router)
-
-        # /api/model/status: extracted в src/modules/web_routers/model_router.py
-        # (Phase 2 Wave FF, Session 25). См. include_router ниже.
 
         @self.app.get("/api/endpoints")
         async def list_endpoints():
@@ -9215,42 +9050,30 @@ class WebApp:
                 "endpoints": sorted(routes, key=lambda r: r["path"]),
             }
 
-        # /api/version: extracted в src/modules/web_routers/version_router.py
-        # (Phase 2 proof-of-concept, Session 25). Подключаем через include_router.
         from .web_routers.version_router import router as _version_router
 
         self.app.include_router(_version_router)
 
-        # /api/uptime + /api/links: extracted в extras_router.py
-        # (Phase 2 Wave F, Session 25 — first RouterContext-based extraction).
         from .web_routers.extras_router import build_extras_router as _build_extras
 
         self.app.include_router(_build_extras(self._make_router_context()))
 
-        # /api/queue + /api/ctx: extracted в runtime_inspect_router.py
-        # (Phase 2 Wave G, Session 25).
         from .web_routers.runtime_inspect_router import (
             build_runtime_inspect_router as _build_runtime_inspect,
         )
 
         self.app.include_router(_build_runtime_inspect(self._make_router_context()))
 
-        # /api/policy/matrix: extracted в policy_router.py
-        # (Phase 2 Wave I, Session 25).
         from .web_routers.policy_router import build_policy_router as _build_policy
 
         self.app.include_router(_build_policy(self._make_router_context()))
 
-        # /api/capabilities/registry, /api/channels/capabilities, /api/policy:
-        # extracted в capabilities_router.py (Phase 2 Wave R, Session 25).
         from .web_routers.capabilities_router import (
             build_capabilities_router as _build_capabilities,
         )
 
         self.app.include_router(_build_capabilities(self._make_router_context()))
 
-        # /api/notify/toggle + /api/silence/toggle: extracted в write_router.py
-        # (Phase 2 Wave J, Session 25 — first ctx.assert_write_access extraction).
         from .web_routers.write_router import build_write_router as _build_write
 
         self.app.include_router(_build_write(self._make_router_context()))
@@ -9285,12 +9108,6 @@ class WebApp:
         from .web_routers.model_router import build_model_router as _build_model
 
         self.app.include_router(_build_model(self._make_router_context()))
-
-        # /api/system/info: extracted в src/modules/web_routers/meta_router.py
-        # (Session 25). См. include_router ниже.
-
-        # /api/memory/stats: extracted в src/modules/web_routers/memory_router.py
-        # (Session 25 Phase 2 Wave B). include_router выше.
 
         @self.app.get("/api/memory/phase2/status")
         async def memory_phase2_status():
@@ -9415,8 +9232,6 @@ class WebApp:
                 "shadow_delta_pct": shadow_delta_pct,
             }
 
-        # /api/system/clock_drift: extracted в src/modules/web_routers/meta_router.py
-        # (Session 25, объединено с /api/system/info в одном meta-router).
         from .web_routers.meta_router import router as _meta_router
 
         self.app.include_router(_meta_router)
@@ -9435,22 +9250,6 @@ class WebApp:
         )
 
         self.app.include_router(_build_monitoring_router(self._make_router_context()))
-
-        # /api/dashboard/summary: extracted в system_router.py (Phase 2 Wave Y).
-        # См. include_router(_build_system_router(...)) выше.
-
-        # /api/translator/test — extracted в translator_router.py (Phase 2 Wave K).
-
-        # /api/model/switch: extracted в src/modules/web_routers/model_router.py
-        # (Phase 2 Wave FF, Session 25).
-
-        # /api/notify/status: extracted в runtime_status_router (Wave D).
-        # POST /api/notify/toggle — extracted в write_router.py (Phase 2 Wave J, Session 25).
-
-        # /api/voice/profile — extracted в voice_router.py (Phase 2 Wave L, Session 25).
-
-        # /api/swarm/task-board, /api/swarm/tasks, /api/swarm/artifacts,
-        # /api/swarm/task/{task_id} (GET only) — extracted в swarm_router (Wave C).
 
         @self.app.post("/api/swarm/tasks/create")
         async def swarm_task_create(
@@ -9474,8 +9273,6 @@ class WebApp:
                 created_by=str(payload.get("created_by") or "api"),
             )
             return {"ok": True, "task_id": task.task_id, "team": task.team, "title": task.title}
-
-        # /api/swarm/team/{team_name} + /api/swarm/stats — extracted в swarm_router (Wave C).
 
         @self.app.get("/api/swarm/reports")
         async def swarm_reports_list(limit: int = Query(default=10)):
@@ -9659,8 +9456,6 @@ class WebApp:
             removed = swarm_artifact_store.cleanup_old(max_files=50)
             return {"ok": True, "removed": removed}
 
-        # /api/swarm/listeners (GET) — extracted в swarm_router (Wave C).
-
         @self.app.get("/api/swarm/delegations/active")
         async def swarm_delegations_active():
             """Активные цепочки делегирования для visibility/dashboard."""
@@ -9677,43 +9472,10 @@ class WebApp:
                 "timeout_sec": swarm_loop_guard._timeout_sec,
             }
 
-        # /api/silence/status: extracted в runtime_status_router (Wave D).
-        # POST /api/silence/toggle — extracted в write_router.py (Phase 2 Wave J, Session 25).
-
-        # /api/runtime/recover: extracted в src/modules/web_routers/system_router.py
-        # (Phase 2 Wave QQ, Session 25). Helpers: ``run_project_python_script_helper``,
-        # ``bool_env_helper`` инжектируются через _make_router_context.
-
-        # /api/runtime/chat-session/clear extracted в
-        # src/modules/web_routers/system_router.py (Phase 2 Wave AA, Session 25).
-        # См. include_router system_router выше.
-
-        # /api/openclaw/channels/status: extracted в src/modules/web_routers/openclaw_router.py
-        # (Phase 2 Wave NN, Session 25). Helpers:
-        # ``openclaw_cli_env_helper`` + ``openclaw_parse_channels_probe_helper``
-        # инжектируются через _make_router_context.
-
-        # /api/openclaw/channels/runtime-repair: extracted в src/modules/web_routers/openclaw_router.py
-        # (Session 25 Phase 2 Wave N). См. include_router рядом с voice_router.
-
-        # /api/openclaw/channels/signal-guard-run: extracted в src/modules/web_routers/openclaw_router.py
-        # (Session 25 Phase 2 Wave N). См. include_router рядом с voice_router.
-
-        # /api/ecosystem/health, /api/ecosystem/health/debug:
-        # extracted в src/modules/web_routers/health_router.py
-        # (Session 25 Phase 2 Wave X).
-
         @self.app.get("/api/ecosystem/capabilities")
         async def ecosystem_capabilities():
             """Возвращает capability-срез по control plane и внешним voice/audio сервисам."""
             return await self._ecosystem_capabilities_snapshot()
-
-        # /api/session10/summary — extracted в system_router.py (Phase 2 Wave TT,
-        # Session 25). Helper memory_indexer_state_helper инжектируется через
-        # _make_router_context. См. include_router рядом с другими system endpoints.
-
-        # /api/system/diagnostics: extracted в system_router.py (Phase 2 Wave Y).
-        # См. include_router рядом с другими wave Y endpoints.
 
         async def _system_diagnostics_inline() -> dict:
             """Локальная реализация system_diagnostics для алиаса /api/ops/diagnostics.
@@ -9760,10 +9522,6 @@ class WebApp:
         async def ops_diagnostics():
             """[R12] Унифицированный операционный отчет (алиас system/diagnostics с расширением)."""
             return await _system_diagnostics_inline()
-
-        # /api/ops/metrics, /api/ops/timeline, /api/timeline, /api/sla:
-        # extracted в src/modules/web_routers/monitoring_router.py
-        # (Session 25 Phase 2 Wave E). См. include_router рядом с runtime_status_router.
 
         @self.app.get("/api/ops/runtime_snapshot")
         async def ops_runtime_snapshot():
@@ -9858,21 +9616,6 @@ class WebApp:
                 logger.error("ops_models_control_failed", error=str(e))
                 return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
-        # /api/ecosystem/health/export: extracted в src/modules/web_routers/health_router.py
-        # (Session 25 Phase 2 Wave X).
-
-        # /api/model/recommend, /api/model/preflight, /api/model/local/status:
-        # extracted в src/modules/web_routers/model_router.py
-        # (Phase 2 Wave FF, Session 25).
-
-        # /api/model/local/load-default, /api/model/local/unload:
-        # extracted в src/modules/web_routers/model_router.py
-        # (Phase 2 Wave GG, Session 25). Helpers инжектируются через
-        # lmstudio_snapshot_invalidate_helper в _make_router_context.
-
-        # /api/model/explain: extracted в src/modules/web_routers/model_router.py
-        # (Phase 2 Wave FF, Session 25).
-
         def _normalize_force_mode(force_mode: str) -> str:
             """Нормализует внутренние force_* режимы в UI-вид: auto/local/cloud."""
             normalized = str(force_mode or "").strip().lower()
@@ -9881,60 +9624,6 @@ class WebApp:
             if normalized in {"force_cloud", "cloud"}:
                 return "cloud"
             return "auto"
-
-        # Wave OO (Session 25): closures ``_build_model_catalog`` /
-        # ``_build_model_catalog_inner`` промотованы в методы
-        # WebApp._build_model_catalog_method / _build_model_catalog_inner_method
-        # (около строки 3580). Endpoints /api/model/catalog и /api/model/apply
-        # extracted в src/modules/web_routers/model_router.py через
-        # helper-injection (см. _make_router_context: model_catalog_*_helper).
-
-        # /api/model/catalog: extracted в src/modules/web_routers/model_router.py
-        # (Phase 2 Wave OO, Session 25). Helpers инжектируются через
-        # model_catalog_get_cache_helper + model_catalog_build_helper в
-        # _make_router_context.
-
-        # /api/model/provider-action: extracted в src/modules/web_routers/model_router.py
-        # (Phase 2 Wave GG, Session 25). Helpers инжектируются через
-        # provider_ui_metadata_helper / provider_repair_helper_path_helper /
-        # launch_local_app_helper в _make_router_context.
-
-        # /api/openclaw/model-routing/status: extracted в
-        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave EE, Session 25).
-        # Helpers инжектируются через openclaw_model_routing_helper +
-        # openclaw_model_routing_overlay_helper в _make_router_context.
-
-        # /api/thinking/status, /api/thinking/set, /api/depth/status:
-        # extracted в src/modules/web_routers/model_router.py
-        # (Phase 2 Wave GG, Session 25). Helpers через
-        # openclaw_runtime_controls_build_helper / openclaw_runtime_controls_apply_helper /
-        # thinking_normalize_helper / lmstudio_snapshot_invalidate_helper.
-
-        # /api/userbot/acl/status и /api/userbot/acl/update extracted в
-        # src/modules/web_routers/admin_router.py (Phase 2 Wave W, Session 25).
-        # См. include_router в общем блоке admin_router ниже.
-
-        # /api/openclaw/model-compat/probe: extracted в
-        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave EE, Session 25).
-        # Subprocess helper hoisted в module-level _run_openclaw_model_compat_probe
-        # и инжектируется через openclaw_model_compat_probe_helper в _make_router_context.
-
-        # /api/model/apply: extracted в src/modules/web_routers/model_router.py
-        # (Phase 2 Wave OO, Session 25). Helpers инжектируются через
-        # model_catalog_build_helper / model_catalog_build_fallback_helper /
-        # model_catalog_store_cache_helper / model_apply_catalog_timeout_helper /
-        # runtime_quick_presets_build_helper / openclaw_runtime_controls_apply_helper /
-        # openclaw_runtime_controls_build_helper / openclaw_model_routing_helper /
-        # runtime_lite_cache_invalidator_helper в _make_router_context.
-
-        # /api/model/feedback (GET+POST): extracted в src/modules/web_routers/model_router.py
-        # (Phase 2 Wave FF, Session 25). Idempotency cache shared через
-        # idempotency_get/idempotency_set helpers в _make_router_context.
-
-        # /api/ops/usage, /api/ops/cost-report, /api/ops/runway,
-        # /api/ops/executive-summary, /api/ops/report:
-        # extracted в src/modules/web_routers/monitoring_router.py
-        # (Session 25 Phase 2 Wave T). См. include_router рядом с runtime_status_router.
 
         @self.app.get("/api/ops/report/export")
         async def ops_report_export(
@@ -10030,13 +9719,6 @@ class WebApp:
                 filename=out_path.name,
             )
 
-        # /api/ops/alerts, /api/ops/history:
-        # extracted в src/modules/web_routers/monitoring_router.py (Wave T).
-
-        # /api/ops/maintenance/prune, /api/ops/ack/{code} (POST + DELETE)
-        # extracted в src/modules/web_routers/monitoring_router.py
-        # (Phase 2 Wave AA, Session 25). См. include_router monitoring_router выше.
-
         @self.app.get("/api/ops/openclaw-procs")
         async def ops_openclaw_procs():
             """Список текущих openclaw-процессов с командой, возрастом и RSS MB.
@@ -10069,14 +9751,6 @@ class WebApp:
                 "processes": procs,
             }
 
-        # /api/archive/growth: extracted в src/modules/web_routers/monitoring_router.py
-        # (Session 25 Phase 2 Wave E). См. include_router рядом с runtime_status_router.
-
-        # /api/assistant/capabilities + /api/assistant/attachment:
-        # extracted в src/modules/web_routers/assistant_router.py
-        # (Phase 2 Wave V, Session 25). Helpers инжектируются через deps
-        # в _make_router_context. /api/assistant/query и /api/assistant/stream
-        # остаются inline (намеренно, см. assistant_router.py docstring).
         from .web_routers.assistant_router import build_assistant_router as _build_assistant
 
         self.app.include_router(_build_assistant(self._make_router_context()))
@@ -10540,117 +10214,25 @@ class WebApp:
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
-        # /api/inbox/events extracted в
-        # src/modules/web_routers/misc_router.py (Phase 2 Wave Z, Session 25).
-        # См. include_router рядом с health_router.
-
-        # /api/openclaw/report, /api/openclaw/deep-check, /api/openclaw/remediation-plan:
-        # extracted в src/modules/web_routers/openclaw_router.py (Session 25 Phase 2 Wave M).
-        # См. include_router рядом с voice_router.
-
-        # /api/openclaw/browser-smoke: extracted в src/modules/web_routers/openclaw_router.py
-        # (Phase 2 Wave LL, Session 25). Helper инжектируется через
-        # openclaw_browser_smoke_helper в _make_router_context.
-
-        # /api/diagnostics/smoke: extracted в src/modules/web_routers/misc_router.py
-        # (Phase 2 Wave RR, Session 25). Helpers (openclaw_browser_smoke_helper +
-        # openclaw_photo_smoke_helper) уже инжектируются через _make_router_context
-        # начиная с Wave LL.
-
-        # /api/openclaw/browser/start: extracted в src/modules/web_routers/openclaw_router.py
-        # (Phase 2 Wave MM, Session 25). Helpers инжектируются через
-        # openclaw_run_cli_json_helper + browser smoke/probe/runtime/classify
-        # helpers в _make_router_context.
-
-        # /api/openclaw/browser/open-owner-chrome: extracted в
-        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave LL, Session 25).
-        # Helper инжектируется через openclaw_launch_owner_chrome_helper в
-        # _make_router_context.
-
         # /api/chrome/dedicated/* перенесены в web_routers.browser_router
         # (Phase 2 Wave U, Session 25). См. include_router ниже.
         from .web_routers.browser_router import build_browser_router as _build_browser
 
         self.app.include_router(_build_browser(self._make_router_context()))
 
-        # /api/openclaw/browser-mcp-readiness: extracted в
-        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave MM, Session 25).
-        # Helpers инжектируются через openclaw_browser_smoke_helper +
-        # openclaw_probe_owner_chrome_helper + collect_stable_browser_cli_runtime
-        # + classify_browser_stage + build_mcp_readiness_snapshot +
-        # build_browser_access_paths в _make_router_context.
-
-        # /api/openclaw/photo-smoke: extracted в src/modules/web_routers/openclaw_router.py
-        # (Phase 2 Wave LL, Session 25). Helper инжектируется через
-        # openclaw_photo_smoke_helper в _make_router_context.
-
-        # /api/openclaw/cloud, /api/openclaw/cloud/diagnostics: extracted в
-        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave KK, Session 25).
-        # Self-contained: вызывают openclaw.get_cloud_provider_diagnostics напрямую
-        # через ctx.get_dep("openclaw_client"). См. include_router рядом.
-
-        # /api/openclaw/cloud/runtime-check: extracted в src/modules/web_routers/openclaw_router.py
-        # (Phase 2 Wave NN, Session 25). Helpers:
-        # ``openclaw_client.get_cloud_runtime_check`` + ``runtime_lite_cache_invalidator_helper``
-        # (mutates ``self._runtime_lite_cache``).
-
-        # /api/openclaw/cloud/switch-tier: extracted в src/modules/web_routers/openclaw_router.py
-        # (Phase 2 Wave NN, Session 25). Helpers:
-        # ``openclaw_client.switch_cloud_tier`` + ``runtime_lite_cache_invalidator_helper``.
-
-        # /api/openclaw/cloud/tier/state: extracted в src/modules/web_routers/openclaw_router.py
-        # (Session 25 Phase 2 Wave M). См. include_router рядом с voice_router.
-
-        # /api/openclaw/cloud/tier/reset: extracted в src/modules/web_routers/openclaw_router.py
-        # (Session 25 Phase 2 Wave N). См. include_router рядом с voice_router.
-
-        # /api/openclaw/model-autoswitch/status: extracted в
-        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave EE, Session 25).
-        # Subprocess helper hoisted в module-level _run_openclaw_model_autoswitch
-        # и инжектируется через openclaw_model_autoswitch_helper в _make_router_context.
-
-        # /api/openclaw/model-autoswitch/apply: extracted в
-        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave JJ, Session 25).
-        # Subprocess helper hoisted в module-level _run_openclaw_model_autoswitch
-        # и инжектируется через openclaw_model_autoswitch_helper в _make_router_context.
-
-        # /api/openclaw/control-compat/status: extracted в
-        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave KK, Session 25).
-        # Self-contained: subprocess вызовы `openclaw channels status --probe` +
-        # `openclaw logs --tail 200`. См. include_router рядом.
-
-        # /api/openclaw/routing/effective: extracted в src/modules/web_routers/openclaw_router.py
-        # (Phase 2 Wave NN, Session 25). Helpers:
-        # ``resolve_local_runtime_truth_helper`` + ``router`` dep + inline
-        # ``_normalize_force_mode`` копия (pure-функция). См. include_router рядом.
-
-        # /api/provisioning/* и /api/userbot/acl/* extracted в
-        # src/modules/web_routers/admin_router.py (Phase 2 Wave W, Session 25).
-        # ACL helpers + idempotency cache инжектированы через _make_router_context.
         from .web_routers.admin_router import build_admin_router as _build_admin
 
         self.app.include_router(_build_admin(self._make_router_context()))
 
-        # /api/health, /api/health/lite, /api/v1/health,
-        # /api/ecosystem/health{,/debug,/export} extracted в
-        # src/modules/web_routers/health_router.py (Phase 2 Wave X, Session 25).
         from .web_routers.health_router import build_health_router as _build_health
 
         self.app.include_router(_build_health(self._make_router_context()))
 
-        # /api/transcriber/status, /api/reactions/stats, /api/mood/{chat_id},
-        # /api/inbox/events, /api/chat_windows/{config,list} extracted в
-        # src/modules/web_routers/misc_router.py (Phase 2 Wave Z, Session 25).
         from .web_routers.misc_router import build_misc_router as _build_misc
 
         self.app.include_router(_build_misc(self._make_router_context()))
 
         # ── Chat Window Manager endpoints ────────────────────────────────────
-
-        # /api/chat_windows/config, /api/chat_windows/list extracted в
-        # src/modules/web_routers/misc_router.py (Phase 2 Wave Z, Session 25).
-        # /api/chat_windows/evict_idle, /api/chat_windows/clear extracted в
-        # misc_router.py (Phase 2 Wave AA, Session 25). См. include_router выше.
 
     async def start(self):
         """Запуск сервера в фоне."""
