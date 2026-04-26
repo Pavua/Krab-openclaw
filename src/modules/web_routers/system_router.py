@@ -25,9 +25,14 @@ Helper-методы WebApp (``_runtime_operator_profile``,
 from __future__ import annotations
 
 import asyncio
+import os
+import sqlite3
+import subprocess
+import time
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 
 from ._context import RouterContext
@@ -443,6 +448,209 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
             "steps": steps,
             "runtime_after": runtime_after,
             "cloud_runtime": cloud_runtime,
+        }
+
+    # ── /api/session10/summary (Wave TT) ────────────────────────────────────
+
+    @router.get("/api/session10/summary")
+    async def session10_summary() -> dict:
+        """
+        Aggregated Session 10 features stats для V4 Dashboard Hub.
+
+        Делает один запрос вместо N — фронтенду не нужно дёргать
+        отдельные endpoints для memory_validator/archive/chrome/restart/observability.
+
+        Каждая секция обёрнута в try/except: при отсутствии модуля возвращаем
+        defaults, endpoint не падает в 500.
+        """
+        import structlog
+
+        from ...core.ecosystem_health import EcosystemHealthService
+
+        _logger = structlog.get_logger("system_router")
+
+        # ── session_info (статический + dynamic commits через git) ─────
+        session_info: dict[str, Any] = {
+            "name": "Session 10",
+            "date": "2026-04-17",
+            "status": "closed",
+            "new_tests_count": 155,
+        }
+        try:
+            result = subprocess.run(
+                ["git", "rev-list", "--count", "--since=1 day", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+            if result.returncode == 0:
+                session_info["commits_count"] = int(result.stdout.strip() or 0)
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug("session10_commits_count_failed", error=str(exc))
+
+        # ── memory_validator (модуль пока не существует → defaults) ─────
+        memory_validator: dict[str, Any] = {
+            "enabled": False,
+            "safe_total": 0,
+            "injection_blocked_total": 0,
+            "confirmed_total": 0,
+            "confirm_failed_total": 0,
+            "pending_count": 0,
+        }
+        try:
+            from ...core import memory_validator as _mv  # type: ignore[attr-defined]
+
+            if hasattr(_mv, "get_validator_stats"):
+                mv_stats = _mv.get_validator_stats()
+                if isinstance(mv_stats, dict):
+                    memory_validator.update(mv_stats)
+                    memory_validator.setdefault("enabled", True)
+        except ImportError:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("session10_memory_validator_failed", error=str(exc))
+
+        # ── memory_archive (archive.db file-level stats + indexer state) ─
+        memory_archive: dict[str, Any] = {
+            "exists": False,
+            "size_bytes": 0,
+            "size_mb": 0.0,
+            "message_count": 0,
+            "chats_count": 0,
+            "chunks_count": 0,
+            "indexer_state": "stopped",
+        }
+        try:
+            from ...core.memory_archive import DEFAULT_ARCHIVE_PATH
+
+            archive_path = DEFAULT_ARCHIVE_PATH
+            if archive_path.exists():
+                size_bytes = archive_path.stat().st_size
+                memory_archive["exists"] = True
+                memory_archive["size_bytes"] = size_bytes
+                memory_archive["size_mb"] = round(size_bytes / (1024 * 1024), 2)
+                try:
+                    conn = sqlite3.connect(f"file:{archive_path}?mode=ro", uri=True)
+                    try:
+                        cursor = conn.cursor()
+                        for table, key in (
+                            ("messages", "message_count"),
+                            ("chats", "chats_count"),
+                            ("chunks", "chunks_count"),
+                        ):
+                            try:
+                                cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                                memory_archive[key] = int(cursor.fetchone()[0])
+                            except sqlite3.Error:
+                                pass
+                    finally:
+                        conn.close()
+                except sqlite3.Error as exc:
+                    _logger.debug("session10_archive_query_failed", error=str(exc))
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("session10_memory_archive_failed", error=str(exc))
+
+        # Переиспользуем existing helper (late-bound через ctx) для indexer state.
+        indexer_helper = ctx.get_dep("memory_indexer_state_helper")
+        memory_archive["indexer_state"] = (
+            indexer_helper() if callable(indexer_helper) else "stopped"
+        )
+
+        # ── dedicated_chrome (env-driven; модуль пока optional) ─────────
+        dedicated_chrome: dict[str, Any] = {
+            "enabled": bool(os.environ.get("KRAB_DEDICATED_CHROME_ENABLED", "") == "1"),
+            "running": False,
+            "port": int(os.environ.get("KRAB_DEDICATED_CHROME_PORT") or 9222),
+        }
+        try:
+            probe_url = f"http://127.0.0.1:{dedicated_chrome['port']}/json/version"
+            async with httpx.AsyncClient(timeout=0.5) as probe_client:
+                probe_resp = await probe_client.get(probe_url)
+                dedicated_chrome["running"] = probe_resp.status_code == 200
+        except Exception:  # noqa: BLE001
+            pass
+
+        # ── auto_restart (services_tracked + attempts из watchdog deps) ──
+        auto_restart: dict[str, Any] = {
+            "enabled": False,
+            "services_tracked": [],
+            "total_attempts_last_hour": 0,
+        }
+        try:
+            watchdog = ctx.get_dep("watchdog")
+            if watchdog is not None:
+                auto_restart["enabled"] = True
+                recoveries = getattr(watchdog, "last_recovery_attempt", {}) or {}
+                if isinstance(recoveries, dict):
+                    auto_restart["services_tracked"] = sorted(recoveries.keys())
+                    cutoff = time.time() - 3600
+                    attempts = 0
+                    for rec in recoveries.values():
+                        if isinstance(rec, dict):
+                            ts = rec.get("ts") or rec.get("timestamp") or 0
+                            if isinstance(ts, (int, float)) and ts >= cutoff:
+                                attempts += 1
+                    auto_restart["total_attempts_last_hour"] = attempts
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("session10_auto_restart_failed", error=str(exc))
+
+        # ── observability (env-driven флаги + stagnation threshold) ─────
+        try:
+            stagnation_threshold = int(os.environ.get("LLM_STAGNATION_THRESHOLD_SEC") or 120)
+        except (TypeError, ValueError):
+            stagnation_threshold = 120
+
+        observability = {
+            "correlation_id_active": True,
+            "tool_indicator_enabled": True,
+            "stagnation_threshold_sec": stagnation_threshold,
+        }
+
+        new_commands = [
+            {
+                "name": "!confirm",
+                "description": "Подтвердить persistent memory write (owner)",
+            },
+            {
+                "name": "!reset",
+                "description": "Aggressive очистка 4 слоёв истории",
+            },
+            {
+                "name": "!memory stats",
+                "description": "Memory Layer статистика",
+            },
+        ]
+
+        # ── known_issues (резолв по commit hash'ам; конфиг через env) ──
+        known_issues: list[str] = []
+        if os.environ.get("KRAB_KNOWN_ISSUE_CHROME_PROMPTS") == "1":
+            known_issues.append("chrome_prompts_from_extension")
+
+        # ── session_12 (Wave 16 Chado-inspired modules) ──────────────────
+        health_svc = ctx.get_dep("health_service")
+        if health_svc is None:
+            router_dep = ctx.get_dep("router")
+            if router_dep is not None:
+                health_svc = EcosystemHealthService(router=router_dep)
+        session_12: dict[str, Any] = {}
+        if health_svc is not None:
+            try:
+                session_12 = health_svc._collect_session_12_stats()
+            except Exception as exc:  # noqa: BLE001
+                _logger.debug("session12_stats_failed", error=str(exc))
+
+        return {
+            "ok": True,
+            "generated_at": int(time.time()),
+            "session_info": session_info,
+            "memory_validator": memory_validator,
+            "memory_archive": memory_archive,
+            "new_commands": new_commands,
+            "dedicated_chrome": dedicated_chrome,
+            "auto_restart": auto_restart,
+            "observability": observability,
+            "known_issues": known_issues,
+            "session_12": session_12,
         }
 
     # ── /api/krab/restart_userbot (Wave SS) ─────────────────────────────────
