@@ -7824,86 +7824,10 @@ class WebApp:
         # extracted в src/modules/web_routers/runtime_status_router.py
         # (Session 25 Phase 2 Wave D). См. include_router рядом с meta_router.
 
-        @self.app.get("/api/health")
-        async def get_health():
-            """Единый health статусов для web-панели."""
-            router = self.deps["router"]
-            openclaw = self.deps.get("openclaw_client")
-            voice_gateway = self.deps.get("voice_gateway_client")
-            krab_ear = self.deps.get("krab_ear_client")
-            lite_snapshot = await self._collect_runtime_lite_snapshot()
-            lm_state = str(lite_snapshot.get("lmstudio_model_state") or "unknown").strip().lower()
-            local_ok = lm_state in {"loaded", "idle"}
-            ecosystem = EcosystemHealthService(
-                router=router,
-                openclaw_client=openclaw,
-                voice_gateway_client=voice_gateway,
-                krab_ear_client=krab_ear,
-                local_health_override={
-                    "ok": local_ok,
-                    "status": "ok" if local_ok else (lm_state or "down"),
-                    "degraded": not local_ok,
-                    "latency_ms": 0,
-                    "source": "web_app.lite_snapshot",
-                },
-            )
-            report = await ecosystem.collect()
-            return {
-                "status": "ok",
-                "checks": {
-                    "openclaw": bool(report["checks"]["openclaw"]["ok"]),
-                    "local_lm": local_ok,
-                    "voice_gateway": bool(report["checks"]["voice_gateway"]["ok"]),
-                    "krab_ear": bool(report["checks"]["krab_ear"]["ok"]),
-                },
-                "degradation": str(report["degradation"]),
-                "risk_level": str(report["risk_level"]),
-                "chain": report["chain"],
-            }
-
-        @self.app.get("/api/health/lite")
-        async def get_health_lite():
-            """
-            Быстрый liveness-check web-панели.
-
-            Важно:
-            - не тянет deep ecosystem probes;
-            - используется daemon-скриптами и uptime-watch для проверки
-              «жив ли HTTP-процесс», а не «все ли внешние зависимости сейчас быстрые».
-            """
-            runtime = await self._collect_runtime_lite_snapshot()
-            # B.7 (session 4): telegram_rate_limiter stats для /stats dashboard.
-            try:
-                from ..core.telegram_rate_limiter import telegram_rate_limiter as _trl
-
-                _rate_limiter_stats = _trl.stats()
-            except Exception:
-                _rate_limiter_stats = None
-            result = {
-                "ok": True,
-                "status": "up",
-                "telegram_session_state": runtime.get("telegram_session_state"),
-                "telegram_userbot_state": (
-                    (runtime.get("telegram_userbot") or {}).get("startup_state")
-                ),
-                "telegram_userbot_client_connected": (
-                    (runtime.get("telegram_userbot") or {}).get("client_connected")
-                ),
-                "telegram_userbot_error_code": (
-                    (runtime.get("telegram_userbot") or {}).get("startup_error_code")
-                ),
-                "lmstudio_model_state": runtime.get("lmstudio_model_state"),
-                "openclaw_auth_state": runtime.get("openclaw_auth_state"),
-                "last_runtime_route": runtime.get("last_runtime_route"),
-                "scheduler_enabled": runtime.get("scheduler_enabled"),
-                "inbox_summary": runtime.get("inbox_summary"),
-                "voice_gateway_configured": runtime.get("voice_gateway_configured"),
-                "memory_indexer_state": _resolve_memory_indexer_state(),
-                "memory_indexer_queue_size": _resolve_memory_indexer_queue_size(),
-            }
-            if _rate_limiter_stats is not None:
-                result["telegram_rate_limiter"] = _rate_limiter_stats
-            return result
+        # /api/health, /api/health/lite: extracted в src/modules/web_routers/health_router.py
+        # (Session 25 Phase 2 Wave X). См. include_router рядом с meta_router.
+        # /api/health/deep остаётся inline — критичный (Session 24 8f0da60), tests
+        # используют full WebApp instance.
 
         @self.app.get("/api/health/deep")
         async def get_health_deep():
@@ -10594,21 +10518,8 @@ class WebApp:
 
         self.app.include_router(_swarm_router)
 
-        @self.app.get("/api/v1/health")
-        async def health_v1():
-            """Versioned health endpoint для внешних мониторов."""
-            try:
-                health = await self._collect_runtime_lite_snapshot()
-                return {
-                    "ok": True,
-                    "version": "1",
-                    "status": health.get("status", "unknown"),
-                    "telegram": health.get("telegram_userbot_state", "unknown"),
-                    "gateway": health.get("openclaw_auth_state", "unknown"),
-                    "uptime_probe": "pass",
-                }
-            except Exception as exc:
-                return {"ok": False, "version": "1", "error": str(exc)}
+        # /api/v1/health: extracted в src/modules/web_routers/health_router.py
+        # (Session 25 Phase 2 Wave X).
 
         @self.app.get("/api/runtime/summary")
         async def runtime_summary():
@@ -11433,61 +11344,9 @@ class WebApp:
         # /api/openclaw/channels/signal-guard-run: extracted в src/modules/web_routers/openclaw_router.py
         # (Session 25 Phase 2 Wave N). См. include_router рядом с voice_router.
 
-        @self.app.get("/api/ecosystem/health")
-        async def ecosystem_health():
-            """[R11] Расширенный health-отчет 3-проектной экосистемы с метриками ресурсов."""
-            health_service = self.deps.get("health_service")
-            if not health_service:
-                # Fallback для совместимости, если сервис не в депсах
-                router = self.deps["router"]
-                openclaw = self.deps.get("openclaw_client")
-                voice_gateway = self.deps.get("voice_gateway_client")
-                krab_ear = self.deps.get("krab_ear_client")
-                health_service = EcosystemHealthService(
-                    router=router,
-                    openclaw_client=openclaw,
-                    voice_gateway_client=voice_gateway,
-                    krab_ear_client=krab_ear,
-                )
-            report = await health_service.collect()
-            return {"ok": True, "report": report}
-
-        @self.app.get("/api/ecosystem/health/debug")
-        async def ecosystem_health_debug(section: str = ""):
-            """Raw health collector output + full dict для diagnose.
-
-            Query params:
-            - section: filter one section (session_10, session_12, runtime_route, etc.)
-            """
-            try:
-                health_svc = self.deps.get("health_service")
-                if health_svc is None:
-                    router = self.deps.get("router")
-                    if router is None:
-                        return {"error": "router_not_found_in_deps"}
-                    from ..core.ecosystem_health import EcosystemHealthService
-
-                    health_svc = EcosystemHealthService(router=router)
-                direct = health_svc._collect_session_12_stats()
-                full = await health_svc.collect()
-
-                response = {
-                    "direct": direct,
-                    "full_has_session_12": "session_12" in full,
-                    "full_keys": list(full.keys()),
-                }
-
-                if section:
-                    response["section_filter"] = section
-                    response["full_section"] = full.get(section)
-                else:
-                    response["full_session_12"] = full.get("session_12")
-
-                return response
-            except Exception as exc:
-                import traceback
-
-                return {"error": str(exc), "trace": traceback.format_exc()[:500]}
+        # /api/ecosystem/health, /api/ecosystem/health/debug:
+        # extracted в src/modules/web_routers/health_router.py
+        # (Session 25 Phase 2 Wave X).
 
         @self.app.get("/api/ecosystem/capabilities")
         async def ecosystem_capabilities():
@@ -11838,30 +11697,8 @@ class WebApp:
                 logger.error("ops_models_control_failed", error=str(e))
                 return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
-        @self.app.get("/api/ecosystem/health/export")
-        async def ecosystem_health_export():
-            """Экспортирует расширенный ecosystem health report в JSON-файл."""
-            router = self.deps["router"]
-            openclaw = self.deps.get("openclaw_client")
-            voice_gateway = self.deps.get("voice_gateway_client")
-            krab_ear = self.deps.get("krab_ear_client")
-            payload = await EcosystemHealthService(
-                router=router,
-                openclaw_client=openclaw,
-                voice_gateway_client=voice_gateway,
-                krab_ear_client=krab_ear,
-            ).collect()
-            ops_dir = Path("artifacts/ops")
-            ops_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
-            out_path = ops_dir / f"ecosystem_health_web_{stamp}.json"
-            with out_path.open("w", encoding="utf-8") as fp:
-                json.dump(payload, fp, ensure_ascii=False, indent=2)
-            return FileResponse(
-                str(out_path),
-                media_type="application/json",
-                filename=out_path.name,
-            )
+        # /api/ecosystem/health/export: extracted в src/modules/web_routers/health_router.py
+        # (Session 25 Phase 2 Wave X).
 
         @self.app.get("/api/model/recommend")
         async def model_recommend(
@@ -14282,6 +14119,13 @@ class WebApp:
         from .web_routers.admin_router import build_admin_router as _build_admin
 
         self.app.include_router(_build_admin(self._make_router_context()))
+
+        # /api/health, /api/health/lite, /api/v1/health,
+        # /api/ecosystem/health{,/debug,/export} extracted в
+        # src/modules/web_routers/health_router.py (Phase 2 Wave X, Session 25).
+        from .web_routers.health_router import build_health_router as _build_health
+
+        self.app.include_router(_build_health(self._make_router_context()))
 
         # ── Chat Window Manager endpoints ────────────────────────────────────
 
