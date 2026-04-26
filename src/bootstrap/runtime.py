@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import sqlite3
+import sys
 
 import structlog
 
@@ -16,6 +18,16 @@ from ..core.access_control import get_effective_owner_label
 from ..model_manager import model_manager
 from ..openclaw_client import openclaw_client
 from ..userbot_bridge import KraabUserbot, _telegram_send_queue
+from .db_corruption_guard import (
+    is_corruption_error,
+    preflight_known_dbs,
+    report_corruption_to_sentry,
+)
+
+# Exit code, который launchd конвенционально считает "не пытайся респавнить
+# немедленно" — даёт человеку шанс заметить и пере-авторизовать сессию.
+# (KeepAlive=true всё равно поднимет процесс, но throttle interval растёт.)
+DB_CORRUPTION_EXIT_CODE = 78
 
 logger = structlog.get_logger(__name__)
 
@@ -209,6 +221,39 @@ async def run_app() -> None:
     RAM Limit: {config.MAX_RAM_GB}GB
     """)
 
+    # DB corruption circuit breaker (Session 26): integrity_check на known DB
+    # перед запуском userbot. Если session corrupt — quarantine + exit, чтобы
+    # launchd KeepAlive=true НЕ зацикливал нас на битой базе (incident
+    # 26.04.2026: 322 fatal_error events за 24h из-за corrupt kraab.session).
+    try:
+        preflight_reports = preflight_known_dbs()
+    except Exception as exc:  # noqa: BLE001 — guard не должен ронять boot
+        logger.warning("db_preflight_failed", error=str(exc))
+        preflight_reports = []
+    critical_quarantined = [
+        r for r in preflight_reports if r.get("quarantined") and r.get("critical")
+    ]
+    for r in preflight_reports:
+        if r.get("quarantined"):
+            logger.error(
+                "db_corruption_detected",
+                path=r["path"],
+                kind=r["kind"],
+                detail=r["detail"],
+                quarantine_path=r["quarantine_path"],
+                critical=r["critical"],
+            )
+    if critical_quarantined:
+        # Critical session corrupt → НЕ продолжаем boot. Owner должен
+        # пере-авторизоваться. Exit graceful — main._run_with_retry поймает
+        # SystemExit как clean exit (не ConnectionError → не retry-loop).
+        logger.error(
+            "boot_aborted_session_corrupt",
+            quarantined=[r["path"] for r in critical_quarantined],
+            exit_code=DB_CORRUPTION_EXIT_CODE,
+        )
+        sys.exit(DB_CORRUPTION_EXIT_CODE)
+
     lm_health = await model_manager.health_check()
     claw_health = await openclaw_client.health_check()
     logger.info("system_check", lm_studio=lm_health, openclaw=claw_health)
@@ -273,6 +318,30 @@ async def run_app() -> None:
             error_type=type(exc).__name__,
         )
         network_failure = exc
+    except sqlite3.DatabaseError as exc:
+        # Late corruption detection: PRAGMA integrity_check мог пропустить
+        # повреждение (например, locked во время preflight) — и SQLite
+        # возразил уже при kraab.start(). Reactive quarantine + exit.
+        if is_corruption_error(exc):
+            logger.error(
+                "db_corruption_detected_runtime",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            try:
+                # Heuristic quarantine: попробуем найти path в exception args.
+                # Если не нашли — повторный preflight уже сейчас quarantine`нет.
+                preflight_known_dbs()
+            except Exception:  # noqa: BLE001
+                pass
+            report_corruption_to_sentry(
+                path="runtime",
+                kind="late",
+                detail=str(exc),
+                quarantine_path="",
+            )
+            sys.exit(DB_CORRUPTION_EXIT_CODE)
+        logger.error("fatal_error", error=str(exc), error_type=type(exc).__name__)
     except Exception as e:
         logger.error("fatal_error", error=str(e), error_type=type(e).__name__)
     finally:

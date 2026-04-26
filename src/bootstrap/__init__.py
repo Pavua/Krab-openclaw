@@ -1,4 +1,5 @@
 # Bootstrap: env validation and runtime lifecycle (Фаза 4 / 6.2 декомпозиция main.py)
+from .db_corruption_guard import preflight_known_dbs
 from .env_and_lock import validate_config
 from .pyrogram_patch import apply_pyrogram_sqlite_hardening
 from .runtime import run_app
@@ -14,4 +15,5 @@ __all__ = [
     "run_app",
     "init_sentry",
     "apply_pyrogram_sqlite_hardening",
+    "preflight_known_dbs",
 ]
