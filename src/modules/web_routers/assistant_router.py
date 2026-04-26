@@ -115,4 +115,74 @@ def build_assistant_router(ctx: RouterContext) -> APIRouter:
 
         return {"ok": True, "attachment": attachment}
 
+    # ------------------------------------------------------------------
+    # Phase 2 Part 2C (Session 27): /api/assistant/stream — SSE streaming
+    # ------------------------------------------------------------------
+
+    @router.get("/api/assistant/stream")
+    async def assistant_stream(
+        prompt: str = Query(default=""),
+        token: str = Query(default=""),
+        task_type: str = Query(default="chat"),
+    ):
+        """SSE streaming для AI Chat dashboard.
+
+        Auth: dev-mode — SSE chat доступен без ключа (write-endpoints
+        защищены отдельно через X-Krab-Web-Key). Контракт сохранён 1:1
+        с inline-определением web_app.py.
+        """
+        from fastapi.responses import StreamingResponse as _StreamingResponse
+
+        if not prompt.strip():
+            return {"ok": False, "error": "empty prompt"}
+
+        async def event_generator():
+            import json as _json
+
+            yield f"event: status\ndata: {_json.dumps({'phase': 'routing'})}\n\n"
+
+            try:
+                from ...openclaw_client import openclaw_client
+
+                yield f"event: status\ndata: {_json.dumps({'phase': 'processing'})}\n\n"
+
+                chunks = []
+                async for chunk in openclaw_client.send_message_stream(
+                    message=prompt,
+                    chat_id=f"web_chat_{id(prompt) % 10000}",
+                    system_prompt="Ты — AI ассистент Krab. Отвечай полезно и по делу.",
+                    force_cloud=True,
+                ):
+                    chunks.append(chunk)
+
+                reply = "".join(chunks).strip()
+
+                if hasattr(openclaw_client, "_active_tool_calls"):
+                    for i, tc in enumerate(openclaw_client._active_tool_calls):
+                        yield (
+                            f"event: tool_done\ndata: "
+                            f"{_json.dumps({'name': tc.get('name', '?'), 'index': i})}\n\n"
+                        )
+
+                route = {}
+                if hasattr(openclaw_client, "get_last_runtime_route"):
+                    route = openclaw_client.get_last_runtime_route() or {}
+
+                yield (
+                    f"event: route\ndata: "
+                    f"{_json.dumps({'model': route.get('model', '?'), 'provider': route.get('provider', '?')})}\n\n"
+                )
+                yield f"event: message\ndata: {_json.dumps({'reply': reply})}\n\n"
+
+            except Exception as exc:  # noqa: BLE001
+                yield f"event: error\ndata: {_json.dumps({'error': str(exc)})}\n\n"
+
+            yield "event: done\ndata: {}\n\n"
+
+        return _StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     return router

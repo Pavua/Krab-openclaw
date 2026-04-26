@@ -158,3 +158,64 @@ def test_attachment_logs_to_black_box(tmp_path, monkeypatch) -> None:
     assert resp.status_code == 200
     assert events and events[0][0] == "web_assistant_attachment"
     assert "name=note.txt" in events[0][1]
+
+
+# ===========================================================================
+# Phase 2 Part 2C (Session 27) — /api/assistant/stream
+# ===========================================================================
+
+
+def test_assistant_stream_empty_prompt() -> None:
+    """SSE возвращает {ok:false} при пустом prompt — без entry в openclaw."""
+    client = _make_client()
+    resp = client.get("/api/assistant/stream", params={"prompt": "   "})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": False, "error": "empty prompt"}
+
+
+def test_assistant_stream_sse_returns_event_stream(monkeypatch) -> None:
+    """SSE endpoint возвращает text/event-stream content-type + done event."""
+
+    class _FakeClient:
+        _active_tool_calls: list = []
+
+        async def send_message_stream(self, **kwargs):
+            yield "hello "
+            yield "world"
+
+        def get_last_runtime_route(self) -> dict:
+            return {"model": "gemini-3-pro", "provider": "google"}
+
+    fake = _FakeClient()
+    import src.openclaw_client as oc_mod
+
+    monkeypatch.setattr(oc_mod, "openclaw_client", fake, raising=False)
+
+    client = _make_client()
+    with client.stream("GET", "/api/assistant/stream", params={"prompt": "hi"}) as resp:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        body = b"".join(resp.iter_bytes()).decode("utf-8", errors="replace")
+    assert "event: status" in body
+    assert "event: route" in body
+    assert "event: message" in body
+    assert "event: done" in body
+
+
+def test_assistant_stream_handles_exception(monkeypatch) -> None:
+    """SSE error event при исключении в openclaw."""
+
+    class _FakeClient:
+        async def send_message_stream(self, **kwargs):
+            raise RuntimeError("boom-test")
+            yield  # pragma: no cover (unreachable)
+
+    import src.openclaw_client as oc_mod
+
+    monkeypatch.setattr(oc_mod, "openclaw_client", _FakeClient(), raising=False)
+
+    client = _make_client()
+    with client.stream("GET", "/api/assistant/stream", params={"prompt": "x"}) as resp:
+        body = b"".join(resp.iter_bytes()).decode("utf-8", errors="replace")
+    assert "event: error" in body
+    assert "boom-test" in body

@@ -9253,67 +9253,9 @@ class WebApp:
             self._idempotency_set("assistant_query", idem_key, response_payload)
             return response_payload
 
-        @self.app.get("/api/assistant/stream")
-        async def assistant_stream(
-            prompt: str = Query(default=""),
-            token: str = Query(default=""),
-            task_type: str = Query(default="chat"),
-        ):
-            """SSE streaming для AI Chat dashboard."""
-            from fastapi.responses import StreamingResponse as _StreamingResponse
-
-            # Auth: dev mode — SSE chat доступен без ключа
-            # (write-endpoints защищены отдельно через X-Krab-Web-Key)
-            if not prompt.strip():
-                return {"ok": False, "error": "empty prompt"}
-
-            async def event_generator():
-                import json as _json
-
-                # Фаза routing
-                yield f"event: status\ndata: {_json.dumps({'phase': 'routing'})}\n\n"
-
-                try:
-                    from ..openclaw_client import openclaw_client
-
-                    # Фаза обработки
-                    yield f"event: status\ndata: {_json.dumps({'phase': 'processing'})}\n\n"
-
-                    # Собираем ответ
-                    chunks = []
-                    async for chunk in openclaw_client.send_message_stream(
-                        message=prompt,
-                        chat_id=f"web_chat_{id(prompt) % 10000}",
-                        system_prompt="Ты — AI ассистент Krab. Отвечай полезно и по делу.",
-                        force_cloud=True,
-                    ):
-                        chunks.append(chunk)
-
-                    reply = "".join(chunks).strip()
-
-                    # Tool calls info
-                    if hasattr(openclaw_client, "_active_tool_calls"):
-                        for i, tc in enumerate(openclaw_client._active_tool_calls):
-                            yield f"event: tool_done\ndata: {_json.dumps({'name': tc.get('name', '?'), 'index': i})}\n\n"
-
-                    # Route info
-                    route = {}
-                    if hasattr(openclaw_client, "get_last_runtime_route"):
-                        route = openclaw_client.get_last_runtime_route() or {}
-
-                    yield f"event: route\ndata: {_json.dumps({'model': route.get('model', '?'), 'provider': route.get('provider', '?')})}\n\n"
-                    yield f"event: message\ndata: {_json.dumps({'reply': reply})}\n\n"
-
-                except Exception as exc:
-                    yield f"event: error\ndata: {_json.dumps({'error': str(exc)})}\n\n"
-
-                yield "event: done\ndata: {}\n\n"
-
-            return _StreamingResponse(
-                event_generator(),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
+        # /api/assistant/stream — extracted в assistant_router.py
+        # (Phase 2 Part 2C, Session 27). /api/assistant/query остаётся
+        # inline (HARD: ~310 LOC pipeline + idempotency cache + rate limit).
 
         # /api/swarm/events перенесён в swarm_router (Wave ZZ, Session 26).
 
