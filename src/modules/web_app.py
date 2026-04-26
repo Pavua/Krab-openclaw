@@ -9661,6 +9661,13 @@ class WebApp:
 
         self.app.include_router(_build_misc(self._make_router_context()))
 
+        # Smart Routing Phase 4 (Session 26) — per-chat response policies
+        from .web_routers.chat_policy_router import (
+            build_chat_policy_router as _build_chat_policy,
+        )
+
+        self.app.include_router(_build_chat_policy(self._make_router_context()))
+
         # ── Chat Window Manager endpoints ────────────────────────────────────
 
     async def start(self):

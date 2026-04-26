@@ -551,6 +551,13 @@ _COMMANDS: list[CommandInfo] = [
         owner_only=True,
     ),
     CommandInfo(
+        name="chatpolicy",
+        category="modes",
+        description="Per-chat response policy (Smart Routing)",
+        usage="!chatpolicy [show|set|threshold|stats|list|reset|...]",
+        owner_only=True,
+    ),
+    CommandInfo(
         name="notify",
         category="modes",
         description="Tool narrations (🔍 Ищу... 📸 Скриншот...)",

@@ -170,6 +170,7 @@ from .command_handlers import (
     handle_write,
     handle_yt,
 )
+from .commands.policy_commands import handle_chatpolicy
 from .loglevel_command import handle_loglevel
 
 __all__ = [
@@ -202,6 +203,7 @@ __all__ = [
     "handle_browser",
     "handle_chatban",
     "handle_chatinfo",
+    "handle_chatpolicy",
     "handle_id",
     "handle_listen",
     "handle_contacts",

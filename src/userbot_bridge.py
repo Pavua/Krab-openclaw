@@ -81,6 +81,7 @@ from .handlers import (
     handle_cap,
     handle_catchup,
     handle_chatban,
+    handle_chatpolicy,
     handle_claude_cli,
     handle_clear,
     handle_cmdblock,
@@ -759,6 +760,13 @@ class KraabUserbot(
         )
         async def wrap_chatban(c, m):
             await run_cmd(handle_chatban, m)
+
+        @self.client.on_message(
+            filters.command("chatpolicy", prefixes=prefixes) & _make_command_filter("chatpolicy"),
+            group=-1,
+        )
+        async def wrap_chatpolicy(c, m):
+            await run_cmd(handle_chatpolicy, m)
 
         @self.client.on_message(
             filters.command("block", prefixes=prefixes) & _make_command_filter("block"), group=-1

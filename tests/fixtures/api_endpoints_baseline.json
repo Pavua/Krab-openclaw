@@ -1,7 +1,7 @@
 {
-  "snapshot_at": "2026-04-26T02:20:44+00:00",
-  "session": "Session 24",
-  "count": 253,
+  "snapshot_at": "2026-04-26T17:03:51+00:00",
+  "session": "Session 26",
+  "count": 255,
   "endpoints": [
     "/",
     "/api/archive/growth",
@@ -17,6 +17,8 @@
     "/api/browser/tabs",
     "/api/capabilities/registry",
     "/api/channels/capabilities",
+    "/api/chat/policies",
+    "/api/chat/policy/{chat_id}",
     "/api/chat_windows/clear",
     "/api/chat_windows/config",
     "/api/chat_windows/evict_idle",
