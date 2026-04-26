@@ -269,6 +269,15 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - **Wake-up message**: 60min rate limit (no more startup spam в Saved Messages)
 - **message_batcher**: preserve buffered messages during LLM processing (no drops)
 
+## Phase 2 Code Splits (Session 25 — 26.04.2026 — COMPLETE)
+
+- **Status: COMPLETE** — 50 waves Wave A → Wave XX, ~50 commits (`db6d9fd..674ebd1`)
+- **25 routers / 207 endpoints** extracted в `src/modules/web_routers/`
+- **web_app.py: 15 822 → ~10k LOC (-37%)**
+- **Pattern**: factory `build_X_router(ctx)` + helper injection через late-bound lambda (zero behavior change)
+- **Foundation**: `src/modules/web_routers/_context.py` (RouterContext) + `src/modules/web_routers/_helpers.py` (shared helpers)
+- **Routers**: admin, assistant, browser, capabilities, commands, extras, health, inbox, memory, meta, misc, model, monitoring, openclaw, pages, policy, runtime_inspect, runtime_status, swarm, system, translator, version, voice, write + один common (см. `src/modules/web_routers/`)
+
 ### Wave 12 backlog (Session 23)
 - Cron LLM output quality (короткие/обрезанные ответы — нужно поднять reasoning depth)
 - DB-locked retest after WAL+busy_timeout pragma fix
@@ -678,11 +687,11 @@ Endpoints session 7 (добавлены, ~249 итого после Session 22):
 | Session 22 | 9991 (collected, после Wave 11/12 cleanup) |
 | Session 23 | 9991 collected, 1 intermittent flake (Wave 13 cleanup) |
 | Session 24 | **9527 passed**, 94 skipped, 0 failed (clean state, 538s full run; +busy_timeout test, +health_deep session 24 tests, +sentry markers tests) |
-| Session 25 | **9656+ passed**, 94 skipped (Phase 2 Code Splits — 14 routers extracted, 48 endpoints + новые tests на routers / RouterContext / MCP userbot capabilities / peer_id_invalid handling) |
+| Session 25 | **10125 collected** (~9700+ passed), 94 skipped (Phase 2 Code Splits **COMPLETE** — **25 routers extracted, 207 endpoints** через factory `build_X_router(ctx)` pattern за 50 waves Wave A→XX; +tests на routers / RouterContext / MCP userbot capabilities / peer_id_invalid handling / HTML pages router) |
 
 <!-- BEGIN:auto-endpoints -->
 
-### Auto-generated endpoints table (253 уникальных paths на Session 25; 48+ из них extracted в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern — 14 routers за Wave A-L)
+### Auto-generated endpoints table (253 уникальных paths на Session 25; **207 extracted в `src/modules/web_routers/`** через factory `build_X_router(ctx)` pattern — **25 routers** за 50 waves Phase 2 Wave A→XX)
 
 | Endpoint | Метод |
 |----------|-------|
