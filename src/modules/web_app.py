@@ -688,6 +688,34 @@ class WebApp:
             lambda: self._launch_owner_chrome_remote_debugging(),
         )
 
+        # Phase 2 Wave MM (Session 25): inject openclaw browser readiness/start
+        # helpers для /api/openclaw/browser-mcp-readiness, /api/openclaw/browser/start.
+        # Late-bound через lambda — позволяет тестам монкей-патчить методы WebApp.
+        deps_dict.setdefault(
+            "openclaw_probe_owner_chrome_helper",
+            lambda *args, **kwargs: self._probe_owner_chrome_devtools(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_collect_stable_browser_cli_runtime_helper",
+            lambda *args, **kwargs: self._collect_stable_browser_cli_runtime(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_classify_browser_stage_helper",
+            lambda *args, **kwargs: self._classify_browser_stage(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_build_mcp_readiness_snapshot_helper",
+            lambda *args, **kwargs: self._build_mcp_readiness_snapshot(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_build_browser_access_paths_helper",
+            lambda *args, **kwargs: self._build_browser_access_paths(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_run_cli_json_helper",
+            lambda *args, **kwargs: self._run_openclaw_cli_json(*args, **kwargs),
+        )
+
         # Phase 2 Wave GG (Session 25): inject helpers для thinking/depth + model
         # provider-action / local load-default+unload в model_router.
         # Late-bound через lambda — позволяет тестам монкей-патчить
@@ -11903,66 +11931,10 @@ class WebApp:
                 },
             }
 
-        @self.app.post("/api/openclaw/browser/start")
-        async def openclaw_browser_start(
-            token: str = Query(default=""),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-        ):
-            """Явно поднимает dedicated OpenClaw browser и возвращает обновлённый readiness snapshot."""
-            self._assert_write_access(x_krab_web_key, token)
-
-            start_payload, start_error = await self._run_openclaw_cli_json(
-                ["browser", "--json", "start"],
-                timeout_sec=20.0,
-            )
-            if start_error:
-                return {
-                    "ok": False,
-                    "error": "browser_start_failed",
-                    "detail": start_error,
-                }
-
-            # После старта хотим вернуть тот же truthful payload, что и readiness-endpoint:
-            # relay-smoke и owner Chrome probe независимы и могут собираться параллельно.
-            smoke_report, owner_chrome = await asyncio.gather(
-                self._collect_openclaw_browser_smoke_report("https://example.com"),
-                self._probe_owner_chrome_devtools("https://example.com"),
-            )
-            smoke = dict(smoke_report.get("browser_smoke", {}) or {})
-            (
-                browser_status,
-                browser_status_error,
-                tabs_payload,
-                tabs_error,
-            ) = await self._collect_stable_browser_cli_runtime(
-                relay_reachable=bool(
-                    smoke.get("relay_reachable") or smoke.get("browser_http_reachable")
-                ),
-                auth_required=bool(smoke.get("browser_auth_required")),
-                attempts=3,
-                settle_delay_sec=0.8,
-            )
-            browser = self._classify_browser_stage(
-                browser_status,
-                tabs_payload,
-                smoke,
-                browser_status_error=browser_status_error,
-                tabs_error=tabs_error,
-            )
-
-            return {
-                "ok": True,
-                "start": start_payload,
-                "browser": browser,
-                "raw": {
-                    "browser_status": browser_status,
-                    "browser_status_error": browser_status_error,
-                    "tabs": tabs_payload,
-                    "tabs_error": tabs_error,
-                    "browser_smoke": smoke_report,
-                    "owner_chrome": owner_chrome,
-                },
-            }
+        # /api/openclaw/browser/start: extracted в src/modules/web_routers/openclaw_router.py
+        # (Phase 2 Wave MM, Session 25). Helpers инжектируются через
+        # openclaw_run_cli_json_helper + browser smoke/probe/runtime/classify
+        # helpers в _make_router_context.
 
         # /api/openclaw/browser/open-owner-chrome: extracted в
         # src/modules/web_routers/openclaw_router.py (Phase 2 Wave LL, Session 25).
@@ -11975,78 +11947,12 @@ class WebApp:
 
         self.app.include_router(_build_browser(self._make_router_context()))
 
-        @self.app.get("/api/openclaw/browser-mcp-readiness")
-        async def openclaw_browser_mcp_readiness(url: str = "https://example.com"):
-            """Агрегированный staged readiness для browser-контура владельца и managed MCP."""
-
-            async def _run_readiness() -> dict:
-                # Важный UX-момент: ordinary Chrome probe и relay-smoke не зависят друг от
-                # друга напрямую, поэтому нет смысла ждать их строго последовательно.
-                smoke_report, owner_chrome = await asyncio.gather(
-                    self._collect_openclaw_browser_smoke_report(url),
-                    self._probe_owner_chrome_devtools(url),
-                )
-                smoke = dict(smoke_report.get("browser_smoke", {}) or {})
-                (
-                    browser_status,
-                    browser_status_error,
-                    tabs_payload,
-                    tabs_error,
-                ) = await self._collect_stable_browser_cli_runtime(
-                    relay_reachable=bool(
-                        smoke.get("relay_reachable") or smoke.get("browser_http_reachable")
-                    ),
-                    auth_required=bool(smoke.get("browser_auth_required")),
-                    attempts=3,
-                    settle_delay_sec=0.8,
-                )
-                browser = self._classify_browser_stage(
-                    browser_status,
-                    tabs_payload,
-                    smoke,
-                    browser_status_error=browser_status_error,
-                    tabs_error=tabs_error,
-                )
-                mcp = self._build_mcp_readiness_snapshot(browser, owner_chrome=owner_chrome)
-                browser["paths"] = self._build_browser_access_paths(browser, mcp)
-
-                overall = "ready"
-                if "blocked" in {str(browser.get("readiness")), str(mcp.get("readiness"))}:
-                    overall = "blocked"
-                elif "attention" in {str(browser.get("readiness")), str(mcp.get("readiness"))}:
-                    overall = "attention"
-
-                return {
-                    "available": True,
-                    "overall": {
-                        "readiness": overall,
-                        "detail": (
-                            "Browser relay и managed MCP готовы."
-                            if overall == "ready"
-                            else "Есть оставшиеся шаги для browser/MCP readiness."
-                        ),
-                    },
-                    "browser": browser,
-                    "mcp": mcp,
-                    "raw": {
-                        "browser_status": browser_status,
-                        "browser_status_error": browser_status_error,
-                        "tabs": tabs_payload,
-                        "tabs_error": tabs_error,
-                        "browser_smoke": smoke_report,
-                        "owner_chrome": owner_chrome,
-                    },
-                }
-
-            # Верхний guard: не зависаем если gateway/browser не отвечает.
-            try:
-                return await asyncio.wait_for(_run_readiness(), timeout=5.0)
-            except asyncio.TimeoutError:
-                return {
-                    "available": False,
-                    "error": "OpenClaw timeout (5s)",
-                    "detail": "gateway not responding",
-                }
+        # /api/openclaw/browser-mcp-readiness: extracted в
+        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave MM, Session 25).
+        # Helpers инжектируются через openclaw_browser_smoke_helper +
+        # openclaw_probe_owner_chrome_helper + collect_stable_browser_cli_runtime
+        # + classify_browser_stage + build_mcp_readiness_snapshot +
+        # build_browser_access_paths в _make_router_context.
 
         # /api/openclaw/photo-smoke: extracted в src/modules/web_routers/openclaw_router.py
         # (Phase 2 Wave LL, Session 25). Helper инжектируется через

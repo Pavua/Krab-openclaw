@@ -48,6 +48,16 @@ Endpoints (Wave LL, browser/smoke через helper injection):
 - GET  /api/openclaw/photo-smoke                — `openclaw_photo_smoke_helper`
 - POST /api/openclaw/browser/open-owner-chrome  — `openclaw_launch_owner_chrome_helper`
 
+Endpoints (Wave MM, browser readiness/start через helper injection):
+- GET  /api/openclaw/browser-mcp-readiness — `openclaw_browser_smoke_helper`
+                                              + `openclaw_probe_owner_chrome_helper`
+                                              + `openclaw_collect_stable_browser_cli_runtime_helper`
+                                              + `openclaw_classify_browser_stage_helper`
+                                              + `openclaw_build_mcp_readiness_snapshot_helper`
+                                              + `openclaw_build_browser_access_paths_helper`
+- POST /api/openclaw/browser/start         — `openclaw_run_cli_json_helper`
+                                              + browser smoke/probe/runtime/classify helpers
+
 SKIP (HARD, требуют дополнительный helper promote):
 - /api/openclaw/cron/jobs/run_now      — cron_native_scheduler internals (W32 debug)
 - /api/openclaw/channels/status        — `_collect_openclaw_channels_snapshot`
@@ -854,5 +864,189 @@ def build_openclaw_router(ctx: RouterContext) -> APIRouter:
         if inspect.isawaitable(result):
             result = await result
         return result
+
+    # ---------- Wave MM: browser readiness/start endpoints ---------------
+
+    async def _maybe_await(value):
+        """Helper: await если awaitable, иначе вернуть как есть."""
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    async def _gather_browser_state(url: str, *, write_pre_check: bool = False):
+        """Общий контур сбора browser readiness state.
+
+        Возвращает tuple: (smoke_report, owner_chrome, browser_status,
+        browser_status_error, tabs_payload, tabs_error, browser, smoke).
+        """
+        smoke_helper = ctx.get_dep("openclaw_browser_smoke_helper")
+        probe_helper = ctx.get_dep("openclaw_probe_owner_chrome_helper")
+        runtime_helper = ctx.get_dep("openclaw_collect_stable_browser_cli_runtime_helper")
+        classify_helper = ctx.get_dep("openclaw_classify_browser_stage_helper")
+
+        # smoke + owner_chrome параллельно
+        smoke_task = _maybe_await(smoke_helper(url)) if smoke_helper else None
+        owner_task = _maybe_await(probe_helper(url)) if probe_helper else None
+        if smoke_task is not None and owner_task is not None:
+            smoke_report, owner_chrome = await asyncio.gather(smoke_task, owner_task)
+        else:
+            smoke_report = await smoke_task if smoke_task is not None else {}
+            owner_chrome = await owner_task if owner_task is not None else {}
+
+        smoke = dict((smoke_report or {}).get("browser_smoke", {}) or {})
+
+        if runtime_helper is None:
+            return (smoke_report, owner_chrome, {}, None, {}, None, {}, smoke)
+
+        runtime_result = runtime_helper(
+            relay_reachable=bool(
+                smoke.get("relay_reachable") or smoke.get("browser_http_reachable")
+            ),
+            auth_required=bool(smoke.get("browser_auth_required")),
+            attempts=3,
+            settle_delay_sec=0.8,
+        )
+        runtime_result = await _maybe_await(runtime_result)
+        browser_status, browser_status_error, tabs_payload, tabs_error = runtime_result
+
+        if classify_helper is None:
+            browser = {}
+        else:
+            browser = classify_helper(
+                browser_status,
+                tabs_payload,
+                smoke,
+                browser_status_error=browser_status_error,
+                tabs_error=tabs_error,
+            )
+            browser = await _maybe_await(browser)
+        return (
+            smoke_report,
+            owner_chrome,
+            browser_status,
+            browser_status_error,
+            tabs_payload,
+            tabs_error,
+            browser,
+            smoke,
+        )
+
+    # ---------- GET /api/openclaw/browser-mcp-readiness (Wave MM) --------
+    @router.get("/api/openclaw/browser-mcp-readiness")
+    async def openclaw_browser_mcp_readiness(url: str = "https://example.com") -> dict:
+        """Агрегированный staged readiness для browser-контура владельца и managed MCP."""
+
+        async def _run_readiness() -> dict:
+            (
+                smoke_report,
+                owner_chrome,
+                browser_status,
+                browser_status_error,
+                tabs_payload,
+                tabs_error,
+                browser,
+                smoke,
+            ) = await _gather_browser_state(url)
+
+            mcp_helper = ctx.get_dep("openclaw_build_mcp_readiness_snapshot_helper")
+            paths_helper = ctx.get_dep("openclaw_build_browser_access_paths_helper")
+            mcp = (
+                await _maybe_await(mcp_helper(browser, owner_chrome=owner_chrome))
+                if mcp_helper
+                else {}
+            )
+            if paths_helper is not None and isinstance(browser, dict):
+                browser["paths"] = await _maybe_await(paths_helper(browser, mcp))
+
+            overall = "ready"
+            if "blocked" in {
+                str((browser or {}).get("readiness")),
+                str((mcp or {}).get("readiness")),
+            }:
+                overall = "blocked"
+            elif "attention" in {
+                str((browser or {}).get("readiness")),
+                str((mcp or {}).get("readiness")),
+            }:
+                overall = "attention"
+
+            return {
+                "available": True,
+                "overall": {
+                    "readiness": overall,
+                    "detail": (
+                        "Browser relay и managed MCP готовы."
+                        if overall == "ready"
+                        else "Есть оставшиеся шаги для browser/MCP readiness."
+                    ),
+                },
+                "browser": browser,
+                "mcp": mcp,
+                "raw": {
+                    "browser_status": browser_status,
+                    "browser_status_error": browser_status_error,
+                    "tabs": tabs_payload,
+                    "tabs_error": tabs_error,
+                    "browser_smoke": smoke_report,
+                    "owner_chrome": owner_chrome,
+                },
+            }
+
+        try:
+            return await asyncio.wait_for(_run_readiness(), timeout=5.0)
+        except asyncio.TimeoutError:
+            return {
+                "available": False,
+                "error": "OpenClaw timeout (5s)",
+                "detail": "gateway not responding",
+            }
+
+    # ---------- POST /api/openclaw/browser/start (Wave MM) ---------------
+    @router.post("/api/openclaw/browser/start")
+    async def openclaw_browser_start(
+        token: str = Query(default=""),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+    ) -> dict:
+        """Явно поднимает dedicated OpenClaw browser и возвращает обновлённый readiness snapshot."""
+        ctx.assert_write_access(x_krab_web_key, token)
+
+        cli_helper = ctx.get_dep("openclaw_run_cli_json_helper")
+        if cli_helper is None:
+            raise HTTPException(status_code=500, detail="cli_helper_unavailable")
+
+        cli_result = cli_helper(["browser", "--json", "start"], timeout_sec=20.0)
+        cli_result = await _maybe_await(cli_result)
+        start_payload, start_error = cli_result
+        if start_error:
+            return {
+                "ok": False,
+                "error": "browser_start_failed",
+                "detail": start_error,
+            }
+
+        (
+            smoke_report,
+            owner_chrome,
+            browser_status,
+            browser_status_error,
+            tabs_payload,
+            tabs_error,
+            browser,
+            _smoke,
+        ) = await _gather_browser_state("https://example.com")
+
+        return {
+            "ok": True,
+            "start": start_payload,
+            "browser": browser,
+            "raw": {
+                "browser_status": browser_status,
+                "browser_status_error": browser_status_error,
+                "tabs": tabs_payload,
+                "tabs_error": tabs_error,
+                "browser_smoke": smoke_report,
+                "owner_chrome": owner_chrome,
+            },
+        }
 
     return router

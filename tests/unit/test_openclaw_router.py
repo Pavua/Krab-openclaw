@@ -1162,3 +1162,222 @@ def test_openclaw_open_owner_chrome_helper_missing() -> None:
     )
     assert resp.status_code == 500
     assert resp.json()["detail"] == "helper_unavailable"
+
+
+# =============================================================================
+# Wave MM: browser readiness/start endpoints (Session 25)
+# =============================================================================
+
+
+def _build_ctx_wave_mm(
+    *,
+    smoke=None,
+    probe=None,
+    runtime=None,
+    classify=None,
+    mcp_snapshot=None,
+    paths=None,
+    cli_json=None,
+    assert_write_fn=None,
+) -> RouterContext:
+    deps: dict = {}
+    if smoke is not None:
+        deps["openclaw_browser_smoke_helper"] = smoke
+    if probe is not None:
+        deps["openclaw_probe_owner_chrome_helper"] = probe
+    if runtime is not None:
+        deps["openclaw_collect_stable_browser_cli_runtime_helper"] = runtime
+    if classify is not None:
+        deps["openclaw_classify_browser_stage_helper"] = classify
+    if mcp_snapshot is not None:
+        deps["openclaw_build_mcp_readiness_snapshot_helper"] = mcp_snapshot
+    if paths is not None:
+        deps["openclaw_build_browser_access_paths_helper"] = paths
+    if cli_json is not None:
+        deps["openclaw_run_cli_json_helper"] = cli_json
+    return RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "secret",
+        assert_write_access_fn=assert_write_fn or (lambda h, t: None),
+    )
+
+
+def _default_wave_mm_helpers():
+    """Базовый набор helpers для readiness happy-path."""
+
+    async def _smoke(url: str) -> dict:
+        return {
+            "browser_smoke": {
+                "relay_reachable": True,
+                "browser_http_reachable": True,
+                "browser_auth_required": False,
+            }
+        }
+
+    async def _probe(url: str) -> dict:
+        return {"reachable": True}
+
+    async def _runtime(**kwargs) -> tuple:
+        return ({"running": True}, None, {"tabs": []}, None)
+
+    def _classify(status, tabs, smoke, **kwargs) -> dict:
+        return {"readiness": "ready", "stage": "ready"}
+
+    def _mcp(browser, *, owner_chrome) -> dict:
+        return {"readiness": "ready"}
+
+    def _paths(browser, mcp) -> dict:
+        return {"primary": "/tmp/path"}
+
+    return _smoke, _probe, _runtime, _classify, _mcp, _paths
+
+
+# ---------- /api/openclaw/browser-mcp-readiness -----------------------------
+
+
+def test_openclaw_browser_mcp_readiness_ok() -> None:
+    smoke, probe, runtime, classify, mcp, paths = _default_wave_mm_helpers()
+    body = _client(
+        _build_ctx_wave_mm(
+            smoke=smoke,
+            probe=probe,
+            runtime=runtime,
+            classify=classify,
+            mcp_snapshot=mcp,
+            paths=paths,
+        )
+    ).get("/api/openclaw/browser-mcp-readiness").json()
+    assert body["available"] is True
+    assert body["overall"]["readiness"] == "ready"
+    assert body["mcp"]["readiness"] == "ready"
+    assert body["browser"]["paths"] == {"primary": "/tmp/path"}
+
+
+def test_openclaw_browser_mcp_readiness_attention() -> None:
+    smoke, probe, runtime, _classify, _mcp, paths = _default_wave_mm_helpers()
+
+    def _classify_attention(status, tabs, smoke_dict, **kwargs) -> dict:
+        return {"readiness": "attention"}
+
+    def _mcp_ready(browser, *, owner_chrome) -> dict:
+        return {"readiness": "ready"}
+
+    body = _client(
+        _build_ctx_wave_mm(
+            smoke=smoke,
+            probe=probe,
+            runtime=runtime,
+            classify=_classify_attention,
+            mcp_snapshot=_mcp_ready,
+            paths=paths,
+        )
+    ).get("/api/openclaw/browser-mcp-readiness").json()
+    assert body["overall"]["readiness"] == "attention"
+
+
+def test_openclaw_browser_mcp_readiness_blocked() -> None:
+    smoke, probe, runtime, _classify, _mcp, paths = _default_wave_mm_helpers()
+
+    def _mcp_blocked(browser, *, owner_chrome) -> dict:
+        return {"readiness": "blocked"}
+
+    def _classify_ready(status, tabs, smoke_dict, **kwargs) -> dict:
+        return {"readiness": "ready"}
+
+    body = _client(
+        _build_ctx_wave_mm(
+            smoke=smoke,
+            probe=probe,
+            runtime=runtime,
+            classify=_classify_ready,
+            mcp_snapshot=_mcp_blocked,
+            paths=paths,
+        )
+    ).get("/api/openclaw/browser-mcp-readiness").json()
+    assert body["overall"]["readiness"] == "blocked"
+
+
+def test_openclaw_browser_mcp_readiness_timeout() -> None:
+    import asyncio as _asyncio
+
+    async def _slow_smoke(url: str) -> dict:
+        raise _asyncio.TimeoutError()
+
+    smoke, probe, runtime, classify, mcp, paths = _default_wave_mm_helpers()
+    body = _client(
+        _build_ctx_wave_mm(
+            smoke=_slow_smoke,
+            probe=probe,
+            runtime=runtime,
+            classify=classify,
+            mcp_snapshot=mcp,
+            paths=paths,
+        )
+    ).get("/api/openclaw/browser-mcp-readiness").json()
+    assert body["available"] is False
+    assert body["error"] == "OpenClaw timeout (5s)"
+
+
+# ---------- /api/openclaw/browser/start -------------------------------------
+
+
+def test_openclaw_browser_start_ok() -> None:
+    smoke, probe, runtime, classify, mcp, paths = _default_wave_mm_helpers()
+
+    async def _cli(args, timeout_sec=20.0) -> tuple:
+        return ({"started": True, "args": args}, None)
+
+    body = _client(
+        _build_ctx_wave_mm(
+            smoke=smoke,
+            probe=probe,
+            runtime=runtime,
+            classify=classify,
+            cli_json=_cli,
+        )
+    ).post(
+        "/api/openclaw/browser/start",
+        headers={"X-Krab-Web-Key": "secret"},
+    ).json()
+    assert body["ok"] is True
+    assert body["start"]["started"] is True
+    assert body["start"]["args"] == ["browser", "--json", "start"]
+
+
+def test_openclaw_browser_start_cli_failed() -> None:
+    smoke, probe, runtime, classify, mcp, paths = _default_wave_mm_helpers()
+
+    async def _cli_fail(args, timeout_sec=20.0) -> tuple:
+        return (None, "cli timeout")
+
+    body = _client(
+        _build_ctx_wave_mm(
+            smoke=smoke,
+            probe=probe,
+            runtime=runtime,
+            classify=classify,
+            cli_json=_cli_fail,
+        )
+    ).post(
+        "/api/openclaw/browser/start",
+        headers={"X-Krab-Web-Key": "secret"},
+    ).json()
+    assert body["ok"] is False
+    assert body["error"] == "browser_start_failed"
+    assert body["detail"] == "cli timeout"
+
+
+def test_openclaw_browser_start_forbidden(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+    resp = _client(_build_ctx_wave_mm()).post("/api/openclaw/browser/start")
+    assert resp.status_code == 403
+
+
+def test_openclaw_browser_start_helper_missing() -> None:
+    resp = _client(_build_ctx_wave_mm()).post(
+        "/api/openclaw/browser/start",
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "cli_helper_unavailable"
