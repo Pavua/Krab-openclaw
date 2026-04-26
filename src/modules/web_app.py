@@ -11265,55 +11265,11 @@ class WebApp:
                 "notify_enabled": bool(getattr(config, "TOOL_NARRATION_ENABLED", True)),
             }
 
-        @self.app.get("/api/commands")
-        async def list_commands():
-            """Полный список команд с метаданными из command_registry."""
-            from ..core.command_registry import registry as _reg
+        # /api/commands*: extracted в src/modules/web_routers/commands_router.py
+        # (Session 25 Phase 2 Wave A). 4 endpoints: list, usage, usage/top, get_by_name.
+        from .web_routers.commands_router import router as _commands_router
 
-            return _reg.to_api_response()
-
-        @self.app.get("/api/commands/usage")
-        async def get_command_usage():
-            """Статистика вызовов команд (отсортировано по убыванию)."""
-            from ..core.command_registry import get_usage as _get_usage
-
-            usage = _get_usage()
-            return {
-                "ok": True,
-                "total_calls": sum(usage.values()),
-                "unique_commands": len(usage),
-                "usage": usage,
-            }
-
-        @self.app.get("/api/commands/usage/top")
-        async def get_command_usage_top(limit: int = 10):
-            """Топ-N команд по количеству вызовов (count DESC, name ASC при ничьей)."""
-            from ..core.command_registry import get_usage as _get_usage
-
-            raw = _get_usage()
-            clamped = max(1, min(limit, 100))
-            sorted_items = sorted(raw.items(), key=lambda x: (-x[1], x[0]))
-            top = [{"command": cmd, "count": cnt} for cmd, cnt in sorted_items[:clamped]]
-            return {
-                "ok": True,
-                "top": top,
-                "total_commands": len(raw),
-            }
-
-        @self.app.get("/api/commands/{name}")
-        async def get_command(name: str):
-            """Детальная информация о конкретной команде."""
-            from ..core.command_registry import registry as _reg
-
-            cmd = _reg.get(name)
-            if cmd is None:
-                from fastapi import HTTPException
-
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Команда '{name}' не найдена",
-                )
-            return {"ok": True, "command": cmd.to_dict()}
+        self.app.include_router(_commands_router)
 
         @self.app.get("/api/model/status")
         async def model_status():
