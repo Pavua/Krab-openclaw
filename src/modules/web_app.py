@@ -716,6 +716,25 @@ class WebApp:
             lambda *args, **kwargs: self._run_openclaw_cli_json(*args, **kwargs),
         )
 
+        # Phase 2 Wave NN (Session 25): inject openclaw helpers для оставшихся
+        # HARD endpoints — channels/status, routing/effective, cloud/runtime-check,
+        # cloud/switch-tier. Late-bound через lambda — позволяет тестам монкей-патчить
+        # WebApp methods и static helpers после init.
+        deps_dict.setdefault(
+            "openclaw_cli_env_helper",
+            lambda: WebApp._openclaw_cli_env(),
+        )
+        deps_dict.setdefault(
+            "openclaw_parse_channels_probe_helper",
+            lambda raw_output: WebApp._parse_openclaw_channels_probe(raw_output),
+        )
+        # Mutates WebApp instance attribute, чтобы существующие тесты, проверяющие
+        # ``app._runtime_lite_cache is None`` после endpoint'а, продолжали работать.
+        deps_dict.setdefault(
+            "runtime_lite_cache_invalidator_helper",
+            lambda: setattr(self, "_runtime_lite_cache", None),
+        )
+
         # Phase 2 Wave GG (Session 25): inject helpers для thinking/depth + model
         # provider-action / local load-default+unload в model_router.
         # Late-bound через lambda — позволяет тестам монкей-патчить
@@ -10269,73 +10288,10 @@ class WebApp:
         # src/modules/web_routers/system_router.py (Phase 2 Wave AA, Session 25).
         # См. include_router system_router выше.
 
-        @self.app.get("/api/openclaw/channels/status")
-        async def openclaw_channels_status():
-            """
-            Выполняет 'openclaw channels status --probe' и возвращает
-            сырой вывод + распарсенные предупреждения.
-            """
-
-            async def _inner() -> dict:
-                # [R9] Безопасный запуск через asyncio subprocess с таймаутом.
-                proc = await asyncio.create_subprocess_exec(
-                    "openclaw",
-                    "channels",
-                    "status",
-                    "--probe",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    env=self._openclaw_cli_env(),
-                )
-                try:
-                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=45.0)
-                except asyncio.TimeoutError:
-                    if proc.returncode is None:
-                        try:
-                            proc.terminate()
-                        except ProcessLookupError:
-                            pass
-                    return {
-                        "ok": False,
-                        "error": "openclaw_timeout",
-                        "detail": "Запрос статуса каналов превысил 45 сек.",
-                    }
-
-                raw_output = stdout.decode("utf-8", errors="replace")
-
-                parsed = self._parse_openclaw_channels_probe(raw_output)
-                warnings = list(parsed.get("warnings") or [])
-                if not warnings:
-                    # Дополнительно ищем строки с WARN вне блока Warnings.
-                    for line in raw_output.splitlines():
-                        if "WARN" in line.upper():
-                            warnings.append(line.strip())
-
-                return {
-                    "ok": proc.returncode == 0,
-                    "raw": raw_output,
-                    "warnings": warnings,
-                    "exit_code": proc.returncode,
-                    "channels": parsed.get("channels") or [],
-                    "gateway_reachable": bool(parsed.get("gateway_reachable")),
-                }
-
-            # Верхний guard: не зависаем если CLI не стартует.
-            try:
-                return await asyncio.wait_for(_inner(), timeout=5.0)
-            except asyncio.TimeoutError:
-                return {
-                    "ok": False,
-                    "error": "OpenClaw timeout (5s)",
-                    "detail": "gateway not responding",
-                }
-            except Exception as exc:
-                logger.error("openclaw_status_failed", error=str(exc))
-                return {
-                    "ok": False,
-                    "error": "system_error",
-                    "detail": f"Не удалось выполнить openclaw: {exc}",
-                }
+        # /api/openclaw/channels/status: extracted в src/modules/web_routers/openclaw_router.py
+        # (Phase 2 Wave NN, Session 25). Helpers:
+        # ``openclaw_cli_env_helper`` + ``openclaw_parse_channels_probe_helper``
+        # инжектируются через _make_router_context.
 
         # /api/openclaw/channels/runtime-repair: extracted в src/modules/web_routers/openclaw_router.py
         # (Session 25 Phase 2 Wave N). См. include_router рядом с voice_router.
@@ -11963,51 +11919,14 @@ class WebApp:
         # Self-contained: вызывают openclaw.get_cloud_provider_diagnostics напрямую
         # через ctx.get_dep("openclaw_client"). См. include_router рядом.
 
-        @self.app.get("/api/openclaw/cloud/runtime-check")
-        async def openclaw_cloud_runtime_check():
-            """Runtime-check cloud key chain (masked)."""
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw:
-                return {"available": False, "error": "openclaw_client_not_configured"}
-            if not hasattr(openclaw, "get_cloud_runtime_check"):
-                return {"available": False, "error": "cloud_runtime_check_not_supported"}
-            try:
-                report = await openclaw.get_cloud_runtime_check()
-            except Exception as exc:
-                return {
-                    "available": False,
-                    "error": "cloud_runtime_check_failed",
-                    "detail": str(exc),
-                }
-            # После truthful runtime-check tier-state может измениться с stale `free`
-            # на фактический `paid`, поэтому lightweight runtime snapshot нужно
-            # пересобрать заново, а не держать старый TTL-cache.
-            self._runtime_lite_cache = None
-            return {"available": True, "report": report}
+        # /api/openclaw/cloud/runtime-check: extracted в src/modules/web_routers/openclaw_router.py
+        # (Phase 2 Wave NN, Session 25). Helpers:
+        # ``openclaw_client.get_cloud_runtime_check`` + ``runtime_lite_cache_invalidator_helper``
+        # (mutates ``self._runtime_lite_cache``).
 
-        @self.app.post("/api/openclaw/cloud/switch-tier")
-        async def openclaw_cloud_switch_tier(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Ручное переключение cloud-tier (free/paid) + secrets reload."""
-            self._assert_write_access(x_krab_web_key, token)
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw:
-                return {"ok": False, "error": "openclaw_client_not_configured"}
-            if not hasattr(openclaw, "switch_cloud_tier"):
-                return {"ok": False, "error": "switch_cloud_tier_not_supported"}
-
-            tier = str((payload or {}).get("tier", "free")).strip().lower()
-            if tier not in {"free", "paid"}:
-                return {"ok": False, "error": "invalid_tier", "detail": "Допустимо: free|paid"}
-            try:
-                result = await openclaw.switch_cloud_tier(tier)
-                self._runtime_lite_cache = None
-                return {"ok": bool(result.get("ok")), "result": result}
-            except Exception as exc:
-                return {"ok": False, "error": "switch_cloud_tier_failed", "detail": str(exc)}
+        # /api/openclaw/cloud/switch-tier: extracted в src/modules/web_routers/openclaw_router.py
+        # (Phase 2 Wave NN, Session 25). Helpers:
+        # ``openclaw_client.switch_cloud_tier`` + ``runtime_lite_cache_invalidator_helper``.
 
         # /api/openclaw/cloud/tier/state: extracted в src/modules/web_routers/openclaw_router.py
         # (Session 25 Phase 2 Wave M). См. include_router рядом с voice_router.
@@ -12030,158 +11949,10 @@ class WebApp:
         # Self-contained: subprocess вызовы `openclaw channels status --probe` +
         # `openclaw logs --tail 200`. См. include_router рядом.
 
-        @self.app.get("/api/openclaw/routing/effective")
-        async def openclaw_routing_effective():
-            """
-            [R22] Routing Effective Source of Truth.
-
-            Единый источник истины о текущем routing-решении Krab:
-            откуда оно взялось, какой force_mode активен, почему идём в local или cloud.
-
-            Читает только существующие атрибуты роутера — без внешних вызовов.
-            Это позволяет: дебаггинг без отправки запросов в LM Studio/cloud,
-            проверку конфигурации, понимание причин route-решений.
-            """
-            router = self.deps["router"]
-
-            # --- Normalize force_mode ---
-            force_mode_raw = str(getattr(router, "force_mode", "auto") or "auto")
-            force_mode_eff = _normalize_force_mode(force_mode_raw)
-
-            # --- Определяем default slot и модель ---
-            cloud_slots: dict = {}
-            raw_models = getattr(router, "models", {}) or {}
-            if isinstance(raw_models, dict):
-                cloud_slots = {str(k): str(v) for k, v in raw_models.items()}
-            # Приоритет: "chat" → первый ключ → пусто
-            default_slot = (
-                "chat" if "chat" in cloud_slots else (next(iter(cloud_slots), None) or "")
-            )
-            default_model = cloud_slots.get(default_slot, "")
-
-            # --- Cloud fallback включен если НЕ принудительный local ---
-            cloud_fallback_enabled = force_mode_eff != "local"
-            last_route: dict[str, Any] = {}
-            try:
-                getter = getattr(router, "get_last_route", None)
-                if callable(getter):
-                    candidate = getter() or {}
-                    if isinstance(candidate, dict):
-                        last_route = candidate
-            except Exception:
-                last_route = {}
-
-            # --- Строим decision_notes из фактического состояния runtime ---
-            local_truth = await self._resolve_local_runtime_truth(router)
-            local_engine = str(
-                local_truth.get("engine") or getattr(router, "local_engine", "") or ""
-            )
-            local_available = bool(local_truth.get("runtime_reachable"))
-            active_local_model = str(local_truth.get("active_model") or "")
-            routing_policy = str(
-                getattr(router, "routing_policy", "free_first_hybrid") or "free_first_hybrid"
-            )
-            cloud_cap_reached = bool(getattr(router, "cloud_soft_cap_reached", False))
-            last_route_status = str(last_route.get("status") or "").strip().lower()
-            last_route_channel = str(last_route.get("channel") or "").strip().lower()
-            last_route_model = str(last_route.get("model") or "").strip()
-
-            current_route_uses_cloud = bool(
-                last_route_status == "ok" and last_route_channel in {"openclaw_cloud", "cloud"}
-            )
-            current_fallback_active = False
-            if force_mode_eff == "cloud" and cloud_fallback_enabled:
-                current_fallback_active = True
-            elif not cloud_fallback_enabled:
-                current_fallback_active = False
-            elif last_route_status == "ok":
-                # Cloud =/= fallback.
-                # Считаем fallback активным только если фактическая модель маршрута
-                # отличается от configured default cloud-model либо пришлось уйти
-                # в cloud при force_local=off и отсутствии рабочей local-модели.
-                if (
-                    current_route_uses_cloud
-                    and default_model
-                    and last_route_model
-                    and last_route_model != default_model
-                ):
-                    current_fallback_active = True
-                elif (
-                    not current_route_uses_cloud
-                    and last_route_model
-                    and active_local_model
-                    and last_route_model != active_local_model
-                ):
-                    current_fallback_active = True
-            elif not local_available and force_mode_eff not in {"cloud"} and cloud_fallback_enabled:
-                current_fallback_active = True
-
-            if not cloud_fallback_enabled:
-                cloud_fallback_state = "disabled"
-            elif current_fallback_active:
-                cloud_fallback_state = "active"
-            else:
-                cloud_fallback_state = "standby"
-
-            decision_notes: list[str] = []
-            if force_mode_raw in {"force_local", "local"}:
-                decision_notes.append(
-                    f"Принудительный local-режим активен — все запросы идут через {local_engine or 'local'}."
-                )
-            elif force_mode_raw in {"force_cloud", "cloud"}:
-                decision_notes.append(
-                    "Принудительный cloud-режим активен — локальный движок пропускается."
-                )
-            else:
-                decision_notes.append(f"Routing policy: {routing_policy} — auto-routing включен.")
-
-            if local_available:
-                decision_notes.append(
-                    f"Локальный движок '{local_engine}' доступен."
-                    + (f" Активная модель: '{active_local_model}'." if active_local_model else "")
-                )
-            else:
-                decision_notes.append("Локальный движок недоступен — fallback только на cloud.")
-
-            if cloud_cap_reached:
-                decision_notes.append(
-                    "Cloud soft-cap достигнут: приоритет переключен на локальный движок."
-                )
-
-            if not cloud_fallback_enabled:
-                decision_notes.append(
-                    "Cloud fallback ОТКЛЮЧЕН: force_local режим запрещает обращение к cloud."
-                )
-            elif cloud_fallback_state == "active":
-                decision_notes.append("Cloud fallback сейчас задействован как активный маршрут.")
-            else:
-                decision_notes.append(
-                    "Cloud fallback доступен как резерв, но сейчас не задействован."
-                )
-
-            # Для owner UI важнее фактическая последняя модель маршрута, чем stale router-slot.
-            # Иначе после hot-reload/runtime-fallback верхние виджеты показывают правду,
-            # а блок "Эффективный роутинг" остаётся на старом default-model.
-            active_slot_or_model = (
-                last_route_model or active_local_model or default_model or default_slot
-            )
-
-            return {
-                "ok": True,
-                "requested_mode": force_mode_raw,
-                "effective_mode": force_mode_eff,
-                "active_slot_or_model": active_slot_or_model,
-                "cloud_fallback": cloud_fallback_enabled,
-                "cloud_fallback_state": cloud_fallback_state,
-                "cloud_fallback_active": current_fallback_active,
-                "cloud_route_active": current_route_uses_cloud,
-                "force_mode_requested": force_mode_raw,
-                "force_mode_effective": force_mode_eff,
-                "assistant_default_slot": default_slot,
-                "assistant_default_model": default_model,
-                "cloud_fallback_enabled": cloud_fallback_enabled,
-                "decision_notes": decision_notes,
-            }
+        # /api/openclaw/routing/effective: extracted в src/modules/web_routers/openclaw_router.py
+        # (Phase 2 Wave NN, Session 25). Helpers:
+        # ``resolve_local_runtime_truth_helper`` + ``router`` dep + inline
+        # ``_normalize_force_mode`` копия (pure-функция). См. include_router рядом.
 
         # /api/provisioning/* и /api/userbot/acl/* extracted в
         # src/modules/web_routers/admin_router.py (Phase 2 Wave W, Session 25).

@@ -908,9 +908,7 @@ class _CloudDiagOpenClaw:
         self._raise = raise_exc
         self.last_providers: list[str] | None = None
 
-    async def get_cloud_provider_diagnostics(
-        self, providers: list[str] | None = None
-    ) -> dict:
+    async def get_cloud_provider_diagnostics(self, providers: list[str] | None = None) -> dict:
         if self._raise:
             raise RuntimeError("boom")
         self.last_providers = providers
@@ -986,9 +984,7 @@ def test_control_compat_status_subprocess_failure() -> None:
     orig = _mod.asyncio.create_subprocess_exec
     _mod.asyncio.create_subprocess_exec = _boom  # type: ignore[assignment]
     try:
-        resp = _client(_build_ctx_kk(openclaw=None)).get(
-            "/api/openclaw/control-compat/status"
-        )
+        resp = _client(_build_ctx_kk(openclaw=None)).get("/api/openclaw/control-compat/status")
     finally:
         _mod.asyncio.create_subprocess_exec = orig  # type: ignore[assignment]
         del _asyncio  # silence unused import
@@ -1040,9 +1036,11 @@ def test_openclaw_browser_smoke_ok() -> None:
         captured["url"] = url
         return {"browser_smoke": {"ok": True, "channel": "endpoint"}}
 
-    body = _client(_build_ctx_wave_ll(browser_smoke=_helper)).get(
-        "/api/openclaw/browser-smoke?url=https://test.example"
-    ).json()
+    body = (
+        _client(_build_ctx_wave_ll(browser_smoke=_helper))
+        .get("/api/openclaw/browser-smoke?url=https://test.example")
+        .json()
+    )
     assert body["available"] is True
     assert body["report"]["browser_smoke"]["ok"] is True
     assert captured["url"] == "https://test.example"
@@ -1055,9 +1053,9 @@ def test_openclaw_browser_smoke_default_url() -> None:
         seen["url"] = url
         return {"browser_smoke": {"ok": False}}
 
-    body = _client(_build_ctx_wave_ll(browser_smoke=_helper)).get(
-        "/api/openclaw/browser-smoke"
-    ).json()
+    body = (
+        _client(_build_ctx_wave_ll(browser_smoke=_helper)).get("/api/openclaw/browser-smoke").json()
+    )
     assert body["available"] is True
     assert seen["url"] == "https://example.com"
 
@@ -1082,9 +1080,11 @@ def test_openclaw_browser_smoke_timeout_guard() -> None:
     # Smoke helper that raises TimeoutError synchronously won't trigger; we need
     # asyncio.wait_for to fire — use a helper that is awaitable but never
     # completes. Simpler: monkeypatch wait_for via a tiny wrapper.
-    body = _client(_build_ctx_wave_ll(browser_smoke=_timeout_helper)).get(
-        "/api/openclaw/browser-smoke"
-    ).json()
+    body = (
+        _client(_build_ctx_wave_ll(browser_smoke=_timeout_helper))
+        .get("/api/openclaw/browser-smoke")
+        .json()
+    )
     # TimeoutError raised inside helper still bubbles up to the wait_for branch
     assert body["available"] is False
     assert body["error"] == "OpenClaw timeout (5s)"
@@ -1097,9 +1097,7 @@ def test_openclaw_photo_smoke_ok_async() -> None:
     async def _helper() -> dict:
         return {"available": True, "report": {"photo_smoke": {"ok": True}}}
 
-    body = _client(_build_ctx_wave_ll(photo_smoke=_helper)).get(
-        "/api/openclaw/photo-smoke"
-    ).json()
+    body = _client(_build_ctx_wave_ll(photo_smoke=_helper)).get("/api/openclaw/photo-smoke").json()
     assert body["available"] is True
     assert body["report"]["photo_smoke"]["ok"] is True
 
@@ -1112,12 +1110,11 @@ def test_openclaw_photo_smoke_helper_missing() -> None:
 
 def test_openclaw_photo_smoke_sync_helper() -> None:
     """Helper может быть sync — endpoint должен корректно возвращать payload."""
+
     def _helper() -> dict:
         return {"available": False, "error": "router_unavailable"}
 
-    body = _client(_build_ctx_wave_ll(photo_smoke=_helper)).get(
-        "/api/openclaw/photo-smoke"
-    ).json()
+    body = _client(_build_ctx_wave_ll(photo_smoke=_helper)).get("/api/openclaw/photo-smoke").json()
     assert body["available"] is False
     assert body["error"] == "router_unavailable"
 
@@ -1132,10 +1129,14 @@ def test_openclaw_open_owner_chrome_ok() -> None:
         calls.append(True)
         return {"ok": True, "method": "command_helper", "path": "/tmp/x.command"}
 
-    body = _client(_build_ctx_wave_ll(launch_owner_chrome=_helper)).post(
-        "/api/openclaw/browser/open-owner-chrome",
-        headers={"X-Krab-Web-Key": "secret"},
-    ).json()
+    body = (
+        _client(_build_ctx_wave_ll(launch_owner_chrome=_helper))
+        .post(
+            "/api/openclaw/browser/open-owner-chrome",
+            headers={"X-Krab-Web-Key": "secret"},
+        )
+        .json()
+    )
     assert body["ok"] is True
     assert body["method"] == "command_helper"
     assert calls == [True]
@@ -1238,16 +1239,20 @@ def _default_wave_mm_helpers():
 
 def test_openclaw_browser_mcp_readiness_ok() -> None:
     smoke, probe, runtime, classify, mcp, paths = _default_wave_mm_helpers()
-    body = _client(
-        _build_ctx_wave_mm(
-            smoke=smoke,
-            probe=probe,
-            runtime=runtime,
-            classify=classify,
-            mcp_snapshot=mcp,
-            paths=paths,
+    body = (
+        _client(
+            _build_ctx_wave_mm(
+                smoke=smoke,
+                probe=probe,
+                runtime=runtime,
+                classify=classify,
+                mcp_snapshot=mcp,
+                paths=paths,
+            )
         )
-    ).get("/api/openclaw/browser-mcp-readiness").json()
+        .get("/api/openclaw/browser-mcp-readiness")
+        .json()
+    )
     assert body["available"] is True
     assert body["overall"]["readiness"] == "ready"
     assert body["mcp"]["readiness"] == "ready"
@@ -1263,16 +1268,20 @@ def test_openclaw_browser_mcp_readiness_attention() -> None:
     def _mcp_ready(browser, *, owner_chrome) -> dict:
         return {"readiness": "ready"}
 
-    body = _client(
-        _build_ctx_wave_mm(
-            smoke=smoke,
-            probe=probe,
-            runtime=runtime,
-            classify=_classify_attention,
-            mcp_snapshot=_mcp_ready,
-            paths=paths,
+    body = (
+        _client(
+            _build_ctx_wave_mm(
+                smoke=smoke,
+                probe=probe,
+                runtime=runtime,
+                classify=_classify_attention,
+                mcp_snapshot=_mcp_ready,
+                paths=paths,
+            )
         )
-    ).get("/api/openclaw/browser-mcp-readiness").json()
+        .get("/api/openclaw/browser-mcp-readiness")
+        .json()
+    )
     assert body["overall"]["readiness"] == "attention"
 
 
@@ -1285,16 +1294,20 @@ def test_openclaw_browser_mcp_readiness_blocked() -> None:
     def _classify_ready(status, tabs, smoke_dict, **kwargs) -> dict:
         return {"readiness": "ready"}
 
-    body = _client(
-        _build_ctx_wave_mm(
-            smoke=smoke,
-            probe=probe,
-            runtime=runtime,
-            classify=_classify_ready,
-            mcp_snapshot=_mcp_blocked,
-            paths=paths,
+    body = (
+        _client(
+            _build_ctx_wave_mm(
+                smoke=smoke,
+                probe=probe,
+                runtime=runtime,
+                classify=_classify_ready,
+                mcp_snapshot=_mcp_blocked,
+                paths=paths,
+            )
         )
-    ).get("/api/openclaw/browser-mcp-readiness").json()
+        .get("/api/openclaw/browser-mcp-readiness")
+        .json()
+    )
     assert body["overall"]["readiness"] == "blocked"
 
 
@@ -1305,16 +1318,20 @@ def test_openclaw_browser_mcp_readiness_timeout() -> None:
         raise _asyncio.TimeoutError()
 
     smoke, probe, runtime, classify, mcp, paths = _default_wave_mm_helpers()
-    body = _client(
-        _build_ctx_wave_mm(
-            smoke=_slow_smoke,
-            probe=probe,
-            runtime=runtime,
-            classify=classify,
-            mcp_snapshot=mcp,
-            paths=paths,
+    body = (
+        _client(
+            _build_ctx_wave_mm(
+                smoke=_slow_smoke,
+                probe=probe,
+                runtime=runtime,
+                classify=classify,
+                mcp_snapshot=mcp,
+                paths=paths,
+            )
         )
-    ).get("/api/openclaw/browser-mcp-readiness").json()
+        .get("/api/openclaw/browser-mcp-readiness")
+        .json()
+    )
     assert body["available"] is False
     assert body["error"] == "OpenClaw timeout (5s)"
 
@@ -1328,18 +1345,22 @@ def test_openclaw_browser_start_ok() -> None:
     async def _cli(args, timeout_sec=20.0) -> tuple:
         return ({"started": True, "args": args}, None)
 
-    body = _client(
-        _build_ctx_wave_mm(
-            smoke=smoke,
-            probe=probe,
-            runtime=runtime,
-            classify=classify,
-            cli_json=_cli,
+    body = (
+        _client(
+            _build_ctx_wave_mm(
+                smoke=smoke,
+                probe=probe,
+                runtime=runtime,
+                classify=classify,
+                cli_json=_cli,
+            )
         )
-    ).post(
-        "/api/openclaw/browser/start",
-        headers={"X-Krab-Web-Key": "secret"},
-    ).json()
+        .post(
+            "/api/openclaw/browser/start",
+            headers={"X-Krab-Web-Key": "secret"},
+        )
+        .json()
+    )
     assert body["ok"] is True
     assert body["start"]["started"] is True
     assert body["start"]["args"] == ["browser", "--json", "start"]
@@ -1351,18 +1372,22 @@ def test_openclaw_browser_start_cli_failed() -> None:
     async def _cli_fail(args, timeout_sec=20.0) -> tuple:
         return (None, "cli timeout")
 
-    body = _client(
-        _build_ctx_wave_mm(
-            smoke=smoke,
-            probe=probe,
-            runtime=runtime,
-            classify=classify,
-            cli_json=_cli_fail,
+    body = (
+        _client(
+            _build_ctx_wave_mm(
+                smoke=smoke,
+                probe=probe,
+                runtime=runtime,
+                classify=classify,
+                cli_json=_cli_fail,
+            )
         )
-    ).post(
-        "/api/openclaw/browser/start",
-        headers={"X-Krab-Web-Key": "secret"},
-    ).json()
+        .post(
+            "/api/openclaw/browser/start",
+            headers={"X-Krab-Web-Key": "secret"},
+        )
+        .json()
+    )
     assert body["ok"] is False
     assert body["error"] == "browser_start_failed"
     assert body["detail"] == "cli timeout"
@@ -1381,3 +1406,271 @@ def test_openclaw_browser_start_helper_missing() -> None:
     )
     assert resp.status_code == 500
     assert resp.json()["detail"] == "cli_helper_unavailable"
+
+
+# ===========================================================================
+# Wave NN — оставшиеся HARD endpoints через helper injection
+# ===========================================================================
+
+
+# ---------- POST /api/openclaw/cloud/switch-tier (Wave NN) ------------------
+
+
+class _SwitchTierClient:
+    def __init__(self, *, raise_in: bool = False) -> None:
+        self._raise = raise_in
+        self.calls: list[str] = []
+
+    async def switch_cloud_tier(self, tier: str) -> dict:
+        if self._raise:
+            raise RuntimeError("boom-switch")
+        self.calls.append(tier)
+        return {"ok": True, "tier": tier, "secrets_reloaded": True}
+
+
+def _build_ctx_wave_nn(
+    *,
+    openclaw: object | None = ...,
+    router_obj: object | None = None,
+    cli_env: dict | None = None,
+    parse_result: dict | None = None,
+    truth_helper=None,
+    invalidator_target: list | None = None,
+) -> RouterContext:
+    deps: dict = {}
+    if openclaw is ...:
+        deps["openclaw_client"] = _SwitchTierClient()
+    elif openclaw is not None:
+        deps["openclaw_client"] = openclaw
+    if router_obj is not None:
+        deps["router"] = router_obj
+    if cli_env is not None:
+        deps["openclaw_cli_env_helper"] = lambda: dict(cli_env)
+    if parse_result is not None:
+        deps["openclaw_parse_channels_probe_helper"] = lambda raw: dict(parse_result)
+    if truth_helper is not None:
+        deps["resolve_local_runtime_truth_helper"] = truth_helper
+    if invalidator_target is not None:
+        deps["runtime_lite_cache_invalidator_helper"] = lambda: invalidator_target.append(
+            "invalidated"
+        )
+    return RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+
+
+def test_openclaw_cloud_switch_tier_invalid_tier(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    body = (
+        _client(_build_ctx_wave_nn())
+        .post("/api/openclaw/cloud/switch-tier", json={"tier": "premium"})
+        .json()
+    )
+    assert body["ok"] is False
+    assert body["error"] == "invalid_tier"
+
+
+def test_openclaw_cloud_switch_tier_ok_invalidates_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    invalidations: list[str] = []
+    client_obj = _SwitchTierClient()
+    ctx = _build_ctx_wave_nn(
+        openclaw=client_obj,
+        invalidator_target=invalidations,
+    )
+    body = _client(ctx).post("/api/openclaw/cloud/switch-tier", json={"tier": "paid"}).json()
+    assert body["ok"] is True
+    assert body["result"]["tier"] == "paid"
+    assert client_obj.calls == ["paid"]
+    assert invalidations == ["invalidated"]
+
+
+def test_openclaw_cloud_switch_tier_no_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    body = (
+        _client(_build_ctx_wave_nn(openclaw=None))
+        .post("/api/openclaw/cloud/switch-tier", json={"tier": "free"})
+        .json()
+    )
+    assert body["ok"] is False
+    assert body["error"] == "openclaw_client_not_configured"
+
+
+def test_openclaw_cloud_switch_tier_not_supported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    body = (
+        _client(_build_ctx_wave_nn(openclaw=_StubNoMethods()))
+        .post("/api/openclaw/cloud/switch-tier", json={"tier": "free"})
+        .json()
+    )
+    assert body["ok"] is False
+    assert body["error"] == "switch_cloud_tier_not_supported"
+
+
+def test_openclaw_cloud_switch_tier_exception_graceful(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    body = (
+        _client(_build_ctx_wave_nn(openclaw=_SwitchTierClient(raise_in=True)))
+        .post("/api/openclaw/cloud/switch-tier", json={"tier": "free"})
+        .json()
+    )
+    assert body["ok"] is False
+    assert body["error"] == "switch_cloud_tier_failed"
+    assert "boom-switch" in body["detail"]
+
+
+def test_openclaw_cloud_switch_tier_forbidden(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+    resp = _client(_build_ctx_wave_nn()).post(
+        "/api/openclaw/cloud/switch-tier", json={"tier": "paid"}
+    )
+    # ctx.assert_write_access raises HTTPException(403)
+    assert resp.status_code == 403
+
+
+# ---------- GET /api/openclaw/cloud/runtime-check (Wave NN) -----------------
+
+
+class _RuntimeCheckClient:
+    def __init__(self, *, raise_in: bool = False) -> None:
+        self._raise = raise_in
+
+    async def get_cloud_runtime_check(self) -> dict:
+        if self._raise:
+            raise RuntimeError("boom-runtime-check")
+        return {"providers": [{"name": "google", "ok": True}]}
+
+
+def test_openclaw_cloud_runtime_check_ok_invalidates_cache() -> None:
+    invalidations: list[str] = []
+    ctx = _build_ctx_wave_nn(
+        openclaw=_RuntimeCheckClient(),
+        invalidator_target=invalidations,
+    )
+    body = _client(ctx).get("/api/openclaw/cloud/runtime-check").json()
+    assert body["available"] is True
+    assert body["report"]["providers"][0]["ok"] is True
+    assert invalidations == ["invalidated"]
+
+
+def test_openclaw_cloud_runtime_check_no_client() -> None:
+    body = (
+        _client(_build_ctx_wave_nn(openclaw=None)).get("/api/openclaw/cloud/runtime-check").json()
+    )
+    assert body["available"] is False
+    assert body["error"] == "openclaw_client_not_configured"
+
+
+def test_openclaw_cloud_runtime_check_not_supported() -> None:
+    body = (
+        _client(_build_ctx_wave_nn(openclaw=_StubNoMethods()))
+        .get("/api/openclaw/cloud/runtime-check")
+        .json()
+    )
+    assert body["available"] is False
+    assert body["error"] == "cloud_runtime_check_not_supported"
+
+
+def test_openclaw_cloud_runtime_check_exception_graceful() -> None:
+    body = (
+        _client(_build_ctx_wave_nn(openclaw=_RuntimeCheckClient(raise_in=True)))
+        .get("/api/openclaw/cloud/runtime-check")
+        .json()
+    )
+    assert body["available"] is False
+    assert body["error"] == "cloud_runtime_check_failed"
+
+
+# ---------- GET /api/openclaw/channels/status (Wave NN) ---------------------
+
+
+def test_openclaw_channels_status_helpers_missing() -> None:
+    """Без cli_env / parse helpers — graceful system_error."""
+    body = _client(_build_ctx_wave_nn()).get("/api/openclaw/channels/status").json()
+    assert body["ok"] is False
+    assert body["error"] == "system_error"
+
+
+def test_openclaw_channels_status_subprocess_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Subprocess бросает — endpoint возвращает ok=False с error."""
+
+    async def _raise(*args, **kwargs):
+        raise FileNotFoundError("openclaw not found")
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _raise)
+
+    ctx = _build_ctx_wave_nn(
+        cli_env={"OPENCLAW_GATEWAY_TOKEN": "x"},
+        parse_result={"channels": [], "warnings": [], "gateway_reachable": False},
+    )
+    body = _client(ctx).get("/api/openclaw/channels/status").json()
+    assert body["ok"] is False
+    assert body["error"] == "system_error"
+    assert "openclaw" in body["detail"].lower()
+
+
+# ---------- GET /api/openclaw/routing/effective (Wave NN) -------------------
+
+
+class _StubRouterMinimal:
+    def __init__(self) -> None:
+        self.force_mode = "auto"
+        self.models = {"chat": "google/gemini-2.5-flash"}
+        self.routing_policy = "free_first_hybrid"
+        self.cloud_soft_cap_reached = False
+        self.local_engine = "lm_studio"
+
+    def get_last_route(self) -> dict:
+        return {}
+
+
+def test_openclaw_routing_effective_no_router() -> None:
+    ctx = _build_ctx_wave_nn(router_obj=None)
+    # router not in deps
+    body = _client(ctx).get("/api/openclaw/routing/effective").json()
+    assert body["ok"] is False
+    assert body["error"] == "router_unavailable"
+
+
+def test_openclaw_routing_effective_auto_mode_local_available() -> None:
+    async def _truth(_router, **kwargs):
+        return {
+            "engine": "lm_studio",
+            "runtime_reachable": True,
+            "active_model": "nvidia/nemotron-3-nano",
+        }
+
+    ctx = _build_ctx_wave_nn(
+        router_obj=_StubRouterMinimal(),
+        truth_helper=_truth,
+    )
+    body = _client(ctx).get("/api/openclaw/routing/effective").json()
+    assert body["ok"] is True
+    assert body["requested_mode"] == "auto"
+    assert body["effective_mode"] == "auto"
+    assert body["cloud_fallback"] is True
+    assert body["cloud_fallback_state"] == "standby"
+    assert body["active_slot_or_model"] == "nvidia/nemotron-3-nano"
+    assert any("lm_studio" in note for note in body["decision_notes"])
+
+
+def test_openclaw_routing_effective_force_local_disables_cloud() -> None:
+    router_obj = _StubRouterMinimal()
+    router_obj.force_mode = "force_local"
+
+    async def _truth(_router, **kwargs):
+        return {"engine": "lm_studio", "runtime_reachable": True, "active_model": "x"}
+
+    ctx = _build_ctx_wave_nn(router_obj=router_obj, truth_helper=_truth)
+    body = _client(ctx).get("/api/openclaw/routing/effective").json()
+    assert body["ok"] is True
+    assert body["effective_mode"] == "local"
+    assert body["cloud_fallback"] is False
+    assert body["cloud_fallback_state"] == "disabled"
