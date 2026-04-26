@@ -1,17 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-Translator router — Phase 2 Wave K extraction (Session 25).
+Translator router — Phase 2 Waves K + Q extraction (Session 25).
 
-Простые GET endpoints translator-домена через RouterContext.
-Не extract'ятся endpoints, требующие ``self._collect_runtime_lite_snapshot()``
-(readiness/bootstrap/control-plane/session-inspector/mobile/* —
-отложены до wave с runtime_lite refactor).
+GET endpoints translator-домена через RouterContext. Wave Q добавляет
+endpoints, требующие ``ctx.collect_runtime_lite()`` + translator snapshot
+helpers (через deps-injection из WebApp).
 
-Endpoints:
+Endpoints (Wave K):
 - GET /api/translator/languages — список языковых пар + текущая
 - GET /api/translator/status    — лёгкий профиль + session state
 - GET /api/translator/history   — история переводов + статистика
 - GET /api/translator/test      — быстрый тест перевода через GET-параметры
+
+Endpoints (Wave Q):
+- GET /api/translator/readiness        — readiness translator-контура
+- GET /api/translator/control-plane    — session/policy truth
+- GET /api/translator/session-inspector — why-report + timeline digest
+- GET /api/translator/mobile-readiness — readiness iPhone companion
+- GET /api/translator/delivery-matrix  — product truth ordinary/internet tracks
 
 Контракт ответов сохранён 1:1 с inline definitions из web_app.py.
 """
@@ -110,5 +116,86 @@ def build_translator_router(ctx: RouterContext) -> APIRouter:
             }
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    # ------------------------------------------------------------------
+    # Wave Q — endpoints через runtime_lite + translator snapshot helpers.
+    # ------------------------------------------------------------------
+
+    @router.get("/api/translator/readiness")
+    async def translator_readiness() -> dict:
+        """Truthful readiness translator-контура внутри экосистемы Краба."""
+        readiness_fn = ctx.get_dep("translator_readiness_snapshot")
+        if readiness_fn is None:
+            return {"ok": False, "error": "translator_readiness_snapshot not bound"}
+        runtime_lite = await ctx.collect_runtime_lite()
+        snapshot = await readiness_fn(runtime_lite=runtime_lite)
+        snapshot["capability_registry_endpoint"] = "/api/capabilities/registry"
+        snapshot["policy_matrix_endpoint"] = "/api/policy/matrix"
+        return snapshot
+
+    @router.get("/api/translator/control-plane")
+    async def translator_control_plane() -> dict:
+        """Session/policy truth translator-контура через control-plane Краба."""
+        control_plane_fn = ctx.get_dep("translator_control_plane_snapshot")
+        if control_plane_fn is None:
+            return {"ok": False, "error": "translator_control_plane_snapshot not bound"}
+        runtime_lite = await ctx.collect_runtime_lite()
+        return await control_plane_fn(runtime_lite=runtime_lite)
+
+    @router.get("/api/translator/session-inspector")
+    async def translator_session_inspector() -> dict:
+        """Why-report, timeline digest и escalation context для translator session."""
+        control_plane_fn = ctx.get_dep("translator_control_plane_snapshot")
+        inspector_fn = ctx.get_dep("translator_session_inspector_snapshot")
+        if control_plane_fn is None or inspector_fn is None:
+            return {"ok": False, "error": "translator snapshot helpers not bound"}
+        runtime_lite = await ctx.collect_runtime_lite()
+        control_plane = await control_plane_fn(runtime_lite=runtime_lite)
+        return await inspector_fn(
+            runtime_lite=runtime_lite,
+            current_control_plane=control_plane,
+        )
+
+    @router.get("/api/translator/mobile-readiness")
+    async def translator_mobile_readiness() -> dict:
+        """Readiness iPhone companion/mobile device слоя переводчика."""
+        control_plane_fn = ctx.get_dep("translator_control_plane_snapshot")
+        mobile_fn = ctx.get_dep("translator_mobile_readiness_snapshot")
+        if control_plane_fn is None or mobile_fn is None:
+            return {"ok": False, "error": "translator snapshot helpers not bound"}
+        runtime_lite = await ctx.collect_runtime_lite()
+        control_plane = await control_plane_fn(runtime_lite=runtime_lite)
+        return await mobile_fn(
+            runtime_lite=runtime_lite,
+            current_control_plane=control_plane,
+        )
+
+    @router.get("/api/translator/delivery-matrix")
+    async def translator_delivery_matrix() -> dict:
+        """Product truth по ordinary/internet call tracks переводчика."""
+        readiness_fn = ctx.get_dep("translator_readiness_snapshot")
+        control_plane_fn = ctx.get_dep("translator_control_plane_snapshot")
+        mobile_fn = ctx.get_dep("translator_mobile_readiness_snapshot")
+        delivery_fn = ctx.get_dep("translator_delivery_matrix_snapshot")
+        if (
+            readiness_fn is None
+            or control_plane_fn is None
+            or mobile_fn is None
+            or delivery_fn is None
+        ):
+            return {"ok": False, "error": "translator snapshot helpers not bound"}
+        runtime_lite = await ctx.collect_runtime_lite()
+        readiness = await readiness_fn(runtime_lite=runtime_lite)
+        control_plane = await control_plane_fn(runtime_lite=runtime_lite)
+        mobile_readiness = await mobile_fn(
+            runtime_lite=runtime_lite,
+            current_control_plane=control_plane,
+        )
+        return await delivery_fn(
+            runtime_lite=runtime_lite,
+            current_readiness=readiness,
+            current_control_plane=control_plane,
+            current_mobile_readiness=mobile_readiness,
+        )
 
     return router

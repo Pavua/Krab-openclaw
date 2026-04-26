@@ -44,12 +44,21 @@ class _FakeKraab:
         return self._session_state
 
 
-def _build_ctx(kraab: _FakeKraab | None = None) -> RouterContext:
+def _build_ctx(
+    kraab: _FakeKraab | None = None,
+    *,
+    deps_extra: dict | None = None,
+    runtime_lite_provider=None,
+) -> RouterContext:
+    deps = {"kraab_userbot": kraab or _FakeKraab()}
+    if deps_extra:
+        deps.update(deps_extra)
     return RouterContext(
-        deps={"kraab_userbot": kraab or _FakeKraab()},
+        deps=deps,
         project_root=Path("/tmp"),
         web_api_key_fn=lambda: "",
         assert_write_access_fn=lambda h, t: None,
+        runtime_lite_provider=runtime_lite_provider,
     )
 
 
@@ -159,3 +168,127 @@ def test_test_no_text_returns_error() -> None:
     data = _client(_build_ctx()).get("/api/translator/test").json()
     assert data["ok"] is False
     assert "text" in data["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Wave Q: readiness / control-plane / session-inspector / mobile-readiness /
+# delivery-matrix
+# ---------------------------------------------------------------------------
+
+
+async def _fake_runtime_lite():
+    return {"runtime_lite": True, "marker": "Q"}
+
+
+def _wave_q_helpers() -> dict:
+    """Build async snapshot helpers that return identifiable payloads."""
+    captured: dict = {"calls": []}
+
+    async def readiness(*, runtime_lite=None):
+        captured["calls"].append(("readiness", runtime_lite))
+        return {"ok": True, "kind": "readiness", "runtime_seen": runtime_lite}
+
+    async def control_plane(*, runtime_lite=None):
+        captured["calls"].append(("control_plane", runtime_lite))
+        return {"ok": True, "kind": "control_plane"}
+
+    async def session_inspector(*, runtime_lite=None, current_control_plane=None):
+        captured["calls"].append(("inspector", current_control_plane))
+        return {"ok": True, "kind": "inspector", "cp": current_control_plane}
+
+    async def mobile_readiness(*, runtime_lite=None, current_control_plane=None):
+        captured["calls"].append(("mobile", current_control_plane))
+        return {"ok": True, "kind": "mobile"}
+
+    async def delivery_matrix(
+        *,
+        runtime_lite=None,
+        current_readiness=None,
+        current_control_plane=None,
+        current_mobile_readiness=None,
+    ):
+        captured["calls"].append(
+            ("delivery", current_readiness, current_control_plane, current_mobile_readiness)
+        )
+        return {
+            "ok": True,
+            "kind": "delivery",
+            "readiness": current_readiness,
+            "mobile": current_mobile_readiness,
+        }
+
+    return {
+        "_captured": captured,
+        "translator_readiness_snapshot": readiness,
+        "translator_control_plane_snapshot": control_plane,
+        "translator_session_inspector_snapshot": session_inspector,
+        "translator_mobile_readiness_snapshot": mobile_readiness,
+        "translator_delivery_matrix_snapshot": delivery_matrix,
+    }
+
+
+def _ctx_with_q_helpers() -> tuple[RouterContext, dict]:
+    helpers = _wave_q_helpers()
+    captured = helpers.pop("_captured")
+    ctx = _build_ctx(deps_extra=helpers, runtime_lite_provider=_fake_runtime_lite)
+    return ctx, captured
+
+
+def test_readiness_passes_runtime_lite_and_appends_endpoints() -> None:
+    ctx, captured = _ctx_with_q_helpers()
+    data = _client(ctx).get("/api/translator/readiness").json()
+    assert data["ok"] is True
+    assert data["kind"] == "readiness"
+    # runtime_lite from provider пробрасывается в helper.
+    assert data["runtime_seen"] == {"runtime_lite": True, "marker": "Q"}
+    # endpoint добавляет 2 ссылки в snapshot.
+    assert data["capability_registry_endpoint"] == "/api/capabilities/registry"
+    assert data["policy_matrix_endpoint"] == "/api/policy/matrix"
+    assert ("readiness", {"runtime_lite": True, "marker": "Q"}) in captured["calls"]
+
+
+def test_readiness_helper_missing_returns_graceful_error() -> None:
+    """Без injected helper → ok=False (не 500)."""
+    ctx = _build_ctx(runtime_lite_provider=_fake_runtime_lite)
+    data = _client(ctx).get("/api/translator/readiness").json()
+    assert data["ok"] is False
+    assert "translator_readiness_snapshot" in data["error"]
+
+
+def test_control_plane_returns_helper_payload() -> None:
+    ctx, captured = _ctx_with_q_helpers()
+    data = _client(ctx).get("/api/translator/control-plane").json()
+    assert data == {"ok": True, "kind": "control_plane"}
+    assert any(c[0] == "control_plane" for c in captured["calls"])
+
+
+def test_session_inspector_chains_control_plane() -> None:
+    ctx, captured = _ctx_with_q_helpers()
+    data = _client(ctx).get("/api/translator/session-inspector").json()
+    assert data["kind"] == "inspector"
+    # inspector получает control_plane payload.
+    assert data["cp"]["kind"] == "control_plane"
+    kinds = [c[0] for c in captured["calls"]]
+    assert kinds.index("control_plane") < kinds.index("inspector")
+
+
+def test_mobile_readiness_chains_control_plane() -> None:
+    ctx, captured = _ctx_with_q_helpers()
+    data = _client(ctx).get("/api/translator/mobile-readiness").json()
+    assert data["kind"] == "mobile"
+    kinds = [c[0] for c in captured["calls"]]
+    assert "control_plane" in kinds
+    assert "mobile" in kinds
+
+
+def test_delivery_matrix_aggregates_chain() -> None:
+    ctx, captured = _ctx_with_q_helpers()
+    data = _client(ctx).get("/api/translator/delivery-matrix").json()
+    assert data["kind"] == "delivery"
+    assert data["readiness"]["kind"] == "readiness"
+    assert data["mobile"]["kind"] == "mobile"
+    kinds = [c[0] for c in captured["calls"]]
+    # readiness + control_plane + mobile должны быть вызваны до delivery.
+    assert kinds[-1] == "delivery"
+    for required in ("readiness", "control_plane", "mobile"):
+        assert required in kinds

@@ -326,8 +326,28 @@ class WebApp:
         if getattr(self, "_boot_ts", None) and not self._boot_ts_holder:
             self._boot_ts_holder.append(float(self._boot_ts))
 
+        # Phase 2 Wave Q (Session 25): inject translator snapshot helpers
+        # как deps так чтобы router'ы могли их вызвать без self-bind на WebApp.
+        deps_dict = dict(getattr(self, "deps", {}) or {})
+        deps_dict.setdefault("translator_readiness_snapshot", self._translator_readiness_snapshot)
+        deps_dict.setdefault(
+            "translator_control_plane_snapshot", self._translator_control_plane_snapshot
+        )
+        deps_dict.setdefault(
+            "translator_session_inspector_snapshot",
+            self._translator_session_inspector_snapshot,
+        )
+        deps_dict.setdefault(
+            "translator_mobile_readiness_snapshot",
+            self._translator_mobile_readiness_snapshot,
+        )
+        deps_dict.setdefault(
+            "translator_delivery_matrix_snapshot",
+            self._translator_delivery_matrix_snapshot,
+        )
+
         return RouterContext(
-            deps=getattr(self, "deps", {}) or {},
+            deps=deps_dict,
             project_root=self._project_root(),
             web_api_key_fn=self._web_api_key,
             assert_write_access_fn=self._assert_write_access,
@@ -9474,15 +9494,7 @@ class WebApp:
                 ),
             }
 
-        @self.app.get("/api/translator/readiness")
-        async def translator_readiness():
-            """Возвращает truthful readiness translator-контура внутри экосистемы Краба."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            snapshot = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            snapshot["capability_registry_endpoint"] = "/api/capabilities/registry"
-            snapshot["policy_matrix_endpoint"] = "/api/policy/matrix"
-            return snapshot
-
+        # /api/translator/readiness — extracted в translator_router.py (Phase 2 Wave Q).
         # /api/translator/status — extracted в translator_router.py (Phase 2 Wave K).
 
         @self.app.post("/api/translator/session/toggle")
@@ -9645,48 +9657,10 @@ class WebApp:
                 "mobile_onboarding": mobile_onboarding,
             }
 
-        @self.app.get("/api/translator/control-plane")
-        async def translator_control_plane():
-            """Возвращает session/policy truth translator-контура через control-plane Краба."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            return await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-
-        @self.app.get("/api/translator/session-inspector")
-        async def translator_session_inspector():
-            """Возвращает why-report, timeline digest и escalation context для translator session."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            return await self._translator_session_inspector_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-
-        @self.app.get("/api/translator/mobile-readiness")
-        async def translator_mobile_readiness():
-            """Возвращает readiness iPhone companion/mobile device слоя переводчика."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            return await self._translator_mobile_readiness_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-
-        @self.app.get("/api/translator/delivery-matrix")
-        async def translator_delivery_matrix():
-            """Возвращает product truth по ordinary/internet call tracks переводчика."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            mobile_readiness = await self._translator_mobile_readiness_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-            return await self._translator_delivery_matrix_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-            )
+        # /api/translator/control-plane — extracted в translator_router.py (Phase 2 Wave Q).
+        # /api/translator/session-inspector — extracted в translator_router.py (Phase 2 Wave Q).
+        # /api/translator/mobile-readiness — extracted в translator_router.py (Phase 2 Wave Q).
+        # /api/translator/delivery-matrix — extracted в translator_router.py (Phase 2 Wave Q).
 
         @self.app.get("/api/translator/live-trial-preflight")
         async def translator_live_trial_preflight():
@@ -10907,11 +10881,13 @@ class WebApp:
 
         self.app.include_router(_build_write(self._make_router_context()))
 
-        # /api/translator/{languages,status,history,test}: extracted в
-        # translator_router.py (Phase 2 Wave K, Session 25 — простые GET через
-        # ctx.get_dep("kraab_userbot")). HARD endpoints (readiness, bootstrap,
-        # control-plane, session-inspector, mobile/*, delivery-matrix,
-        # live-trial-preflight) пока inline — требуют runtime_lite refactor.
+        # /api/translator/{languages,status,history,test} — Wave K extraction;
+        # /api/translator/{readiness,control-plane,session-inspector,mobile-readiness,
+        # delivery-matrix} — Wave Q extraction (через ctx.collect_runtime_lite() +
+        # translator_*_snapshot helpers, инжектированные в deps в _make_router_context).
+        # HARD endpoints (bootstrap, live-trial-preflight, mobile/onboarding) пока
+        # inline — bootstrap агрегирует все snapshot'ы, live-trial-preflight требует
+        # дополнительный helper, а mobile/onboarding имеет POST.
         from .web_routers.translator_router import (
             build_translator_router as _build_translator,
         )
