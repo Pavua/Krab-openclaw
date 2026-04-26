@@ -2,19 +2,23 @@
 
 ## Status snapshot
 
-- **Session 24 CLOSED** на ветке `fix/daily-review-20260421`, **3 commit'а** (`8f0da60..9b7cf52`), всё в origin
+- **Session 24 CLOSED** на ветке `fix/daily-review-20260421`, **6 commit'ов** (`8f0da60..d2ec04b`), всё в origin
 - KrabEar PR #288 — статус **MERGED** в base `codex/krab-ear-v2` (выполнено параллельной KrabEar сессией, не в скопе Krab main)
 - **Krab production live**, PID 91282 после 3-х successful restart-ов в сессии
 - archive.db: 506 MB / 753k+ msgs / **72,362 chunks** ↔ 72,362 vec ↔ 72,362 FTS — **memory_doctor.py 5/5 ✅**
 - **10 LaunchAgents активны** (включая новый `ai.krab.db-lock-monitor` Session 24)
+- **Phase 1 Code Splits scaffold READY** — structure для extraction готова, без breaking changes
 
-## Session 24 wins (3 commits)
+## Session 24 wins (6 commits)
 
 | sha | type | summary |
 |---|---|---|
 | `8f0da60` | feat(health) | /api/health/deep 8→**12 секций** (sentry/mcp_servers/cf_tunnel/error_rate_5m) + bug fix orphan_vec false positive (72362→0) |
 | `b4d7dc0` | fix(sentry) | _BENIGN_ERROR_MARKERS expansion: +`router_not_configured`, +`Client has not been started yet` (transient boot HTTPException) |
 | `9b7cf52` | docs | docs/HNSW_MIGRATION_PLAN.md + docs/CODE_SPLITS_PLAN.md (sub-agent prep) |
+| `b3aa68f` | docs(handoff) | Initial Session 25 handoff (will be updated below) |
+| `1224c26` | fix(p1) | busy_timeout=30s in archive.db open_archive + 1 raw print fix + whois mock fix + CLAUDE.md autotables refresh |
+| `d2ec04b` | feat(splits) | **Phase 1 scaffold:** src/handlers/commands/_shared.py, src/modules/web_routers/_context.py + snapshot baselines (253 endpoints, 151 commands) + 13 tests + untracked cleanup |
 
 ## Что live в production (новое в Session 24)
 
@@ -60,18 +64,25 @@
 
 ## Session 25 priorities
 
-### P0 (operational)
-1. **Sentry observation 24-48h post-Session 24 restart** — markers extension работает, но смотреть появятся ли новые типы spam после 24h. Если да — расширить `_BENIGN_ERROR_MARKERS` ещё.
-2. **db_lock_monitor 24h baseline** — наблюдение за `/tmp/krab_db_lock_monitor/run.log`, `pragma_baseline`. Если ALERT — расследовать concurrent writer'ов.
+### P0 (operational watch)
+1. **Sentry observation 24-48h post-Session 24** — 50+ минут после 3rd restart показали 0 spam events. Extension работает. Watch если появятся новые типы.
+2. **db_lock_monitor 24h baseline** — first scan post-bootstrap (03:40) count=0. Watch run.log за следующие сутки.
 
-### P1 (improvements)
-3. **`busy_timeout=0` → 30000ms** — мини-оптимизация archive.db SQLite. Изменить `busy_timeout` PRAGMA в `memory_indexer_worker.py` или там где открывается connection. Ожидаемый impact: graceful retry вместо immediate `database is locked` fail.
-4. **Wave 14 test cleanup** (если есть intermittent flakes) — пока известен только `test_gratitude_with_random_below_rate` (random seed, не блокирует). Если за неделю появятся новые flaky — sweep.
-5. **CLAUDE.md autotables refresh** — endpoint count теперь 249→**253** (+4 не нужно, /api/health/deep уже был; reality TBD после `/api/endpoints` snapshot). Test count 9991→9527 (+коррекция в обе стороны).
+### P1 (mostly closed in Session 24, minor leftovers)
+3. ~~busy_timeout=0 → 30000ms~~ → CLOSED Session 24 (`1224c26`, в open_archive). Ожидаемое в pragma_baseline скрипте db_lock_monitor — оно открывает СВОЁ connection вне open_archive, поэтому всё ещё показывает 0. **Подвопрос:** имеет ли смысл fix scripts/db_lock_monitor.sh тоже? (~5 мин)
+4. ~~CLAUDE.md autotables~~ → CLOSED (Session 23+24 rows added, 257 endpoints).
+5. **Phase 1 scaffold valid → start Phase 2 extraction** (см. ниже).
 
 ### P2 (architectural — dedicated sessions)
-6. **HNSW migration** — НЕ trigger'нулось (vec count 72k, p95 ~25ms). Только мониторинг, активация когда `VecQueryLatencyHigh` p95>100ms ≥30 минут. См. `docs/HNSW_MIGRATION_PLAN.md`.
-7. **Code splits** — `command_handlers.py` + `web_app.py`. 6 session-days. См. `docs/CODE_SPLITS_PLAN.md`. **Требует max reasoning + test discipline**. Phase 1 (scaffold) — low risk, можно начать в любой момент.
+
+6. **Code splits Phase 2 — START READY** (после Session 24 scaffold):
+   - **Phase 1 ✅ DONE** (Session 24): `src/handlers/commands/_shared.py` + `src/modules/web_routers/_context.py` + 253 endpoints / 151 commands snapshot baselines + 13 тестов.
+   - **Phase 2a (suggested first)**: `text_utils.py`, `chat_commands.py` extraction — low coupling.
+   - **Phase 2b**: `health_router.py`, `memory_router.py`, `voice_router.py` — простые routers.
+   - **Test discipline**: `scripts/snapshot_endpoints_commands.py --diff tests/fixtures/api_endpoints_baseline.json` после каждого extraction → exit 0 expected.
+   - **Полный план**: `docs/CODE_SPLITS_PLAN.md` (5 phase / 6 session-days). **Требует max reasoning** перед Phase 4 (high-coupling).
+
+7. **HNSW migration** — НЕ trigger'нулось (vec count 72k, p95 ~25ms). Только мониторинг, активация когда `VecQueryLatencyHigh` p95>100ms ≥30 минут. См. `docs/HNSW_MIGRATION_PLAN.md`.
 
 ### P3 (backlog)
 8. **9 raw `print()` calls в src/** — заменить structured logger.
@@ -85,10 +96,12 @@
 3. ~~vec_chunks_meta desync~~ → CLOSED (Session 23 misdiagnosis)
 4. ~~orphan_vec false positive~~ → CLOSED (Session 24 `8f0da60`)
 5. ~~Sentry init drift~~ → CLOSED (Session 23 `8c803e2`)
-6. **`busy_timeout=0`** в archive.db (Session 25 P1)
-7. **1 flaky test** (`test_gratitude_with_random_below_rate`, random seed)
-8. **disk I/O error** на двойном Stop+Start — race close+reopen archive.db (rare, мониторинг)
-9. **9 raw print() in src/** (low impact)
+6. ~~busy_timeout=0 в archive.db~~ → CLOSED (Session 24 `1224c26`)
+7. ~~1 flaky test~~ → NOT FLAKY (Session 24 verified 20/20 pass — sub-agent ранее зафиксил patches)
+8. ~~9 raw print() in src/~~ → CLOSED (Session 24, 1 был bug — fixed; 8 legitimate)
+9. ~~RuntimeWarning whois coro never awaited~~ → CLOSED (Session 24 `1224c26`)
+10. **disk I/O error** на двойном Stop+Start — race close+reopen archive.db (rare, мониторинг). После busy_timeout=30s fix должен grace-recover.
+11. **db_lock_monitor.sh pragma probe** — открывает свой connection без busy_timeout, baseline всё ещё показывает 0. Не bug, чисто косметика.
 
 ## First commands for Session 25
 
