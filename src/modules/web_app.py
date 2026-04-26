@@ -11831,76 +11831,11 @@ class WebApp:
                     "detail": f"Не удалось выполнить openclaw: {exc}",
                 }
 
-        @self.app.post("/api/openclaw/channels/runtime-repair")
-        async def openclaw_runtime_repair(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Запуск скрипта восстановления рантайма OpenClaw.
-            Требует WEB_API_KEY.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            script_path = str(self._project_root() / "openclaw_runtime_repair.command")
+        # /api/openclaw/channels/runtime-repair: extracted в src/modules/web_routers/openclaw_router.py
+        # (Session 25 Phase 2 Wave N). См. include_router рядом с voice_router.
 
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    script_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
-                output = stdout.decode("utf-8", errors="replace")
-                return {
-                    "ok": proc.returncode == 0,
-                    "output": output,
-                    "exit_code": proc.returncode,
-                }
-            except asyncio.TimeoutError:
-                return {
-                    "ok": False,
-                    "error": "timeout",
-                    "detail": "Скрипт выполнялся слишком долго (60с)",
-                }
-            except Exception as exc:
-                return {"ok": False, "error": "system_error", "detail": str(exc)}
-
-        @self.app.post("/api/openclaw/channels/signal-guard-run")
-        async def openclaw_signal_guard_run(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Однократный запуск Ops Guard для проверки сигналов.
-            Требует WEB_API_KEY.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            script_path = "/Users/pablito/Antigravity_AGENTS/Краб/scripts/signal_ops_guard.py"
-
-            try:
-                # Запускаем с флагом --once для разовой проверки
-                proc = await asyncio.create_subprocess_exec(
-                    sys.executable,
-                    script_path,
-                    "--once",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
-                output = stdout.decode("utf-8", errors="replace")
-                return {
-                    "ok": proc.returncode == 0,
-                    "output": output,
-                    "exit_code": proc.returncode,
-                }
-            except asyncio.TimeoutError:
-                return {
-                    "ok": False,
-                    "error": "timeout",
-                    "detail": "Signal Guard выполнялся слишком долго (60с)",
-                }
-            except Exception as exc:
-                return {"ok": False, "error": "system_error", "detail": str(exc)}
+        # /api/openclaw/channels/signal-guard-run: extracted в src/modules/web_routers/openclaw_router.py
+        # (Session 25 Phase 2 Wave N). См. include_router рядом с voice_router.
 
         @self.app.get("/api/ecosystem/health")
         async def ecosystem_health():
@@ -14502,46 +14437,8 @@ class WebApp:
         # /api/openclaw/cloud/tier/state: extracted в src/modules/web_routers/openclaw_router.py
         # (Session 25 Phase 2 Wave M). См. include_router рядом с voice_router.
 
-        @self.app.post("/api/openclaw/cloud/tier/reset")
-        async def openclaw_cloud_tier_reset(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            [R23/R25] Ручной сброс Cloud Tier на free.
-
-            Требует X-Krab-Web-Key или token (WEB_API_KEY).
-            Снимает sticky_paid флаг, не требует перезапуска бота.
-            Возвращает: {ok, previous_tier, new_tier, reset_at}.
-            """
-            try:
-                self._assert_write_access(x_krab_web_key, token)
-            except HTTPException as exc:
-                return build_ops_response(
-                    status="failed", error_code="forbidden", summary=exc.detail
-                )
-
-            try:
-                openclaw = self.deps.get("openclaw_client")
-                if not openclaw:
-                    return build_ops_response(
-                        status="failed",
-                        error_code="openclaw_client_not_configured",
-                        summary="Openclaw client not configured",
-                    )
-                if not hasattr(openclaw, "reset_cloud_tier"):
-                    return build_ops_response(
-                        status="failed",
-                        error_code="tier_reset_not_supported",
-                        summary="Tier reset not supported",
-                    )
-
-                result = await openclaw.reset_cloud_tier()
-                return build_ops_response(status="ok", data={"result": result})
-            except Exception as exc:
-                return build_ops_response(
-                    status="failed", error_code="tier_reset_error", summary=str(exc)
-                )
+        # /api/openclaw/cloud/tier/reset: extracted в src/modules/web_routers/openclaw_router.py
+        # (Session 25 Phase 2 Wave N). См. include_router рядом с voice_router.
 
         def _run_openclaw_model_autoswitch(
             *,

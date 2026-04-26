@@ -1,18 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-Unit tests для openclaw_router (Phase 2 Wave M, Session 25).
+Unit tests для openclaw_router (Phase 2 Wave M+N, Session 25).
 
-Endpoints:
+Endpoints (Wave M, GET):
 - GET /api/openclaw/report
 - GET /api/openclaw/deep-check
 - GET /api/openclaw/remediation-plan
 - GET /api/openclaw/cloud/tier/state
+
+Endpoints (Wave N, POST через ctx.assert_write_access):
+- POST /api/openclaw/cloud/tier/reset
+- POST /api/openclaw/channels/runtime-repair
+- POST /api/openclaw/channels/signal-guard-run
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -55,6 +61,11 @@ class _FakeOpenClaw:
         if self._raise == "tier":
             raise RuntimeError("boom-tier")
         return self._tier
+
+    async def reset_cloud_tier(self) -> dict:
+        if self._raise == "reset":
+            raise RuntimeError("boom-reset")
+        return {"previous_tier": "paid", "new_tier": "free", "reset_at": "now"}
 
 
 class _StubNoMethods:
@@ -178,3 +189,128 @@ def test_openclaw_cloud_tier_state_system_error() -> None:
     body = _client(_build_ctx(openclaw=fake)).get("/api/openclaw/cloud/tier/state").json()
     assert body.get("status") == "failed"
     assert body.get("error_code") == "system_error"
+
+
+# ===========================================================================
+# Wave N — POST endpoints через ctx.assert_write_access
+# ===========================================================================
+
+
+# ---------- POST /api/openclaw/cloud/tier/reset -----------------------------
+
+
+def test_openclaw_cloud_tier_reset_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Без WEB_API_KEY доступ открыт; reset_cloud_tier вызывается успешно."""
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    body = _client(_build_ctx()).post("/api/openclaw/cloud/tier/reset").json()
+    assert body.get("status") == "ok"
+    assert body["data"]["result"]["new_tier"] == "free"
+
+
+def test_openclaw_cloud_tier_reset_forbidden(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WEB_API_KEY установлен, header не передан → forbidden."""
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+    body = _client(_build_ctx()).post("/api/openclaw/cloud/tier/reset").json()
+    assert body.get("status") == "failed"
+    assert body.get("error_code") == "forbidden"
+
+
+def test_openclaw_cloud_tier_reset_valid_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Корректный X-Krab-Web-Key → 200/ok."""
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+    resp = _client(_build_ctx()).post(
+        "/api/openclaw/cloud/tier/reset",
+        headers={"X-Krab-Web-Key": "secret-key"},
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("status") == "ok"
+
+
+def test_openclaw_cloud_tier_reset_no_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """openclaw_client отсутствует → openclaw_client_not_configured."""
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    body = (
+        _client(_build_ctx(openclaw=None))
+        .post("/api/openclaw/cloud/tier/reset")
+        .json()
+    )
+    assert body.get("status") == "failed"
+    assert body.get("error_code") == "openclaw_client_not_configured"
+
+
+def test_openclaw_cloud_tier_reset_not_supported(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Клиент без reset_cloud_tier → tier_reset_not_supported."""
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    body = (
+        _client(_build_ctx(openclaw=_StubNoMethods()))
+        .post("/api/openclaw/cloud/tier/reset")
+        .json()
+    )
+    assert body.get("status") == "failed"
+    assert body.get("error_code") == "tier_reset_not_supported"
+
+
+def test_openclaw_cloud_tier_reset_system_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """reset_cloud_tier бросает → tier_reset_error."""
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    fake = _FakeOpenClaw(raise_in="reset")
+    body = (
+        _client(_build_ctx(openclaw=fake))
+        .post("/api/openclaw/cloud/tier/reset")
+        .json()
+    )
+    assert body.get("status") == "failed"
+    assert body.get("error_code") == "tier_reset_error"
+
+
+# ---------- POST /api/openclaw/channels/runtime-repair ----------------------
+
+
+def test_openclaw_runtime_repair_forbidden(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WEB_API_KEY установлен, header не передан → 403."""
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+    resp = _client(_build_ctx()).post("/api/openclaw/channels/runtime-repair")
+    assert resp.status_code == 403
+
+
+def test_openclaw_runtime_repair_script_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Без WEB_API_KEY вызывается subprocess; для несуществующего script_path
+    asyncio.create_subprocess_exec падает → handler возвращает {ok: False,
+    error: "system_error"}."""
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    ctx = RouterContext(
+        deps={},
+        project_root=tmp_path,  # пусто, openclaw_runtime_repair.command нет
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+    resp = _client(ctx).post("/api/openclaw/channels/runtime-repair")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error"] == "system_error"
+
+
+# ---------- POST /api/openclaw/channels/signal-guard-run --------------------
+
+
+def test_openclaw_signal_guard_forbidden(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WEB_API_KEY установлен, header не передан → 403."""
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+    resp = _client(_build_ctx()).post("/api/openclaw/channels/signal-guard-run")
+    assert resp.status_code == 403
+
+
+def test_openclaw_signal_guard_valid_auth_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Корректный header пропускает auth; subprocess может ok/fail в зависимости
+    от наличия скрипта — главное что мы прошли guard и получили JSON."""
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+    resp = _client(_build_ctx()).post(
+        "/api/openclaw/channels/signal-guard-run",
+        headers={"X-Krab-Web-Key": "secret-key"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "ok" in body

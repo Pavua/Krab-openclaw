@@ -1,31 +1,42 @@
 # -*- coding: utf-8 -*-
 """
-OpenClaw router — Phase 2 Wave M extraction (Session 25).
+OpenClaw router — Phase 2 Wave M+N extraction (Session 25).
 
-Простые OpenClaw GET endpoints через RouterContext. Только endpoints, которые
-работают исключительно через ``ctx.get_dep("openclaw_client")`` без вызовов
-WebApp helper-методов (``_collect_openclaw_*_snapshot``,
-``_load_openclaw_runtime_config`` и пр.) и без мутации ``_runtime_lite_cache``.
+OpenClaw endpoints через RouterContext. Только endpoints, которые работают
+исключительно через ``ctx.get_dep("openclaw_client")`` / ``ctx.project_root``
+без вызовов WebApp helper-методов (``_collect_openclaw_*_snapshot``,
+``_load_openclaw_runtime_config``, ``_run_openclaw_cli`` и пр.) и без мутации
+``_runtime_lite_cache``.
 
-Endpoints:
+Endpoints (Wave M, GET):
 - GET /api/openclaw/report             — health-report OpenClaw
 - GET /api/openclaw/deep-check         — расширенная проверка
 - GET /api/openclaw/remediation-plan   — план исправлений
 - GET /api/openclaw/cloud/tier/state   — диагностика Cloud Tier State
 
+Endpoints (Wave N, POST через ctx.assert_write_access):
+- POST /api/openclaw/cloud/tier/reset           — сброс tier на free
+- POST /api/openclaw/channels/runtime-repair    — запуск repair-скрипта
+- POST /api/openclaw/channels/signal-guard-run  — однократный Signal Guard
+
 SKIP (HARD, требуют helper promote):
 - /api/openclaw/cron/status, /api/openclaw/cron/jobs — `_collect_openclaw_cron_*`
+- /api/openclaw/cron/jobs/{create,toggle,remove,run_now} — `_run_openclaw_cli`
 - /api/openclaw/channels/status        — `_collect_openclaw_channels_snapshot`
 - /api/openclaw/runtime-config         — `_load_openclaw_runtime_config`
 - /api/openclaw/cloud, /api/openclaw/cloud/diagnostics — `_openclaw_cloud_diagnostics_impl`
 - /api/openclaw/cloud/runtime-check    — мутирует `self._runtime_lite_cache`
+- /api/openclaw/cloud/switch-tier      — мутирует `self._runtime_lite_cache`
 
 Контракт ответов сохранён 1:1 с inline definitions из web_app.py.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+import asyncio
+import sys
+
+from fastapi import APIRouter, Header, HTTPException, Query
 
 from src.core.observability import build_ops_response
 
@@ -116,5 +127,119 @@ def build_openclaw_router(ctx: RouterContext) -> APIRouter:
             return build_ops_response(status="ok", data={"tier_state": tier_state})
         except Exception as exc:  # noqa: BLE001
             return build_ops_response(status="failed", error_code="system_error", summary=str(exc))
+
+    # ---------- POST /api/openclaw/cloud/tier/reset (Wave N) -------------
+    @router.post("/api/openclaw/cloud/tier/reset")
+    async def openclaw_cloud_tier_reset(
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """[R23/R25] Ручной сброс Cloud Tier на free.
+
+        Требует X-Krab-Web-Key или token (WEB_API_KEY).
+        Снимает sticky_paid флаг, не требует перезапуска бота.
+        Возвращает: {ok, previous_tier, new_tier, reset_at}.
+        """
+        try:
+            ctx.assert_write_access(x_krab_web_key, token)
+        except HTTPException as http_exc:
+            return build_ops_response(
+                status="failed", error_code="forbidden", summary=http_exc.detail
+            )
+
+        try:
+            openclaw = ctx.get_dep("openclaw_client")
+            if not openclaw:
+                return build_ops_response(
+                    status="failed",
+                    error_code="openclaw_client_not_configured",
+                    summary="Openclaw client not configured",
+                )
+            if not hasattr(openclaw, "reset_cloud_tier"):
+                return build_ops_response(
+                    status="failed",
+                    error_code="tier_reset_not_supported",
+                    summary="Tier reset not supported",
+                )
+
+            result = await openclaw.reset_cloud_tier()
+            return build_ops_response(status="ok", data={"result": result})
+        except Exception as exc:  # noqa: BLE001
+            return build_ops_response(
+                status="failed", error_code="tier_reset_error", summary=str(exc)
+            )
+
+    # ---------- POST /api/openclaw/channels/runtime-repair (Wave N) ------
+    @router.post("/api/openclaw/channels/runtime-repair")
+    async def openclaw_runtime_repair(
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Запуск скрипта восстановления рантайма OpenClaw.
+
+        Требует WEB_API_KEY. Запускает ``openclaw_runtime_repair.command``
+        из корня проекта с timeout 60s.
+        """
+        ctx.assert_write_access(x_krab_web_key, token)
+        script_path = str(ctx.project_root / "openclaw_runtime_repair.command")
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                script_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+            output = stdout.decode("utf-8", errors="replace")
+            return {
+                "ok": proc.returncode == 0,
+                "output": output,
+                "exit_code": proc.returncode,
+            }
+        except asyncio.TimeoutError:
+            return {
+                "ok": False,
+                "error": "timeout",
+                "detail": "Скрипт выполнялся слишком долго (60с)",
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": "system_error", "detail": str(exc)}
+
+    # ---------- POST /api/openclaw/channels/signal-guard-run (Wave N) ----
+    @router.post("/api/openclaw/channels/signal-guard-run")
+    async def openclaw_signal_guard_run(
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Однократный запуск Ops Guard для проверки сигналов.
+
+        Требует WEB_API_KEY. Запускает ``scripts/signal_ops_guard.py --once``.
+        """
+        ctx.assert_write_access(x_krab_web_key, token)
+        script_path = "/Users/pablito/Antigravity_AGENTS/Краб/scripts/signal_ops_guard.py"
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                script_path,
+                "--once",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+            output = stdout.decode("utf-8", errors="replace")
+            return {
+                "ok": proc.returncode == 0,
+                "output": output,
+                "exit_code": proc.returncode,
+            }
+        except asyncio.TimeoutError:
+            return {
+                "ok": False,
+                "error": "timeout",
+                "detail": "Signal Guard выполнялся слишком долго (60с)",
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": "system_error", "detail": str(exc)}
 
     return router
