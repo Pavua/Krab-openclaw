@@ -14,7 +14,9 @@ RouterContext через delegating-методы и могут быть импо
 
 from __future__ import annotations
 
+import copy
 import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
@@ -120,3 +122,70 @@ def collect_policy_matrix_snapshot(
         web_write_requires_key=bool(get_web_api_key()),
         runtime_lite=runtime_lite or {},
     )
+
+
+# ---------------------------------------------------------------------------
+# Pure utility helpers (Session 26 Phase 2 audit follow-up).
+# Promoted из ``WebApp`` static-методов в module-level — позволяют router'ам
+# импортировать напрямую без обращения к WebApp instance. Wrapper-методы
+# в ``WebApp`` сохранены для совместимости (тесты могут monkeypatch).
+# ---------------------------------------------------------------------------
+
+
+def tail_text(text: str, max_chars: int = 2000) -> str:
+    """Возвращает хвост текста с ограничением длины."""
+    payload = str(text or "")
+    if len(payload) <= max_chars:
+        return payload
+    return payload[-max_chars:]
+
+
+def mask_secret(value: str) -> str:
+    """Маскирует секрет для UI/логов: видны только префикс и суффикс."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= 6:
+        return "*" * len(text)
+    return f"{text[:3]}...{text[-3:]}"
+
+
+def bool_env(value: str, default: bool = False) -> bool:
+    """Безопасно нормализует булево значение из env/строки."""
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
+def project_root() -> Path:
+    """Возвращает корень проекта Krab (родитель ``src/``)."""
+    return Path(__file__).resolve().parents[3]
+
+
+def clone_jsonish_dict(payload: dict[str, Any]) -> dict[str, Any]:
+    """Возвращает безопасную неглубокую копию dict/list payload для runtime-cache."""
+    cloned: dict[str, Any] = {}
+    for key, value in dict(payload or {}).items():
+        if isinstance(value, list):
+            cloned[key] = list(value)
+        elif isinstance(value, dict):
+            cloned[key] = dict(value)
+        else:
+            cloned[key] = value
+    return cloned
+
+
+def clone_jsonish_payload(payload: Any) -> Any:
+    """Возвращает глубокую копию JSON-подобного payload для cache/fallback ответов."""
+    return copy.deepcopy(payload)
+
+
+def float_env(name: str, default: float, *, min_value: float, max_value: float) -> float:
+    """Читает float из env с безопасным clamp."""
+    raw = str(os.getenv(name, str(default)) or str(default)).strip()
+    try:
+        value = float(raw)
+    except Exception:
+        value = float(default)
+    return max(float(min_value), min(float(value), float(max_value)))

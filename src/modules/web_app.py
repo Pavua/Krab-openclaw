@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import copy
 import hashlib
 import io
 import json
@@ -411,19 +410,27 @@ class WebApp:
         logger.info("Bcrypt auth middleware активирован", username=_username)
 
     def _public_base_url(self) -> str:
-        """Возвращает внешний base URL панели."""
-        explicit = os.getenv("WEB_PUBLIC_BASE_URL", "").strip().rstrip("/")
-        if explicit:
-            return explicit
-        display_host = os.getenv("WEB_HOST", "127.0.0.1").strip() or "127.0.0.1"
-        return f"http://{display_host}:{self.port}"
+        """Возвращает внешний base URL панели (delegates → _helpers)."""
+        from .web_routers._helpers import get_public_base_url
+
+        return get_public_base_url(default_port=self.port)
 
     def _web_api_key(self) -> str:
-        """Возвращает API-ключ web write-endpoints (может быть пустым)."""
-        return os.getenv("WEB_API_KEY", "").strip()
+        """Возвращает API-ключ web write-endpoints (delegates → _helpers).
+
+        Wrapper сохранён: тесты используют ``patch.object(WebApp, "_web_api_key", ...)``.
+        """
+        from .web_routers._helpers import get_web_api_key
+
+        return get_web_api_key()
 
     def _assert_write_access(self, header_key: str, token: str) -> None:
-        """Проверяет доступ к write-эндпоинтам web API."""
+        """Проверяет доступ к write-эндпоинтам web API.
+
+        Wrapper использует ``self._web_api_key()`` (не helper напрямую),
+        чтобы тесты могли monkeypatch ``WebApp._web_api_key`` для имитации
+        настроенного ключа.
+        """
         expected = self._web_api_key()
         if not expected:
             return
@@ -434,8 +441,13 @@ class WebApp:
 
     @staticmethod
     def _project_root() -> Path:
-        """Возвращает корень проекта Krab."""
-        return Path(__file__).resolve().parents[2]
+        """Возвращает корень проекта Krab (delegates → _helpers).
+
+        Wrapper сохранён: тесты используют ``monkeypatch.setattr(WebApp, "_project_root", ...)``.
+        """
+        from .web_routers._helpers import project_root
+
+        return project_root()
 
     def _openclaw_runtime_config_snapshot(self) -> dict[str, Any]:
         """[Wave DD] Snapshot runtime-конфига OpenClaw для openclaw_router.
@@ -955,21 +967,17 @@ class WebApp:
 
     @staticmethod
     def _tail_text(text: str, max_chars: int = 2000) -> str:
-        """Возвращает хвост текста с ограничением длины."""
-        payload = str(text or "")
-        if len(payload) <= max_chars:
-            return payload
-        return payload[-max_chars:]
+        """Возвращает хвост текста (delegates → _helpers.tail_text)."""
+        from .web_routers._helpers import tail_text
+
+        return tail_text(text, max_chars)
 
     @staticmethod
     def _mask_secret(value: str) -> str:
-        """Маскирует секрет для UI/логов: видны только префикс и суффикс."""
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        if len(text) <= 6:
-            return "*" * len(text)
-        return f"{text[:3]}...{text[-3:]}"
+        """Маскирует секрет (delegates → _helpers.mask_secret)."""
+        from .web_routers._helpers import mask_secret
+
+        return mask_secret(value)
 
     @staticmethod
     def _openclaw_gateway_token_from_config() -> str:
@@ -3561,31 +3569,24 @@ class WebApp:
 
     @staticmethod
     def _clone_jsonish_dict(payload: dict[str, Any]) -> dict[str, Any]:
-        """Возвращает безопасственную неглубокую копию dict/list payload для runtime-cache."""
-        cloned: dict[str, Any] = {}
-        for key, value in dict(payload or {}).items():
-            if isinstance(value, list):
-                cloned[key] = list(value)
-            elif isinstance(value, dict):
-                cloned[key] = dict(value)
-            else:
-                cloned[key] = value
-        return cloned
+        """Неглубокая копия dict/list payload (delegates → _helpers)."""
+        from .web_routers._helpers import clone_jsonish_dict
+
+        return clone_jsonish_dict(payload)
 
     @staticmethod
     def _clone_jsonish_payload(payload: Any) -> Any:
-        """Возвращает глубокую копию JSON-подобного payload для cache/fallback ответов."""
-        return copy.deepcopy(payload)
+        """Глубокая копия JSON-подобного payload (delegates → _helpers)."""
+        from .web_routers._helpers import clone_jsonish_payload
+
+        return clone_jsonish_payload(payload)
 
     @staticmethod
     def _float_env(name: str, default: float, *, min_value: float, max_value: float) -> float:
-        """Читает float из env с безопасным clamp и без размазывания try/except по коду."""
-        raw = str(os.getenv(name, str(default)) or str(default)).strip()
-        try:
-            value = float(raw)
-        except Exception:
-            value = float(default)
-        return max(float(min_value), min(float(value), float(max_value)))
+        """Читает float из env с clamp (delegates → _helpers.float_env)."""
+        from .web_routers._helpers import float_env
+
+        return float_env(name, default, min_value=min_value, max_value=max_value)
 
     def _model_catalog_cache_ttl_sec(self) -> float:
         """TTL короткого cache каталога owner UI."""
@@ -4256,11 +4257,10 @@ class WebApp:
 
     @staticmethod
     def _bool_env(value: str, default: bool = False) -> bool:
-        """Безопасно нормализует булево значение из env/строки."""
-        raw = str(value or "").strip().lower()
-        if not raw:
-            return default
-        return raw in {"1", "true", "yes", "on"}
+        """Нормализует булево значение (delegates → _helpers.bool_env)."""
+        from .web_routers._helpers import bool_env
+
+        return bool_env(value, default)
 
     def _git_snapshot(self) -> dict[str, Any]:
         """Снимает минимальный git-срез (ветка/head/short status) для handoff."""
