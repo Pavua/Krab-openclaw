@@ -678,10 +678,11 @@ Endpoints session 7 (добавлены, ~249 итого после Session 22):
 | Session 22 | 9991 (collected, после Wave 11/12 cleanup) |
 | Session 23 | 9991 collected, 1 intermittent flake (Wave 13 cleanup) |
 | Session 24 | **9527 passed**, 94 skipped, 0 failed (clean state, 538s full run; +busy_timeout test, +health_deep session 24 tests, +sentry markers tests) |
+| Session 25 | **9656+ passed**, 94 skipped (Phase 2 Code Splits — 14 routers extracted, 48 endpoints + новые tests на routers / RouterContext / MCP userbot capabilities / peer_id_invalid handling) |
 
 <!-- BEGIN:auto-endpoints -->
 
-### Auto-generated endpoints table (257 маршрутов на Session 24)
+### Auto-generated endpoints table (253 уникальных paths на Session 25; 48+ из них extracted в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern — 14 routers за Wave A-L)
 
 | Endpoint | Метод |
 |----------|-------|
