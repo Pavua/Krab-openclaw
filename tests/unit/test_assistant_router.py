@@ -12,7 +12,7 @@ import io
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from src.modules.web_routers._context import RouterContext
@@ -200,6 +200,244 @@ def test_assistant_stream_sse_returns_event_stream(monkeypatch) -> None:
     assert "event: route" in body
     assert "event: message" in body
     assert "event: done" in body
+
+
+# ===========================================================================
+# Phase 2 Part 2D (Session 27) — /api/assistant/query
+# ===========================================================================
+
+
+class _FakeRouter:
+    def __init__(self) -> None:
+        self.force_mode = "auto"
+        self.models = {"chat": "google/gemini-3-pro-preview"}
+        self.route_query_calls: list[dict[str, Any]] = []
+        self._reply = "Тестовый ответ"
+
+    def set_force_mode(self, mode: str):
+        if mode == "local":
+            self.force_mode = "force_local"
+        elif mode == "cloud":
+            self.force_mode = "force_cloud"
+        else:
+            self.force_mode = "auto"
+        return {"ok": True, "mode": self.force_mode}
+
+    async def route_query(self, **kwargs):
+        self.route_query_calls.append(kwargs)
+        return self._reply
+
+    def classify_task_profile(self, prompt, task_type="chat"):
+        return task_type
+
+    def get_profile_recommendation(self, profile):
+        return {"profile": profile, "recommended_model": "google/gemini-3-pro-preview"}
+
+    def get_last_route(self):
+        return {
+            "model": "google/gemini-3-pro-preview",
+            "channel": "cloud",
+            "provider": "google",
+            "active_tier": "primary",
+        }
+
+    def get_task_preflight(self, **kwargs):
+        return {
+            "profile": kwargs.get("task_type", "chat"),
+            "execution": {
+                "model": "google/gemini-3-pro-preview",
+                "channel": "cloud",
+                "force_mode": "auto",
+            },
+            "reasons": ["test"],
+            "local_available": False,
+        }
+
+
+def _make_query_client(
+    *,
+    fake_router: _FakeRouter | None = None,
+    rate_limit_raises: bool = False,
+    idem_cache: dict | None = None,
+    deps_overrides: dict[str, Any] | None = None,
+):
+    """Builds TestClient with full assistant/query deps wired."""
+    fr = fake_router or _FakeRouter()
+    cache: dict = idem_cache if idem_cache is not None else {}
+
+    def _idem_get(ns, key):
+        if not key:
+            return None
+        return cache.get((ns, key))
+
+    def _idem_set(ns, key, payload):
+        if key:
+            cache[(ns, key)] = payload
+
+    def _rate_limit(client_key):
+        if rate_limit_raises:
+            raise HTTPException(status_code=429, detail="rate_limited")
+
+    deps: dict[str, Any] = {
+        "assistant_capabilities_snapshot_helper": lambda: {"ok": True},
+        "assistant_attachment_max_bytes_helper": lambda: 1_000_000,
+        "assistant_attachment_sanitize_name_helper": lambda n: n,
+        "assistant_attachment_build_prompt_helper": lambda **_: {"kind": "text"},
+        "router": fr,
+        "black_box": None,
+        "idempotency_get": _idem_get,
+        "idempotency_set": _idem_set,
+        "assistant_rate_limit_helper": _rate_limit,
+    }
+    if deps_overrides:
+        deps.update(deps_overrides)
+
+    ctx = RouterContext(
+        deps=deps,
+        project_root=Path("."),
+        web_api_key_fn=lambda: None,
+        assert_write_access_fn=lambda *a, **kw: None,
+    )
+    app = FastAPI()
+    app.include_router(build_assistant_router(ctx))
+    client = TestClient(app)
+    client._fake_router = fr  # type: ignore[attr-defined]
+    client._idem_cache = cache  # type: ignore[attr-defined]
+    return client
+
+
+def test_query_happy_path() -> None:
+    from fastapi import HTTPException  # noqa: F401  (used via closure)
+
+    client = _make_query_client()
+    resp = client.post("/api/assistant/query", json={"prompt": "Привет"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["mode"] == "web_native"
+    assert body["task_type"] == "chat"
+    assert body["reply"] == "Тестовый ответ"
+    assert body["last_route"]["model"] == "google/gemini-3-pro-preview"
+
+
+def test_query_empty_prompt_400() -> None:
+    client = _make_query_client()
+    resp = client.post("/api/assistant/query", json={"prompt": "   "})
+    assert resp.status_code == 400
+    assert "prompt_required" in resp.json()["detail"]
+
+
+def test_query_rate_limited_429() -> None:
+    client = _make_query_client(rate_limit_raises=True)
+    resp = client.post(
+        "/api/assistant/query",
+        json={"prompt": "hi"},
+        headers={"X-Krab-Client": "test-client"},
+    )
+    assert resp.status_code == 429
+    assert "rate_limited" in resp.json()["detail"]
+
+
+def test_query_idempotency_cache_hit() -> None:
+    cache: dict = {}
+    client = _make_query_client(idem_cache=cache)
+    headers = {"X-Idempotency-Key": "abc123"}
+    r1 = client.post("/api/assistant/query", json={"prompt": "hello"}, headers=headers)
+    assert r1.status_code == 200
+    # Second request with same key — should hit cache (no router call).
+    fr = client._fake_router  # type: ignore[attr-defined]
+    initial_calls = len(fr.route_query_calls)
+    r2 = client.post("/api/assistant/query", json={"prompt": "hello"}, headers=headers)
+    assert r2.status_code == 200
+    assert r2.json() == r1.json()
+    # No additional router call — cache hit.
+    assert len(fr.route_query_calls) == initial_calls
+
+
+def test_query_force_mode_local() -> None:
+    fr = _FakeRouter()
+    client = _make_query_client(fake_router=fr)
+    resp = client.post(
+        "/api/assistant/query",
+        json={"prompt": "hi", "force_mode": "local"},
+    )
+    assert resp.status_code == 200
+    assert fr.force_mode == "force_local"
+    assert resp.json()["effective_force_mode"] == "local"
+
+
+def test_query_router_not_configured_503() -> None:
+    client = _make_query_client(deps_overrides={"router": None})
+    resp = client.post("/api/assistant/query", json={"prompt": "hi"})
+    assert resp.status_code == 503
+    assert "router_not_configured" in resp.json()["detail"]
+
+
+def test_query_helpers_missing_503() -> None:
+    client = _make_query_client(deps_overrides={"idempotency_get": None})
+    resp = client.post("/api/assistant/query", json={"prompt": "hi"})
+    assert resp.status_code == 503
+    assert "helpers_not_configured" in resp.json()["detail"]
+
+
+def test_query_model_command_presets() -> None:
+    """!model presets — short-circuit без вызова route_query."""
+    fr = _FakeRouter()
+    client = _make_query_client(fake_router=fr)
+    resp = client.post("/api/assistant/query", json={"prompt": "!model presets"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body.get("command_mode") is True
+    # route_query НЕ должен быть вызван
+    assert len(fr.route_query_calls) == 0
+
+
+def test_query_model_command_force_mode_switch() -> None:
+    """!model local — переключает force_mode и не вызывает route_query."""
+    fr = _FakeRouter()
+    client = _make_query_client(fake_router=fr)
+    resp = client.post("/api/assistant/query", json={"prompt": "!model local"})
+    assert resp.status_code == 200
+    assert fr.force_mode == "force_local"
+    assert "Режим обновлен" in resp.json()["reply"]
+    assert len(fr.route_query_calls) == 0
+
+
+def test_query_router_exception_500() -> None:
+    fr = _FakeRouter()
+
+    async def _boom(**kw):
+        raise RuntimeError("downstream-fail")
+
+    fr.route_query = _boom  # type: ignore[assignment]
+    client = _make_query_client(fake_router=fr)
+    resp = client.post("/api/assistant/query", json={"prompt": "hi"})
+    assert resp.status_code == 500
+    assert "assistant_query_failed" in resp.json()["detail"]
+
+
+def test_query_model_status_question_uses_last_route() -> None:
+    """Вопрос "какая модель?" → reply строится из last_route."""
+    client = _make_query_client()
+    resp = client.post(
+        "/api/assistant/query", json={"prompt": "На какой модели работаешь?"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "Фактический runtime-маршрут" in body["reply"]
+    assert "google/gemini-3-pro-preview" in body["reply"]
+
+
+def test_query_black_box_logs_event() -> None:
+    events: list[tuple[str, str]] = []
+
+    class _BB:
+        def log_event(self, name: str, detail: str) -> None:
+            events.append((name, detail))
+
+    client = _make_query_client(deps_overrides={"black_box": _BB()})
+    client.post("/api/assistant/query", json={"prompt": "hello"})
+    assert events and events[0][0] == "web_assistant_query"
 
 
 def test_assistant_stream_handles_exception(monkeypatch) -> None:
