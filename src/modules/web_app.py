@@ -11245,6 +11245,12 @@ class WebApp:
 
         self.app.include_router(_build_policy(self._make_router_context()))
 
+        # /api/notify/toggle + /api/silence/toggle: extracted в write_router.py
+        # (Phase 2 Wave J, Session 25 — first ctx.assert_write_access extraction).
+        from .web_routers.write_router import build_write_router as _build_write
+
+        self.app.include_router(_build_write(self._make_router_context()))
+
         # /api/system/info: extracted в src/modules/web_routers/meta_router.py
         # (Session 25). См. include_router ниже.
 
@@ -11482,19 +11488,7 @@ class WebApp:
             }
 
         # /api/notify/status: extracted в runtime_status_router (Wave D).
-        @self.app.post("/api/notify/toggle")
-        async def notify_toggle(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Toggle tool narration через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            enabled = bool(
-                payload.get("enabled", not getattr(config, "TOOL_NARRATION_ENABLED", True))
-            )
-            config.update_setting("TOOL_NARRATION_ENABLED", "1" if enabled else "0")
-            return {"ok": True, "enabled": enabled}
+        # POST /api/notify/toggle — extracted в write_router.py (Phase 2 Wave J, Session 25).
 
         @self.app.get("/api/voice/profile")
         async def voice_profile():
@@ -11730,32 +11724,7 @@ class WebApp:
             }
 
         # /api/silence/status: extracted в runtime_status_router (Wave D).
-        @self.app.post("/api/silence/toggle")
-        async def silence_toggle(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Toggle silence mode через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            from ..core.silence_mode import silence_manager
-
-            chat_id = str(payload.get("chat_id") or "").strip()
-            minutes = int(payload.get("minutes") or 30)
-            global_mode = bool(payload.get("global", False))
-            if global_mode:
-                if silence_manager.is_global_muted():
-                    silence_manager.unmute_global()
-                    return {"ok": True, "action": "unmuted_global"}
-                silence_manager.mute_global(minutes=minutes)
-                return {"ok": True, "action": "muted_global", "minutes": minutes}
-            if not chat_id:
-                return {"ok": False, "error": "chat_id required for per-chat silence"}
-            if silence_manager.is_silenced(chat_id):
-                silence_manager.unmute(chat_id)
-                return {"ok": True, "action": "unmuted", "chat_id": chat_id}
-            silence_manager.mute(chat_id, minutes=minutes)
-            return {"ok": True, "action": "muted", "chat_id": chat_id, "minutes": minutes}
+        # POST /api/silence/toggle — extracted в write_router.py (Phase 2 Wave J, Session 25).
 
         @self.app.post("/api/runtime/recover")
         async def runtime_recover(
