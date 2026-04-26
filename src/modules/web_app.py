@@ -9776,15 +9776,7 @@ class WebApp:
             snapshot["policy_matrix_endpoint"] = "/api/policy/matrix"
             return snapshot
 
-        @self.app.get("/api/translator/status")
-        async def translator_status():
-            """Лёгкий status endpoint для dashboard /translator page."""
-            try:
-                profile = self.kraab.get_translator_runtime_profile()
-                session = self.kraab.get_translator_session_state()
-                return {"ok": True, "profile": profile, "session": session}
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
+        # /api/translator/status — extracted в translator_router.py (Phase 2 Wave K).
 
         @self.app.post("/api/translator/session/toggle")
         async def translator_session_toggle(
@@ -9849,30 +9841,7 @@ class WebApp:
             self.kraab.update_translator_runtime_profile(language_pair=pair, persist=True)
             return {"ok": True, "language_pair": pair}
 
-        @self.app.get("/api/translator/history")
-        async def translator_history(n: int = 20):
-            """История переводов и статистика. ?n=N — последние N записей (default 20)."""
-            try:
-                state = self.kraab.get_translator_session_state()
-                stats = state.get("stats") or {}
-                total = stats.get("total_translations", 0)
-                history: list[dict] = list(state.get("history") or [])
-                # Ограничиваем выборку по параметру n
-                n_clamped = max(1, min(20, n))
-                recent = history[-n_clamped:] if history else []
-                return {
-                    "ok": True,
-                    "total_translations": total,
-                    "total_latency_ms": stats.get("total_latency_ms", 0),
-                    "avg_latency_ms": round(stats.get("total_latency_ms", 0) / max(1, total)),
-                    "last_pair": state.get("last_language_pair", ""),
-                    "last_original": state.get("last_translated_original", ""),
-                    "last_translation": state.get("last_translated_translation", ""),
-                    "history": list(reversed(recent)),  # новые первыми
-                    "history_count": len(history),
-                }
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
+        # /api/translator/history — extracted в translator_router.py (Phase 2 Wave K).
 
         @self.app.post("/api/translator/translate")
         async def translator_translate(
@@ -11117,17 +11086,7 @@ class WebApp:
             self.kraab.voice_mode = new_state
             return {"ok": True, "voice_enabled": new_state}
 
-        @self.app.get("/api/translator/languages")
-        async def translator_languages():
-            """Доступные языковые пары."""
-            from ..core.translator_runtime_profile import ALLOWED_LANGUAGE_PAIRS
-
-            profile = self.kraab.get_translator_runtime_profile()
-            return {
-                "ok": True,
-                "current": profile.get("language_pair", "es-ru"),
-                "available": sorted(ALLOWED_LANGUAGE_PAIRS),
-            }
+        # /api/translator/languages — extracted в translator_router.py (Phase 2 Wave K).
 
         # /api/swarm/teams + 7 других read-only swarm endpoints вынесены в
         # src/modules/web_routers/swarm_router.py (Session 25 Phase 2 Wave C).
@@ -11250,6 +11209,17 @@ class WebApp:
         from .web_routers.write_router import build_write_router as _build_write
 
         self.app.include_router(_build_write(self._make_router_context()))
+
+        # /api/translator/{languages,status,history,test}: extracted в
+        # translator_router.py (Phase 2 Wave K, Session 25 — простые GET через
+        # ctx.get_dep("kraab_userbot")). HARD endpoints (readiness, bootstrap,
+        # control-plane, session-inspector, mobile/*, delivery-matrix,
+        # live-trial-preflight) пока inline — требуют runtime_lite refactor.
+        from .web_routers.translator_router import (
+            build_translator_router as _build_translator,
+        )
+
+        self.app.include_router(_build_translator(self._make_router_context()))
 
         # /api/system/info: extracted в src/modules/web_routers/meta_router.py
         # (Session 25). См. include_router ниже.
@@ -11425,36 +11395,7 @@ class WebApp:
             router = self.deps.get("router")
             return await collect_dashboard_summary_async(boot_ts=boot, router=router)
 
-        @self.app.get("/api/translator/test")
-        async def translator_test_api(text: str = Query(default=""), tgt: str = Query(default="")):
-            """Тестовый перевод через API (GET для простоты)."""
-            if not text:
-                return {"ok": False, "error": "?text=Buenos+dias+amigo required"}
-            try:
-                from ..core.language_detect import detect_language, resolve_translation_pair
-                from ..core.translator_engine import translate_text
-                from ..openclaw_client import openclaw_client as _oc
-
-                detected = detect_language(text)
-                if not detected:
-                    return {"ok": False, "error": "language not detected"}
-                profile = self.kraab.get_translator_runtime_profile()
-                src, tgt_lang = resolve_translation_pair(
-                    detected, profile.get("language_pair", "es-ru")
-                )
-                if tgt:
-                    tgt_lang = tgt
-                result = await translate_text(text, src, tgt_lang, openclaw_client=_oc)
-                return {
-                    "ok": True,
-                    "src": src,
-                    "tgt": tgt_lang,
-                    "original": result.original,
-                    "translated": result.translated,
-                    "latency_ms": result.latency_ms,
-                }
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
+        # /api/translator/test — extracted в translator_router.py (Phase 2 Wave K).
 
         @self.app.post("/api/model/switch")
         async def model_switch(
