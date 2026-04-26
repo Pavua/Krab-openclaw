@@ -31,7 +31,7 @@ import httpx
 import structlog
 import uvicorn
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.config import config  # noqa: E402
@@ -526,6 +526,9 @@ class WebApp:
         # Phase 2 Wave Q (Session 25): inject translator snapshot helpers
         # как deps так чтобы router'ы могли их вызвать без self-bind на WebApp.
         deps_dict = dict(getattr(self, "deps", {}) or {})
+        # Phase 2 Wave XX: pages_router читает _index_path / _nano_theme_path
+        # лениво через webapp ref (поддержка тестов, патчащих attrs после init).
+        deps_dict.setdefault("webapp", self)
         deps_dict.setdefault("translator_readiness_snapshot", self._translator_readiness_snapshot)
         deps_dict.setdefault(
             "translator_control_plane_snapshot", self._translator_control_plane_snapshot
@@ -8450,35 +8453,11 @@ class WebApp:
                 "Expires": "0",
             }
 
-        @self.app.get("/", response_class=HTMLResponse)
-        async def index():
-            # Если есть кастомный index.html — отдаём его (для обратной совместимости).
-            if self._index_path.exists():
-                return FileResponse(self._index_path, headers=_no_store_headers())
-            # Иначе — Gemini-generated landing page с навигацией по sub-dashboards.
-            from .web_app_landing_page import LANDING_PAGE_HTML
-
-            return HTMLResponse(
-                LANDING_PAGE_HTML,
-                headers=_no_store_headers(),
-            )
-
-        @self.app.get("/nano_theme.css")
-        @self.app.get("/prototypes/nano/nano_theme.css")
-        async def nano_theme_css():
-            """
-            Отдает основной CSS web-панели.
-
-            Дублируем оба URL, чтобы панель стабильно работала и при открытии
-            через локальный HTTP, и при старых ссылках после обновлений.
-            """
-            if self._nano_theme_path.exists():
-                return FileResponse(
-                    self._nano_theme_path,
-                    media_type="text/css",
-                    headers=_no_store_headers(),
-                )
-            raise HTTPException(status_code=404, detail="nano_theme_css_not_found")
+        # / + /nano_theme.css + /prototypes/nano/nano_theme.css:
+        # extracted в src/modules/web_routers/pages_router.py
+        # (Phase 2 Wave XX, Session 25 — final architectural extraction).
+        # Все HTML page routes (landing, V4, legacy, prototypes, redirects)
+        # переехали в pages_router. См. include_router ниже.
 
         # /api/notify: extracted в src/modules/web_routers/misc_router.py
         # (Phase 2 Wave RR, Session 25). См. include_router ниже.
@@ -8687,250 +8666,14 @@ class WebApp:
         # /api/stats/caches: extracted в system_router.py (Phase 2 Wave Y).
         # См. include_router рядом с другими wave Y endpoints.
 
-        @self.app.get("/stats", response_class=HTMLResponse)
-        async def stats_dashboard():
-            """Runtime stats dashboard (Gemini 3.1 Pro frontend)."""
-            from .web_app_stats_dashboard import STATS_DASHBOARD_HTML
+        # All HTML page routes (/, /stats, /v4/*, /legacy/*, /prototypes/{page},
+        # /costs, /inbox, /swarm, /translator, /ops, /settings, /commands,
+        # /v4/* → primary 301 redirects, /v4 static CSS+JS, /nano_theme.css)
+        # extracted в src/modules/web_routers/pages_router.py
+        # (Phase 2 Wave XX, Session 25 — final architectural extraction).
+        from .web_routers.pages_router import build_pages_router as _build_pages_router
 
-            return HTMLResponse(
-                STATS_DASHBOARD_HTML,
-                headers=_no_store_headers(),
-            )
-
-        @self.app.get("/legacy/inbox", response_class=HTMLResponse)
-        async def legacy_inbox_dashboard():
-            """Legacy v3 Inbox items dashboard (Gemini 3.1 Pro generated)."""
-            page = config.BASE_DIR / "src" / "web" / "inbox_v2.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Legacy Inbox page not found</h1>", headers=_no_store_headers())
-
-        @self.app.get("/legacy/costs", response_class=HTMLResponse)
-        async def legacy_costs_dashboard():
-            """Legacy v3 Cost analytics dashboard (Gemini 3.1 Pro generated)."""
-            page = config.BASE_DIR / "src" / "web" / "costs_v2.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Legacy Costs page not found</h1>", headers=_no_store_headers())
-
-        @self.app.get("/legacy/swarm", response_class=HTMLResponse)
-        async def legacy_swarm_dashboard():
-            """Legacy v3 Swarm multi-agent dashboard (Gemini 3.1 Pro generated)."""
-            page = config.BASE_DIR / "src" / "web" / "swarm_v2.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Legacy Swarm page not found</h1>", headers=_no_store_headers())
-
-        @self.app.get("/prototypes/{page}", response_class=HTMLResponse)
-        async def prototype_page(page: str):
-            """Доступ к Gemini-generated prototype pages."""
-            safe_page = page.replace("..", "").replace("/", "")
-            proto = config.BASE_DIR / "src" / "web" / "prototypes" / f"{safe_page}.html"
-            if proto.exists():
-                return FileResponse(proto, headers=_no_store_headers())
-            # Попробуем с _v1 суффиксом
-            proto_v1 = config.BASE_DIR / "src" / "web" / "prototypes" / f"{safe_page}_v1.html"
-            if proto_v1.exists():
-                return FileResponse(proto_v1, headers=_no_store_headers())
-            return HTMLResponse(f"<h1>Prototype '{page}' not found</h1>", status_code=404)
-
-        @self.app.get("/legacy/translator", response_class=HTMLResponse)
-        async def legacy_translator_dashboard():
-            """Legacy v3 Translator dashboard (Gemini 3.1 Pro generated)."""
-            page = config.BASE_DIR / "src" / "web" / "translator_v2.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse(
-                "<h1>Legacy Translator page not found</h1>", headers=_no_store_headers()
-            )
-
-        # ── V4 Dashboard (Liquid Glass) ────────────────────────────────
-
-        @self.app.get("/v4", response_class=HTMLResponse)
-        @self.app.get("/v4/", response_class=HTMLResponse)
-        async def v4_index():
-            """V4 Liquid Glass dashboard — главная страница."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "index.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/v4/chat", response_class=HTMLResponse)
-        async def v4_chat():
-            """V4 Liquid Glass dashboard — AI Chat."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "chat.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Chat not ready</h1>", headers=_no_store_headers())
-
-        # ── V4 primary routes (promoted to top-level) ─────────────────
-
-        @self.app.get("/costs", response_class=HTMLResponse)
-        async def costs_dashboard():
-            """V4 Cost analytics dashboard (primary)."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "costs.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Costs dashboard not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/inbox", response_class=HTMLResponse)
-        async def inbox_dashboard():
-            """V4 Inbox items dashboard (primary)."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "inbox.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Inbox dashboard not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/swarm", response_class=HTMLResponse)
-        async def swarm_dashboard():
-            """V4 Swarm multi-agent dashboard (primary)."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "swarm.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Swarm dashboard not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/translator", response_class=HTMLResponse)
-        async def translator_dashboard():
-            """V4 Translator dashboard (primary)."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "translator.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse(
-                "<h1>Translator dashboard not ready</h1>", headers=_no_store_headers()
-            )
-
-        @self.app.get("/ops", response_class=HTMLResponse)
-        async def ops_dashboard():
-            """V4 Operations Center dashboard (primary)."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "ops.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Ops dashboard not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/settings", response_class=HTMLResponse)
-        async def settings_dashboard():
-            """V4 Settings editor (primary)."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "settings.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse(
-                "<h1>Settings dashboard not ready</h1>", headers=_no_store_headers()
-            )
-
-        @self.app.get("/commands", response_class=HTMLResponse)
-        async def commands_dashboard():
-            """V4 Commands catalog (primary)."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "commands.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse(
-                "<h1>Commands dashboard not ready</h1>", headers=_no_store_headers()
-            )
-
-        # ── /v4/* → 301 redirect to primary routes ────────────────────
-
-        @self.app.get("/v4/costs", response_class=HTMLResponse)
-        async def v4_costs_redirect():
-            """Permanent redirect: /v4/costs → /costs."""
-            from fastapi.responses import RedirectResponse
-
-            return RedirectResponse(url="/costs", status_code=301)
-
-        @self.app.get("/v4/inbox", response_class=HTMLResponse)
-        async def v4_inbox_redirect():
-            """Permanent redirect: /v4/inbox → /inbox."""
-            from fastapi.responses import RedirectResponse
-
-            return RedirectResponse(url="/inbox", status_code=301)
-
-        @self.app.get("/v4/swarm", response_class=HTMLResponse)
-        async def v4_swarm_redirect():
-            """Permanent redirect: /v4/swarm → /swarm."""
-            from fastapi.responses import RedirectResponse
-
-            return RedirectResponse(url="/swarm", status_code=301)
-
-        @self.app.get("/v4/translator", response_class=HTMLResponse)
-        async def v4_translator_redirect():
-            """Permanent redirect: /v4/translator → /translator."""
-            from fastapi.responses import RedirectResponse
-
-            return RedirectResponse(url="/translator", status_code=301)
-
-        @self.app.get("/v4/ops", response_class=HTMLResponse)
-        async def v4_ops_redirect():
-            """Permanent redirect: /v4/ops → /ops."""
-            from fastapi.responses import RedirectResponse
-
-            return RedirectResponse(url="/ops", status_code=301)
-
-        @self.app.get("/v4/settings", response_class=HTMLResponse)
-        async def v4_settings_redirect():
-            """Permanent redirect: /v4/settings → /settings."""
-            from fastapi.responses import RedirectResponse
-
-            return RedirectResponse(url="/settings", status_code=301)
-
-        @self.app.get("/v4/commands", response_class=HTMLResponse)
-        async def v4_commands_redirect():
-            """Permanent redirect: /v4/commands → /commands."""
-            from fastapi.responses import RedirectResponse
-
-            return RedirectResponse(url="/commands", status_code=301)
-
-        # ── /v4/research (no primary equivalent, keep serving directly) ─
-
-        @self.app.get("/v4/research", response_class=HTMLResponse)
-        async def v4_research():
-            """V4 Liquid Glass dashboard — Swarm Research Pipeline."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "research.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Research not ready</h1>", headers=_no_store_headers())
-
-        # ── Legacy v3 stubs for ops/settings/commands (no v3 html existed) ─
-
-        @self.app.get("/legacy/ops", response_class=HTMLResponse)
-        async def legacy_ops_dashboard():
-            """Legacy ops placeholder (no v3 page existed for ops)."""
-            return HTMLResponse(
-                "<h1>Legacy Ops</h1><p>No v3 ops page — <a href='/ops'>go to V4 Ops</a></p>",
-                headers=_no_store_headers(),
-            )
-
-        @self.app.get("/legacy/settings", response_class=HTMLResponse)
-        async def legacy_settings_dashboard():
-            """Legacy settings placeholder (no v3 page existed for settings)."""
-            return HTMLResponse(
-                "<h1>Legacy Settings</h1><p>No v3 settings page — <a href='/settings'>go to V4 Settings</a></p>",
-                headers=_no_store_headers(),
-            )
-
-        @self.app.get("/legacy/commands", response_class=HTMLResponse)
-        async def legacy_commands_dashboard():
-            """Legacy commands placeholder (no v3 page existed for commands)."""
-            return HTMLResponse(
-                "<h1>Legacy Commands</h1><p>No v3 commands page — <a href='/commands'>go to V4 Commands</a></p>",
-                headers=_no_store_headers(),
-            )
-
-        @self.app.get("/v4/liquid-glass.css")
-        async def v4_css():
-            """V4 Liquid Glass — общий CSS."""
-            css = config.BASE_DIR / "src" / "web" / "v4" / "liquid-glass.css"
-            if css.exists():
-                return FileResponse(css, media_type="text/css", headers=_no_store_headers())
-            return HTMLResponse("/* not found */", media_type="text/css")
-
-        @self.app.get("/v4/theme-toggle.js")
-        async def v4_theme_toggle():
-            """V4 — скрипт dark/light theme toggle с localStorage."""
-            js = config.BASE_DIR / "src" / "web" / "v4" / "theme-toggle.js"
-            if js.exists():
-                return FileResponse(
-                    js, media_type="application/javascript", headers=_no_store_headers()
-                )
-            return HTMLResponse("// not found", media_type="application/javascript")
+        self.app.include_router(_build_pages_router(self._make_router_context()))
 
         # ── Costs + Swarm API endpoints (backend для Gemini dashboards) ────
 
