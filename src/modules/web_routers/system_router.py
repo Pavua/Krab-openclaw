@@ -14,6 +14,7 @@ System router — Phase 2 Wave Y + Wave AA extraction (Session 25).
 - POST /api/runtime/chat-session/clear — Wave AA: очистка runtime chat-session
 - POST /api/runtime/repair-active-shared-permissions — Wave QQ: нормализация прав в `Краб-active`
 - POST /api/runtime/recover — Wave QQ: recovery playbook (repair + sync + tier/probe)
+- GET  /api/runtime/handoff — Wave UU: единый runtime-снимок для anti-413 миграции
 - POST /api/krab/restart_userbot — Wave SS: перезапуск userbot c rate-limit (legacy watchdog)
 
 Helper-методы WebApp (``_runtime_operator_profile``,
@@ -651,6 +652,186 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
             "observability": observability,
             "known_issues": known_issues,
             "session_12": session_12,
+        }
+
+    # ── /api/runtime/handoff (Wave UU) ──────────────────────────────────────
+
+    @router.get("/api/runtime/handoff")
+    async def runtime_handoff(probe_cloud_runtime: str = Query(default="1")) -> dict:
+        """
+        Единый runtime-снимок для безопасной миграции в новый чат (Anti-413).
+
+        Формат intentionally machine-readable, чтобы его можно было:
+        - сохранить в артефакты;
+        - приложить в новый диалог без ручной реконструкции контекста.
+        """
+        # Reuse module-level reference в src.modules.web_app — это единая точка,
+        # которую существующие тесты монкей-патчат через
+        # ``monkeypatch.setattr("src.modules.web_app.inbox_service", ...)``.
+        # Прямой импорт `from ...core.inbox_service import inbox_service` ломал бы
+        # эти тесты.
+        import sys as _sys
+
+        _wam = _sys.modules.get("src.modules.web_app")
+        if _wam is not None and hasattr(_wam, "inbox_service"):
+            _inbox_service = getattr(_wam, "inbox_service")
+        else:
+            from ...core.inbox_service import inbox_service as _inbox_service
+
+        openclaw = ctx.get_dep("openclaw_client")
+        voice_gateway = ctx.get_dep("voice_gateway_client")
+        krab_ear = ctx.get_dep("krab_ear_client")
+
+        runtime_lite = await ctx.collect_runtime_lite()
+
+        operator_profile_helper = ctx.get_dep("runtime_operator_profile_helper")
+        operator_profile = operator_profile_helper() if callable(operator_profile_helper) else {}
+
+        translator_snapshot_helper = ctx.get_dep("translator_readiness_snapshot")
+        translator_snapshot: dict[str, Any] = {}
+        if callable(translator_snapshot_helper):
+            translator_snapshot = await translator_snapshot_helper(runtime_lite=runtime_lite) or {}
+
+        capability_registry_helper = ctx.get_dep("capability_registry_snapshot_helper")
+        capability_registry: dict[str, Any] = {}
+        if callable(capability_registry_helper):
+            capability_registry = await capability_registry_helper(runtime_lite=runtime_lite) or {}
+
+        safe_health_helper = ctx.get_dep("runtime_handoff_safe_client_health_helper")
+
+        async def _health(client: Any, source: str) -> dict[str, Any]:
+            if not callable(safe_health_helper):
+                return {"ok": False, "status": "not_supported", "source": source, "detail": {}}
+            return await safe_health_helper(client, source=source, timeout_sec=3.0)
+
+        openclaw_health = await _health(openclaw, "openclaw")
+        voice_health = await _health(voice_gateway, "voice_gateway")
+        krab_ear_health = await _health(krab_ear, "krab_ear")
+
+        bool_env_helper = ctx.get_dep("bool_env_helper")
+        if callable(bool_env_helper):
+            should_probe_cloud_runtime = bool_env_helper(str(probe_cloud_runtime or "1"), True)
+        else:
+            should_probe_cloud_runtime = str(probe_cloud_runtime or "1").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+
+        cloud_runtime: dict[str, Any]
+        if not should_probe_cloud_runtime:
+            cloud_runtime = {"available": False, "skipped": True, "reason": "probe_disabled"}
+        elif openclaw and hasattr(openclaw, "get_cloud_runtime_check"):
+            try:
+                cloud_report = await asyncio.wait_for(
+                    openclaw.get_cloud_runtime_check(), timeout=18.0
+                )
+                cloud_runtime = {"available": True, "report": cloud_report}
+                # После cloud-probe `openclaw_client` может обновить tier/auth truth.
+                # Переснимаем lightweight runtime, чтобы handoff не уносил stale
+                # `configured/free` сразу после restart, когда probe уже увидел real state.
+                runtime_lite = await ctx.collect_runtime_lite(force_refresh=True)
+            except asyncio.TimeoutError:
+                cloud_runtime = {"available": False, "error": "timeout"}
+            except Exception as exc:  # noqa: BLE001
+                cloud_runtime = {"available": False, "error": str(exc)}
+        else:
+            cloud_runtime = {"available": False, "error": "not_supported"}
+
+        latest_path_helper = ctx.get_dep("runtime_handoff_latest_path_by_glob_helper")
+        if callable(latest_path_helper):
+            latest_bundle = latest_path_helper("artifacts/handoff_*")
+            latest_checkpoint = latest_path_helper("artifacts/context_checkpoints/checkpoint_*.md")
+            latest_pack_dir = latest_path_helper("artifacts/context_transition/pack_*")
+        else:
+            latest_bundle = None
+            latest_checkpoint = None
+            latest_pack_dir = None
+
+        latest_transfer_prompt = (
+            str(latest_pack_dir / "TRANSFER_PROMPT_RU.md")
+            if latest_pack_dir and (latest_pack_dir / "TRANSFER_PROMPT_RU.md").exists()
+            else None
+        )
+
+        operator_workflow = _inbox_service.get_workflow_snapshot()
+
+        git_helper = ctx.get_dep("runtime_handoff_git_snapshot_helper")
+        git_snapshot = git_helper() if callable(git_helper) else {}
+
+        mask_helper = ctx.get_dep("runtime_handoff_mask_secret_helper")
+
+        def _mask(value: str) -> str:
+            return mask_helper(value) if callable(mask_helper) else ""
+
+        return {
+            "ok": True,
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "project_root": str(ctx.project_root),
+            "git": git_snapshot,
+            "health_lite": {
+                "ok": True,
+                "status": "up",
+                "telegram_session_state": runtime_lite.get("telegram_session_state"),
+                "lmstudio_model_state": runtime_lite.get("lmstudio_model_state"),
+                "openclaw_auth_state": runtime_lite.get("openclaw_auth_state"),
+                "workspace_attached": bool(
+                    (
+                        (runtime_lite.get("workspace_state") or {})
+                        if isinstance(runtime_lite, dict)
+                        else {}
+                    ).get("shared_workspace_attached")
+                ),
+                "last_runtime_route": runtime_lite.get("last_runtime_route"),
+                "inbox_summary": operator_workflow.get("summary")
+                or runtime_lite.get("inbox_summary"),
+            },
+            "runtime": runtime_lite,
+            "inbox_summary": operator_workflow.get("summary") or {},
+            "operator_workflow": operator_workflow,
+            "operator_profile": operator_profile,
+            "capability_registry_summary": capability_registry.get("summary") or {},
+            "policy_matrix_summary": (capability_registry.get("policy_matrix") or {}).get("summary")
+            or {},
+            "channel_capabilities_summary": (
+                (capability_registry.get("contours") or {}).get("channels", {}).get("summary") or {}
+            ),
+            "translator_readiness": translator_snapshot,
+            "services": {
+                "openclaw": openclaw_health,
+                "voice_gateway": voice_health,
+                "krab_ear": krab_ear_health,
+            },
+            "cloud_runtime": cloud_runtime,
+            "masked_secrets": {
+                "openclaw_token": _mask(
+                    os.getenv(
+                        "OPENCLAW_GATEWAY_TOKEN",
+                        os.getenv("OPENCLAW_TOKEN", os.getenv("OPENCLAW_API_KEY", "")),
+                    )
+                ),
+                "web_api_key": _mask(os.getenv("WEB_API_KEY", "")),
+                "gemini_free": _mask(os.getenv("GEMINI_API_KEY_FREE", "")),
+                "gemini_paid": _mask(os.getenv("GEMINI_API_KEY_PAID", "")),
+                "openai_api_key": _mask(os.getenv("OPENAI_API_KEY", "")),
+            },
+            "artifacts": {
+                "latest_handoff_bundle_dir": str(latest_bundle) if latest_bundle else None,
+                "latest_context_checkpoint": str(latest_checkpoint) if latest_checkpoint else None,
+                "latest_transition_pack_dir": str(latest_pack_dir) if latest_pack_dir else None,
+                "latest_transfer_prompt": latest_transfer_prompt,
+                "master_plan_doc": str(ctx.project_root / "docs" / "MASTER_PLAN_VNEXT_RU.md"),
+                "translator_audit_doc": str(
+                    ctx.project_root / "docs" / "CALL_TRANSLATOR_AUDIT_RU.md"
+                ),
+                "multi_account_doc": str(
+                    ctx.project_root / "docs" / "MULTI_ACCOUNT_SWITCHOVER_RU.md"
+                ),
+                "parallel_dialog_doc": str(
+                    ctx.project_root / "docs" / "PARALLEL_DIALOG_PROTOCOL_RU.md"
+                ),
+            },
         }
 
     # ── /api/krab/restart_userbot (Wave SS) ─────────────────────────────────

@@ -918,6 +918,26 @@ class WebApp:
             lambda ts: setattr(self, "_last_restart_userbot_ts", ts),
         )
 
+        # Phase 2 Wave UU (Session 25): inject helpers для extraction
+        # /api/runtime/handoff aggregator в system_router.py. Late-bound через
+        # lambda — позволяет тестам монкей-патчить методы WebApp после init.
+        deps_dict.setdefault(
+            "runtime_handoff_safe_client_health_helper",
+            lambda *args, **kwargs: self._safe_client_health_summary(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "runtime_handoff_latest_path_by_glob_helper",
+            lambda pattern: self._latest_path_by_glob(pattern),
+        )
+        deps_dict.setdefault(
+            "runtime_handoff_git_snapshot_helper",
+            lambda: self._git_snapshot(),
+        )
+        deps_dict.setdefault(
+            "runtime_handoff_mask_secret_helper",
+            lambda value: WebApp._mask_secret(value),
+        )
+
         return RouterContext(
             deps=deps_dict,
             project_root=self._project_root(),
@@ -9587,152 +9607,14 @@ class WebApp:
         # /api/translator/mobile/bind — extracted в translator_router.py (Phase 2 Wave II).
         # /api/translator/mobile/remove — extracted в translator_router.py (Phase 2 Wave II).
 
-        @self.app.get("/api/runtime/handoff")
-        async def runtime_handoff(probe_cloud_runtime: str = Query(default="1")):
-            """
-            Единый runtime-снимок для безопасной миграции в новый чат (Anti-413).
-
-            Формат intentionally machine-readable, чтобы его можно было:
-            - сохранить в артефакты;
-            - приложить в новый диалог без ручной реконструкции контекста.
-            """
-            openclaw = self.deps.get("openclaw_client")
-            voice_gateway = self.deps.get("voice_gateway_client")
-            krab_ear = self.deps.get("krab_ear_client")
-
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            operator_profile = self._runtime_operator_profile()
-            translator_snapshot = await self._translator_readiness_snapshot(
-                runtime_lite=runtime_lite
-            )
-            capability_registry = await self._capability_registry_snapshot(
-                runtime_lite=runtime_lite
-            )
-            openclaw_health = await self._safe_client_health_summary(
-                openclaw,
-                source="openclaw",
-                timeout_sec=3.0,
-            )
-            voice_health = await self._safe_client_health_summary(
-                voice_gateway,
-                source="voice_gateway",
-                timeout_sec=3.0,
-            )
-            krab_ear_health = await self._safe_client_health_summary(
-                krab_ear,
-                source="krab_ear",
-                timeout_sec=3.0,
-            )
-
-            should_probe_cloud_runtime = self._bool_env(str(probe_cloud_runtime or "1"), True)
-
-            cloud_runtime: dict[str, Any]
-            if not should_probe_cloud_runtime:
-                cloud_runtime = {"available": False, "skipped": True, "reason": "probe_disabled"}
-            elif openclaw and hasattr(openclaw, "get_cloud_runtime_check"):
-                try:
-                    cloud_report = await asyncio.wait_for(
-                        openclaw.get_cloud_runtime_check(), timeout=18.0
-                    )
-                    cloud_runtime = {"available": True, "report": cloud_report}
-                    # После cloud-probe `openclaw_client` может обновить tier/auth truth.
-                    # Переснимаем lightweight runtime, чтобы handoff не уносил stale
-                    # `configured/free` сразу после restart, когда probe уже увидел real state.
-                    runtime_lite = await self._collect_runtime_lite_snapshot(force_refresh=True)
-                except asyncio.TimeoutError:
-                    cloud_runtime = {"available": False, "error": "timeout"}
-                except Exception as exc:
-                    cloud_runtime = {"available": False, "error": str(exc)}
-            else:
-                cloud_runtime = {"available": False, "error": "not_supported"}
-
-            latest_bundle = self._latest_path_by_glob("artifacts/handoff_*")
-            latest_checkpoint = self._latest_path_by_glob(
-                "artifacts/context_checkpoints/checkpoint_*.md"
-            )
-            latest_pack_dir = self._latest_path_by_glob("artifacts/context_transition/pack_*")
-            latest_transfer_prompt = (
-                str(latest_pack_dir / "TRANSFER_PROMPT_RU.md")
-                if latest_pack_dir and (latest_pack_dir / "TRANSFER_PROMPT_RU.md").exists()
-                else None
-            )
-            operator_workflow = inbox_service.get_workflow_snapshot()
-
-            return {
-                "ok": True,
-                "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "project_root": str(self._project_root()),
-                "git": self._git_snapshot(),
-                "health_lite": {
-                    "ok": True,
-                    "status": "up",
-                    "telegram_session_state": runtime_lite.get("telegram_session_state"),
-                    "lmstudio_model_state": runtime_lite.get("lmstudio_model_state"),
-                    "openclaw_auth_state": runtime_lite.get("openclaw_auth_state"),
-                    "workspace_attached": bool(
-                        (
-                            (runtime_lite.get("workspace_state") or {})
-                            if isinstance(runtime_lite, dict)
-                            else {}
-                        ).get("shared_workspace_attached")
-                    ),
-                    "last_runtime_route": runtime_lite.get("last_runtime_route"),
-                    "inbox_summary": operator_workflow.get("summary")
-                    or runtime_lite.get("inbox_summary"),
-                },
-                "runtime": runtime_lite,
-                "inbox_summary": operator_workflow.get("summary") or {},
-                "operator_workflow": operator_workflow,
-                "operator_profile": operator_profile,
-                "capability_registry_summary": capability_registry.get("summary") or {},
-                "policy_matrix_summary": (capability_registry.get("policy_matrix") or {}).get(
-                    "summary"
-                )
-                or {},
-                "channel_capabilities_summary": (
-                    (capability_registry.get("contours") or {}).get("channels", {}).get("summary")
-                    or {}
-                ),
-                "translator_readiness": translator_snapshot,
-                "services": {
-                    "openclaw": openclaw_health,
-                    "voice_gateway": voice_health,
-                    "krab_ear": krab_ear_health,
-                },
-                "cloud_runtime": cloud_runtime,
-                "masked_secrets": {
-                    "openclaw_token": self._mask_secret(
-                        os.getenv(
-                            "OPENCLAW_GATEWAY_TOKEN",
-                            os.getenv("OPENCLAW_TOKEN", os.getenv("OPENCLAW_API_KEY", "")),
-                        )
-                    ),
-                    "web_api_key": self._mask_secret(os.getenv("WEB_API_KEY", "")),
-                    "gemini_free": self._mask_secret(os.getenv("GEMINI_API_KEY_FREE", "")),
-                    "gemini_paid": self._mask_secret(os.getenv("GEMINI_API_KEY_PAID", "")),
-                    "openai_api_key": self._mask_secret(os.getenv("OPENAI_API_KEY", "")),
-                },
-                "artifacts": {
-                    "latest_handoff_bundle_dir": str(latest_bundle) if latest_bundle else None,
-                    "latest_context_checkpoint": str(latest_checkpoint)
-                    if latest_checkpoint
-                    else None,
-                    "latest_transition_pack_dir": str(latest_pack_dir) if latest_pack_dir else None,
-                    "latest_transfer_prompt": latest_transfer_prompt,
-                    "master_plan_doc": str(
-                        self._project_root() / "docs" / "MASTER_PLAN_VNEXT_RU.md"
-                    ),
-                    "translator_audit_doc": str(
-                        self._project_root() / "docs" / "CALL_TRANSLATOR_AUDIT_RU.md"
-                    ),
-                    "multi_account_doc": str(
-                        self._project_root() / "docs" / "MULTI_ACCOUNT_SWITCHOVER_RU.md"
-                    ),
-                    "parallel_dialog_doc": str(
-                        self._project_root() / "docs" / "PARALLEL_DIALOG_PROTOCOL_RU.md"
-                    ),
-                },
-            }
+        # /api/runtime/handoff — extracted в system_router.py (Phase 2 Wave UU,
+        # Session 25). Helpers `runtime_handoff_safe_client_health_helper`,
+        # `runtime_handoff_latest_path_by_glob_helper`,
+        # `runtime_handoff_git_snapshot_helper`,
+        # `runtime_handoff_mask_secret_helper` инжектируются через
+        # `_make_router_context`. Reuses Wave Q/R helpers
+        # (translator_readiness_snapshot, capability_registry_snapshot_helper,
+        # runtime_operator_profile_helper) и Wave QQ `bool_env_helper`.
 
         # /api/krab/restart_userbot — extracted в system_router.py (Phase 2 Wave SS,
         # Session 25). Helpers `restart_userbot_get_last_ts_helper` /

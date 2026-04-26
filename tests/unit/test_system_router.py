@@ -570,3 +570,134 @@ def test_runtime_recover_invalid_auth(monkeypatch) -> None:
     client = _make_client()
     resp = client.post("/api/runtime/recover", json={})
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# /api/runtime/handoff (Wave UU)
+# ---------------------------------------------------------------------------
+
+
+def _handoff_handoff_overrides(*, latest: Any = None) -> dict[str, Any]:
+    """Базовый набор helpers для /api/runtime/handoff endpoint."""
+
+    async def _safe_health(client: Any, *, source: str, timeout_sec: float = 3.0) -> dict:
+        return {"ok": client is not None, "status": "ok", "source": source, "detail": {}}
+
+    async def _translator_readiness(*, runtime_lite: Any = None) -> dict:
+        return {"ready": True, "language_pair": "es-ru"}
+
+    async def _capability_registry(*, runtime_lite: Any = None) -> dict:
+        return {
+            "summary": {"contours_total": 3},
+            "policy_matrix": {"summary": {"rules": 5}},
+            "contours": {"channels": {"summary": {"telegram": "ok"}}},
+        }
+
+    return {
+        "runtime_handoff_safe_client_health_helper": _safe_health,
+        "translator_readiness_snapshot": _translator_readiness,
+        "capability_registry_snapshot_helper": _capability_registry,
+        "runtime_handoff_latest_path_by_glob_helper": lambda pattern: latest,
+        "runtime_handoff_git_snapshot_helper": lambda: {
+            "branch": "feature-x",
+            "head": "abc123",
+            "status_short": "## feature-x",
+        },
+        "runtime_handoff_mask_secret_helper": lambda v: ("***" + v[-3:]) if v else "",
+        "bool_env_helper": lambda value, default=False: (
+            str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+        ),
+    }
+
+
+def test_runtime_handoff_returns_machine_readable_snapshot() -> None:
+    """Handoff endpoint должен отдать единый JSON с health_lite/runtime/git."""
+    overrides = _handoff_handoff_overrides()
+    client = _make_client(deps_overrides=overrides)
+    resp = client.get("/api/runtime/handoff", params={"probe_cloud_runtime": "0"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["git"]["branch"] == "feature-x"
+    assert body["health_lite"]["status"] == "up"
+    assert body["health_lite"]["telegram_session_state"] == "active"
+    assert body["translator_readiness"]["ready"] is True
+    assert body["capability_registry_summary"] == {"contours_total": 3}
+    assert body["policy_matrix_summary"] == {"rules": 5}
+    assert body["channel_capabilities_summary"] == {"telegram": "ok"}
+
+
+def test_runtime_handoff_skips_cloud_probe_when_disabled() -> None:
+    """probe_cloud_runtime=0 должен вернуть ok=True без cloud-probe."""
+    client = _make_client(deps_overrides=_handoff_handoff_overrides())
+    resp = client.get("/api/runtime/handoff", params={"probe_cloud_runtime": "0"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cloud_runtime"]["available"] is False
+    assert body["cloud_runtime"]["skipped"] is True
+    assert body["cloud_runtime"]["reason"] == "probe_disabled"
+
+
+def test_runtime_handoff_cloud_probe_unsupported_when_no_openclaw() -> None:
+    """Без openclaw_client должен вернуть not_supported (не падать в 500)."""
+    overrides = _handoff_handoff_overrides()
+    client = _make_client(deps_overrides=overrides)
+    resp = client.get("/api/runtime/handoff", params={"probe_cloud_runtime": "1"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cloud_runtime"]["available"] is False
+    assert body["cloud_runtime"]["error"] == "not_supported"
+
+
+def test_runtime_handoff_masks_secrets(monkeypatch) -> None:
+    """masked_secrets должны проходить через mask_helper, а не светить env."""
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "supersecret_token_12345")
+    monkeypatch.setenv("WEB_API_KEY", "")
+    monkeypatch.delenv("GEMINI_API_KEY_FREE", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY_PAID", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    overrides = _handoff_handoff_overrides()
+    client = _make_client(deps_overrides=overrides)
+    resp = client.get("/api/runtime/handoff", params={"probe_cloud_runtime": "0"})
+    assert resp.status_code == 200
+    masked = resp.json()["masked_secrets"]
+    assert masked["openclaw_token"].endswith("345")
+    assert masked["openclaw_token"].startswith("***")
+    assert masked["web_api_key"] == ""
+
+
+def test_runtime_handoff_includes_artifacts_paths(tmp_path) -> None:
+    """artifacts должны включать project_root-based абсолютные пути для docs."""
+    overrides = _handoff_handoff_overrides(latest=tmp_path / "handoff_2026")
+    client = _make_client(deps_overrides=overrides)
+    resp = client.get("/api/runtime/handoff", params={"probe_cloud_runtime": "0"})
+    assert resp.status_code == 200
+    artifacts = resp.json()["artifacts"]
+    # latest_handoff_bundle_dir resolved через helper
+    assert artifacts["latest_handoff_bundle_dir"].endswith("handoff_2026")
+    # docs paths relative to project_root (".") в _make_client
+    assert artifacts["master_plan_doc"].endswith("docs/MASTER_PLAN_VNEXT_RU.md")
+    assert artifacts["translator_audit_doc"].endswith("docs/CALL_TRANSLATOR_AUDIT_RU.md")
+    # latest_transfer_prompt — None если pack_dir/TRANSFER_PROMPT_RU.md не существует
+    assert artifacts["latest_transfer_prompt"] is None
+
+
+def test_runtime_handoff_safe_when_helpers_missing() -> None:
+    """Endpoint не должен падать, если helpers отсутствуют (graceful degradation)."""
+    overrides = {
+        "runtime_handoff_safe_client_health_helper": None,
+        "translator_readiness_snapshot": None,
+        "capability_registry_snapshot_helper": None,
+        "runtime_handoff_latest_path_by_glob_helper": None,
+        "runtime_handoff_git_snapshot_helper": None,
+        "runtime_handoff_mask_secret_helper": None,
+        "bool_env_helper": None,
+    }
+    client = _make_client(deps_overrides=overrides)
+    resp = client.get("/api/runtime/handoff", params={"probe_cloud_runtime": "0"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["translator_readiness"] == {}
+    assert body["capability_registry_summary"] == {}
+    assert body["git"] == {}
