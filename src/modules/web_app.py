@@ -9530,25 +9530,9 @@ class WebApp:
                 "policy_matrix": self._policy_matrix_snapshot(runtime_lite=runtime_lite),
             }
 
-        @self.app.get("/api/queue")
-        async def get_queue():
-            """Возвращает состояние per-chat очередей автообработки."""
-            ai_runtime = self.deps.get("ai_runtime")
-            if not ai_runtime or not hasattr(ai_runtime, "queue_manager"):
-                return {"ok": False, "error": "queue_not_configured"}
-            return {"ok": True, "queue": ai_runtime.queue_manager.get_stats()}
-
-        @self.app.get("/api/ctx")
-        async def get_ctx(chat_id: int | None = Query(default=None)):
-            """Snapshot контекста последнего запроса (по чату или все чаты)."""
-            ai_runtime = self.deps.get("ai_runtime")
-            if not ai_runtime:
-                return {"ok": False, "error": "ai_runtime_not_configured"}
-            if chat_id is None:
-                if not hasattr(ai_runtime, "get_context_snapshots"):
-                    return {"ok": False, "error": "ctx_not_supported"}
-                return {"ok": True, "contexts": ai_runtime.get_context_snapshots()}
-            return {"ok": True, "context": ai_runtime.get_context_snapshot(int(chat_id))}
+        # /api/queue + /api/ctx: extracted в runtime_inspect_router.py
+        # (Phase 2 Wave G, Session 25 — RouterContext-based extraction).
+        # См. include_router рядом с extras_router.
 
         @self.app.get("/api/reactions/stats")
         async def get_reactions_stats(chat_id: int | None = Query(default=None)):
@@ -11244,6 +11228,14 @@ class WebApp:
         from .web_routers.extras_router import build_extras_router as _build_extras
 
         self.app.include_router(_build_extras(self._make_router_context()))
+
+        # /api/queue + /api/ctx: extracted в runtime_inspect_router.py
+        # (Phase 2 Wave G, Session 25).
+        from .web_routers.runtime_inspect_router import (
+            build_runtime_inspect_router as _build_runtime_inspect,
+        )
+
+        self.app.include_router(_build_runtime_inspect(self._make_router_context()))
 
         # /api/system/info: extracted в src/modules/web_routers/meta_router.py
         # (Session 25). См. include_router ниже.
