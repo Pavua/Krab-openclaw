@@ -346,6 +346,17 @@ class WebApp:
             self._translator_delivery_matrix_snapshot,
         )
 
+        # Phase 2 Wave R (Session 25): inject capability/channel snapshot helpers
+        # для capabilities_router (без self-bind на WebApp).
+        deps_dict.setdefault(
+            "capability_registry_snapshot_helper",
+            self._capability_registry_snapshot,
+        )
+        deps_dict.setdefault(
+            "channel_capabilities_snapshot_helper",
+            self._channel_capabilities_snapshot,
+        )
+
         return RouterContext(
             deps=deps_dict,
             project_root=self._project_root(),
@@ -9237,23 +9248,8 @@ class WebApp:
                 "note": "fire-and-forget — check logs for cron_native_job_done / cron_native_job_sender_not_bound",
             }
 
-        @self.app.get("/api/policy")
-        async def get_policy():
-            """Возвращает runtime-политику AI (queue/guardrails/reactions)."""
-            ai_runtime = self.deps.get("ai_runtime")
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            policy_matrix = self._policy_matrix_snapshot(runtime_lite=runtime_lite)
-            if not ai_runtime:
-                return {
-                    "ok": False,
-                    "error": "ai_runtime_not_configured",
-                    "policy_matrix": policy_matrix,
-                }
-            return {
-                "ok": True,
-                "policy": ai_runtime.get_policy_snapshot(),
-                "policy_matrix": policy_matrix,
-            }
+        # /api/policy: extracted в capabilities_router.py (Phase 2 Wave R, Session 25).
+        # См. include_router рядом с policy_router.
 
         # /api/policy/matrix: extracted в policy_router.py
         # (Phase 2 Wave I, Session 25 — RouterContext-based extraction).
@@ -9475,24 +9471,9 @@ class WebApp:
                 "active_shared_permission_health": permission_health,
             }
 
-        @self.app.get("/api/capabilities/registry")
-        async def capability_registry():
-            """Возвращает единый capability registry поверх truthful runtime-срезов."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            return await self._capability_registry_snapshot(runtime_lite=runtime_lite)
-
-        @self.app.get("/api/channels/capabilities")
-        async def channel_capabilities():
-            """Возвращает unified channel capability parity snapshot."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            policy_matrix = self._policy_matrix_snapshot(runtime_lite=runtime_lite)
-            return {
-                "ok": True,
-                "channel_capabilities": self._channel_capabilities_snapshot(
-                    runtime_lite=runtime_lite,
-                    policy_matrix=policy_matrix,
-                ),
-            }
+        # /api/capabilities/registry + /api/channels/capabilities: extracted
+        # в capabilities_router.py (Phase 2 Wave R, Session 25).
+        # См. include_router рядом с policy_router.
 
         # /api/translator/readiness — extracted в translator_router.py (Phase 2 Wave Q).
         # /api/translator/status — extracted в translator_router.py (Phase 2 Wave K).
@@ -10874,6 +10855,14 @@ class WebApp:
         from .web_routers.policy_router import build_policy_router as _build_policy
 
         self.app.include_router(_build_policy(self._make_router_context()))
+
+        # /api/capabilities/registry, /api/channels/capabilities, /api/policy:
+        # extracted в capabilities_router.py (Phase 2 Wave R, Session 25).
+        from .web_routers.capabilities_router import (
+            build_capabilities_router as _build_capabilities,
+        )
+
+        self.app.include_router(_build_capabilities(self._make_router_context()))
 
         # /api/notify/toggle + /api/silence/toggle: extracted в write_router.py
         # (Phase 2 Wave J, Session 25 — first ctx.assert_write_access extraction).
