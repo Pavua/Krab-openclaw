@@ -618,7 +618,9 @@ class WebApp:
         )
         deps_dict.setdefault(
             "resolve_local_runtime_truth_helper",
-            self._resolve_local_runtime_truth,
+            # Late-bound: позволяет тестам монкей-патчить
+            # WebApp._resolve_local_runtime_truth после init.
+            lambda *args, **kwargs: self._resolve_local_runtime_truth(*args, **kwargs),
         )
 
         # Phase 2 Wave DD (Session 25): inject openclaw helpers для cron/status,
@@ -10234,21 +10236,8 @@ class WebApp:
 
         self.app.include_router(_commands_router)
 
-        @self.app.get("/api/model/status")
-        async def model_status():
-            """Текущий статус модели и маршрутизации."""
-            from ..model_manager import model_manager as _mm
-            from ..openclaw_client import openclaw_client as _oc
-
-            route = _oc.get_last_runtime_route()
-            return {
-                "ok": True,
-                "route": route,
-                "provider": _mm.format_status() if hasattr(_mm, "format_status") else str(_mm),
-                "active_model": str(
-                    getattr(_mm, "active_model_id", None) or route.get("model", "")
-                ),
-            }
+        # /api/model/status: extracted в src/modules/web_routers/model_router.py
+        # (Phase 2 Wave FF, Session 25). См. include_router ниже.
 
         @self.app.get("/api/endpoints")
         async def list_endpoints():
@@ -10327,6 +10316,14 @@ class WebApp:
         from .web_routers.openclaw_router import build_openclaw_router as _build_openclaw
 
         self.app.include_router(_build_openclaw(self._make_router_context()))
+
+        # Phase 2 Wave FF (Session 25): model management endpoints (status, switch,
+        # recommend, preflight, explain, feedback GET+POST, local/status) через
+        # RouterContext. HARD endpoints (catalog, apply, provider-action,
+        # local/load-default, local/unload, thinking/depth) пока inline.
+        from .web_routers.model_router import build_model_router as _build_model
+
+        self.app.include_router(_build_model(self._make_router_context()))
 
         # /api/system/info: extracted в src/modules/web_routers/meta_router.py
         # (Session 25). См. include_router ниже.
@@ -10483,36 +10480,8 @@ class WebApp:
 
         # /api/translator/test — extracted в translator_router.py (Phase 2 Wave K).
 
-        @self.app.post("/api/model/switch")
-        async def model_switch(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Переключить модель через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            from ..model_manager import model_manager as _mm
-
-            model = str(payload.get("model") or "").strip()
-            if not model:
-                return {
-                    "ok": False,
-                    "error": "model required (e.g. 'auto', 'local', 'cloud', model_id)",
-                }
-            try:
-                if model in {"auto", "local", "cloud"}:
-                    _mm.set_provider(model)
-                else:
-                    _mm.set_model(model)
-            except ValueError as exc:
-                # Некорректный ID модели — отдаём 400, чтобы dashboard мог
-                # отличить пользовательскую ошибку от runtime-сбоя.
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return {
-                "ok": True,
-                "model": model,
-                "active": str(getattr(_mm, "active_model_id", model)),
-            }
+        # /api/model/switch: extracted в src/modules/web_routers/model_router.py
+        # (Phase 2 Wave FF, Session 25).
 
         # /api/notify/status: extracted в runtime_status_router (Wave D).
         # POST /api/notify/toggle — extracted в write_router.py (Phase 2 Wave J, Session 25).
@@ -11316,80 +11285,9 @@ class WebApp:
         # /api/ecosystem/health/export: extracted в src/modules/web_routers/health_router.py
         # (Session 25 Phase 2 Wave X).
 
-        @self.app.get("/api/model/recommend")
-        async def model_recommend(
-            profile: str = Query(default="chat", description="Профиль задачи"),
-        ):
-            router = self.deps["router"]
-            return router.get_profile_recommendation(profile)
-
-        @self.app.post("/api/model/preflight")
-        async def model_preflight(payload: dict = Body(...)):
-            """
-            Возвращает preflight-план задачи до выполнения:
-            профиль, канал/модель, confirm-step, риски и cost hint.
-            """
-            router = self.deps["router"]
-            if not hasattr(router, "get_task_preflight"):
-                return {"ok": False, "error": "task_preflight_not_supported"}
-
-            prompt = str(payload.get("prompt", "")).strip()
-            if not prompt:
-                raise HTTPException(status_code=400, detail="prompt_required")
-
-            task_type = str(payload.get("task_type", "chat")).strip().lower() or "chat"
-            preferred_model = payload.get("preferred_model")
-            preferred_model_str = str(preferred_model).strip() if preferred_model else None
-            confirm_expensive = bool(payload.get("confirm_expensive", False))
-
-            preflight = router.get_task_preflight(
-                prompt=prompt,
-                task_type=task_type,
-                preferred_model=preferred_model_str,
-                confirm_expensive=confirm_expensive,
-            )
-            return {"ok": True, "preflight": preflight}
-
-        @self.app.get("/api/model/local/status")
-        async def model_local_status():
-            """Возвращает статус локального рантайма LLM."""
-            router = self.deps["router"]
-            truth = await self._resolve_local_runtime_truth(router)
-            active_model = str(truth.get("active_model") or "").strip()
-            engine_raw = str(truth.get("engine") or "unknown").strip()
-            runtime_url = str(truth.get("runtime_url") or "n/a").strip()
-            lifecycle_status = "loaded" if bool(truth.get("is_loaded")) else "not_loaded"
-
-            return {
-                "ok": True,
-                # Каноничный формат для frontend R10.
-                "status": lifecycle_status,
-                "model_name": active_model or "",
-                "engine": engine_raw,
-                "url": runtime_url or "n/a",
-                # Backward compatibility для существующих клиентов.
-                "details": {
-                    "available": bool(truth.get("runtime_reachable")),
-                    "engine": engine_raw,
-                    "active_model": active_model,
-                    "is_loaded": lifecycle_status == "loaded",
-                    "url": runtime_url or "n/a",
-                    "loaded_models": truth.get("loaded_models", []),
-                    "probe_state": truth.get("probe_state", "down"),
-                    "error": truth.get("error", ""),
-                },
-                # Старый вложенный формат оставляем на переходный период.
-                "status_legacy": {
-                    "available": bool(truth.get("runtime_reachable")),
-                    "engine": engine_raw,
-                    "active_model": active_model,
-                    "is_loaded": lifecycle_status == "loaded",
-                    "url": runtime_url or "n/a",
-                    "loaded_models": truth.get("loaded_models", []),
-                    "probe_state": truth.get("probe_state", "down"),
-                    "error": truth.get("error", ""),
-                },
-            }
+        # /api/model/recommend, /api/model/preflight, /api/model/local/status:
+        # extracted в src/modules/web_routers/model_router.py
+        # (Phase 2 Wave FF, Session 25).
 
         @self.app.post("/api/model/local/load-default")
         async def model_local_load_default(
@@ -11443,74 +11341,8 @@ class WebApp:
 
             return {"ok": True, "freed_gb_estimate": round(freed_gb, 1)}
 
-        @self.app.get("/api/model/explain")
-        async def model_explain(
-            task_type: str = Query(default="chat", description="Тип задачи для preflight"),
-            prompt: str = Query(
-                default="", description="Опциональный prompt для preflight explain"
-            ),
-            preferred_model: str = Query(
-                default="", description="Опциональная предпочтительная модель"
-            ),
-            confirm_expensive: bool = Query(
-                default=False, description="Флаг подтверждения дорогого cloud пути"
-            ),
-        ):
-            """
-            Explainability endpoint: почему выбран канал/модель.
-
-            Возвращает:
-            - last route (route_reason/route_detail);
-            - policy snapshot;
-            - preflight (если передан prompt).
-            """
-            router = self.deps["router"]
-            normalized_prompt = str(prompt or "").strip()
-            normalized_task_type = str(task_type or "chat").strip().lower() or "chat"
-            preferred_model_str = str(preferred_model or "").strip() or None
-
-            if hasattr(router, "get_route_explain"):
-                explain = router.get_route_explain(
-                    prompt=normalized_prompt,
-                    task_type=normalized_task_type,
-                    preferred_model=preferred_model_str,
-                    confirm_expensive=bool(confirm_expensive),
-                )
-                return {"ok": True, "explain": explain}
-
-            # Fallback для старого роутера без get_route_explain.
-            last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
-            preflight = None
-            if normalized_prompt and hasattr(router, "get_task_preflight"):
-                preflight = router.get_task_preflight(
-                    prompt=normalized_prompt,
-                    task_type=normalized_task_type,
-                    preferred_model=preferred_model_str,
-                    confirm_expensive=bool(confirm_expensive),
-                )
-            return {
-                "ok": True,
-                "explain": {
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                    "last_route": last_route if isinstance(last_route, dict) else {},
-                    "reason": {
-                        "code": str(last_route.get("route_reason", "")).strip() or "unknown",
-                        "detail": str(last_route.get("route_detail", "")).strip(),
-                        "human": "Роутер не поддерживает расширенный explain; показан базовый срез.",
-                    },
-                    "policy": {
-                        "force_mode": str(getattr(router, "force_mode", "auto")),
-                        "routing_policy": str(getattr(router, "routing_policy", "unknown")),
-                        "cloud_soft_cap_reached": bool(
-                            getattr(router, "cloud_soft_cap_reached", False)
-                        ),
-                        "local_available": bool(getattr(router, "is_local_available", False)),
-                    },
-                    "preflight": preflight,
-                    "explainability_score": 40 if last_route else 0,
-                    "transparency_level": "low" if not last_route else "medium",
-                },
-            }
+        # /api/model/explain: extracted в src/modules/web_routers/model_router.py
+        # (Phase 2 Wave FF, Session 25).
 
         def _normalize_force_mode(force_mode: str) -> str:
             """Нормализует внутренние force_* режимы в UI-вид: auto/local/cloud."""
@@ -12160,63 +11992,9 @@ class WebApp:
                 "catalog_refresh": catalog_refresh,
             }
 
-        @self.app.get("/api/model/feedback")
-        async def model_feedback_summary(
-            profile: str | None = Query(default=None),
-            top: int = Query(default=5, ge=1, le=20),
-        ):
-            """Сводка оценок качества роутинга моделей."""
-            router = self.deps["router"]
-            if not hasattr(router, "get_feedback_summary"):
-                return {"ok": False, "error": "feedback_summary_not_supported"}
-            normalized_profile = str(profile).strip().lower() if profile is not None else None
-            return {
-                "ok": True,
-                "feedback": router.get_feedback_summary(profile=normalized_profile, top=top),
-            }
-
-        @self.app.post("/api/model/feedback")
-        async def model_feedback_submit(
-            payload: dict = Body(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            x_idempotency_key: str = Header(default="", alias="X-Idempotency-Key"),
-            token: str = Query(default=""),
-        ):
-            """Принимает оценку качества ответа (1-5) для самообучающегося роутинга."""
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps["router"]
-            if not hasattr(router, "submit_feedback"):
-                return {"ok": False, "error": "feedback_submit_not_supported"}
-
-            idem_key = (x_idempotency_key or "").strip()
-            cached = self._idempotency_get("model_feedback_submit", idem_key)
-            if cached:
-                return cached
-
-            score = payload.get("score")
-            profile = payload.get("profile")
-            model_name = payload.get("model")
-            channel = payload.get("channel")
-            note = payload.get("note", "")
-
-            try:
-                result = router.submit_feedback(
-                    score=int(score),
-                    profile=str(profile).strip().lower() if profile is not None else None,
-                    model_name=str(model_name).strip() if model_name is not None else None,
-                    channel=str(channel).strip().lower() if channel is not None else None,
-                    note=str(note).strip(),
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=500, detail=f"feedback_submit_failed: {exc}"
-                ) from exc
-
-            response_payload = {"ok": True, "result": result}
-            self._idempotency_set("model_feedback_submit", idem_key, response_payload)
-            return response_payload
+        # /api/model/feedback (GET+POST): extracted в src/modules/web_routers/model_router.py
+        # (Phase 2 Wave FF, Session 25). Idempotency cache shared через
+        # idempotency_get/idempotency_set helpers в _make_router_context.
 
         # /api/ops/usage, /api/ops/cost-report, /api/ops/runway,
         # /api/ops/executive-summary, /api/ops/report:
