@@ -37,12 +37,18 @@ Endpoints (Wave JJ, POST через CLI helper injection):
 - POST /api/openclaw/cron/jobs/remove   — same helpers
 - POST /api/openclaw/model-autoswitch/apply — через `openclaw_model_autoswitch_helper`
 
+Endpoints (Wave KK, GET self-contained):
+- GET /api/openclaw/cloud               — `openclaw.get_cloud_provider_diagnostics`
+- GET /api/openclaw/cloud/diagnostics   — legacy alias (тот же impl)
+- GET /api/openclaw/control-compat/status — subprocess (`openclaw channels status --probe`,
+                                            `openclaw logs --tail 200`), pure self-contained
+
 SKIP (HARD, требуют дополнительный helper promote):
 - /api/openclaw/cron/jobs/run_now      — cron_native_scheduler internals (W32 debug)
 - /api/openclaw/channels/status        — `_collect_openclaw_channels_snapshot`
-- /api/openclaw/cloud, /api/openclaw/cloud/diagnostics — `_openclaw_cloud_diagnostics_impl`
 - /api/openclaw/cloud/runtime-check    — мутирует `self._runtime_lite_cache`
 - /api/openclaw/cloud/switch-tier      — мутирует `self._runtime_lite_cache`
+- /api/openclaw/routing/effective      — `_resolve_local_runtime_truth` + `router` deps overlay
 
 Контракт ответов сохранён 1:1 с inline definitions из web_app.py.
 """
@@ -58,6 +64,11 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from src.core.observability import build_ops_response
 
 from ._context import RouterContext
+
+# /api/openclaw/control-compat/status (Wave KK): источники маркеров schema-warnings.
+# Хранятся как module-level set, чтобы тесты могли при необходимости расширять
+# или подменять через monkeypatch без изменения сигнатуры функции.
+_CONTROL_COMPAT_SCHEMA_MARKERS = frozenset({"unsupported schema node", "schema", "validation"})
 
 
 def build_openclaw_router(ctx: RouterContext) -> APIRouter:
@@ -619,5 +630,152 @@ def build_openclaw_router(ctx: RouterContext) -> APIRouter:
         if inspect.isawaitable(result):
             result = await result
         return {"ok": True, "autoswitch": result}
+
+    # ---------- Wave KK: cloud diagnostics impl --------------------------
+    async def _cloud_diagnostics_impl(providers: str = "") -> dict:
+        """Проверка cloud-провайдеров OpenClaw с классификацией ошибок ключей/API.
+
+        Зеркалирует ``WebApp._openclaw_cloud_diagnostics_impl`` (web_app.py).
+        """
+        openclaw = ctx.get_dep("openclaw_client")
+        if not openclaw:
+            return {"available": False, "error": "openclaw_client_not_configured"}
+        if not hasattr(openclaw, "get_cloud_provider_diagnostics"):
+            return {"available": False, "error": "cloud_diagnostics_not_supported"}
+
+        providers_list: list[str] | None = None
+        raw = (providers or "").strip()
+        if raw:
+            providers_list = [item.strip().lower() for item in raw.split(",") if item.strip()]
+            if not providers_list:
+                providers_list = None
+        report = await openclaw.get_cloud_provider_diagnostics(providers=providers_list)
+        return {"available": True, "report": report}
+
+    # ---------- GET /api/openclaw/cloud (Wave KK) -------------------------
+    @router.get("/api/openclaw/cloud")
+    async def openclaw_cloud_diagnostics(providers: str = Query(default="")) -> dict:
+        """Канонический endpoint cloud-диагностики."""
+        return await _cloud_diagnostics_impl(providers=providers)
+
+    # ---------- GET /api/openclaw/cloud/diagnostics (Wave KK) ------------
+    @router.get("/api/openclaw/cloud/diagnostics")
+    async def openclaw_cloud_diagnostics_legacy(providers: str = Query(default="")) -> dict:
+        """Совместимость со старым UI-клиентом (legacy alias)."""
+        return await _cloud_diagnostics_impl(providers=providers)
+
+    # ---------- GET /api/openclaw/control-compat/status (Wave KK) --------
+    @router.get("/api/openclaw/control-compat/status")
+    async def openclaw_control_compat_status() -> dict:
+        """[R22] Control Compatibility Diagnostics.
+
+        Дает прозрачный ответ на вопрос: предупреждения OpenClaw Control UI
+        (`Unsupported schema node`) — это UI-артефакт или реальный runtime-риск?
+
+        Источники:
+        - `openclaw channels status --probe` → runtime_channels_ok
+        - `openclaw logs --tail 200` → control_schema_warnings (фильтрация по маркерам)
+
+        Логика impact_level:
+        - runtime ok + warnings → "ui_only"
+        - runtime fail + warnings → "runtime_risk"
+        - runtime ok, warnings нет → "none"
+        """
+
+        async def _inner() -> dict:
+            # --- Шаг 1: проверяем runtime каналов ---
+            runtime_ok = False
+            try:
+                proc_channels = await asyncio.create_subprocess_exec(
+                    "openclaw",
+                    "channels",
+                    "status",
+                    "--probe",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                try:
+                    await asyncio.wait_for(proc_channels.communicate(), timeout=30.0)
+                    runtime_ok = proc_channels.returncode == 0
+                except asyncio.TimeoutError:
+                    try:
+                        proc_channels.terminate()
+                    except ProcessLookupError:
+                        pass
+                    runtime_ok = False
+            except Exception:  # noqa: BLE001
+                runtime_ok = False
+
+            # --- Шаг 2: получаем последние логи OpenClaw для поиска schema-маркеров ---
+            control_schema_warnings: list[str] = []
+            try:
+                proc_logs = await asyncio.create_subprocess_exec(
+                    "openclaw",
+                    "logs",
+                    "--tail",
+                    "200",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                try:
+                    stdout_logs, _ = await asyncio.wait_for(proc_logs.communicate(), timeout=10.0)
+                    raw_logs = stdout_logs.decode("utf-8", errors="replace")
+                    for line in raw_logs.splitlines():
+                        line_lower = line.lower()
+                        if any(marker in line_lower for marker in _CONTROL_COMPAT_SCHEMA_MARKERS):
+                            stripped = line.strip()
+                            if stripped:
+                                control_schema_warnings.append(stripped)
+                except asyncio.TimeoutError:
+                    try:
+                        proc_logs.terminate()
+                    except ProcessLookupError:
+                        pass
+            except Exception:  # noqa: BLE001
+                pass
+
+            # --- Шаг 3: определяем impact_level и рекомендацию ---
+            has_warnings = bool(control_schema_warnings)
+            if runtime_ok and has_warnings:
+                impact_level = "ui_only"
+                recommended_action = (
+                    "Предупреждения ограничены UI Control. Runtime каналов работает нормально. "
+                    "Для редактирования затронутых полей используй Raw-режим в Control Dashboard."
+                )
+            elif not runtime_ok and has_warnings:
+                impact_level = "runtime_risk"
+                recommended_action = (
+                    "Обнаружены schema-предупреждения И проблемы runtime. "
+                    "Запусти: openclaw doctor --fix  или  ./openclaw_runtime_repair.command"
+                )
+            elif not runtime_ok:
+                impact_level = "runtime_risk"
+                recommended_action = (
+                    "Runtime каналов недоступен. Schema-предупреждения не обнаружены. "
+                    "Запусти: openclaw doctor --fix"
+                )
+            else:
+                impact_level = "none"
+                recommended_action = "Все каналы работают нормально. Предупреждений нет."
+
+            return {
+                "ok": runtime_ok or not has_warnings,
+                "runtime_channels_ok": runtime_ok,
+                "runtime_status": "OK" if runtime_ok else "FAIL",
+                "control_schema_warnings": control_schema_warnings,
+                "has_schema_warning": has_warnings,
+                "impact_level": impact_level,
+                "recommended_action": recommended_action,
+            }
+
+        # Верхний guard: не зависаем если CLI не стартует.
+        try:
+            return await asyncio.wait_for(_inner(), timeout=5.0)
+        except asyncio.TimeoutError:
+            return {
+                "ok": False,
+                "error": "OpenClaw timeout (5s)",
+                "detail": "gateway not responding",
+            }
 
     return router

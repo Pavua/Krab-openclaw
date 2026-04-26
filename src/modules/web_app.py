@@ -12069,32 +12069,10 @@ class WebApp:
             """
             return await self._collect_openclaw_photo_smoke_payload()
 
-        async def _openclaw_cloud_diagnostics_impl(providers: str = ""):
-            """Проверка cloud-провайдеров OpenClaw с классификацией ошибок ключей/API."""
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw:
-                return {"available": False, "error": "openclaw_client_not_configured"}
-            if not hasattr(openclaw, "get_cloud_provider_diagnostics"):
-                return {"available": False, "error": "cloud_diagnostics_not_supported"}
-
-            providers_list: list[str] | None = None
-            raw = (providers or "").strip()
-            if raw:
-                providers_list = [item.strip().lower() for item in raw.split(",") if item.strip()]
-                if not providers_list:
-                    providers_list = None
-            report = await openclaw.get_cloud_provider_diagnostics(providers=providers_list)
-            return {"available": True, "report": report}
-
-        @self.app.get("/api/openclaw/cloud")
-        async def openclaw_cloud_diagnostics(providers: str = Query(default="")):
-            """Канонический endpoint cloud-диагностики."""
-            return await _openclaw_cloud_diagnostics_impl(providers=providers)
-
-        @self.app.get("/api/openclaw/cloud/diagnostics")
-        async def openclaw_cloud_diagnostics_legacy(providers: str = Query(default="")):
-            """Совместимость со старым UI-клиентом (legacy alias)."""
-            return await _openclaw_cloud_diagnostics_impl(providers=providers)
+        # /api/openclaw/cloud, /api/openclaw/cloud/diagnostics: extracted в
+        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave KK, Session 25).
+        # Self-contained: вызывают openclaw.get_cloud_provider_diagnostics напрямую
+        # через ctx.get_dep("openclaw_client"). См. include_router рядом.
 
         @self.app.get("/api/openclaw/cloud/runtime-check")
         async def openclaw_cloud_runtime_check():
@@ -12158,127 +12136,10 @@ class WebApp:
         # Subprocess helper hoisted в module-level _run_openclaw_model_autoswitch
         # и инжектируется через openclaw_model_autoswitch_helper в _make_router_context.
 
-        @self.app.get("/api/openclaw/control-compat/status")
-        async def openclaw_control_compat_status():
-            """
-            [R22] Control Compatibility Diagnostics.
-
-            Дает прозрачный ответ на вопрос: предупреждения OpenClaw Control UI
-            (`Unsupported schema node`) — это UI-артефакт или реальный runtime-риск?
-
-            Источники:
-            - `openclaw channels status --probe` → runtime_channels_ok
-            - `openclaw logs --tail 200` → control_schema_warnings (фильтрация по маркерам)
-
-            Логика impact_level:
-            - runtime ok + warnings → "ui_only"   (каналы работают, предупреждение косметическое)
-            - runtime fail + warnings → "runtime_risk"  (нужна диагностика)
-            - runtime ok, warnings нет → "none"
-            """
-
-            async def _inner() -> dict:
-                # --- Шаг 1: проверяем runtime каналов ---
-                runtime_ok = False
-                try:
-                    proc_channels = await asyncio.create_subprocess_exec(
-                        "openclaw",
-                        "channels",
-                        "status",
-                        "--probe",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                    )
-                    try:
-                        stdout_ch, _ = await asyncio.wait_for(
-                            proc_channels.communicate(), timeout=30.0
-                        )
-                        runtime_ok = proc_channels.returncode == 0
-                    except asyncio.TimeoutError:
-                        try:
-                            proc_channels.terminate()
-                        except ProcessLookupError:
-                            pass
-                        runtime_ok = False
-                except Exception:
-                    runtime_ok = False
-
-                # --- Шаг 2: получаем последние логи OpenClaw для поиска schema-маркеров ---
-                schema_markers = {"unsupported schema node", "schema", "validation"}
-                control_schema_warnings: list[str] = []
-                try:
-                    proc_logs = await asyncio.create_subprocess_exec(
-                        "openclaw",
-                        "logs",
-                        "--tail",
-                        "200",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                    )
-                    try:
-                        stdout_logs, _ = await asyncio.wait_for(
-                            proc_logs.communicate(), timeout=10.0
-                        )
-                        raw_logs = stdout_logs.decode("utf-8", errors="replace")
-                        for line in raw_logs.splitlines():
-                            line_lower = line.lower()
-                            # Ищем строки, содержащие хотя бы один из маркеров схемы
-                            if any(marker in line_lower for marker in schema_markers):
-                                stripped = line.strip()
-                                if stripped:
-                                    control_schema_warnings.append(stripped)
-                    except asyncio.TimeoutError:
-                        try:
-                            proc_logs.terminate()
-                        except ProcessLookupError:
-                            pass
-                        # При таймауте логов — не считаем это runtime-риском
-                except Exception:
-                    # CLI openclaw logs недоступен — просто нет данных для schema-анализа
-                    pass
-
-                # --- Шаг 3: определяем impact_level и рекомендацию ---
-                has_warnings = bool(control_schema_warnings)
-                if runtime_ok and has_warnings:
-                    impact_level = "ui_only"
-                    recommended_action = (
-                        "Предупреждения ограничены UI Control. Runtime каналов работает нормально. "
-                        "Для редактирования затронутых полей используй Raw-режим в Control Dashboard."
-                    )
-                elif not runtime_ok and has_warnings:
-                    impact_level = "runtime_risk"
-                    recommended_action = (
-                        "Обнаружены schema-предупреждения И проблемы runtime. "
-                        "Запусти: openclaw doctor --fix  или  ./openclaw_runtime_repair.command"
-                    )
-                elif not runtime_ok:
-                    impact_level = "runtime_risk"
-                    recommended_action = (
-                        "Runtime каналов недоступен. Schema-предупреждения не обнаружены. "
-                        "Запусти: openclaw doctor --fix"
-                    )
-                else:
-                    impact_level = "none"
-                    recommended_action = "Все каналы работают нормально. Предупреждений нет."
-
-                return {
-                    "ok": runtime_ok or not has_warnings,
-                    "runtime_channels_ok": runtime_ok,
-                    "runtime_status": "OK" if runtime_ok else "FAIL",
-                    "control_schema_warnings": control_schema_warnings,
-                    "has_schema_warning": has_warnings,
-                    "impact_level": impact_level,
-                    "recommended_action": recommended_action,
-                }
-
-            # Верхний guard: не зависаем если CLI не стартует.
-            try:
-                return await asyncio.wait_for(_inner(), timeout=5.0)
-            except asyncio.TimeoutError:
-                return {
-                    "ok": False,
-                    "error": "OpenClaw timeout (5s)",
-                    "detail": "gateway not responding",
-                }
+        # /api/openclaw/control-compat/status: extracted в
+        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave KK, Session 25).
+        # Self-contained: subprocess вызовы `openclaw channels status --probe` +
+        # `openclaw logs --tail 200`. См. include_router рядом.
 
         @self.app.get("/api/openclaw/routing/effective")
         async def openclaw_routing_effective():

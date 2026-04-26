@@ -894,3 +894,110 @@ def test_autoswitch_apply_helper_unavailable() -> None:
     )
     assert resp.status_code == 500
     assert resp.json()["detail"] == "helper_unavailable"
+
+
+# ============================================================================
+# Wave KK: cloud diagnostics + control-compat/status
+# ============================================================================
+
+
+class _CloudDiagOpenClaw:
+    """Stub поддерживающий get_cloud_provider_diagnostics."""
+
+    def __init__(self, *, raise_exc: bool = False) -> None:
+        self._raise = raise_exc
+        self.last_providers: list[str] | None = None
+
+    async def get_cloud_provider_diagnostics(
+        self, providers: list[str] | None = None
+    ) -> dict:
+        if self._raise:
+            raise RuntimeError("boom")
+        self.last_providers = providers
+        return {"providers": providers or []}
+
+
+def _build_ctx_kk(*, openclaw: object | None = ...) -> RouterContext:
+    deps: dict = {}
+    if openclaw is ...:
+        deps["openclaw_client"] = _CloudDiagOpenClaw()
+    elif openclaw is not None:
+        deps["openclaw_client"] = openclaw
+    return RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+
+
+def test_cloud_diagnostics_no_openclaw_client() -> None:
+    resp = _client(_build_ctx_kk(openclaw=None)).get("/api/openclaw/cloud")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"available": False, "error": "openclaw_client_not_configured"}
+
+
+def test_cloud_diagnostics_method_not_supported() -> None:
+    resp = _client(_build_ctx_kk(openclaw=_StubNoMethods())).get("/api/openclaw/cloud")
+    assert resp.json() == {"available": False, "error": "cloud_diagnostics_not_supported"}
+
+
+def test_cloud_diagnostics_empty_providers() -> None:
+    stub = _CloudDiagOpenClaw()
+    resp = _client(_build_ctx_kk(openclaw=stub)).get("/api/openclaw/cloud")
+    body = resp.json()
+    assert body["available"] is True
+    assert body["report"] == {"providers": []}
+    # Пустая строка → providers=None в helper.
+    assert stub.last_providers is None
+
+
+def test_cloud_diagnostics_with_providers_query() -> None:
+    stub = _CloudDiagOpenClaw()
+    resp = _client(_build_ctx_kk(openclaw=stub)).get(
+        "/api/openclaw/cloud", params={"providers": "Google, OPENAI ,, "}
+    )
+    body = resp.json()
+    assert body["available"] is True
+    # Должна быть нормализация: lowercase + trim + filter empty.
+    assert stub.last_providers == ["google", "openai"]
+
+
+def test_cloud_diagnostics_legacy_alias() -> None:
+    """Legacy /cloud/diagnostics endpoint должен иметь идентичный контракт."""
+    stub = _CloudDiagOpenClaw()
+    resp = _client(_build_ctx_kk(openclaw=stub)).get("/api/openclaw/cloud/diagnostics")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["available"] is True
+    assert body["report"] == {"providers": []}
+
+
+def test_control_compat_status_subprocess_failure() -> None:
+    """Если subprocess CLI недоступен — endpoint возвращает graceful response."""
+    import asyncio as _asyncio
+
+    from src.modules.web_routers import openclaw_router as _mod
+
+    async def _boom(*args, **kwargs):
+        raise FileNotFoundError("openclaw CLI not found")
+
+    orig = _mod.asyncio.create_subprocess_exec
+    _mod.asyncio.create_subprocess_exec = _boom  # type: ignore[assignment]
+    try:
+        resp = _client(_build_ctx_kk(openclaw=None)).get(
+            "/api/openclaw/control-compat/status"
+        )
+    finally:
+        _mod.asyncio.create_subprocess_exec = orig  # type: ignore[assignment]
+        del _asyncio  # silence unused import
+    assert resp.status_code == 200
+    body = resp.json()
+    # CLI недоступен → runtime_ok=False, no warnings → impact_level=runtime_risk.
+    assert body["runtime_channels_ok"] is False
+    assert body["runtime_status"] == "FAIL"
+    assert body["control_schema_warnings"] == []
+    assert body["has_schema_warning"] is False
+    assert body["impact_level"] == "runtime_risk"
+    assert "ok" in body
