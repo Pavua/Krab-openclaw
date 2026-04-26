@@ -211,3 +211,216 @@ def test_memory_indexer_flush_requires_write_access(monkeypatch) -> None:
     monkeypatch.setenv("WEB_API_KEY", "secret")
     resp = _factory_client().post("/api/memory/indexer/flush")
     assert resp.status_code == 403
+
+
+# ── /api/memory/search (Wave BB) ──────────────────────────────────────
+
+
+def test_memory_search_empty_query_returns_error() -> None:
+    """Пустой query → ok=False, error=empty_query (no DB hit)."""
+    resp = _client().get("/api/memory/search?q=")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": False, "error": "empty_query"}
+
+
+def test_memory_search_invalid_mode_returns_error() -> None:
+    """Невалидный mode → ok=False, error=invalid_mode."""
+    resp = _client().get("/api/memory/search?q=hello&mode=lalala")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error"] == "invalid_mode"
+
+
+def test_memory_search_archive_db_missing(tmp_path) -> None:
+    """Если archive.db не существует → ok=False, error=archive_db_missing."""
+
+    class _FakePaths:
+        db = tmp_path / "nonexistent.db"
+
+        @classmethod
+        def default(cls):
+            return cls()
+
+    fake_archive = type("M", (), {"ArchivePaths": _FakePaths})
+    fake_retrieval = type("M", (), {"HybridRetriever": object})
+
+    import sys
+
+    monkey = {
+        "src.core.memory_archive": fake_archive,
+        "src.core.memory_retrieval": fake_retrieval,
+    }
+    saved = {k: sys.modules.get(k) for k in monkey}
+    try:
+        sys.modules.update(monkey)
+        resp = _client().get("/api/memory/search?q=hello")
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": False, "error": "archive_db_missing"}
+
+
+def test_memory_search_returns_results(tmp_path) -> None:
+    """Happy path → результаты от mocked HybridRetriever."""
+    from datetime import datetime, timezone
+
+    db_file = tmp_path / "archive.db"
+    db_file.write_text("dummy")
+
+    class _FakePaths:
+        db = db_file
+
+        @classmethod
+        def default(cls):
+            return cls()
+
+    class _FakeResult:
+        message_id = "msg-1"
+        chat_id = "chat-42"
+        text_redacted = "hello world preview"
+        score = 0.87
+        timestamp = datetime(2026, 4, 26, 12, 0, 0, tzinfo=timezone.utc)
+
+    class _FakeRetriever:
+        _vec_available = True
+
+        def __init__(self, archive_paths=None):
+            pass
+
+        def search(self, query, chat_id=None, top_k=10):
+            return [_FakeResult()]
+
+        def close(self):
+            pass
+
+    fake_archive = type("M", (), {"ArchivePaths": _FakePaths})
+    fake_retrieval = type("M", (), {"HybridRetriever": _FakeRetriever})
+
+    import sys
+
+    monkey = {
+        "src.core.memory_archive": fake_archive,
+        "src.core.memory_retrieval": fake_retrieval,
+    }
+    saved = {k: sys.modules.get(k) for k in monkey}
+    try:
+        sys.modules.update(monkey)
+        resp = _client().get("/api/memory/search?q=hello&limit=5")
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["query"] == "hello"
+    assert body["count"] == 1
+    assert body["results"][0]["chunk_id"] == "msg-1"
+    assert body["results"][0]["chat_id"] == "chat-42"
+    assert body["results"][0]["score"] == 0.87
+
+
+# ── /api/memory/heatmap (Wave BB) ─────────────────────────────────────
+
+
+def test_memory_heatmap_archive_db_missing(monkeypatch, tmp_path) -> None:
+    """Когда archive.db отсутствует → 503 + JSON error."""
+    monkeypatch.setattr(
+        Path,
+        "expanduser",
+        lambda self: tmp_path / "krab_memory" / "archive.db",
+    )
+    resp = _client().get("/api/memory/heatmap")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert "error" in body
+    assert "not found" in body["error"]
+
+
+def test_memory_heatmap_empty_db(monkeypatch, tmp_path) -> None:
+    """Пустая archive.db (no messages) → пустой ответ + generated_at."""
+    import sqlite3
+
+    db_file = tmp_path / "archive.db"
+    conn = sqlite3.connect(str(db_file))
+    conn.execute("CREATE TABLE messages (chat_id TEXT, timestamp TEXT)")
+    conn.execute("CREATE TABLE chats (chat_id TEXT, title TEXT)")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(Path, "expanduser", lambda self: db_file)
+    resp = _client().get("/api/memory/heatmap?bucket_hours=24&top_chats=5")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["bucket_hours"] == 24
+    assert body["chats"] == []
+    assert "generated_at" in body
+
+
+def test_memory_heatmap_with_data(monkeypatch, tmp_path) -> None:
+    """archive.db с данными → топ-чаты с buckets."""
+    import sqlite3
+
+    db_file = tmp_path / "archive.db"
+    conn = sqlite3.connect(str(db_file))
+    conn.execute(
+        "CREATE TABLE messages (chat_id TEXT, timestamp TEXT)"
+    )
+    conn.execute("CREATE TABLE chats (chat_id TEXT, title TEXT)")
+    conn.executemany(
+        "INSERT INTO messages VALUES (?, ?)",
+        [
+            ("chat-A", "2026-04-10T08:00:00Z"),
+            ("chat-A", "2026-04-11T09:00:00Z"),
+            ("chat-B", "2026-04-10T08:00:00Z"),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO chats VALUES (?, ?)", ("chat-A", "Chat A Title")
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(Path, "expanduser", lambda self: db_file)
+    resp = _client().get("/api/memory/heatmap?top_chats=5")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["bucket_hours"] == 24
+    chat_ids = [c["chat_id"] for c in body["chats"]]
+    assert "chat-A" in chat_ids
+    assert "chat-B" in chat_ids
+    a_entry = next(c for c in body["chats"] if c["chat_id"] == "chat-A")
+    assert a_entry["chat_title"] == "Chat A Title"
+    b_entry = next(c for c in body["chats"] if c["chat_id"] == "chat-B")
+    # без title fallback на chat_id
+    assert b_entry["chat_title"] == "chat-B"
+
+
+def test_memory_heatmap_clamps_bucket_hours(monkeypatch, tmp_path) -> None:
+    """bucket_hours clamped в [1, 8760]."""
+    import sqlite3
+
+    db_file = tmp_path / "archive.db"
+    conn = sqlite3.connect(str(db_file))
+    conn.execute("CREATE TABLE messages (chat_id TEXT, timestamp TEXT)")
+    conn.execute("CREATE TABLE chats (chat_id TEXT, title TEXT)")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(Path, "expanduser", lambda self: db_file)
+    resp = _client().get("/api/memory/heatmap?bucket_hours=99999")
+    assert resp.status_code == 200
+    assert resp.json()["bucket_hours"] == 8760
+
+    resp2 = _client().get("/api/memory/heatmap?bucket_hours=0")
+    assert resp2.status_code == 200
+    assert resp2.json()["bucket_hours"] == 1
