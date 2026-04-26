@@ -407,6 +407,22 @@ class WebApp:
         deps_dict.setdefault("acl_partial_commands", PARTIAL_ACCESS_COMMANDS)
         deps_dict.setdefault("acl_file_path", str(config.USERBOT_ACL_FILE))
 
+        # Phase 2 Wave Y (Session 25): inject system_router helpers
+        # (runtime/operator-profile, /api/stats, /api/system/diagnostics)
+        # без self-bind на WebApp.
+        deps_dict.setdefault(
+            "runtime_operator_profile_helper",
+            self._runtime_operator_profile,
+        )
+        deps_dict.setdefault(
+            "build_stats_router_payload_helper",
+            self._build_stats_router_payload,
+        )
+        deps_dict.setdefault(
+            "resolve_local_runtime_truth_helper",
+            self._resolve_local_runtime_truth,
+        )
+
         return RouterContext(
             deps=deps_dict,
             project_root=self._project_root(),
@@ -7805,20 +7821,8 @@ class WebApp:
                 ),
             }
 
-        @self.app.get("/api/stats")
-        async def get_stats():
-            router = self.deps["router"]
-            black_box = self.deps.get("black_box")
-            rag = router.rag if hasattr(router, "rag") else None
-            return {
-                "router": await self._build_stats_router_payload(router),
-                "black_box": black_box.get_stats()
-                if black_box and hasattr(black_box, "get_stats")
-                else {"enabled": False},
-                "rag": rag.get_stats()
-                if rag and hasattr(rag, "get_stats")
-                else {"enabled": False, "count": 0},
-            }
+        # /api/stats: extracted в system_router.py (Phase 2 Wave Y).
+        # См. include_router рядом с другими wave Y endpoints.
 
         # /api/message_batcher/stats, /api/chat_windows/stats:
         # extracted в src/modules/web_routers/runtime_status_router.py
@@ -8152,55 +8156,8 @@ class WebApp:
 
         # ── Stats Dashboard (session 4+, Gemini 3.1 Pro frontend) ──────────
 
-        @self.app.get("/api/stats/caches")
-        async def get_stats_caches():
-            """
-            Агрегированные cache-метрики для /stats dashboard.
-
-            Возвращает counts для chat_ban_cache, chat_capability_cache
-            и voice_reply_blocked_chats. Dashboard делает один fetch сюда
-            вместо трёх отдельных вызовов.
-            """
-            try:
-                from ..core.chat_ban_cache import chat_ban_cache as _cbc
-
-                ban_entries = _cbc.list_entries()
-                ban_count = len(ban_entries)
-            except Exception:
-                ban_entries = []
-                ban_count = 0
-
-            try:
-                from ..core.chat_capability_cache import chat_capability_cache as _ccc
-
-                cap_entries = _ccc.list_entries()
-                cap_count = len(cap_entries)
-                voice_disallowed = sum(1 for e in cap_entries if e.get("voice_allowed") is False)
-                slow_mode = sum(
-                    1
-                    for e in cap_entries
-                    if isinstance(e.get("slow_mode_seconds"), (int, float))
-                    and e["slow_mode_seconds"] > 0
-                )
-            except Exception:
-                cap_count = 0
-                voice_disallowed = 0
-                slow_mode = 0
-
-            try:
-                userbot = self.deps.get("kraab_userbot")
-                blocked = userbot.get_voice_blocked_chats() if userbot else []
-                voice_blocked_count = len(blocked)
-            except Exception:
-                voice_blocked_count = 0
-
-            return {
-                "ban_cache_count": ban_count,
-                "capability_cache_count": cap_count,
-                "voice_blocked_count": voice_blocked_count,
-                "capability_voice_disallowed": voice_disallowed,
-                "capability_slow_mode": slow_mode,
-            }
+        # /api/stats/caches: extracted в system_router.py (Phase 2 Wave Y).
+        # См. include_router рядом с другими wave Y endpoints.
 
         @self.app.get("/stats", response_class=HTMLResponse)
         async def stats_dashboard():
@@ -9317,13 +9274,8 @@ class WebApp:
                 else None,
             }
 
-        @self.app.get("/api/runtime/operator-profile")
-        async def runtime_operator_profile():
-            """Возвращает machine-readable профиль текущей учётки/runtime для multi-account handoff."""
-            return {
-                "ok": True,
-                "profile": self._runtime_operator_profile(),
-            }
+        # /api/runtime/operator-profile: extracted в system_router.py
+        # (Phase 2 Wave Y, Session 25). См. include_router ниже.
 
         @self.app.post("/api/runtime/repair-active-shared-permissions")
         async def runtime_repair_active_shared_permissions(
@@ -10521,35 +10473,11 @@ class WebApp:
         # /api/v1/health: extracted в src/modules/web_routers/health_router.py
         # (Session 25 Phase 2 Wave X).
 
-        @self.app.get("/api/runtime/summary")
-        async def runtime_summary():
-            """Единый summary endpoint — полное состояние Краба одним запросом."""
-            from ..core.cost_analytics import cost_analytics as _ca
-            from ..core.silence_mode import silence_manager
-            from ..core.swarm_task_board import swarm_task_board
-            from ..core.swarm_team_listener import is_listeners_enabled
-            from ..openclaw_client import openclaw_client as _oc
+        # /api/runtime/summary: extracted в system_router.py (Phase 2 Wave Y).
+        # См. include_router ниже.
+        from .web_routers.system_router import build_system_router as _build_system_router
 
-            try:
-                health = await self._collect_runtime_lite_snapshot()
-            except Exception:
-                health = {}
-            return {
-                "ok": True,
-                "health": health,
-                "route": _oc.get_last_runtime_route(),
-                "costs": _ca.build_usage_report_dict(),
-                "translator": {
-                    "profile": self.kraab.get_translator_runtime_profile(),
-                    "session": self.kraab.get_translator_session_state(),
-                },
-                "swarm": {
-                    "task_board": swarm_task_board.get_board_summary(),
-                    "listeners_enabled": is_listeners_enabled(),
-                },
-                "silence": silence_manager.status(),
-                "notify_enabled": bool(getattr(config, "TOOL_NARRATION_ENABLED", True)),
-            }
+        self.app.include_router(_build_system_router(self._make_router_context()))
 
         # /api/commands*: extracted в src/modules/web_routers/commands_router.py
         # (Session 25 Phase 2 Wave A). 4 endpoints: list, usage, usage/top, get_by_name.
@@ -10801,33 +10729,8 @@ class WebApp:
 
         self.app.include_router(_build_monitoring_router(self._make_router_context()))
 
-        @self.app.get("/api/dashboard/summary")
-        async def dashboard_summary():
-            """Агрегатор для Dashboard V4 — один запрос вместо 15.
-
-            Собирает uptime, version, service status, archive/memory stats,
-            activity counters и alerts. Graceful fallback — при ошибке любого
-            источника поле возвращается null, 500 не выбрасывается.
-            """
-            # boot_ts ленится так же, как в /api/uptime.
-            # Phase 2 Wave F: используем shared holder если router уже инит-нул.
-            import time as _t
-
-            from ..core.dashboard_summary import collect_dashboard_summary_async
-
-            holder = getattr(self, "_boot_ts_holder", None)
-            boot = getattr(self, "_boot_ts", None)
-            if holder:
-                boot = holder[0]
-                self._boot_ts = boot
-            elif not boot:
-                self._boot_ts = _t.time()
-                boot = self._boot_ts
-                if holder is not None:
-                    holder.append(boot)
-
-            router = self.deps.get("router")
-            return await collect_dashboard_summary_async(boot_ts=boot, router=router)
+        # /api/dashboard/summary: extracted в system_router.py (Phase 2 Wave Y).
+        # См. include_router(_build_system_router(...)) выше.
 
         # /api/translator/test — extracted в translator_router.py (Phase 2 Wave K).
 
@@ -11553,21 +11456,24 @@ class WebApp:
                 "session_12": session_12,
             }
 
-        @self.app.get("/api/system/diagnostics")
-        async def system_diagnostics():
-            """[R11] Глубокая диагностика сервера (RAM, CPU, Бюджет, Локальные LLM)."""
+        # /api/system/diagnostics: extracted в system_router.py (Phase 2 Wave Y).
+        # См. include_router рядом с другими wave Y endpoints.
+
+        async def _system_diagnostics_inline() -> dict:
+            """Локальная реализация system_diagnostics для алиаса /api/ops/diagnostics.
+
+            Логика идентична extracted endpoint'у — дублирование оправдано
+            тем, что ops_diagnostics остаётся inline (Wave T extracted уже
+            ops/* в monitoring_router без него; перенос ops_diagnostics в
+            system_router нарушил бы доменное разделение)."""
             router = self.deps.get("router")
             if not router:
                 return {"ok": False, "error": "router_not_found"}
-
-            # Получаем свежие данные через health_service
             health_service = self.deps.get("health_service")
             if not health_service:
                 health_service = EcosystemHealthService(router=router)
-
             health_data = await health_service.collect()
             local_truth = await self._resolve_local_runtime_truth(router)
-
             status = "ok"
             if not bool(local_truth.get("runtime_reachable")):
                 status = "degraded"
@@ -11575,7 +11481,6 @@ class WebApp:
                     status = "failed"
             elif getattr(router, "active_tier", "") == "paid":
                 status = "degraded"
-
             return {
                 "ok": True,
                 "status": status,
@@ -11598,7 +11503,7 @@ class WebApp:
         @self.app.get("/api/ops/diagnostics")
         async def ops_diagnostics():
             """[R12] Унифицированный операционный отчет (алиас system/diagnostics с расширением)."""
-            return await system_diagnostics()
+            return await _system_diagnostics_inline()
 
         # /api/ops/metrics, /api/ops/timeline, /api/timeline, /api/sla:
         # extracted в src/modules/web_routers/monitoring_router.py
