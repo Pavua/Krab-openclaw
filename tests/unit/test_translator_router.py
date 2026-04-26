@@ -1053,3 +1053,101 @@ def test_mobile_onboarding_helper_missing_returns_503() -> None:
     ctx = _build_ctx(runtime_lite_provider=_fake_runtime_lite)
     resp = _client(ctx).get("/api/translator/mobile/onboarding")
     assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Wave RR — POST /api/translator/mobile/onboarding/export
+# ---------------------------------------------------------------------------
+
+
+def test_mobile_onboarding_export_writes_versioned_and_latest(tmp_path) -> None:
+    helpers = _wave_pp_helpers()
+    helpers.pop("_captured")
+    written: list[tuple[Path, dict]] = []
+
+    def _write(path, payload):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
+        written.append((path, payload))
+
+    helpers["write_json_file_helper"] = _write
+    ctx = RouterContext(
+        deps={"kraab_userbot": _FakeKraab(), **helpers},
+        project_root=tmp_path,
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+        runtime_lite_provider=_fake_runtime_lite,
+    )
+    resp = _client(ctx).post("/api/translator/mobile/onboarding/export")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["action"] == "export_mobile_onboarding_packet"
+    assert data["onboarding"]["kind"] == "onboarding"
+    artifacts = data["artifacts"]
+    assert artifacts["latest_written"] is True
+    assert artifacts["latest_write_error"] == ""
+    assert "translator_mobile_onboarding_latest.json" in artifacts["latest_path"]
+    assert "translator_mobile_onboarding_" in artifacts["versioned_path"]
+    # Both versioned + latest должны быть записаны.
+    assert len(written) == 2
+
+
+def test_mobile_onboarding_export_falls_back_when_latest_oserror(tmp_path) -> None:
+    helpers = _wave_pp_helpers()
+    helpers.pop("_captured")
+    calls: list[Path] = []
+
+    def _write(path, payload):
+        calls.append(path)
+        # versioned записывается ок, latest бросает OSError, fallback ок.
+        if path.name == "translator_mobile_onboarding_latest.json":
+            raise OSError("readonly")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
+
+    helpers["write_json_file_helper"] = _write
+    ctx = RouterContext(
+        deps={"kraab_userbot": _FakeKraab(), **helpers},
+        project_root=tmp_path,
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+        runtime_lite_provider=_fake_runtime_lite,
+    )
+    resp = _client(ctx).post("/api/translator/mobile/onboarding/export")
+    assert resp.status_code == 200
+    artifacts = resp.json()["artifacts"]
+    assert artifacts["latest_written"] is True
+    assert "readonly" in artifacts["latest_write_error"]
+    # effective путь — fallback с user-suffix.
+    assert "translator_mobile_onboarding_latest_" in artifacts["latest_path_effective"]
+
+
+def test_mobile_onboarding_export_helper_missing_returns_503(tmp_path) -> None:
+    """Без write_json_file_helper → 503."""
+    helpers = _wave_pp_helpers()
+    helpers.pop("_captured")
+    ctx = RouterContext(
+        deps={"kraab_userbot": _FakeKraab(), **helpers},
+        project_root=tmp_path,
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+        runtime_lite_provider=_fake_runtime_lite,
+    )
+    resp = _client(ctx).post("/api/translator/mobile/onboarding/export")
+    assert resp.status_code == 503
+    assert "write_json_file_helper" in resp.json()["detail"]
+
+
+def test_mobile_onboarding_export_pp_helper_missing_returns_503(tmp_path) -> None:
+    """Без PP helpers → 503."""
+    ctx = RouterContext(
+        deps={"kraab_userbot": _FakeKraab(), "write_json_file_helper": lambda p, x: None},
+        project_root=tmp_path,
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+        runtime_lite_provider=_fake_runtime_lite,
+    )
+    resp = _client(ctx).post("/api/translator/mobile/onboarding/export")
+    assert resp.status_code == 503
+    assert "translator_helper_missing" in resp.json()["detail"]

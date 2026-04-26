@@ -862,6 +862,14 @@ class WebApp:
             lambda: getattr(_wam, "inbox_service").get_summary(),
         )
 
+        # Phase 2 Wave RR (Session 25): inject helpers для extraction
+        # /api/translator/mobile/onboarding/export (translator_router.py) и
+        # /api/diagnostics/smoke + /api/notify (misc_router.py).
+        deps_dict.setdefault(
+            "write_json_file_helper",
+            lambda path, payload: WebApp._write_json_file(path, payload),
+        )
+
         # Phase 2 Wave QQ (Session 25): inject runtime recover/repair helpers
         # для extraction /api/runtime/repair-active-shared-permissions и
         # /api/runtime/recover в system_router.py. Late-bound через lambda —
@@ -8429,43 +8437,8 @@ class WebApp:
                 )
             raise HTTPException(status_code=404, detail="nano_theme_css_not_found")
 
-        @self.app.post("/api/notify")
-        async def notify(
-            payload: dict[str, Any] = Body(default_factory=dict),
-        ):
-            """Отправляет Telegram-сообщение от Краба владельцу.
-
-            Используется внутренними сервисами (inbox watcher, hotkey) для уведомлений.
-            Localhost-only, без auth (rate-limited через ThrottleInterval LaunchAgent).
-            """
-            text = str(payload.get("text") or "").strip()
-            if not text:
-                raise HTTPException(status_code=400, detail="text_required")
-            chat_id = str(payload.get("chat_id") or "").strip() or os.getenv(
-                "OPENCLAW_ALERT_TARGET", ""
-            )
-            if not chat_id:
-                raise HTTPException(status_code=400, detail="chat_id_required")
-            userbot = self.deps.get("kraab_userbot")
-            if userbot is None or not getattr(userbot, "client", None):
-                # Возвращаем JSONResponse напрямую (не raise), чтобы Sentry
-                # не ловил это как ошибку во время startup (boot 15-30s).
-                from fastapi.responses import JSONResponse
-
-                return JSONResponse(
-                    status_code=503,
-                    content={
-                        "ok": False,
-                        "error": "userbot_not_ready",
-                        "detail": "userbot_not_ready",
-                    },
-                    headers={"Retry-After": "10"},
-                )
-            try:
-                await userbot.client.send_message(chat_id, text)
-                return {"ok": True, "chat_id": chat_id}
-            except Exception as exc:
-                raise HTTPException(status_code=500, detail=str(exc)) from exc
+        # /api/notify: extracted в src/modules/web_routers/misc_router.py
+        # (Phase 2 Wave RR, Session 25). См. include_router ниже.
 
         @self.app.post("/api/hooks/sentry")
         async def sentry_webhook(
@@ -9419,76 +9392,10 @@ class WebApp:
         # /api/translator/live-trial-preflight — extracted в translator_router.py (Phase 2 Wave PP).
         # /api/translator/mobile/onboarding — extracted в translator_router.py (Phase 2 Wave PP).
 
-        @self.app.post("/api/translator/mobile/onboarding/export")
-        async def translator_mobile_onboarding_export(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Собирает и пишет onboarding packet в ops artifacts одним owner-вызовом."""
-            self._assert_write_access(x_krab_web_key, token)
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            mobile_readiness = await self._translator_mobile_readiness_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-            delivery_matrix = await self._translator_delivery_matrix_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-            )
-            live_trial_preflight = await self._translator_live_trial_preflight_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_delivery_matrix=delivery_matrix,
-                current_mobile_readiness=mobile_readiness,
-            )
-            onboarding = await self._translator_mobile_onboarding_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-                current_delivery_matrix=delivery_matrix,
-                current_live_trial_preflight=live_trial_preflight,
-            )
-            ops_dir = self._project_root() / "artifacts" / "ops"
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
-            versioned_path = ops_dir / f"translator_mobile_onboarding_{stamp}.json"
-            latest_path = ops_dir / "translator_mobile_onboarding_latest.json"
-            self._write_json_file(versioned_path, onboarding)
-            latest_written = False
-            latest_error = ""
-            effective_latest_path = latest_path
-            try:
-                self._write_json_file(latest_path, onboarding)
-                latest_written = True
-            except OSError as exc:
-                latest_error = str(exc)
-                raw_user = str(os.getenv("USER") or Path.home().name or "user").strip().lower()
-                safe_user = re.sub(r"[^a-z0-9_-]+", "_", raw_user) or "user"
-                fallback_latest_path = (
-                    ops_dir / f"translator_mobile_onboarding_latest_{safe_user}.json"
-                )
-                try:
-                    self._write_json_file(fallback_latest_path, onboarding)
-                    effective_latest_path = fallback_latest_path
-                    latest_written = True
-                except OSError as fallback_exc:
-                    latest_error = f"{latest_error}; fallback_failed: {fallback_exc}"
-            return {
-                "ok": True,
-                "action": "export_mobile_onboarding_packet",
-                "artifacts": {
-                    "latest_path": str(latest_path),
-                    "latest_path_effective": str(effective_latest_path),
-                    "latest_written": latest_written,
-                    "latest_write_error": latest_error,
-                    "versioned_path": str(versioned_path),
-                },
-                "onboarding": onboarding,
-            }
+        # /api/translator/mobile/onboarding/export: extracted в
+        # src/modules/web_routers/translator_router.py (Phase 2 Wave RR, Session 25).
+        # Helpers инжектируются через write_json_file_helper +
+        # translator_*_snapshot helpers (Wave PP) в _make_router_context.
 
         # Phase 2 Wave HH (Session 25): /api/translator/session/{start,policy,action,
         # runtime-tune,quick-phrase,summary} extracted в translator_router.py
@@ -11481,56 +11388,10 @@ class WebApp:
         # (Phase 2 Wave LL, Session 25). Helper инжектируется через
         # openclaw_browser_smoke_helper в _make_router_context.
 
-        @self.app.post("/api/diagnostics/smoke")
-        async def diagnostics_smoke():
-            """
-            Агрегированный owner-smoke для быстрой кнопки в панели.
-
-            Нам нужен честный backend-контракт под кнопку `Run Smoke Trigger`, а не
-            фронтовый placeholder. Endpoint собирает базовые browser/photo smoke
-            и возвращает единый verdict, который потом можно расширять дальше.
-            """
-            browser_report, photo_payload = await asyncio.gather(
-                self._collect_openclaw_browser_smoke_report("https://example.com"),
-                self._collect_openclaw_photo_smoke_payload(),
-            )
-
-            browser_smoke = dict(browser_report.get("browser_smoke", {}) or {})
-            photo_smoke = dict((photo_payload.get("report") or {}).get("photo_smoke", {}) or {})
-            browser_ok = bool(browser_smoke.get("ok"))
-            photo_available = bool(photo_payload.get("available"))
-            photo_ok = bool(photo_smoke.get("ok")) if photo_available else False
-
-            checks: list[dict[str, Any]] = [
-                {
-                    "name": "browser_smoke",
-                    "ok": browser_ok,
-                    "detail": str(browser_smoke.get("detail") or "browser smoke unavailable"),
-                },
-                {
-                    "name": "photo_smoke",
-                    "ok": photo_ok,
-                    "detail": (
-                        str(photo_smoke.get("detail") or "photo smoke unavailable")
-                        if photo_available
-                        else str(photo_payload.get("error") or "photo smoke unavailable")
-                    ),
-                },
-            ]
-
-            ok = all(bool(item.get("ok")) for item in checks)
-            return {
-                "ok": ok,
-                "available": True,
-                "checks": checks,
-                "report": {
-                    "browser": {
-                        "available": True,
-                        "report": browser_report,
-                    },
-                    "photo": photo_payload,
-                },
-            }
+        # /api/diagnostics/smoke: extracted в src/modules/web_routers/misc_router.py
+        # (Phase 2 Wave RR, Session 25). Helpers (openclaw_browser_smoke_helper +
+        # openclaw_photo_smoke_helper) уже инжектируются через _make_router_context
+        # начиная с Wave LL.
 
         # /api/openclaw/browser/start: extracted в src/modules/web_routers/openclaw_router.py
         # (Phase 2 Wave MM, Session 25). Helpers инжектируются через

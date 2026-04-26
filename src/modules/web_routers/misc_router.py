@@ -30,10 +30,10 @@ import hashlib
 import json
 import os
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, Header, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Body, Header, HTTPException, Query
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from ._context import RouterContext
 
@@ -290,5 +290,97 @@ def build_misc_router(ctx: RouterContext) -> APIRouter:
             "ok": True,
             "cleared": count,
         }
+
+    # ── Wave RR: /api/diagnostics/smoke ────────────────────────────────────
+    # Агрегированный owner-smoke (browser + photo). Без auth — endpoint
+    # используется кнопкой панели и read-only.
+
+    @router.post("/api/diagnostics/smoke")
+    async def diagnostics_smoke() -> dict:
+        """Агрегированный owner-smoke для быстрой кнопки в панели."""
+        browser_helper = ctx.get_dep("openclaw_browser_smoke_helper")
+        photo_helper = ctx.get_dep("openclaw_photo_smoke_helper")
+        if browser_helper is None or photo_helper is None:
+            raise HTTPException(
+                status_code=503,
+                detail="diagnostics_smoke_helpers_missing",
+            )
+        browser_report, photo_payload = await asyncio.gather(
+            browser_helper("https://example.com"),
+            photo_helper(),
+        )
+
+        browser_smoke = dict(browser_report.get("browser_smoke", {}) or {})
+        photo_smoke = dict((photo_payload.get("report") or {}).get("photo_smoke", {}) or {})
+        browser_ok = bool(browser_smoke.get("ok"))
+        photo_available = bool(photo_payload.get("available"))
+        photo_ok = bool(photo_smoke.get("ok")) if photo_available else False
+
+        checks: list[dict[str, Any]] = [
+            {
+                "name": "browser_smoke",
+                "ok": browser_ok,
+                "detail": str(browser_smoke.get("detail") or "browser smoke unavailable"),
+            },
+            {
+                "name": "photo_smoke",
+                "ok": photo_ok,
+                "detail": (
+                    str(photo_smoke.get("detail") or "photo smoke unavailable")
+                    if photo_available
+                    else str(photo_payload.get("error") or "photo smoke unavailable")
+                ),
+            },
+        ]
+
+        ok = all(bool(item.get("ok")) for item in checks)
+        return {
+            "ok": ok,
+            "available": True,
+            "checks": checks,
+            "report": {
+                "browser": {
+                    "available": True,
+                    "report": browser_report,
+                },
+                "photo": photo_payload,
+            },
+        }
+
+    # ── Wave RR: /api/notify ───────────────────────────────────────────────
+    # Localhost-only Telegram-уведомление от userbot. Без auth (rate-limited
+    # через ThrottleInterval LaunchAgent).
+
+    @router.post("/api/notify")
+    async def notify(
+        payload: dict[str, Any] = Body(default_factory=dict),
+    ):
+        """Отправляет Telegram-сообщение от Краба владельцу."""
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="text_required")
+        chat_id = str(payload.get("chat_id") or "").strip() or os.getenv(
+            "OPENCLAW_ALERT_TARGET", ""
+        )
+        if not chat_id:
+            raise HTTPException(status_code=400, detail="chat_id_required")
+        userbot = ctx.get_dep("kraab_userbot")
+        if userbot is None or not getattr(userbot, "client", None):
+            # Возвращаем JSONResponse напрямую (не raise), чтобы Sentry
+            # не ловил это как ошибку во время startup (boot 15-30s).
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "ok": False,
+                    "error": "userbot_not_ready",
+                    "detail": "userbot_not_ready",
+                },
+                headers={"Retry-After": "10"},
+            )
+        try:
+            await userbot.client.send_message(chat_id, text)
+            return {"ok": True, "chat_id": chat_id}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return router

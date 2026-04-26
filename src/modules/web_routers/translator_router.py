@@ -30,6 +30,10 @@ Endpoints (Wave PP):
 from __future__ import annotations
 
 import inspect
+import os
+import re
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
@@ -1105,6 +1109,63 @@ def build_translator_router(ctx: RouterContext) -> APIRouter:
             "control_plane": control_plane,
             "session_inspector": inspector,
             "inbox_summary": summary_helper(),
+        }
+
+    # ------------------------------------------------------------------
+    # Wave RR — POST /api/translator/mobile/onboarding/export.
+    # Собирает onboarding packet и пишет в artifacts/ops одним owner-вызовом.
+    # Использует уже инжекченные snapshot-helpers + write_json_file_helper.
+    # ------------------------------------------------------------------
+
+    @router.post("/api/translator/mobile/onboarding/export")
+    async def translator_mobile_onboarding_export(
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ):
+        """Собирает и пишет onboarding packet в ops artifacts одним owner-вызовом."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        _require_pp_helpers()
+        write_json_helper = ctx.get_dep("write_json_file_helper")
+        if write_json_helper is None:
+            raise HTTPException(
+                status_code=503,
+                detail="translator_helper_missing:write_json_file_helper",
+            )
+        chain = await _translator_full_snapshot_chain(include_onboarding=True)
+        onboarding = chain["mobile_onboarding"]
+        ops_dir = Path(ctx.project_root) / "artifacts" / "ops"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
+        versioned_path = ops_dir / f"translator_mobile_onboarding_{stamp}.json"
+        latest_path = ops_dir / "translator_mobile_onboarding_latest.json"
+        write_json_helper(versioned_path, onboarding)
+        latest_written = False
+        latest_error = ""
+        effective_latest_path = latest_path
+        try:
+            write_json_helper(latest_path, onboarding)
+            latest_written = True
+        except OSError as exc:
+            latest_error = str(exc)
+            raw_user = str(os.getenv("USER") or Path.home().name or "user").strip().lower()
+            safe_user = re.sub(r"[^a-z0-9_-]+", "_", raw_user) or "user"
+            fallback_latest_path = ops_dir / f"translator_mobile_onboarding_latest_{safe_user}.json"
+            try:
+                write_json_helper(fallback_latest_path, onboarding)
+                effective_latest_path = fallback_latest_path
+                latest_written = True
+            except OSError as fallback_exc:
+                latest_error = f"{latest_error}; fallback_failed: {fallback_exc}"
+        return {
+            "ok": True,
+            "action": "export_mobile_onboarding_packet",
+            "artifacts": {
+                "latest_path": str(latest_path),
+                "latest_path_effective": str(effective_latest_path),
+                "latest_written": latest_written,
+                "latest_write_error": latest_error,
+                "versioned_path": str(versioned_path),
+            },
+            "onboarding": onboarding,
         }
 
     return router

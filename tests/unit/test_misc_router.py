@@ -252,3 +252,132 @@ def test_chat_windows_clear_invalid_auth(monkeypatch: pytest.MonkeyPatch) -> Non
     with patch("src.core.chat_window_manager.chat_window_manager", fake_mgr):
         resp = _client(_build_ctx()).post("/api/chat_windows/clear")
     assert resp.status_code == 403
+
+
+# ── Wave RR: /api/diagnostics/smoke (POST) ─────────────────────────────────
+
+
+def test_diagnostics_smoke_helpers_missing_returns_503() -> None:
+    """Без injected helper'ов → 503."""
+    resp = _client(_build_ctx()).post("/api/diagnostics/smoke")
+    assert resp.status_code == 503
+    assert "diagnostics_smoke_helpers_missing" in resp.json()["detail"]
+
+
+def test_diagnostics_smoke_all_ok() -> None:
+    """browser_smoke + photo_smoke ok → ok=True, оба check-а проходят."""
+
+    async def _browser_helper(url):
+        return {"browser_smoke": {"ok": True, "detail": "browser ok"}}
+
+    async def _photo_helper():
+        return {
+            "available": True,
+            "report": {"photo_smoke": {"ok": True, "detail": "photo ok"}},
+        }
+
+    deps = {
+        "openclaw_browser_smoke_helper": _browser_helper,
+        "openclaw_photo_smoke_helper": _photo_helper,
+    }
+    resp = _client(_build_ctx(deps)).post("/api/diagnostics/smoke")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["available"] is True
+    checks = {c["name"]: c for c in data["checks"]}
+    assert checks["browser_smoke"]["ok"] is True
+    assert checks["photo_smoke"]["ok"] is True
+    assert data["report"]["browser"]["available"] is True
+
+
+def test_diagnostics_smoke_photo_unavailable() -> None:
+    """photo unavailable → ok=False; detail из payload.error."""
+
+    async def _browser_helper(url):
+        return {"browser_smoke": {"ok": True, "detail": "browser ok"}}
+
+    async def _photo_helper():
+        return {"available": False, "error": "photo skill missing"}
+
+    deps = {
+        "openclaw_browser_smoke_helper": _browser_helper,
+        "openclaw_photo_smoke_helper": _photo_helper,
+    }
+    resp = _client(_build_ctx(deps)).post("/api/diagnostics/smoke")
+    data = resp.json()
+    assert data["ok"] is False
+    photo_check = next(c for c in data["checks"] if c["name"] == "photo_smoke")
+    assert photo_check["ok"] is False
+    assert "photo skill missing" in photo_check["detail"]
+
+
+# ── Wave RR: /api/notify (POST) ────────────────────────────────────────────
+
+
+def test_notify_text_required() -> None:
+    resp = _client(_build_ctx()).post("/api/notify", json={})
+    assert resp.status_code == 400
+    assert "text_required" in resp.json()["detail"]
+
+
+def test_notify_chat_id_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENCLAW_ALERT_TARGET", raising=False)
+    resp = _client(_build_ctx()).post("/api/notify", json={"text": "hi"})
+    assert resp.status_code == 400
+    assert "chat_id_required" in resp.json()["detail"]
+
+
+def test_notify_userbot_not_ready_returns_503() -> None:
+    """userbot отсутствует → 503 без raise (Sentry-safe)."""
+    resp = _client(_build_ctx()).post(
+        "/api/notify", json={"text": "hi", "chat_id": "123"}
+    )
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error"] == "userbot_not_ready"
+    assert resp.headers.get("retry-after") == "10"
+
+
+def test_notify_sends_when_userbot_ready() -> None:
+    """userbot.client.send_message вызывается с chat_id и text."""
+    sent: dict[str, Any] = {}
+
+    class _Client:
+        async def send_message(self, chat_id, text):
+            sent["chat_id"] = chat_id
+            sent["text"] = text
+
+    class _Userbot:
+        def __init__(self):
+            self.client = _Client()
+
+    deps = {"kraab_userbot": _Userbot()}
+    resp = _client(_build_ctx(deps)).post(
+        "/api/notify", json={"text": "hello", "chat_id": "42"}
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["chat_id"] == "42"
+    assert sent == {"chat_id": "42", "text": "hello"}
+
+
+def test_notify_uses_env_default_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OPENCLAW_ALERT_TARGET используется как fallback."""
+    monkeypatch.setenv("OPENCLAW_ALERT_TARGET", "777")
+    sent: dict[str, Any] = {}
+
+    class _Client:
+        async def send_message(self, chat_id, text):
+            sent["chat_id"] = chat_id
+
+    class _Userbot:
+        def __init__(self):
+            self.client = _Client()
+
+    deps = {"kraab_userbot": _Userbot()}
+    resp = _client(_build_ctx(deps)).post("/api/notify", json={"text": "hi"})
+    assert resp.status_code == 200
+    assert sent["chat_id"] == "777"
