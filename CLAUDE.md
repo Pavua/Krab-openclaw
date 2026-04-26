@@ -269,6 +269,34 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - **Wake-up message**: 60min rate limit (no more startup spam в Saved Messages)
 - **message_batcher**: preserve buffered messages during LLM processing (no drops)
 
+## Smart Message Routing (Session 26 — 26.04.2026 — LIVE)
+
+5-stage pipeline для intelligent group message routing — ответ на user issue «Krab отвечает не всегда вовремя».
+
+```
+1. Hard gates (DM/mention/reply/!cmd) → ALWAYS respond
+2. Per-chat policy (silent/cautious/normal/chatty) → SILENT drop
+3. Regex fast filter — score >=0.6 yes, <0.2 no
+4. LLM intent classifier (Qwen3.5 9B, 5min cache, 2s timeout) — borderline 0.2-0.6
+5. Post-response feedback (delete/reaction tracking → policy auto-adjust)
+```
+
+**Components**:
+- `src/core/chat_response_policy.py` — JSON store + ChatMode enum + auto-adjust (>5 negatives/24h → downshift, rate-limit 6h)
+- `src/core/llm_intent_classifier.py` — LM Studio HTTP + LRU cache (500 entries, 5min TTL)
+- `src/core/feedback_tracker.py` — Pyrogram delete/reaction → negative/positive signals
+- `src/core/trigger_detector.py:detect_smart_trigger()` — async 5-stage orchestrator
+- `src/userbot_bridge.py` — Pyrogram event hooks + post-response stash
+- `src/handlers/commands/policy_commands.py` — `!chatpolicy` (10 subcommands)
+- `src/modules/web_routers/chat_policy_router.py` — 4 endpoints
+
+**Owner control**:
+- `!chatpolicy [show|set <mode>|threshold <0.0-1.0>|add-blocked-topic|stats|list|reset]`
+- `GET/POST /api/chat/policy/{chat_id}`, `GET /api/chat/policies`, `DELETE /api/chat/policy/{chat_id}`
+- env override: `KRAB_IMPLICIT_TRIGGER_THRESHOLD`
+
+**Spec**: `docs/SMART_ROUTING_DESIGN.md` (319 LOC).
+
 ## Phase 2 Code Splits (Session 25 — 26.04.2026 — COMPLETE)
 
 - **Status: COMPLETE** — 50 waves Wave A → Wave XX, ~50 commits (`db6d9fd..674ebd1`)
@@ -688,6 +716,7 @@ Endpoints session 7 (добавлены, ~249 итого после Session 22):
 | Session 23 | 9991 collected, 1 intermittent flake (Wave 13 cleanup) |
 | Session 24 | **9527 passed**, 94 skipped, 0 failed (clean state, 538s full run; +busy_timeout test, +health_deep session 24 tests, +sentry markers tests) |
 | Session 25 | **10125 collected** (~9700+ passed), 94 skipped (Phase 2 Code Splits **COMPLETE** — **25 routers extracted, 207 endpoints** через factory `build_X_router(ctx)` pattern за 50 waves Wave A→XX; +tests на routers / RouterContext / MCP userbot capabilities / peer_id_invalid handling / HTML pages router) |
+| Session 26 | **+128 tests** Smart Routing (28 chat_response_policy + 29 llm_intent_classifier + 21 feedback_tracker + 12 chat_policy_router + 11 policy_commands + 14 smart_trigger_integration). +DB corruption circuit breaker (16 tests). +Phase 2 Wave YY/ZZ — costs cluster (7) + swarm leaked (12 endpoints). +inbox dual-patch (6 pre-existing failures fixed). +launchd auto-load fix (Stop Krab.command). +session recovery (kraab.session corrupt → sqlite .recover, 380 peers preserved) |
 
 <!-- BEGIN:auto-endpoints -->
 
