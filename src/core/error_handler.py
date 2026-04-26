@@ -21,7 +21,9 @@
 import asyncio
 import functools
 import logging
+import time
 import traceback
+from collections import deque
 
 from pyrogram.errors import ChatWriteForbidden, FloodWait, MessageNotModified, UserNotParticipant
 
@@ -29,6 +31,12 @@ logger = logging.getLogger("ErrorHandler")
 
 # Счётчик ошибок для мониторинга
 _error_counts = {}
+
+# Sliding window: timestamps (unix sec) последних обработанных ошибок.
+# maxlen=1000 — предохранитель от unbounded growth при error storm.
+# Используется в health_deep_collector._collect_error_rate_5m для
+# подсчёта errors_5m без зависимости от лог-парсинга.
+_RECENT_ERROR_TS: deque[float] = deque(maxlen=1000)
 
 
 def safe_handler(func):
@@ -57,6 +65,7 @@ def safe_handler(func):
                 f"Handler НЕ будет повторён для предотвращения рекурсии."
             )
             _error_counts["FloodWait"] = _error_counts.get("FloodWait", 0) + 1
+            _RECENT_ERROR_TS.append(time.time())
             # Prometheus: krab_telegram_flood_wait_total{caller=<handler>}.
             try:
                 from src.core.prometheus_metrics import inc_telegram_flood_wait
@@ -84,11 +93,13 @@ def safe_handler(func):
                 f"Прерываем handler, чтобы бот продолжил работу."
             )
             _error_counts["RecursionError"] = _error_counts.get("RecursionError", 0) + 1
+            _RECENT_ERROR_TS.append(time.time())
 
         except Exception as e:
             # Общая ошибка — логируем полностью (без автоудаления конфига, см. Фаза 1.3)
             error_name = type(e).__name__
             _error_counts[error_name] = _error_counts.get(error_name, 0) + 1
+            _RECENT_ERROR_TS.append(time.time())
 
             tb = traceback.format_exc()
             logger.error(
@@ -118,3 +129,17 @@ def get_error_stats() -> dict:
 def reset_error_stats():
     """Сброс счётчиков (вызывается при !diagnose)."""
     _error_counts.clear()
+    _RECENT_ERROR_TS.clear()
+
+
+def recent_error_count(window_sec: int = 300) -> int:
+    """Сколько errors зарегистрировано в последние ``window_sec`` секунд.
+
+    Используется в /api/health/deep для error_rate_5m (window_sec=300).
+    Не модифицирует внутренний deque — pure read.
+    """
+    if window_sec <= 0:
+        return 0
+    cutoff = time.time() - window_sec
+    # deque итерируется хвост→голова при list(); счёт O(N) но N≤1000.
+    return sum(1 for ts in _RECENT_ERROR_TS if ts >= cutoff)

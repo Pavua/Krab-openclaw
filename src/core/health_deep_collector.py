@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
 import subprocess
@@ -18,6 +19,153 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     pass
+
+
+# ── Дополнительные секции (Session 24) ──────────────────────────────────────
+
+
+def _collect_sentry() -> dict[str, Any]:
+    """Sentry SDK initialization status — после Session 23 init drift fix.
+
+    Возвращает initialized=True если sentry_sdk инициализирован (SDK поднят
+    в src/main.py:62 через init_sentry()). dsn_configured=True если SENTRY_DSN
+    задан в env (показывает что секрет на месте).
+    """
+    dsn_set = bool(os.getenv("SENTRY_DSN", "").strip())
+    try:
+        import sentry_sdk
+
+        # sentry_sdk.is_initialized() — sentry-sdk >= 1.16 (рекомендуемое API).
+        # Hub.current.client — fallback для старых версий (deprecated в 2.x).
+        try:
+            initialized = bool(sentry_sdk.is_initialized())  # type: ignore[attr-defined]
+        except AttributeError:
+            client = sentry_sdk.Hub.current.client
+            initialized = client is not None
+        return {
+            "initialized": initialized,
+            "dsn_configured": dsn_set,
+        }
+    except ImportError:
+        return {
+            "initialized": False,
+            "dsn_configured": dsn_set,
+            "error": "sentry_sdk not installed",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "initialized": False,
+            "dsn_configured": dsn_set,
+            "error": str(exc)[:120],
+            "error_type": type(exc).__name__,
+        }
+
+
+async def _probe_tcp_port(port: int, timeout: float = 1.0) -> dict[str, Any]:
+    """TCP probe одного порта на 127.0.0.1. ok=True если открыт connection."""
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection("127.0.0.1", port),
+            timeout=timeout,
+        )
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:  # noqa: BLE001 — close-time errors игнорируем
+            pass
+        return {"port": port, "ok": True}
+    except asyncio.TimeoutError:
+        return {"port": port, "ok": False, "error": "timeout"}
+    except OSError as exc:
+        return {"port": port, "ok": False, "error": str(exc)[:60]}
+
+
+async def _collect_mcp_servers() -> dict[str, Any]:
+    """Параллельный probe MCP SSE серверов (8011 yung-nagato, 8012 p0lrd, 8013 hammerspoon)."""
+    servers = {
+        "yung-nagato": 8011,
+        "p0lrd": 8012,
+        "hammerspoon": 8013,
+    }
+    tasks = [_probe_tcp_port(port) for port in servers.values()]
+    probe_results = await asyncio.gather(*tasks, return_exceptions=True)
+    out: dict[str, Any] = {}
+    for (name, port), res in zip(servers.items(), probe_results):
+        if isinstance(res, Exception):
+            out[name] = {"port": port, "ok": False, "error": str(res)[:60]}
+        else:
+            out[name] = res
+    return out
+
+
+def _collect_cf_tunnel() -> dict[str, Any]:
+    """Cloudflare quick tunnel: launchctl status + state файлы.
+
+    State хранится в /tmp/krab_cf_tunnel/{last_url,fail_count}. Tunnel
+    управляется LaunchAgent ai.krab.cloudflared-tunnel (ephemeral URL).
+    Sentry sync отдельно (DISABLED после Session 23 — Sentry блокирует
+    trycloudflare).
+    """
+    from .subprocess_env import clean_subprocess_env
+
+    label = "ai.krab.cloudflared-tunnel"
+    state_dir = Path("/tmp/krab_cf_tunnel")
+    loaded = False
+    try:
+        proc = subprocess.run(  # noqa: S603, S607
+            ["launchctl", "list", label],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            env=clean_subprocess_env(),
+        )
+        loaded = proc.returncode == 0
+    except Exception:  # noqa: BLE001
+        pass
+
+    last_url: str | None = None
+    fail_count: int | None = None
+    try:
+        url_file = state_dir / "last_url"
+        if url_file.exists():
+            last_url = url_file.read_text().strip()[:200]
+        fc_file = state_dir / "fail_count"
+        if fc_file.exists():
+            try:
+                fail_count = int(fc_file.read_text().strip())
+            except ValueError:
+                fail_count = -1
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {
+        "label": label,
+        "loaded": loaded,
+        "last_url": last_url,
+        "fail_count": fail_count,
+    }
+
+
+def _collect_error_rate(window_sec: int = 300) -> dict[str, Any]:
+    """Errors за последние ``window_sec`` секунд через ring buffer error_handler.
+
+    Источник — `_RECENT_ERROR_TS` deque (FloodWait + RecursionError +
+    общие Exception в safe_handler). НЕ парсит лог — pure in-memory счёт.
+    """
+    try:
+        from .error_handler import recent_error_count
+
+        return {
+            "errors_5m": int(recent_error_count(window_sec)),
+            "window_sec": window_sec,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "errors_5m": -1,
+            "window_sec": window_sec,
+            "error": str(exc)[:120],
+            "error_type": type(exc).__name__,
+        }
 
 
 async def collect_health_deep(
@@ -128,7 +276,10 @@ async def collect_health_deep(
                 except sqlite3.OperationalError:
                     fts_orphans = None
                 try:
-                    # Загружаем sqlite-vec extension для доступа к vec_chunks_rowids
+                    # Загружаем sqlite-vec extension для доступа к vec_chunks.
+                    # Используем тот же SQL что memory_doctor.py — vec_chunks.rowid ↔ chunks.id.
+                    # NB: vec_chunks_rowids.id всегда NULL (это shadow view с non-standard
+                    # semantics), JOIN на c.id = vr.id даёт false positive на ВСЕ строки.
                     import sqlite_vec  # type: ignore[import-not-found]
 
                     conn.enable_load_extension(True)
@@ -137,11 +288,7 @@ async def collect_health_deep(
                     finally:
                         conn.enable_load_extension(False)
                     vec_orphans = conn.execute(
-                        """
-                        SELECT COUNT(*) FROM vec_chunks_rowids AS vr
-                        LEFT JOIN chunks AS c ON c.id = vr.id
-                        WHERE c.id IS NULL
-                        """
+                        "SELECT COUNT(*) FROM vec_chunks WHERE rowid NOT IN (SELECT id FROM chunks)"
                     ).fetchone()[0]
                 except Exception:  # noqa: BLE001
                     vec_orphans = None
@@ -213,5 +360,20 @@ async def collect_health_deep(
         }
     except Exception as exc:  # noqa: BLE001
         result["system"] = {"error": str(exc), "error_type": type(exc).__name__}
+
+    # ── 9. Sentry SDK init (Session 24) ─────────────────────────────────────
+    result["sentry"] = _collect_sentry()
+
+    # ── 10. MCP servers TCP probe (Session 24) ──────────────────────────────
+    try:
+        result["mcp_servers"] = await _collect_mcp_servers()
+    except Exception as exc:  # noqa: BLE001
+        result["mcp_servers"] = {"error": str(exc)[:120], "error_type": type(exc).__name__}
+
+    # ── 11. Cloudflare quick tunnel (Session 24) ────────────────────────────
+    result["cf_tunnel"] = _collect_cf_tunnel()
+
+    # ── 12. Error rate за 5 минут (Session 24) ──────────────────────────────
+    result["error_rate_5m"] = _collect_error_rate(window_sec=300)
 
     return result

@@ -82,6 +82,20 @@ _DEEP_DATA = {
         "total_mb": 32768,
         "used_pct": 37.5,
     },
+    # Session 24: 4 новые секции
+    "sentry": {"initialized": True, "dsn_configured": True},
+    "mcp_servers": {
+        "yung-nagato": {"port": 8011, "ok": True},
+        "p0lrd": {"port": 8012, "ok": True},
+        "hammerspoon": {"port": 8013, "ok": True},
+    },
+    "cf_tunnel": {
+        "label": "ai.krab.cloudflared-tunnel",
+        "loaded": True,
+        "last_url": "https://example.trycloudflare.com",
+        "fail_count": 0,
+    },
+    "error_rate_5m": {"errors_5m": 0, "window_sec": 300},
 }
 
 
@@ -134,8 +148,21 @@ def test_health_deep_required_keys() -> None:
     ):
         data = _client().get("/api/health/deep").json()
 
-    for key in ("krab", "openclaw", "lm_studio", "archive_db",
-                "reminders", "memory_validator", "sigterm_recent_count", "system"):
+    for key in (
+        "krab",
+        "openclaw",
+        "lm_studio",
+        "archive_db",
+        "reminders",
+        "memory_validator",
+        "sigterm_recent_count",
+        "system",
+        # Session 24: 4 новые секции
+        "sentry",
+        "mcp_servers",
+        "cf_tunnel",
+        "error_rate_5m",
+    ):
         assert key in data, f"отсутствует ключ {key!r}"
 
 
@@ -175,3 +202,67 @@ def test_health_deep_sigterm_count() -> None:
 
     assert isinstance(data["sigterm_recent_count"], int)
     assert data["sigterm_recent_count"] == 0
+
+
+# ── Session 24: 4 новые секции ─────────────────────────────────────────────
+
+
+def test_health_deep_sentry_section() -> None:
+    """Секция sentry отдаёт initialized + dsn_configured booleans."""
+    with patch(
+        "src.core.health_deep_collector.collect_health_deep",
+        new=AsyncMock(return_value=_DEEP_DATA),
+    ):
+        data = _client().get("/api/health/deep").json()
+
+    sentry = data["sentry"]
+    assert "initialized" in sentry
+    assert "dsn_configured" in sentry
+    assert isinstance(sentry["initialized"], bool)
+    assert isinstance(sentry["dsn_configured"], bool)
+
+
+def test_health_deep_mcp_servers_section() -> None:
+    """Секция mcp_servers содержит 3 known servers с port + ok."""
+    with patch(
+        "src.core.health_deep_collector.collect_health_deep",
+        new=AsyncMock(return_value=_DEEP_DATA),
+    ):
+        data = _client().get("/api/health/deep").json()
+
+    mcp = data["mcp_servers"]
+    for name in ("yung-nagato", "p0lrd", "hammerspoon"):
+        assert name in mcp, f"отсутствует MCP {name!r}"
+        assert "port" in mcp[name]
+        assert "ok" in mcp[name]
+    assert mcp["yung-nagato"]["port"] == 8011
+    assert mcp["p0lrd"]["port"] == 8012
+    assert mcp["hammerspoon"]["port"] == 8013
+
+
+def test_health_deep_cf_tunnel_section() -> None:
+    """Секция cf_tunnel содержит label, loaded, last_url, fail_count."""
+    with patch(
+        "src.core.health_deep_collector.collect_health_deep",
+        new=AsyncMock(return_value=_DEEP_DATA),
+    ):
+        data = _client().get("/api/health/deep").json()
+
+    tunnel = data["cf_tunnel"]
+    assert tunnel["label"] == "ai.krab.cloudflared-tunnel"
+    assert "loaded" in tunnel
+    assert "last_url" in tunnel
+    assert "fail_count" in tunnel
+
+
+def test_health_deep_error_rate_section() -> None:
+    """Секция error_rate_5m содержит errors_5m + window_sec=300."""
+    with patch(
+        "src.core.health_deep_collector.collect_health_deep",
+        new=AsyncMock(return_value=_DEEP_DATA),
+    ):
+        data = _client().get("/api/health/deep").json()
+
+    er = data["error_rate_5m"]
+    assert isinstance(er["errors_5m"], int)
+    assert er["window_sec"] == 300
