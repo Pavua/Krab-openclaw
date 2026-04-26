@@ -251,6 +251,75 @@ async def test_session_info_json_bot_warns():
     assert "auth_setup" in data["warning"]
 
 
+@pytest.mark.asyncio
+async def test_send_photo_passes_reply_to_message_id():
+    """reply_to_message_id передаётся в client.send_photo (Session 25)."""
+    from telegram_bridge import TelegramBridge
+
+    bridge = TelegramBridge()
+    fake_client = _FakeClient()
+    bridge._client = fake_client  # type: ignore[assignment]
+
+    await bridge.send_photo(123, "/tmp/x.jpg", caption="hi", reply_to_message_id=42)
+
+    kwargs = fake_client.last_call["kwargs"]
+    assert kwargs["reply_to_message_id"] == 42
+    assert kwargs["caption"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_send_photo_parse_mode_html_for_caption():
+    """parse_mode='html' резолвится в ParseMode.HTML для caption."""
+    from telegram_bridge import TelegramBridge
+
+    bridge = TelegramBridge()
+    fake_client = _FakeClient()
+    bridge._client = fake_client  # type: ignore[assignment]
+
+    await bridge.send_photo(
+        123, "/tmp/x.jpg", caption="<b>bold</b>", parse_mode="html"
+    )
+
+    pm = fake_client.last_call["kwargs"].get("parse_mode")
+    assert pm is not None
+    assert pm.name == "HTML"
+
+
+@pytest.mark.asyncio
+async def test_send_voice_passes_reply_to_message_id():
+    """reply_to_message_id передаётся в client.send_voice (Session 25)."""
+    from telegram_bridge import TelegramBridge
+
+    bridge = TelegramBridge()
+    fake_client = _FakeClient()
+    bridge._client = fake_client  # type: ignore[assignment]
+
+    await bridge.send_voice(123, "/tmp/v.ogg", duration=5, reply_to_message_id=99)
+
+    kwargs = fake_client.last_call["kwargs"]
+    assert kwargs["reply_to_message_id"] == 99
+    assert kwargs["duration"] == 5
+
+
+@pytest.mark.asyncio
+async def test_send_voice_no_parse_mode_field():
+    """Voice не использует parse_mode/disable_web_page_preview — Pyrogram default."""
+    from telegram_bridge import TelegramBridge
+
+    bridge = TelegramBridge()
+    fake_client = _FakeClient()
+    bridge._client = fake_client  # type: ignore[assignment]
+
+    await bridge.send_voice(123, "/tmp/v.ogg")
+
+    kwargs = fake_client.last_call["kwargs"]
+    assert "parse_mode" not in kwargs
+    assert "disable_web_page_preview" not in kwargs
+    assert "caption" not in kwargs
+    # И reply_to_message_id не передаётся когда None
+    assert "reply_to_message_id" not in kwargs
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -265,9 +334,11 @@ class _FakeClient:
             self.last_call = {"args": args, "kwargs": kwargs}
             return _FakeMessage()
 
-        # support send_message + edit_message_text
+        # support send_message + edit_message_text + send_photo + send_voice
         self.send_message = _send  # type: ignore[method-assign]
         self.edit_message_text = _send  # type: ignore[method-assign]
+        self.send_photo = _send  # type: ignore[method-assign]
+        self.send_voice = _send  # type: ignore[method-assign]
 
     async def get_me(self):
         # Можно override через assignment в тестах

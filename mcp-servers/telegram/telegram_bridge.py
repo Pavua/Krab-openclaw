@@ -388,10 +388,27 @@ class TelegramBridge:
         chat_id: int | str,
         photo: str,
         caption: str = "",
+        *,
+        reply_to_message_id: int | None = None,
+        parse_mode: str | None = None,
+        disable_web_page_preview: bool = False,
     ) -> dict[str, Any]:
-        """Отправляет фото (локальный путь или URL) с опциональной подписью."""
+        """Отправляет фото (локальный путь или URL) с опциональной подписью.
+
+        Поддерживает userbot capabilities (Session 25):
+        - reply_to_message_id: Telegram отрисует как Reply на сообщение
+        - parse_mode: 'markdown' / 'html' / 'disabled' / None — разметка caption
+        - disable_web_page_preview: отключить link preview в caption
+        """
         async def _op(client: Client) -> dict[str, Any]:
-            msg = await client.send_photo(chat_id, photo, caption=caption or None)
+            kwargs: dict[str, Any] = {"caption": caption or None}
+            if reply_to_message_id is not None:
+                kwargs["reply_to_message_id"] = reply_to_message_id
+            if parse_mode:
+                kwargs["parse_mode"] = _resolve_parse_mode(parse_mode)
+            if disable_web_page_preview:
+                kwargs["disable_web_page_preview"] = True
+            msg = await client.send_photo(chat_id, photo, **kwargs)
             return _msg_to_dict(msg)
 
         return await self._run_client_call(_op)
@@ -484,12 +501,21 @@ class TelegramBridge:
         chat_id: int | str,
         voice_path: str,
         duration: int | None = None,
+        *,
+        reply_to_message_id: int | None = None,
     ) -> dict[str, Any]:
-        """Отправляет голосовое сообщение (.ogg)."""
+        """Отправляет голосовое сообщение (.ogg).
+
+        Userbot capability (Session 25):
+        - reply_to_message_id: Telegram отрисует как Reply на сообщение.
+        Voice не имеет caption, поэтому parse_mode/preview не применимы.
+        """
         async def _op(client: Client) -> dict[str, Any]:
             kwargs: dict = {}
             if duration is not None:
                 kwargs["duration"] = duration
+            if reply_to_message_id is not None:
+                kwargs["reply_to_message_id"] = reply_to_message_id
             msg = await client.send_voice(chat_id, voice_path, **kwargs)
             return _msg_to_dict(msg)
 

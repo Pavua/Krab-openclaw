@@ -231,6 +231,25 @@ class _SendPhotoInput(BaseModel):
     photo_path: str = Field(default="", description="Локальный путь к файлу фото")
     photo_url: str = Field(default="", description="URL фото (если не задан photo_path)")
     caption: str = Field(default="", max_length=1024, description="Подпись к фото (необязательно)")
+    reply_to_message_id: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "ID сообщения для reply (Telegram отрисует ответ как Reply на конкретное "
+            "сообщение). Userbot capability — аналогично telegram_send_message."
+        ),
+    )
+    parse_mode: str = Field(
+        default="",
+        description=(
+            "Режим разметки caption: 'markdown' / 'html' / 'disabled' / '' (default). "
+            "Аналог параметра в telegram_send_message."
+        ),
+    )
+    disable_web_page_preview: bool = Field(
+        default=False,
+        description="Если True — отключает превью ссылок в caption.",
+    )
 
 
 class _SendReactionInput(BaseModel):
@@ -274,6 +293,14 @@ class _SendVoiceInput(BaseModel):
     voice_path: str = Field(..., min_length=1, description="Локальный путь к .ogg файлу")
     duration: int | None = Field(
         default=None, ge=0, description="Длительность в секундах (необязательно)"
+    )
+    reply_to_message_id: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "ID сообщения для reply (Telegram Reply UI). Userbot capability — "
+            "позволяет отвечать голосом на конкретное сообщение."
+        ),
     )
 
 
@@ -581,7 +608,13 @@ async def telegram_edit_message(params: _EditMessageInput) -> str:
     annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
 )
 async def telegram_send_photo(params: _SendPhotoInput) -> str:
-    """Отправляет фото в Telegram-чат из локального файла или URL.
+    """Отправляет фото в Telegram-чат из локального файла или URL (userbot session).
+
+    Userbot capabilities (Session 25):
+    - reply_to_message_id: отрисует фото как Reply на конкретное сообщение
+      (Telegram показывает quote cutout — как при `Reply` в UI);
+    - parse_mode: разметка caption (markdown/html);
+    - disable_web_page_preview: отключить превью ссылок в caption.
 
     Args:
         params:
@@ -589,6 +622,9 @@ async def telegram_send_photo(params: _SendPhotoInput) -> str:
             - photo_path (str): Локальный путь к файлу (приоритет перед photo_url)
             - photo_url (str): URL фото (если photo_path не задан)
             - caption (str): Подпись к фото (до 1024 символов, необязательно)
+            - reply_to_message_id (int|None): ID сообщения для reply (Telegram quote UI)
+            - parse_mode (str): 'markdown' / 'html' / 'disabled' / '' для caption
+            - disable_web_page_preview (bool)
 
     Returns:
         str: JSON-объект с метаданными отправленного сообщения
@@ -603,7 +639,14 @@ async def telegram_send_photo(params: _SendPhotoInput) -> str:
     except ValueError:
         cid = params.chat_id
     try:
-        result = await _bridge.send_photo(cid, photo, caption=params.caption)
+        result = await _bridge.send_photo(
+            cid,
+            photo,
+            caption=params.caption,
+            reply_to_message_id=params.reply_to_message_id,
+            parse_mode=params.parse_mode or None,
+            disable_web_page_preview=params.disable_web_page_preview,
+        )
         return json.dumps(result, ensure_ascii=False, indent=2)
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
@@ -760,13 +803,19 @@ async def telegram_get_message(params: _GetMessageInput) -> str:
     annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
 )
 async def telegram_send_voice(params: _SendVoiceInput) -> str:
-    """Отправляет голосовое сообщение (.ogg) в Telegram-чат.
+    """Отправляет голосовое сообщение (.ogg) в Telegram-чат (userbot session).
+
+    Userbot capability (Session 25):
+    - reply_to_message_id: отрисует голос как Reply на конкретное сообщение
+      (Telegram quote UI — как при `Reply` в клиенте).
+    Voice не имеет caption у userbot, поэтому parse_mode не применяется.
 
     Args:
         params:
             - chat_id (str): ID чата или @username получателя
             - voice_path (str): Локальный путь к .ogg файлу
             - duration (int | None): Длительность в секундах (необязательно)
+            - reply_to_message_id (int|None): ID сообщения для reply (Telegram quote UI)
 
     Returns:
         str: JSON-объект с метаданными отправленного сообщения
@@ -776,7 +825,12 @@ async def telegram_send_voice(params: _SendVoiceInput) -> str:
     except ValueError:
         cid = params.chat_id
     try:
-        result = await _bridge.send_voice(cid, params.voice_path, duration=params.duration)
+        result = await _bridge.send_voice(
+            cid,
+            params.voice_path,
+            duration=params.duration,
+            reply_to_message_id=params.reply_to_message_id,
+        )
         return json.dumps(result, ensure_ascii=False, indent=2)
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)

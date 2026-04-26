@@ -40,6 +40,7 @@
 - **Реакция эмодзи** вместо текста → `telegram_send_reaction` (легче для UX когда подтверждение или согласие)
 - **Исправляешь опечатку** → `telegram_edit_message` вместо нового
 - **Markdown/HTML форматирование** → передай `parse_mode` параметр
+- **Отвечаешь медиа на сообщение** → `telegram_send_photo` / `telegram_send_voice` с `reply_to_message_id` (Session 25 — Telegram отрисует как Reply на конкретное сообщение; `telegram_send_photo` поддерживает также `parse_mode` для caption)
 - **Перед первым use** в новой сессии — вызови `telegram_session_info` чтобы убедиться `is_bot=False`
 
 ## Подготовка к отправке user'у
