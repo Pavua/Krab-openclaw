@@ -18,7 +18,15 @@ import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
+
+import structlog
+
+if TYPE_CHECKING:
+    from .chat_response_policy import ChatResponsePolicyStore
+    from .llm_intent_classifier import IntentResult, LLMIntentClassifier
+
+logger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Типы
@@ -184,6 +192,143 @@ def detect_implicit_mention(
         return TriggerResult(TriggerType.NONE, _GENERIC_AI_SCORE, ai_match.group(0))
 
     return TriggerResult(TriggerType.NONE, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Smart Routing (Phase 5) — 5-stage pipeline
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SmartTriggerResult:
+    """Результат detect_smart_trigger — итог 5-stage pipeline.
+
+    decision_path значения:
+      - "hard_gate"          — explicit mention / reply-to-me / command
+      - "policy_silent"      — чат в SILENT
+      - "regex_high"         — regex score >=0.6
+      - "regex_low"          — regex score <0.2 (drop без LLM)
+      - "regex_threshold_fallback" — LLM unavailable, regex против policy threshold
+      - "llm_yes" / "llm_no" — LLM ответил should_respond=true/false
+      - "llm_error_fallback" — LLM error → fallback на regex threshold
+    """
+
+    should_respond: bool
+    decision_path: str
+    confidence: float
+    legacy_result: TriggerResult | None = None
+    intent_result: "IntentResult | None" = None
+
+
+async def detect_smart_trigger(
+    text: str,
+    chat_id: str,
+    *,
+    is_reply_to_me: bool,
+    has_explicit_mention: bool,
+    has_command: bool,
+    chat_context: list,
+    policy_store: "ChatResponsePolicyStore",
+    llm_classifier: "LLMIntentClassifier | None" = None,
+) -> SmartTriggerResult:
+    """5-stage smart routing pipeline (Session 26 Smart Routing).
+
+    Stage 1: hard gates (always respond) — command/mention/reply-to-me.
+    Stage 2: per-chat policy — SILENT → drop.
+    Stage 3: regex fast filter — score>=0.6 → respond, score<0.2 → drop.
+    Stage 4: LLM intent classifier для borderline (0.2-0.6).
+    Stage 5: fallback на regex+threshold при отсутствии/ошибке LLM.
+    """
+    # Lazy import чтобы избежать circular import (chat_response_policy → нет;
+    # llm_intent_classifier тоже не импортит нас).
+    from .chat_response_policy import ChatMode
+
+    # Stage 1: Hard gates
+    if has_command or has_explicit_mention or is_reply_to_me:
+        return SmartTriggerResult(
+            should_respond=True,
+            decision_path="hard_gate",
+            confidence=1.0,
+        )
+
+    # Stage 2: Per-chat policy
+    policy = policy_store.get_policy(chat_id)
+    if policy.mode == ChatMode.SILENT:
+        return SmartTriggerResult(
+            should_respond=False,
+            decision_path="policy_silent",
+            confidence=1.0,
+        )
+
+    # Stage 3: Regex fast filter
+    legacy = detect_implicit_mention(
+        text,
+        chat_id,
+        is_reply_to_explicit_msg=False,
+    )
+
+    threshold = policy.effective_threshold()
+
+    # High confidence regex score → respond
+    if legacy.score >= 0.6 and legacy.trigger_type != TriggerType.NONE:
+        return SmartTriggerResult(
+            should_respond=True,
+            decision_path="regex_high",
+            confidence=legacy.score,
+            legacy_result=legacy,
+        )
+
+    # Very low score → drop без LLM
+    if legacy.score < 0.2:
+        return SmartTriggerResult(
+            should_respond=False,
+            decision_path="regex_low",
+            confidence=legacy.score,
+            legacy_result=legacy,
+        )
+
+    # Stage 4: LLM intent (borderline 0.2-0.6)
+    if llm_classifier is None:
+        return SmartTriggerResult(
+            should_respond=(legacy.score >= threshold),
+            decision_path="regex_threshold_fallback",
+            confidence=legacy.score,
+            legacy_result=legacy,
+        )
+
+    try:
+        intent = await llm_classifier.classify_intent_for_krab(
+            text=text,
+            chat_context=chat_context,
+            chat_id=chat_id,
+            policy=policy,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("smart_trigger_llm_error", chat_id=chat_id, error=str(exc))
+        return SmartTriggerResult(
+            should_respond=(legacy.score >= threshold),
+            decision_path="llm_error_fallback",
+            confidence=legacy.score,
+            legacy_result=legacy,
+        )
+
+    if intent.error:
+        return SmartTriggerResult(
+            should_respond=(legacy.score >= threshold),
+            decision_path="llm_error_fallback",
+            confidence=legacy.score,
+            legacy_result=legacy,
+            intent_result=intent,
+        )
+
+    final_decision = intent.should_respond and intent.confidence >= threshold
+    return SmartTriggerResult(
+        should_respond=final_decision,
+        decision_path=f"llm_{'yes' if intent.should_respond else 'no'}",
+        confidence=intent.confidence,
+        legacy_result=legacy,
+        intent_result=intent,
+    )
 
 
 def is_implicit_trigger(

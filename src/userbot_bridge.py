@@ -597,6 +597,9 @@ class KraabUserbot(
         self._hidden_reasoning_traces: dict[str, dict[str, Any]] = {}
         self._session_workdir = config.BASE_DIR / "data" / "sessions"
         self._disclosure_sent_for_chat_ids: set[str] = set()
+        # Smart Routing Phase 5: per-chat pending SmartTriggerResult
+        # (consumed by _maybe_record_smart_trigger_for_delivery после доставки).
+        self._pending_smart_trigger: dict[str, Any] = {}
         # Время старта и счётчик обработанных сообщений за сессию (для !stats).
         self._session_start_time: float = time.time()
         self._session_messages_processed: int = 0
@@ -1412,6 +1415,65 @@ class KraabUserbot(
         )
         async def wrap_message(c, m):
             await self._process_message(m)
+
+        # Smart Routing Phase 5: feedback hooks для negative learning.
+        # Best-effort — wrap всё в try/except, не падаем при проблемах с handlers.
+        try:
+
+            @self.client.on_deleted_messages()
+            async def _on_smart_routing_deleted(client, messages):
+                from .core.feedback_tracker import get_tracker  # noqa: PLC0415
+
+                tracker = get_tracker()
+                for msg in messages or []:
+                    try:
+                        _chat = getattr(msg, "chat", None)
+                        _cid = getattr(_chat, "id", None) if _chat else None
+                        _mid = getattr(msg, "id", None)
+                        if _cid is None or _mid is None:
+                            continue
+                        await tracker.on_message_deleted(
+                            chat_id=int(_cid),
+                            message_id=int(_mid),
+                            deleted_by=None,  # Pyrogram не сообщает кто удалил
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("smart_routing_delete_handler_failed", error=str(exc))
+
+        try:
+
+            @self.client.on_message_reaction_updated()
+            async def _on_smart_routing_reaction(client, reaction):
+                from .core.feedback_tracker import get_tracker  # noqa: PLC0415
+
+                try:
+                    _chat = getattr(reaction, "chat", None)
+                    _cid = getattr(_chat, "id", None) if _chat else None
+                    _mid = getattr(reaction, "message_id", None)
+                    _user = getattr(reaction, "user", None) or getattr(reaction, "from_user", None)
+                    _uid = getattr(_user, "id", None) if _user else None
+                    new_reactions = getattr(reaction, "new_reaction", None) or []
+                    if _cid is None or _mid is None or _uid is None:
+                        return
+                    tracker = get_tracker()
+                    for r in new_reactions:
+                        emoji = getattr(r, "emoji", None) or getattr(r, "reaction", None)
+                        if not emoji:
+                            continue
+                        await tracker.on_reaction_added(
+                            chat_id=int(_cid),
+                            message_id=int(_mid),
+                            reaction=str(emoji),
+                            user_id=int(_uid),
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
+
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("smart_routing_reaction_handler_failed", error=str(exc))
 
     # _is_sqlite_io_error, _start_client_serialized, _safe_stop_client,
     # _arm_client_session_shutdown_guard, _cancel_client_restart_tasks -> SessionMixin (src/userbot/session.py)
@@ -2449,6 +2511,13 @@ class KraabUserbot(
         self.me = await self.client.get_me()
         self._set_startup_state(state="running")
         logger.info("userbot_started", me=self.me.username, id=self.me.id)
+        # Smart Routing Phase 5: сообщить feedback_tracker owner_id
+        try:
+            from .core.feedback_tracker import get_tracker  # noqa: PLC0415
+
+            get_tracker().set_owner_id(int(self.me.id))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("feedback_tracker_owner_id_failed", error=str(exc))
         try:
             self._sync_scheduler_runtime()
         except Exception as exc:  # noqa: BLE001
@@ -2878,6 +2947,7 @@ class KraabUserbot(
                 sent = await self._safe_reply_or_send_new(source_message, part)
                 if getattr(sent, "id", None):
                     delivered_ids.append(str(sent.id))
+            self._maybe_record_smart_trigger_response(source_message.chat.id, delivered_ids)
             self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
             return {
                 "delivery_mode": "edit_and_reply",
@@ -2909,6 +2979,7 @@ class KraabUserbot(
                     await delete_coro()
             except Exception:
                 pass
+            self._maybe_record_smart_trigger_response(source_message.chat.id, delivered_ids)
             self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
             return {
                 "delivery_mode": "send_message",
@@ -2930,6 +3001,45 @@ class KraabUserbot(
         }
         self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
         return result
+
+    def _maybe_record_smart_trigger_response(
+        self,
+        chat_id: int | str,
+        delivered_ids: list[str],
+    ) -> None:
+        """Smart Routing Phase 5: записать KrabResponse если был pending smart trigger.
+
+        Вызывается из _deliver_response_parts после успешной доставки.
+        Best-effort — никогда не падает (best-effort tracking).
+        """
+        try:
+            cid = str(chat_id)
+            pending = self._pending_smart_trigger.pop(cid, None)
+            if pending is None or not delivered_ids:
+                return
+            from .core.feedback_tracker import (  # noqa: PLC0415
+                KrabResponse,
+                get_tracker,
+            )
+
+            tracker = get_tracker()
+            now = time.time()
+            for mid_str in delivered_ids:
+                try:
+                    mid = int(mid_str)
+                except (ValueError, TypeError):
+                    continue
+                tracker.record_krab_response(
+                    KrabResponse(
+                        chat_id=cid,
+                        message_id=mid,
+                        sent_at=now,
+                        decision_path=getattr(pending, "decision_path", "unknown"),
+                        confidence=float(getattr(pending, "confidence", 1.0) or 1.0),
+                    )
+                )
+        except Exception:  # noqa: BLE001
+            pass  # best-effort — не валим доставку из-за tracker
 
     def _maybe_schedule_autodel(self, chat_id: int, delivered_ids: list[str]) -> None:
         """
@@ -3797,10 +3907,13 @@ class KraabUserbot(
             and message.reply_to_message.from_user.id == self.me.id
         )
 
-        # Семантический детектор неявных триггеров (implicit questions, follow-ups, AI aliases).
-        # Только для групп (DM и так обрабатываются без gate).
-        # Guest XOR сохраняется — implicit trigger не обходит его.
+        # Smart trigger (Session 26 Smart Routing Phase 5):
+        # per-chat policy + LLM intent classifier + feedback learning.
+        # Заменяет старый implicit trigger pipeline на 5-stage:
+        #   hard_gate → policy_silent → regex_high → regex_low → llm_yes/no.
+        # При LLM unavailable / errors — graceful fallback на regex threshold (legacy).
         has_implicit_trigger = False
+        smart_trigger_result = None
         if not has_trigger and not is_reply_to_me and not is_self:
             _chat_type_impl = getattr(getattr(message, "chat", None), "type", None)
             _is_group_impl = _chat_type_impl in (
@@ -3808,32 +3921,92 @@ class KraabUserbot(
                 enums.ChatType.SUPERGROUP,
             )
             if _is_group_impl:
-                from .core.trigger_detector import (
-                    TriggerType as ImplicitTriggerType,
+                from .core.chat_response_policy import (  # noqa: PLC0415
+                    get_store as _get_policy_store,
+                )
+                from .core.llm_intent_classifier import (  # noqa: PLC0415
+                    ChatMessage as _LLMChatMessage,
+                )
+                from .core.llm_intent_classifier import (  # noqa: PLC0415
+                    get_classifier as _get_intent_classifier,
                 )
                 from .core.trigger_detector import (  # noqa: PLC0415
-                    detect_implicit_mention,
+                    detect_smart_trigger,
                 )
 
-                _is_reply_to_other = bool(
-                    message.reply_to_message
-                    and message.reply_to_message.from_user
-                    and message.reply_to_message.from_user.id != self.me.id
-                )
-                _impl_result = detect_implicit_mention(
-                    text or "",
-                    chat_id,
-                    is_reply_to_explicit_msg=_is_reply_to_other,
-                )
-                if _impl_result.trigger_type != ImplicitTriggerType.NONE:
-                    has_implicit_trigger = True
-                    logger.info(
-                        "implicit_trigger_fired",
-                        chat_id=chat_id,
-                        trigger_type=_impl_result.trigger_type.value,
-                        score=_impl_result.score,
-                        matched=_impl_result.matched,
+                # Build chat_context — последние сообщения чата (best-effort).
+                # ChatWindowManager хранит role/content, без sender_id — маппим
+                # role="user" → не-Krab, role="assistant" → Krab.
+                _chat_context: list = []
+                try:
+                    _window = chat_window_manager.get_or_create(chat_id)
+                    _now = time.time()
+                    for _wm in _window.messages[-7:]:
+                        _is_krab = _wm.role == "assistant"
+                        _chat_context.append(
+                            _LLMChatMessage(
+                                sender_name="krab" if _is_krab else "user",
+                                sender_id=int(self.me.id) if _is_krab and self.me else 0,
+                                text=_wm.content or "",
+                                timestamp=getattr(_wm, "ts", _now),
+                                is_krab=_is_krab,
+                            )
+                        )
+                except Exception:  # noqa: BLE001
+                    pass  # empty context — LLM работает best-effort
+
+                try:
+                    smart_trigger_result = await detect_smart_trigger(
+                        text=text or "",
+                        chat_id=str(chat_id),
+                        is_reply_to_me=bool(is_reply_to_me),
+                        has_explicit_mention=bool(has_trigger),
+                        has_command=False,  # commands handled separately ранее
+                        chat_context=_chat_context,
+                        policy_store=_get_policy_store(),
+                        llm_classifier=_get_intent_classifier(),
                     )
+                    has_implicit_trigger = bool(smart_trigger_result.should_respond)
+                    logger.info(
+                        "smart_trigger_decision",
+                        chat_id=chat_id,
+                        should_respond=smart_trigger_result.should_respond,
+                        decision_path=smart_trigger_result.decision_path,
+                        confidence=smart_trigger_result.confidence,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "smart_trigger_failed",
+                        chat_id=chat_id,
+                        error=str(exc),
+                    )
+                    # Graceful fallback на legacy detect_implicit_mention.
+                    try:
+                        from .core.trigger_detector import (  # noqa: PLC0415
+                            TriggerType as _ITType,
+                        )
+                        from .core.trigger_detector import (  # noqa: PLC0415
+                            detect_implicit_mention as _legacy_impl,
+                        )
+
+                        _is_reply_to_other = bool(
+                            message.reply_to_message
+                            and message.reply_to_message.from_user
+                            and message.reply_to_message.from_user.id != self.me.id
+                        )
+                        _impl = _legacy_impl(
+                            text or "",
+                            chat_id,
+                            is_reply_to_explicit_msg=_is_reply_to_other,
+                        )
+                        has_implicit_trigger = _impl.trigger_type != _ITType.NONE
+                    except Exception:  # noqa: BLE001
+                        has_implicit_trigger = False
+
+        # Stash smart_trigger_result для последующего feedback hook
+        # (consumed in _deliver_response_parts or finish blocks).
+        if smart_trigger_result is not None:
+            self._pending_smart_trigger[str(chat_id)] = smart_trigger_result
 
         # Forward batch: уже прошли фильтрацию в _process_message — trigger-gate пропускаем
         if not (
