@@ -23,12 +23,39 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.modules.web_routers.swarm_router import router as swarm_router
+from src.modules.web_routers._context import RouterContext
+from src.modules.web_routers.swarm_router import build_swarm_router, router as swarm_router
 
 
 def _client() -> TestClient:
     app = FastAPI()
     app.include_router(swarm_router)
+    return TestClient(app)
+
+
+def _full_client(write_ok: bool = True) -> TestClient:
+    """Factory client со всеми endpoints (Wave C + Wave ZZ).
+
+    write_ok=True — assert_write_access ничего не делает; иначе кидает 403.
+    """
+    from pathlib import Path as _P
+
+    def _assert(header_key: str, token: str) -> None:
+        if not write_ok:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=403, detail="forbidden")
+
+    ctx = RouterContext(
+        deps={},
+        project_root=_P("/tmp"),
+        web_api_key_fn=lambda: None,
+        assert_write_access_fn=_assert,
+    )
+    # Override the bound method to use our test version (bypass _helpers env check).
+    ctx.assert_write_access = _assert  # type: ignore[method-assign]
+    app = FastAPI()
+    app.include_router(build_swarm_router(ctx))
     return TestClient(app)
 
 
@@ -297,3 +324,298 @@ def test_swarm_listeners_status_disabled() -> None:
         resp = _client().get("/api/swarm/listeners")
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "listeners_enabled": False}
+
+
+# ===========================================================================
+# Wave ZZ (Session 26) — extracted leaked endpoints
+# ===========================================================================
+
+
+# /api/swarm/status -----------------------------------------------------------
+
+
+def test_swarm_status_payload() -> None:
+    """GET /api/swarm/status → teams + memory_entries + scheduler_jobs."""
+    fake_sc = SimpleNamespace(is_round_active=lambda team: team == "coders")
+    fake_sm = SimpleNamespace(recall=lambda team, **kw: [{"x": 1}, {"x": 2}])
+    fake_ss = SimpleNamespace(list_jobs=lambda: [{"id": 1}, {"id": 2}, {"id": 3}])
+    with (
+        patch("src.core.swarm_channels.swarm_channels", fake_sc),
+        patch("src.core.swarm_memory.swarm_memory", fake_sm),
+        patch("src.core.swarm_scheduler.swarm_scheduler", fake_ss),
+    ):
+        resp = _full_client().get("/api/swarm/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["teams"]["coders"]["active"] is True
+    assert data["teams"]["traders"]["active"] is False
+    assert data["memory_entries"] == 8  # 2 entries × 4 teams
+    assert data["scheduler_jobs"] == 3
+
+
+# /api/swarm/memory -----------------------------------------------------------
+
+
+def test_swarm_memory_returns_entries() -> None:
+    """GET /api/swarm/memory → topic+summary+timestamp."""
+    fake_sm = SimpleNamespace(
+        recall=lambda team, limit=5: [
+            {"topic": "T1", "summary": "S1", "timestamp": "2026-04-26"},
+        ],
+    )
+    with patch("src.core.swarm_memory.swarm_memory", fake_sm):
+        resp = _full_client().get("/api/swarm/memory?team=coders&limit=3")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["entries"][0]["topic"] == "T1"
+
+
+# /api/swarm/reports ----------------------------------------------------------
+
+
+def test_swarm_reports_empty_when_no_dir(tmp_path) -> None:
+    """GET /api/swarm/reports → ok+empty list если report_dir отсутствует."""
+    # report_dir = ~/.openclaw/.../reports — мокируем Path.home()
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        resp = _full_client().get("/api/swarm/reports")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["reports"] == []
+
+
+# /api/swarm/task-board/export ------------------------------------------------
+
+
+def test_swarm_task_board_export_csv() -> None:
+    """GET /api/swarm/task-board/export → CSV с header."""
+    fake_board = SimpleNamespace(
+        list_tasks=lambda limit=500: [_make_task("abc12345", title="Task 1")]
+    )
+    with patch("src.core.swarm_task_board.swarm_task_board", fake_board):
+        resp = _full_client().get("/api/swarm/task-board/export?format=csv")
+    assert resp.status_code == 200
+    assert "task_id,team,title" in resp.text
+    assert "abc12345" in resp.text
+
+
+def test_swarm_task_board_export_json() -> None:
+    """GET /api/swarm/task-board/export?format=json → JSON списка."""
+    fake_board = SimpleNamespace(
+        list_tasks=lambda limit=500: [_make_task("abc12345", title="Task 1")]
+    )
+    with patch("src.core.swarm_task_board.swarm_task_board", fake_board):
+        resp = _full_client().get("/api/swarm/task-board/export?format=json")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["tasks"][0]["task_id"] == "abc12345"
+
+
+# /api/swarm/tasks/create -----------------------------------------------------
+
+
+def test_swarm_task_create_requires_team_title() -> None:
+    """POST /api/swarm/tasks/create без team/title → ok=False."""
+    resp = _full_client().post("/api/swarm/tasks/create", json={})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+
+def test_swarm_task_create_calls_board() -> None:
+    """POST /api/swarm/tasks/create → swarm_task_board.create_task()."""
+    captured: dict = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(task_id="new-id", team=kwargs["team"], title=kwargs["title"])
+
+    fake_board = SimpleNamespace(create_task=fake_create)
+    with patch("src.core.swarm_task_board.swarm_task_board", fake_board):
+        resp = _full_client().post(
+            "/api/swarm/tasks/create",
+            json={"team": "coders", "title": "Refactor X", "priority": "high"},
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["task_id"] == "new-id"
+    assert captured["priority"] == "high"
+
+
+def test_swarm_task_create_unauthorized() -> None:
+    """POST /api/swarm/tasks/create без write access → 403."""
+    resp = _full_client(write_ok=False).post(
+        "/api/swarm/tasks/create",
+        json={"team": "coders", "title": "X"},
+    )
+    assert resp.status_code == 403
+
+
+# /api/swarm/task/{id}/update -------------------------------------------------
+
+
+def test_swarm_task_update_status_done() -> None:
+    """POST /api/swarm/task/{id}/update status=done → complete_task."""
+    captured: dict = {}
+
+    def fake_complete(task_id, **kw):
+        captured["complete"] = (task_id, kw)
+
+    fake_board = SimpleNamespace(
+        complete_task=fake_complete,
+        fail_task=lambda *a, **k: None,
+        update_task=lambda *a, **k: None,
+    )
+    with patch("src.core.swarm_task_board.swarm_task_board", fake_board):
+        resp = _full_client().post(
+            "/api/swarm/task/abc/update",
+            json={"status": "done", "result": "✅"},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert captured["complete"][0] == "abc"
+
+
+def test_swarm_task_update_no_status() -> None:
+    """POST /api/swarm/task/{id}/update без status → ok=False."""
+    fake_board = SimpleNamespace(
+        complete_task=lambda *a, **k: None,
+        fail_task=lambda *a, **k: None,
+        update_task=lambda *a, **k: None,
+    )
+    with patch("src.core.swarm_task_board.swarm_task_board", fake_board):
+        resp = _full_client().post("/api/swarm/task/abc/update", json={})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+
+# /api/swarm/task/{id} (DELETE) -----------------------------------------------
+
+
+def test_swarm_task_delete() -> None:
+    """DELETE /api/swarm/task/{id} → fail_task('deleted via API')."""
+    captured: dict = {}
+
+    def fake_fail(task_id, reason=""):
+        captured["task_id"] = task_id
+        captured["reason"] = reason
+
+    fake_board = SimpleNamespace(fail_task=fake_fail)
+    with patch("src.core.swarm_task_board.swarm_task_board", fake_board):
+        resp = _full_client().delete("/api/swarm/task/abc")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["deleted"] == "abc"
+    assert "deleted" in captured["reason"]
+
+
+# /api/swarm/task/{id}/priority -----------------------------------------------
+
+
+def test_swarm_task_priority_valid() -> None:
+    """POST /api/swarm/task/{id}/priority high → update_task."""
+    captured: dict = {}
+
+    def fake_update(task_id, **kw):
+        captured.update({"task_id": task_id, **kw})
+
+    fake_board = SimpleNamespace(update_task=fake_update)
+    with patch("src.core.swarm_task_board.swarm_task_board", fake_board):
+        resp = _full_client().post(
+            "/api/swarm/task/abc/priority", json={"priority": "high"}
+        )
+    assert resp.status_code == 200
+    assert resp.json()["priority"] == "high"
+    assert captured["priority"] == "high"
+
+
+def test_swarm_task_priority_invalid() -> None:
+    """POST /api/swarm/task/{id}/priority bogus → ok=False."""
+    resp = _full_client().post(
+        "/api/swarm/task/abc/priority", json={"priority": "bogus"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+
+# /api/swarm/listeners/toggle -------------------------------------------------
+
+
+def test_swarm_listeners_toggle_explicit() -> None:
+    """POST /api/swarm/listeners/toggle enabled=true → set_listeners_enabled."""
+    captured: dict = {}
+
+    def fake_set(value):
+        captured["value"] = value
+
+    with (
+        patch("src.core.swarm_team_listener.is_listeners_enabled", return_value=False),
+        patch("src.core.swarm_team_listener.set_listeners_enabled", fake_set),
+    ):
+        resp = _full_client().post(
+            "/api/swarm/listeners/toggle", json={"enabled": True}
+        )
+    assert resp.status_code == 200
+    assert resp.json()["listeners_enabled"] is True
+    assert captured["value"] is True
+
+
+# /api/swarm/artifacts/cleanup ------------------------------------------------
+
+
+def test_swarm_artifacts_cleanup() -> None:
+    """POST /api/swarm/artifacts/cleanup → cleanup_old(max_files=50)."""
+    captured: dict = {}
+
+    def fake_cleanup(max_files=50):
+        captured["max_files"] = max_files
+        return 7
+
+    fake_store = SimpleNamespace(cleanup_old=fake_cleanup)
+    with patch("src.core.swarm_artifact_store.swarm_artifact_store", fake_store):
+        resp = _full_client().post("/api/swarm/artifacts/cleanup")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["removed"] == 7
+    assert captured["max_files"] == 50
+
+
+def test_swarm_artifacts_cleanup_unauthorized() -> None:
+    """POST /api/swarm/artifacts/cleanup без write access → 403."""
+    resp = _full_client(write_ok=False).post("/api/swarm/artifacts/cleanup")
+    assert resp.status_code == 403
+
+
+# /api/swarm/delegations/active -----------------------------------------------
+
+
+def test_swarm_delegations_active() -> None:
+    """GET /api/swarm/delegations/active → active_chains+blocked_counters."""
+    fake_guard = SimpleNamespace(
+        active_chains_snapshot=lambda: [{"chain_id": "c1"}, {"chain_id": "c2"}],
+        blocked_counters=lambda: {"loops": 3, "timeouts": 1},
+        _max_hops=5,
+        _timeout_sec=120,
+    )
+    # Insert a fake module since swarm_loop_guard.py не существует в src/core/.
+    import sys
+    import types
+
+    fake_module = types.ModuleType("src.core.swarm_loop_guard")
+    fake_module.swarm_loop_guard = fake_guard
+    sys.modules["src.core.swarm_loop_guard"] = fake_module
+    try:
+        resp = _full_client().get("/api/swarm/delegations/active")
+    finally:
+        sys.modules.pop("src.core.swarm_loop_guard", None)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["active_count"] == 2
+    assert data["max_hops"] == 5
+    assert data["timeout_sec"] == 120
