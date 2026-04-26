@@ -953,6 +953,16 @@ class WebApp:
             lambda value: WebApp._mask_secret(value),
         )
 
+        # Phase 2 Part 2A (Session 27): inject helper для context_router.
+        # Late-bound через lambda — позволяет тестам монкей-патчить
+        # WebApp._run_local_script после init.
+        deps_dict.setdefault(
+            "context_run_local_script_helper",
+            lambda script_path, timeout_seconds: self._run_local_script(
+                script_path, timeout_seconds=timeout_seconds
+            ),
+        )
+
         return RouterContext(
             deps=deps_dict,
             project_root=self._project_root(),
@@ -8658,89 +8668,11 @@ class WebApp:
 
         self.app.include_router(_build_inbox_router(self._make_router_context()))
 
-        @self.app.post("/api/context/checkpoint")
-        async def context_checkpoint(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Создает checkpoint для перехода в новый чат (anti-413).
-            Вызывает one-click скрипт и возвращает путь к свежему артефакту.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            script_path = self._project_root() / "new_chat_checkpoint.command"
-            run = self._run_local_script(script_path, timeout_seconds=120)
-            if not bool(run.get("ok")):
-                detail = str(run.get("error") or f"exit_code={run.get('exit_code', 1)}")
-                raise HTTPException(status_code=500, detail=f"context_checkpoint_failed:{detail}")
+        # /api/context/{checkpoint,transition-pack,latest} — extracted в
+        # context_router.py (Phase 2 Part 2A, Session 27).
+        from .web_routers.context_router import build_context_router as _build_context_router
 
-            artifact = self._latest_path_by_glob("artifacts/context_checkpoints/checkpoint_*.md")
-            if artifact is None:
-                raise HTTPException(status_code=500, detail="context_checkpoint_failed:no_artifact")
-
-            return {
-                "ok": True,
-                "artifact_type": "checkpoint",
-                "artifact_path": str(artifact),
-                "stdout_tail": str(run.get("stdout_tail") or ""),
-                "exit_code": int(run.get("exit_code", 0)),
-            }
-
-        @self.app.post("/api/context/transition-pack")
-        async def context_transition_pack(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Собирает transition-pack для восстановления состояния в новом чате.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            script_path = self._project_root() / "build_transition_pack.command"
-            run = self._run_local_script(script_path, timeout_seconds=180)
-            if not bool(run.get("ok")):
-                detail = str(run.get("error") or f"exit_code={run.get('exit_code', 1)}")
-                raise HTTPException(
-                    status_code=500, detail=f"context_transition_pack_failed:{detail}"
-                )
-
-            pack_dir = self._latest_path_by_glob("artifacts/context_transition/pack_*")
-            if pack_dir is None:
-                raise HTTPException(
-                    status_code=500, detail="context_transition_pack_failed:no_pack_dir"
-                )
-
-            transfer_prompt = pack_dir / "TRANSFER_PROMPT_RU.md"
-            files_to_attach = pack_dir / "FILES_TO_ATTACH.txt"
-            return {
-                "ok": True,
-                "artifact_type": "transition_pack",
-                "pack_dir": str(pack_dir),
-                "transfer_prompt_path": str(transfer_prompt) if transfer_prompt.exists() else None,
-                "files_to_attach_path": str(files_to_attach) if files_to_attach.exists() else None,
-                "stdout_tail": str(run.get("stdout_tail") or ""),
-                "exit_code": int(run.get("exit_code", 0)),
-            }
-
-        @self.app.get("/api/context/latest")
-        async def context_latest():
-            """
-            Возвращает ссылки на последние anti-413 артефакты.
-            """
-            checkpoint = self._latest_path_by_glob("artifacts/context_checkpoints/checkpoint_*.md")
-            pack_dir = self._latest_path_by_glob("artifacts/context_transition/pack_*")
-            transfer_prompt = (pack_dir / "TRANSFER_PROMPT_RU.md") if pack_dir else None
-            files_to_attach = (pack_dir / "FILES_TO_ATTACH.txt") if pack_dir else None
-            return {
-                "ok": True,
-                "latest_checkpoint_path": str(checkpoint) if checkpoint else None,
-                "latest_pack_dir": str(pack_dir) if pack_dir else None,
-                "latest_transfer_prompt_path": str(transfer_prompt)
-                if transfer_prompt and transfer_prompt.exists()
-                else None,
-                "latest_files_to_attach_path": str(files_to_attach)
-                if files_to_attach and files_to_attach.exists()
-                else None,
-            }
+        self.app.include_router(_build_context_router(self._make_router_context()))
 
         # /api/capabilities/registry + /api/channels/capabilities: extracted
         # в capabilities_router.py (Phase 2 Wave R, Session 25).
