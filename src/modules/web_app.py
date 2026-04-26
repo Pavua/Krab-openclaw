@@ -8937,82 +8937,9 @@ class WebApp:
                 },
             }
 
-        @self.app.get("/api/voice/runtime")
-        async def voice_runtime_status():
-            """
-            Возвращает сводку по voice-runtime userbot.
-
-            Держим endpoint отдельно от transcriber/status, потому что owner UI и
-            будущий live-voice контур должны видеть не только health входящего STT,
-            но и текущий профиль доставки ответов.
-            """
-            kraab_userbot = self.deps.get("kraab_userbot")
-            if not kraab_userbot or not hasattr(kraab_userbot, "get_voice_runtime_profile"):
-                return {
-                    "ok": False,
-                    "error": "voice_runtime_not_available",
-                }
-            profile = dict(kraab_userbot.get_voice_runtime_profile() or {})
-            return {
-                "ok": True,
-                "voice": profile,
-            }
-
-        @self.app.post("/api/voice/runtime/update")
-        async def voice_runtime_update(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Обновляет voice-runtime profile userbot через owner web-key."""
-            self._assert_write_access(x_krab_web_key, token)
-            kraab_userbot = self.deps.get("kraab_userbot")
-            if not kraab_userbot or not hasattr(kraab_userbot, "update_voice_runtime_profile"):
-                raise HTTPException(status_code=503, detail="voice_runtime_not_available")
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="voice_update_body_required")
-            profile = dict(
-                kraab_userbot.update_voice_runtime_profile(
-                    enabled=body.get("enabled") if "enabled" in body else None,
-                    speed=body.get("speed") if "speed" in body else None,
-                    voice=body.get("voice") if "voice" in body else None,
-                    delivery=body.get("delivery") if "delivery" in body else None,
-                    persist=True,
-                )
-                or {}
-            )
-            return {
-                "ok": True,
-                "voice": profile,
-            }
-
-        @self.app.get("/api/krab_ear/status")
-        async def krab_ear_status():
-            """KrabEar STT diarization status and readiness."""
-            krab_ear = self.deps.get("krab_ear_client")
-            if not krab_ear:
-                return {
-                    "ok": False,
-                    "status": "unavailable",
-                    "error": "krab_ear_client_not_available",
-                }
-            try:
-                report = await krab_ear.health_report()
-                return {
-                    "ok": report.get("ok", False),
-                    "status": report.get("status", "unknown"),
-                    "latency_ms": report.get("latency_ms"),
-                    "source": report.get("source"),
-                    "detail": report.get("detail"),
-                }
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("krab_ear_status_failed", error=str(exc))
-                return {
-                    "ok": False,
-                    "status": "error",
-                    "error": str(exc),
-                }
+        # /api/voice/runtime, /api/voice/runtime/update, /api/krab_ear/status —
+        # extracted в src/modules/web_routers/voice_router.py
+        # (Session 25 Phase 2 Wave L). См. include_router ниже.
 
         @self.app.get("/api/openclaw/cron/status")
         async def openclaw_cron_status():
@@ -11073,18 +11000,8 @@ class WebApp:
 
         # Phase 2: Command API parity — все owner controls через REST, не только Telegram
 
-        @self.app.post("/api/voice/toggle")
-        async def voice_toggle(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Toggle voice mode через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            current = bool(self.kraab.voice_mode)
-            new_state = bool(payload.get("enabled", not current))
-            self.kraab.voice_mode = new_state
-            return {"ok": True, "voice_enabled": new_state}
+        # /api/voice/toggle — extracted в voice_router.py (Phase 2 Wave L, Session 25).
+        # См. include_router рядом с другими voice endpoints.
 
         # /api/translator/languages — extracted в translator_router.py (Phase 2 Wave K).
 
@@ -11220,6 +11137,11 @@ class WebApp:
         )
 
         self.app.include_router(_build_translator(self._make_router_context()))
+
+        # Phase 2 Wave L (Session 25): voice/krab_ear endpoints через RouterContext.
+        from .web_routers.voice_router import build_voice_router as _build_voice
+
+        self.app.include_router(_build_voice(self._make_router_context()))
 
         # /api/system/info: extracted в src/modules/web_routers/meta_router.py
         # (Session 25). См. include_router ниже.
@@ -11431,10 +11353,7 @@ class WebApp:
         # /api/notify/status: extracted в runtime_status_router (Wave D).
         # POST /api/notify/toggle — extracted в write_router.py (Phase 2 Wave J, Session 25).
 
-        @self.app.get("/api/voice/profile")
-        async def voice_profile():
-            """Голосовой профиль runtime."""
-            return {"ok": True, "profile": self.kraab.get_voice_runtime_profile()}
+        # /api/voice/profile — extracted в voice_router.py (Phase 2 Wave L, Session 25).
 
         # /api/swarm/task-board, /api/swarm/tasks, /api/swarm/artifacts,
         # /api/swarm/task/{task_id} (GET only) — extracted в swarm_router (Wave C).
