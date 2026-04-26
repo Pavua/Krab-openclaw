@@ -9,17 +9,33 @@ Verify что extraction в src/modules/web_routers/memory_router.py
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from src.modules.web_routers._context import RouterContext
+from src.modules.web_routers.memory_router import build_memory_router
 from src.modules.web_routers.memory_router import router as memory_router
 
 
 def _client() -> TestClient:
     app = FastAPI()
     app.include_router(memory_router)
+    return TestClient(app)
+
+
+def _factory_client() -> TestClient:
+    """Wave S: factory-pattern client with full POST endpoints."""
+    ctx = RouterContext(
+        deps={},
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+    app = FastAPI()
+    app.include_router(build_memory_router(ctx))
     return TestClient(app)
 
 
@@ -145,3 +161,53 @@ def test_memory_indexer_graceful_on_import_error() -> None:
 
     assert resp.status_code == 200
     assert resp.json() == {"error": "indexer_unavailable"}
+
+
+# ── POST /api/memory/indexer/flush (Wave S) ───────────────────────────
+
+
+def test_memory_indexer_flush_returns_ack(monkeypatch) -> None:
+    """POST /api/memory/indexer/flush → ack=True + queue_size."""
+    monkeypatch.setenv("WEB_API_KEY", "")
+
+    class _FakeIndexer:
+        def get_stats(self):
+            return _FakeStats()
+
+    with patch(
+        "src.core.memory_indexer_worker.get_indexer",
+        return_value=_FakeIndexer(),
+    ):
+        resp = _factory_client().post("/api/memory/indexer/flush")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ack"] is True
+    assert data["queue_size"] == 5
+    assert "note" in data
+
+
+def test_memory_indexer_flush_graceful_on_import_error(monkeypatch) -> None:
+    """ImportError → graceful {error: indexer_unavailable}."""
+    monkeypatch.setenv("WEB_API_KEY", "")
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _raising_import(name, *args, **kwargs):
+        if name.endswith("memory_indexer_worker"):
+            raise ImportError("simulated")
+        return real_import(name, *args, **kwargs)
+
+    with patch.object(builtins, "__import__", side_effect=_raising_import):
+        resp = _factory_client().post("/api/memory/indexer/flush")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"error": "indexer_unavailable"}
+
+
+def test_memory_indexer_flush_requires_write_access(monkeypatch) -> None:
+    """С WEB_API_KEY set, без header → 403."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    resp = _factory_client().post("/api/memory/indexer/flush")
+    assert resp.status_code == 403

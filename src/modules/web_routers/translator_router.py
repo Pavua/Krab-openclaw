@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Translator router — Phase 2 Waves K + Q extraction (Session 25).
+Translator router — Phase 2 Waves K + Q + S extraction (Session 25).
 
 GET endpoints translator-домена через RouterContext. Wave Q добавляет
 endpoints, требующие ``ctx.collect_runtime_lite()`` + translator snapshot
@@ -24,7 +24,7 @@ Endpoints (Wave Q):
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Body, Header, Query
 
 from ._context import RouterContext
 
@@ -197,5 +197,118 @@ def build_translator_router(ctx: RouterContext) -> APIRouter:
             current_control_plane=control_plane,
             current_mobile_readiness=mobile_readiness,
         )
+
+    # ------------------------------------------------------------------
+    # Wave S — POST endpoints через ctx.assert_write_access.
+    # Низкоуровневые операции над runtime_profile / session_state;
+    # не требуют voice_gateway или _translator_* helpers.
+    # ------------------------------------------------------------------
+
+    @router.post("/api/translator/session/toggle")
+    async def translator_session_toggle(
+        payload: dict = Body(default_factory=dict),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Start/stop translator session через API."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        kraab = ctx.get_dep("kraab_userbot")
+        state = kraab.get_translator_session_state()
+        if state.get("session_status") == "active":
+            kraab.update_translator_session_state(
+                session_status="idle",
+                active_chats=[],
+                last_event="session_stopped_api",
+                persist=True,
+            )
+            return {"ok": True, "action": "stopped", "status": "idle"}
+        profile = kraab.get_translator_runtime_profile()
+        chat_id = str(payload.get("chat_id") or "").strip()
+        active_chats = [chat_id] if chat_id else []
+        kraab.update_translator_session_state(
+            session_status="active",
+            active_chats=active_chats,
+            last_language_pair=profile.get("language_pair"),
+            last_event="session_started_api",
+            persist=True,
+        )
+        return {
+            "ok": True,
+            "action": "started",
+            "status": "active",
+            "active_chats": active_chats,
+        }
+
+    @router.post("/api/translator/auto")
+    async def translator_auto(
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Switch to auto-detect mode via API."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        kraab = ctx.get_dep("kraab_userbot")
+        kraab.update_translator_runtime_profile(language_pair="auto-detect", persist=True)
+        return {"ok": True, "language_pair": "auto-detect"}
+
+    @router.post("/api/translator/lang")
+    async def translator_set_lang(
+        payload: dict = Body(default_factory=dict),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Сменить языковую пару через API."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        from ...core.translator_runtime_profile import ALLOWED_LANGUAGE_PAIRS
+
+        pair = str(payload.get("language_pair") or "").strip().lower()
+        if pair not in ALLOWED_LANGUAGE_PAIRS:
+            return {
+                "ok": False,
+                "error": f"invalid pair, use: {sorted(ALLOWED_LANGUAGE_PAIRS)}",
+            }
+        kraab = ctx.get_dep("kraab_userbot")
+        kraab.update_translator_runtime_profile(language_pair=pair, persist=True)
+        return {"ok": True, "language_pair": pair}
+
+    @router.post("/api/translator/translate")
+    async def translator_translate(
+        payload: dict = Body(default_factory=dict),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Прямой перевод текста через API (без voice note)."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return {"ok": False, "error": "text required"}
+        src_lang = str(payload.get("src_lang") or "").strip()
+        tgt_lang = str(payload.get("tgt_lang") or "ru").strip()
+        try:
+            from ...core.language_detect import detect_language, resolve_translation_pair
+            from ...core.translator_engine import translate_text
+            from ...openclaw_client import openclaw_client as _oc
+
+            if not src_lang:
+                src_lang = detect_language(text)
+            if not src_lang:
+                return {"ok": False, "error": "language not detected"}
+            kraab = ctx.get_dep("kraab_userbot")
+            profile = kraab.get_translator_runtime_profile() if kraab else {}
+            if not tgt_lang or tgt_lang == "auto":
+                src_lang, tgt_lang = resolve_translation_pair(
+                    src_lang, profile.get("language_pair", "es-ru")
+                )
+            result = await translate_text(text, src_lang, tgt_lang, openclaw_client=_oc)
+            return {
+                "ok": True,
+                "original": result.original,
+                "translated": result.translated,
+                "src_lang": result.src_lang,
+                "tgt_lang": result.tgt_lang,
+                "latency_ms": result.latency_ms,
+                "model": result.model_id,
+            }
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     return router

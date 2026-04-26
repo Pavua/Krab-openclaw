@@ -43,6 +43,16 @@ class _FakeKraab:
     def get_translator_session_state(self) -> dict:
         return self._session_state
 
+    def update_translator_runtime_profile(self, **kwargs) -> None:
+        for k, v in kwargs.items():
+            if k != "persist":
+                self._profile[k] = v
+
+    def update_translator_session_state(self, **kwargs) -> None:
+        for k, v in kwargs.items():
+            if k != "persist":
+                self._session_state[k] = v
+
 
 def _build_ctx(
     kraab: _FakeKraab | None = None,
@@ -292,3 +302,94 @@ def test_delivery_matrix_aggregates_chain() -> None:
     assert kinds[-1] == "delivery"
     for required in ("readiness", "control_plane", "mobile"):
         assert required in kinds
+
+
+# ---------------------------------------------------------------------------
+# Wave S — POST endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_session_toggle_starts_when_idle(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    kraab = _FakeKraab()
+    kraab._session_state["session_status"] = "idle"
+    ctx = _build_ctx(kraab)
+    resp = _client(ctx).post("/api/translator/session/toggle", json={"chat_id": "42"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["action"] == "started"
+    assert data["status"] == "active"
+    assert "42" in data["active_chats"]
+    assert kraab._session_state["session_status"] == "active"
+
+
+def test_session_toggle_stops_when_active(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    kraab = _FakeKraab()
+    kraab._session_state["session_status"] = "active"
+    ctx = _build_ctx(kraab)
+    resp = _client(ctx).post("/api/translator/session/toggle", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["action"] == "stopped"
+    assert data["status"] == "idle"
+    assert kraab._session_state["session_status"] == "idle"
+
+
+def test_translator_auto_sets_auto_detect(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    kraab = _FakeKraab()
+    ctx = _build_ctx(kraab)
+    resp = _client(ctx).post("/api/translator/auto")
+    assert resp.status_code == 200
+    assert resp.json()["language_pair"] == "auto-detect"
+    assert kraab._profile["language_pair"] == "auto-detect"
+
+
+def test_translator_lang_valid_pair(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    kraab = _FakeKraab()
+    ctx = _build_ctx(kraab)
+    resp = _client(ctx).post("/api/translator/lang", json={"language_pair": "en-ru"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["language_pair"] == "en-ru"
+    assert kraab._profile["language_pair"] == "en-ru"
+
+
+def test_translator_lang_invalid_pair(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    ctx = _build_ctx()
+    resp = _client(ctx).post("/api/translator/lang", json={"language_pair": "zz-xx"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+
+def test_translator_translate_empty_text(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    ctx = _build_ctx()
+    resp = _client(ctx).post("/api/translator/translate", json={"text": ""})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+    assert "text required" in data["error"]
+
+
+def test_post_endpoints_require_write_access(monkeypatch) -> None:
+    """С WEB_API_KEY=secret и без header → 403 на каждый POST."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    ctx = _build_ctx()
+    client = _client(ctx)
+    for path, body in [
+        ("/api/translator/session/toggle", {}),
+        ("/api/translator/auto", None),
+        ("/api/translator/lang", {"language_pair": "en-ru"}),
+        ("/api/translator/translate", {"text": "x"}),
+    ]:
+        if body is None:
+            resp = client.post(path)
+        else:
+            resp = client.post(path, json=body)
+        assert resp.status_code == 403, f"{path} should require write access"

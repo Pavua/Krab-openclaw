@@ -7927,23 +7927,10 @@ class WebApp:
         # (Session 25 Phase 2 Wave B). См. include_router ниже.
         # /api/memory/stats: extracted в src/modules/web_routers/memory_router.py
         # (Session 25 Phase 2 Wave B). См. include_router ниже.
-        from .web_routers.memory_router import router as _memory_router
+        # /api/memory/indexer/flush: extracted в memory_router.py (Wave S, factory).
+        from .web_routers.memory_router import build_memory_router as _build_memory_router
 
-        self.app.include_router(_memory_router)
-
-        @self.app.post("/api/memory/indexer/flush")
-        async def memory_indexer_flush():
-            """Принудительный flush (debug/owner tool)."""
-            try:
-                from ..core.memory_indexer_worker import get_indexer
-            except ImportError:
-                return {"error": "indexer_unavailable"}
-            stats = get_indexer().get_stats()
-            return {
-                "ack": True,
-                "queue_size": stats.queue_size,
-                "note": "flush будет выполнен в течение batch_timeout_sec",
-            }
+        self.app.include_router(_build_memory_router(self._make_router_context()))
 
         @self.app.get("/api/memory/search")
         async def memory_search(
@@ -9478,110 +9465,11 @@ class WebApp:
         # /api/translator/readiness — extracted в translator_router.py (Phase 2 Wave Q).
         # /api/translator/status — extracted в translator_router.py (Phase 2 Wave K).
 
-        @self.app.post("/api/translator/session/toggle")
-        async def translator_session_toggle(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Start/stop translator session через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            state = self.kraab.get_translator_session_state()
-            if state.get("session_status") == "active":
-                self.kraab.update_translator_session_state(
-                    session_status="idle",
-                    active_chats=[],
-                    last_event="session_stopped_api",
-                    persist=True,
-                )
-                return {"ok": True, "action": "stopped", "status": "idle"}
-            profile = self.kraab.get_translator_runtime_profile()
-            chat_id = str(payload.get("chat_id") or "").strip()
-            active_chats = [chat_id] if chat_id else []
-            self.kraab.update_translator_session_state(
-                session_status="active",
-                active_chats=active_chats,
-                last_language_pair=profile.get("language_pair"),
-                last_event="session_started_api",
-                persist=True,
-            )
-            return {
-                "ok": True,
-                "action": "started",
-                "status": "active",
-                "active_chats": active_chats,
-            }
-
-        @self.app.post("/api/translator/auto")
-        async def translator_auto(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Switch to auto-detect mode via API."""
-            self._assert_write_access(x_krab_web_key, token)
-            self.kraab.update_translator_runtime_profile(language_pair="auto-detect", persist=True)
-            return {"ok": True, "language_pair": "auto-detect"}
-
-        @self.app.post("/api/translator/lang")
-        async def translator_set_lang(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Сменить языковую пару через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            from ..core.translator_runtime_profile import ALLOWED_LANGUAGE_PAIRS
-
-            pair = str(payload.get("language_pair") or "").strip().lower()
-            if pair not in ALLOWED_LANGUAGE_PAIRS:
-                return {
-                    "ok": False,
-                    "error": f"invalid pair, use: {sorted(ALLOWED_LANGUAGE_PAIRS)}",
-                }
-            self.kraab.update_translator_runtime_profile(language_pair=pair, persist=True)
-            return {"ok": True, "language_pair": pair}
-
+        # /api/translator/session/toggle — extracted в translator_router.py (Phase 2 Wave S).
+        # /api/translator/auto — extracted в translator_router.py (Phase 2 Wave S).
+        # /api/translator/lang — extracted в translator_router.py (Phase 2 Wave S).
         # /api/translator/history — extracted в translator_router.py (Phase 2 Wave K).
-
-        @self.app.post("/api/translator/translate")
-        async def translator_translate(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Прямой перевод текста через API (без voice note)."""
-            self._assert_write_access(x_krab_web_key, token)
-            text = str(payload.get("text") or "").strip()
-            if not text:
-                return {"ok": False, "error": "text required"}
-            src_lang = str(payload.get("src_lang") or "").strip()
-            tgt_lang = str(payload.get("tgt_lang") or "ru").strip()
-            try:
-                from ..core.language_detect import detect_language, resolve_translation_pair
-                from ..core.translator_engine import translate_text
-                from ..openclaw_client import openclaw_client as _oc
-
-                if not src_lang:
-                    src_lang = detect_language(text)
-                if not src_lang:
-                    return {"ok": False, "error": "language not detected"}
-                profile = self.kraab.get_translator_runtime_profile()
-                if not tgt_lang or tgt_lang == "auto":
-                    src_lang, tgt_lang = resolve_translation_pair(
-                        src_lang, profile.get("language_pair", "es-ru")
-                    )
-                result = await translate_text(text, src_lang, tgt_lang, openclaw_client=_oc)
-                return {
-                    "ok": True,
-                    "original": result.original,
-                    "translated": result.translated,
-                    "src_lang": result.src_lang,
-                    "tgt_lang": result.tgt_lang,
-                    "latency_ms": result.latency_ms,
-                    "model": result.model_id,
-                }
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
+        # /api/translator/translate — extracted в translator_router.py (Phase 2 Wave S).
 
         @self.app.get("/api/translator/bootstrap")
         async def translator_bootstrap():
