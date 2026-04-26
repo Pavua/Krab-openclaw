@@ -769,6 +769,39 @@ class WebApp:
             lambda target_path: self._launch_local_app(target_path),
         )
 
+        # Phase 2 Wave OO (Session 25): inject helpers для extracted
+        # /api/model/catalog + /api/model/apply в model_router.py.
+        # Late-bound через lambda — позволяет тестам монкей-патчить
+        # WebApp methods и black_box dep после init.
+        deps_dict.setdefault(
+            "model_catalog_get_cache_helper",
+            lambda: self._get_model_catalog_cache(),
+        )
+        deps_dict.setdefault(
+            "model_catalog_store_cache_helper",
+            lambda payload: self._store_model_catalog_cache(payload),
+        )
+        deps_dict.setdefault(
+            "model_catalog_build_helper",
+            lambda router_obj: self._build_model_catalog_method(router_obj),
+        )
+        deps_dict.setdefault(
+            "model_catalog_build_fallback_helper",
+            lambda *args, **kwargs: self._build_model_catalog_fallback(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "model_apply_catalog_timeout_helper",
+            lambda: self._model_apply_catalog_timeout_sec(),
+        )
+        deps_dict.setdefault(
+            "runtime_quick_presets_build_helper",
+            lambda *args, **kwargs: self._build_runtime_quick_presets(*args, **kwargs),
+        )
+        # ``black_box`` уже в self.deps (если есть) — но добавляем явно для
+        # extracted endpoint'а чтобы он мог использовать ctx.deps.get("black_box").
+        if "black_box" not in deps_dict and "black_box" in (self.deps or {}):
+            deps_dict["black_box"] = self.deps["black_box"]
+
         # Phase 2 Wave HH (Session 25): inject translator session POST helpers
         # для extraction /api/translator/session/{start,policy,action,runtime-tune,
         # quick-phrase,summary} в translator_router.py. Late-bound через lambda —
@@ -3550,6 +3583,311 @@ class WebApp:
         catalog["catalog_refresh_degraded"] = True
         catalog["catalog_refresh_reason"] = str(degraded_reason or "catalog_refresh_degraded")
         return catalog
+
+    @staticmethod
+    def _normalize_force_mode_static(force_mode: str) -> str:
+        """Pure-функция нормализации force_* режимов в UI-вид: auto/local/cloud.
+
+        Идентична внутреннему ``_normalize_force_mode`` closure внутри
+        ``_setup_routes``. Hoisted на класс для использования из extracted
+        endpoints (Wave OO) и helper-injection.
+        """
+        normalized = str(force_mode or "").strip().lower()
+        if normalized in {"force_local", "local"}:
+            return "local"
+        if normalized in {"force_cloud", "cloud"}:
+            return "cloud"
+        return "auto"
+
+    async def _build_model_catalog_method(self, router_obj) -> dict:
+        """Promotion of ``_build_model_catalog`` closure из ``_setup_routes``.
+
+        Используется helper-injection (Wave OO, Session 25) для extracted
+        endpoints в ``model_router.py`` (``/api/model/catalog`` +
+        ``/api/model/apply``). Логика 1:1 с inline closure.
+        """
+        try:
+            return await self._build_model_catalog_inner_method(router_obj)
+        except Exception as exc:  # noqa: BLE001
+            import logging as _logging
+
+            _logging.getLogger(__name__).warning(
+                "_build_model_catalog failed (cold start?): %s", exc
+            )
+            return {
+                "force_mode": "auto",
+                "slots": [],
+                "cloud_slots": {},
+                "local_engine": "",
+                "local_available": False,
+                "local_active_model": "",
+                "local_models": [],
+                "local_models_error": str(exc),
+                "cloud_presets": [],
+                "cloud_inventory": [],
+                "cloud_provider_groups": [],
+                "aliases": [],
+                "quick_presets": [],
+                "runtime_model_count": 0,
+                "cloud_inventory_count": 0,
+                "runtime_registry_source": "fallback_empty",
+                "router_usage": {},
+                "routing_status": {},
+                "runtime_controls": {},
+                "parallelism_truth": {},
+                "auth_recovery": {},
+                "catalog_guidance": {},
+                "_error": str(exc),
+            }
+
+    async def _build_model_catalog_inner_method(self, router_obj) -> dict:
+        """Promotion of ``_build_model_catalog_inner`` closure.
+
+        См. docstring ``_build_model_catalog_method``.
+        """
+        cloud_slots_raw = getattr(router_obj, "models", {}) or {}
+        cloud_slots = (
+            {str(k): str(v) for k, v in cloud_slots_raw.items()}
+            if isinstance(cloud_slots_raw, dict)
+            else {}
+        )
+        slot_list = (
+            sorted(cloud_slots.keys()) if cloud_slots else ["chat", "thinking", "pro", "coding"]
+        )
+        force_mode = self._normalize_force_mode_static(getattr(router_obj, "force_mode", "auto"))
+        local_truth = await self._resolve_local_runtime_truth(router_obj)
+        local_engine = str(
+            local_truth.get("engine") or getattr(router_obj, "local_engine", "") or ""
+        )
+        local_active_model = str(local_truth.get("active_model") or "")
+        local_available = bool(local_truth.get("runtime_reachable"))
+        loaded_model_ids = {
+            str(item).strip()
+            for item in (local_truth.get("loaded_models") or [])
+            if str(item or "").strip()
+        }
+
+        local_models: list[dict] = []
+        local_models_error = ""
+        if hasattr(router_obj, "list_local_models_verbose"):
+            try:
+                raw_local_models = await router_obj.list_local_models_verbose()
+                if isinstance(raw_local_models, list):
+                    for item in raw_local_models:
+                        if not isinstance(item, dict):
+                            continue
+                        model_id = str(item.get("id", "")).strip()
+                        if not model_id:
+                            continue
+                        local_models.append(
+                            {
+                                "id": model_id,
+                                "loaded": bool(
+                                    model_id == local_active_model
+                                    or model_id in loaded_model_ids
+                                    or item.get("loaded", False)
+                                ),
+                                "type": str(item.get("type", "llm")),
+                                "size_human": str(item.get("size_human", "n/a")),
+                            }
+                        )
+            except Exception as exc:  # noqa: BLE001
+                local_models_error = str(exc)
+
+        if local_active_model and not any(
+            str(item.get("id")) == local_active_model for item in local_models
+        ):
+            local_models.insert(
+                0,
+                {
+                    "id": local_active_model,
+                    "loaded": True,
+                    "type": "llm",
+                    "size_human": "n/a",
+                },
+            )
+
+        cloud_inventory: list[dict[str, Any]] = []
+        cloud_presets: list[dict[str, Any]] = []
+        alias_items: list[dict[str, str]] = []
+        try:
+            cloud_inventory = self._build_runtime_cloud_presets(cloud_slots)
+            cloud_presets = [
+                item for item in cloud_inventory if bool(item.get("configured_runtime", True))
+            ]
+            runtime_model_ids = {
+                str(item.get("id", "")).strip()
+                for item in cloud_presets
+                if str(item.get("id", "")).strip()
+            }
+            for alias_key in sorted(MODEL_FRIENDLY_ALIASES.keys()):
+                resolved_id, _ = normalize_model_alias(alias_key)
+                if resolved_id not in runtime_model_ids:
+                    continue
+                alias_items.append(
+                    {
+                        "alias": alias_key,
+                        "model": resolved_id,
+                    }
+                )
+        except Exception:
+            cloud_inventory = []
+            cloud_presets = []
+            alias_items = []
+
+        if not cloud_inventory:
+            cloud_inventory = self._build_runtime_cloud_presets({})
+        if not cloud_presets:
+            cloud_presets = [
+                item for item in cloud_inventory if bool(item.get("configured_runtime", True))
+            ]
+        if not cloud_presets:
+            cloud_presets = list(cloud_inventory)
+
+        local_override = (
+            local_active_model
+            or str(
+                getattr(router_obj, "active_local_model", "")
+                or getattr(config, "LOCAL_PREFERRED_MODEL", "")
+                or ""
+            ).strip()
+        )
+        if not local_override:
+            local_override = "nvidia/nemotron-3-nano"
+
+        quick_presets_map = self._build_runtime_quick_presets(
+            current_slots=cloud_slots,
+            local_override=local_override,
+        )
+        quick_presets = [
+            {
+                "id": preset_id,
+                "title": str(preset_payload.get("title", preset_id)),
+                "description": str(preset_payload.get("description", "")),
+            }
+            for preset_id, preset_payload in quick_presets_map.items()
+        ]
+        openclaw = self.deps.get("openclaw_client")
+        last_runtime_route: dict[str, Any] = {}
+        if openclaw and hasattr(openclaw, "get_last_runtime_route"):
+            try:
+                last_runtime_route = dict(openclaw.get_last_runtime_route() or {})
+            except Exception:
+                last_runtime_route = {}
+        routing_status = self._overlay_live_route_on_openclaw_model_routing_status(
+            routing=self._build_openclaw_model_routing_status(),
+            last_runtime_route=last_runtime_route,
+        )
+        cloud_inventory = self._overlay_routing_provider_truth_on_cloud_inventory(
+            cloud_inventory=cloud_inventory,
+            routing_status=routing_status,
+        )
+        runtime_controls = self._build_openclaw_runtime_controls()
+        auth_recovery = build_auth_recovery_readiness_snapshot(
+            project_root=self._project_root(),
+            status_payload=self._openclaw_models_status_snapshot().get("raw"),
+            auth_profiles_payload=self._load_openclaw_auth_profiles(),
+            runtime_models_payload=self._load_openclaw_runtime_models(),
+            runtime_config_payload=self._load_openclaw_runtime_config(),
+        )
+
+        router_usage_summary = {}
+        if hasattr(router_obj, "get_usage_summary"):
+            try:
+                router_usage_summary = dict(router_obj.get_usage_summary() or {})
+            except Exception:
+                router_usage_summary = {}
+
+        cloud_provider_groups_map: dict[str, dict[str, Any]] = {}
+        for item in cloud_inventory:
+            provider_name = str(item.get("provider", "") or "").strip()
+            if not provider_name:
+                continue
+            group = cloud_provider_groups_map.setdefault(
+                provider_name,
+                {
+                    "provider": provider_name,
+                    "provider_label": str(item.get("provider_label", provider_name)),
+                    "provider_auth": str(item.get("provider_auth", "unknown")),
+                    "provider_readiness": str(item.get("provider_readiness", "unknown")),
+                    "provider_readiness_label": str(
+                        item.get("provider_readiness_label", "Configured")
+                    ),
+                    "provider_detail": str(item.get("provider_detail", "")),
+                    "provider_quota_state": str(item.get("provider_quota_state", "unknown")),
+                    "provider_quota_label": str(item.get("provider_quota_label", "")),
+                    "provider_effective_kind": str(item.get("provider_effective_kind", "")),
+                    "provider_effective_detail": str(item.get("provider_effective_detail", "")),
+                    "provider_oauth_status": str(item.get("provider_oauth_status", "")),
+                    "provider_oauth_remaining_human": str(
+                        item.get("provider_oauth_remaining_human", "")
+                    ),
+                    "provider_auth_recovery": dict(item.get("provider_auth_recovery") or {}),
+                    "provider_ui": dict(item.get("provider_ui") or {}),
+                    "legacy": bool(item.get("legacy")),
+                    "models": [],
+                },
+            )
+            group["models"].append(item)
+
+        cloud_provider_groups = [
+            {
+                **group,
+                "model_count": len(group["models"]),
+                "configured_model_count": sum(
+                    1 for model in group["models"] if bool(model.get("configured_runtime"))
+                ),
+                "catalog_only_model_count": sum(
+                    1 for model in group["models"] if not bool(model.get("configured_runtime"))
+                ),
+                "active_count": sum(
+                    1 for model in group["models"] if bool(model.get("active_runtime"))
+                ),
+                "selected_slots": sorted(
+                    {
+                        slot_name
+                        for model in group["models"]
+                        for slot_name in (model.get("selected_slots") or [])
+                        if str(slot_name or "").strip()
+                    }
+                ),
+            }
+            for group in sorted(
+                cloud_provider_groups_map.values(),
+                key=lambda item: self._provider_sort_rank(str(item.get("provider") or "")),
+            )
+        ]
+        parallelism_truth = self._build_openclaw_parallelism_truth()
+
+        payload = {
+            "force_mode": force_mode,
+            "slots": slot_list,
+            "cloud_slots": cloud_slots,
+            "local_engine": local_engine,
+            "local_available": local_available,
+            "local_active_model": local_active_model,
+            "local_models": local_models,
+            "local_models_error": local_models_error,
+            "cloud_presets": cloud_presets,
+            "cloud_inventory": cloud_inventory,
+            "cloud_provider_groups": cloud_provider_groups,
+            "aliases": alias_items,
+            "quick_presets": quick_presets,
+            "runtime_model_count": len(cloud_presets),
+            "cloud_inventory_count": len(cloud_inventory),
+            "runtime_registry_source": "openclaw_models_json+openclaw_models_list_all",
+            "router_usage": router_usage_summary,
+            "routing_status": routing_status,
+            "runtime_controls": runtime_controls,
+            "parallelism_truth": parallelism_truth,
+            "auth_recovery": auth_recovery,
+            "catalog_guidance": {
+                "primary_flow": "Сначала выбери режим и пресет. Точный слот меняй только в advanced override.",
+                "openai_manual_only": False,
+            },
+        }
+        self._store_model_catalog_cache(payload)
+        return payload
 
     @classmethod
     def _lmstudio_snapshot_ttl_sec(cls) -> float:
@@ -10678,302 +11016,17 @@ class WebApp:
                 return "cloud"
             return "auto"
 
-        async def _build_model_catalog(router_obj) -> dict:
-            """
-            Собирает каталог моделей и текущих настроек для web-панели.
-            Нужен для кнопочного UX без ручных `!model` команд.
-            Защита от краша: любая ошибка → пустой каталог вместо 500.
-            """
-            try:
-                return await _build_model_catalog_inner(router_obj)
-            except Exception as exc:  # noqa: BLE001
-                # Graceful fallback — не крашим Krab при холодном запросе
-                import logging as _logging
+        # Wave OO (Session 25): closures ``_build_model_catalog`` /
+        # ``_build_model_catalog_inner`` промотованы в методы
+        # WebApp._build_model_catalog_method / _build_model_catalog_inner_method
+        # (около строки 3580). Endpoints /api/model/catalog и /api/model/apply
+        # extracted в src/modules/web_routers/model_router.py через
+        # helper-injection (см. _make_router_context: model_catalog_*_helper).
 
-                _logging.getLogger(__name__).warning(
-                    "_build_model_catalog failed (cold start?): %s", exc
-                )
-                return {
-                    "force_mode": "auto",
-                    "slots": [],
-                    "cloud_slots": {},
-                    "local_engine": "",
-                    "local_available": False,
-                    "local_active_model": "",
-                    "local_models": [],
-                    "local_models_error": str(exc),
-                    "cloud_presets": [],
-                    "cloud_inventory": [],
-                    "cloud_provider_groups": [],
-                    "aliases": [],
-                    "quick_presets": [],
-                    "runtime_model_count": 0,
-                    "cloud_inventory_count": 0,
-                    "runtime_registry_source": "fallback_empty",
-                    "router_usage": {},
-                    "routing_status": {},
-                    "runtime_controls": {},
-                    "parallelism_truth": {},
-                    "auth_recovery": {},
-                    "catalog_guidance": {},
-                    "_error": str(exc),
-                }
-
-        async def _build_model_catalog_inner(router_obj) -> dict:
-            """Внутренняя реализация каталога. Вызывается из _build_model_catalog."""
-            cloud_slots_raw = getattr(router_obj, "models", {}) or {}
-            cloud_slots = (
-                {str(k): str(v) for k, v in cloud_slots_raw.items()}
-                if isinstance(cloud_slots_raw, dict)
-                else {}
-            )
-            slot_list = (
-                sorted(cloud_slots.keys()) if cloud_slots else ["chat", "thinking", "pro", "coding"]
-            )
-            force_mode = _normalize_force_mode(getattr(router_obj, "force_mode", "auto"))
-            local_truth = await self._resolve_local_runtime_truth(router_obj)
-            local_engine = str(
-                local_truth.get("engine") or getattr(router_obj, "local_engine", "") or ""
-            )
-            local_active_model = str(local_truth.get("active_model") or "")
-            local_available = bool(local_truth.get("runtime_reachable"))
-            loaded_model_ids = {
-                str(item).strip()
-                for item in (local_truth.get("loaded_models") or [])
-                if str(item or "").strip()
-            }
-
-            local_models: list[dict] = []
-            local_models_error = ""
-            if hasattr(router_obj, "list_local_models_verbose"):
-                try:
-                    raw_local_models = await router_obj.list_local_models_verbose()
-                    if isinstance(raw_local_models, list):
-                        for item in raw_local_models:
-                            if not isinstance(item, dict):
-                                continue
-                            model_id = str(item.get("id", "")).strip()
-                            if not model_id:
-                                continue
-                            local_models.append(
-                                {
-                                    "id": model_id,
-                                    "loaded": bool(
-                                        model_id == local_active_model
-                                        or model_id in loaded_model_ids
-                                        or item.get("loaded", False)
-                                    ),
-                                    "type": str(item.get("type", "llm")),
-                                    "size_human": str(item.get("size_human", "n/a")),
-                                }
-                            )
-                except Exception as exc:  # noqa: BLE001
-                    local_models_error = str(exc)
-
-            if local_active_model and not any(
-                str(item.get("id")) == local_active_model for item in local_models
-            ):
-                local_models.insert(
-                    0,
-                    {
-                        "id": local_active_model,
-                        "loaded": True,
-                        "type": "llm",
-                        "size_human": "n/a",
-                    },
-                )
-
-            cloud_inventory: list[dict[str, Any]] = []
-            cloud_presets: list[dict[str, Any]] = []
-            alias_items: list[dict[str, str]] = []
-            try:
-                cloud_inventory = self._build_runtime_cloud_presets(cloud_slots)
-                cloud_presets = [
-                    item for item in cloud_inventory if bool(item.get("configured_runtime", True))
-                ]
-                runtime_model_ids = {
-                    str(item.get("id", "")).strip()
-                    for item in cloud_presets
-                    if str(item.get("id", "")).strip()
-                }
-                for alias_key in sorted(MODEL_FRIENDLY_ALIASES.keys()):
-                    resolved_id, _ = normalize_model_alias(alias_key)
-                    if resolved_id not in runtime_model_ids:
-                        continue
-                    alias_items.append(
-                        {
-                            "alias": alias_key,
-                            "model": resolved_id,
-                        }
-                    )
-            except Exception:
-                cloud_inventory = []
-                cloud_presets = []
-                alias_items = []
-
-            if not cloud_inventory:
-                cloud_inventory = self._build_runtime_cloud_presets({})
-            if not cloud_presets:
-                cloud_presets = [
-                    item for item in cloud_inventory if bool(item.get("configured_runtime", True))
-                ]
-            if not cloud_presets:
-                cloud_presets = list(cloud_inventory)
-
-            local_override = (
-                local_active_model
-                or str(
-                    getattr(router_obj, "active_local_model", "")
-                    or getattr(config, "LOCAL_PREFERRED_MODEL", "")
-                    or ""
-                ).strip()
-            )
-            if not local_override:
-                local_override = "nvidia/nemotron-3-nano"
-
-            quick_presets_map = self._build_runtime_quick_presets(
-                current_slots=cloud_slots,
-                local_override=local_override,
-            )
-            quick_presets = [
-                {
-                    "id": preset_id,
-                    "title": str(preset_payload.get("title", preset_id)),
-                    "description": str(preset_payload.get("description", "")),
-                }
-                for preset_id, preset_payload in quick_presets_map.items()
-            ]
-            openclaw = self.deps.get("openclaw_client")
-            last_runtime_route: dict[str, Any] = {}
-            if openclaw and hasattr(openclaw, "get_last_runtime_route"):
-                try:
-                    last_runtime_route = dict(openclaw.get_last_runtime_route() or {})
-                except Exception:
-                    last_runtime_route = {}
-            routing_status = self._overlay_live_route_on_openclaw_model_routing_status(
-                routing=self._build_openclaw_model_routing_status(),
-                last_runtime_route=last_runtime_route,
-            )
-            cloud_inventory = self._overlay_routing_provider_truth_on_cloud_inventory(
-                cloud_inventory=cloud_inventory,
-                routing_status=routing_status,
-            )
-            runtime_controls = self._build_openclaw_runtime_controls()
-            auth_recovery = build_auth_recovery_readiness_snapshot(
-                project_root=self._project_root(),
-                status_payload=self._openclaw_models_status_snapshot().get("raw"),
-                auth_profiles_payload=self._load_openclaw_auth_profiles(),
-                runtime_models_payload=self._load_openclaw_runtime_models(),
-                runtime_config_payload=self._load_openclaw_runtime_config(),
-            )
-
-            router_usage_summary = {}
-            if hasattr(router_obj, "get_usage_summary"):
-                try:
-                    router_usage_summary = dict(router_obj.get_usage_summary() or {})
-                except Exception:
-                    router_usage_summary = {}
-
-            cloud_provider_groups_map: dict[str, dict[str, Any]] = {}
-            for item in cloud_inventory:
-                provider_name = str(item.get("provider", "") or "").strip()
-                if not provider_name:
-                    continue
-                group = cloud_provider_groups_map.setdefault(
-                    provider_name,
-                    {
-                        "provider": provider_name,
-                        "provider_label": str(item.get("provider_label", provider_name)),
-                        "provider_auth": str(item.get("provider_auth", "unknown")),
-                        "provider_readiness": str(item.get("provider_readiness", "unknown")),
-                        "provider_readiness_label": str(
-                            item.get("provider_readiness_label", "Configured")
-                        ),
-                        "provider_detail": str(item.get("provider_detail", "")),
-                        "provider_quota_state": str(item.get("provider_quota_state", "unknown")),
-                        "provider_quota_label": str(item.get("provider_quota_label", "")),
-                        "provider_effective_kind": str(item.get("provider_effective_kind", "")),
-                        "provider_effective_detail": str(item.get("provider_effective_detail", "")),
-                        "provider_oauth_status": str(item.get("provider_oauth_status", "")),
-                        "provider_oauth_remaining_human": str(
-                            item.get("provider_oauth_remaining_human", "")
-                        ),
-                        "provider_auth_recovery": dict(item.get("provider_auth_recovery") or {}),
-                        "provider_ui": dict(item.get("provider_ui") or {}),
-                        "legacy": bool(item.get("legacy")),
-                        "models": [],
-                    },
-                )
-                group["models"].append(item)
-
-            cloud_provider_groups = [
-                {
-                    **group,
-                    "model_count": len(group["models"]),
-                    "configured_model_count": sum(
-                        1 for model in group["models"] if bool(model.get("configured_runtime"))
-                    ),
-                    "catalog_only_model_count": sum(
-                        1 for model in group["models"] if not bool(model.get("configured_runtime"))
-                    ),
-                    "active_count": sum(
-                        1 for model in group["models"] if bool(model.get("active_runtime"))
-                    ),
-                    "selected_slots": sorted(
-                        {
-                            slot_name
-                            for model in group["models"]
-                            for slot_name in (model.get("selected_slots") or [])
-                            if str(slot_name or "").strip()
-                        }
-                    ),
-                }
-                for group in sorted(
-                    cloud_provider_groups_map.values(),
-                    key=lambda item: self._provider_sort_rank(str(item.get("provider") or "")),
-                )
-            ]
-            parallelism_truth = self._build_openclaw_parallelism_truth()
-
-            payload = {
-                "force_mode": force_mode,
-                "slots": slot_list,
-                "cloud_slots": cloud_slots,
-                "local_engine": local_engine,
-                "local_available": local_available,
-                "local_active_model": local_active_model,
-                "local_models": local_models,
-                "local_models_error": local_models_error,
-                "cloud_presets": cloud_presets,
-                "cloud_inventory": cloud_inventory,
-                "cloud_provider_groups": cloud_provider_groups,
-                "aliases": alias_items,
-                "quick_presets": quick_presets,
-                "runtime_model_count": len(cloud_presets),
-                "cloud_inventory_count": len(cloud_inventory),
-                "runtime_registry_source": "openclaw_models_json+openclaw_models_list_all",
-                "router_usage": router_usage_summary,
-                "routing_status": routing_status,
-                "runtime_controls": runtime_controls,
-                "parallelism_truth": parallelism_truth,
-                "auth_recovery": auth_recovery,
-                "catalog_guidance": {
-                    "primary_flow": "Сначала выбери режим и пресет. Точный слот меняй только в advanced override.",
-                    "openai_manual_only": False,
-                },
-            }
-            self._store_model_catalog_cache(payload)
-            return payload
-
-        @self.app.get("/api/model/catalog")
-        async def model_catalog(force_refresh: bool = Query(default=False)):
-            """Каталог моделей/режимов для web-панели с кнопочным управлением."""
-            router = self.deps["router"]
-            if not force_refresh:
-                cached_catalog = self._get_model_catalog_cache()
-                if cached_catalog is not None:
-                    return {"ok": True, "catalog": cached_catalog, "cached": True}
-            return {"ok": True, "catalog": await _build_model_catalog(router)}
+        # /api/model/catalog: extracted в src/modules/web_routers/model_router.py
+        # (Phase 2 Wave OO, Session 25). Helpers инжектируются через
+        # model_catalog_get_cache_helper + model_catalog_build_helper в
+        # _make_router_context.
 
         # /api/model/provider-action: extracted в src/modules/web_routers/model_router.py
         # (Phase 2 Wave GG, Session 25). Helpers инжектируются через
@@ -11000,216 +11053,13 @@ class WebApp:
         # Subprocess helper hoisted в module-level _run_openclaw_model_compat_probe
         # и инжектируется через openclaw_model_compat_probe_helper в _make_router_context.
 
-        @self.app.post("/api/model/apply")
-        async def model_apply(
-            payload: dict = Body(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Применяет изменения модели/режима из web UI без ручных команд."""
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps["router"]
-            black_box = self.deps.get("black_box")
-
-            action = str(payload.get("action", "")).strip().lower()
-            if not action:
-                raise HTTPException(status_code=400, detail="model_apply_action_required")
-
-            result_payload: dict[str, object] = {}
-            message_text = "✅ Изменения применены."
-            post_apply_runtime_controls: dict[str, Any] | None = None
-            post_apply_routing_status: dict[str, Any] | None = None
-
-            if action == "set_mode":
-                mode = str(payload.get("mode", "auto")).strip().lower() or "auto"
-                if mode not in {"auto", "local", "cloud"}:
-                    raise HTTPException(status_code=400, detail="model_apply_invalid_mode")
-                if not hasattr(router, "set_force_mode"):
-                    raise HTTPException(
-                        status_code=400, detail="model_apply_set_mode_not_supported"
-                    )
-                update_result = router.set_force_mode(mode)
-                result_payload = {
-                    "mode": _normalize_force_mode(getattr(router, "force_mode", "auto")),
-                    "router_response": str(update_result),
-                }
-                message_text = f"✅ Режим обновлен: {result_payload['mode']}"
-
-            elif action == "set_slot_model":
-                slot = str(payload.get("slot", "")).strip().lower()
-                raw_model = str(payload.get("model", "")).strip()
-                if not slot or not raw_model:
-                    raise HTTPException(
-                        status_code=400, detail="model_apply_slot_and_model_required"
-                    )
-                if not hasattr(router, "models") or not isinstance(getattr(router, "models"), dict):
-                    raise HTTPException(status_code=400, detail="model_apply_slots_not_supported")
-                if slot not in router.models:
-                    available = ", ".join(sorted(router.models.keys()))
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"model_apply_unknown_slot: {slot}; available={available}",
-                    )
-                resolved_model, alias_note = normalize_model_alias(raw_model)
-                old_model = str(router.models.get(slot, ""))
-                router.models[slot] = resolved_model
-                result_payload = {
-                    "slot": slot,
-                    "old_model": old_model,
-                    "new_model": resolved_model,
-                    "alias_note": alias_note,
-                }
-                message_text = f"✅ Слот `{slot}`: `{old_model}` → `{resolved_model}`"
-
-            elif action == "apply_preset":
-                preset_id = str(payload.get("preset", "")).strip().lower()
-                if not preset_id:
-                    raise HTTPException(status_code=400, detail="model_apply_preset_required")
-                if not hasattr(router, "models") or not isinstance(getattr(router, "models"), dict):
-                    raise HTTPException(status_code=400, detail="model_apply_slots_not_supported")
-
-                local_override = str(payload.get("local_model", "")).strip() or str(
-                    getattr(router, "active_local_model", "") or ""
-                )
-                if not local_override:
-                    local_override = (
-                        os.getenv("LOCAL_PREFERRED_MODEL", "nvidia/nemotron-3-nano").strip()
-                        or "nvidia/nemotron-3-nano"
-                    )
-
-                presets = self._build_runtime_quick_presets(
-                    current_slots={str(k): str(v) for k, v in router.models.items()},
-                    local_override=local_override,
-                )
-                chosen = presets.get(preset_id)
-                if not chosen:
-                    raise HTTPException(
-                        status_code=400, detail=f"model_apply_unknown_preset: {preset_id}"
-                    )
-
-                applied_changes: list[dict[str, str]] = []
-                for slot, model_id in dict(chosen.get("slots", {})).items():
-                    if slot not in router.models:
-                        continue
-                    resolved_model, _ = normalize_model_alias(str(model_id))
-                    previous = str(router.models.get(slot, ""))
-                    router.models[slot] = resolved_model
-                    applied_changes.append(
-                        {
-                            "slot": str(slot),
-                            "old_model": previous,
-                            "new_model": resolved_model,
-                        }
-                    )
-
-                target_mode = (
-                    str(payload.get("mode_override", "") or chosen.get("mode", "auto"))
-                    .strip()
-                    .lower()
-                    or "auto"
-                )
-                if hasattr(router, "set_force_mode"):
-                    router.set_force_mode(target_mode)
-
-                result_payload = {
-                    "preset": preset_id,
-                    "mode": _normalize_force_mode(getattr(router, "force_mode", "auto")),
-                    "changes": applied_changes,
-                }
-                message_text = f"✅ Пресет `{preset_id}` применён ({len(applied_changes)} слотов)."
-
-            elif action == "set_runtime_chain":
-                primary_raw = payload.get("primary")
-                fallbacks_raw = (
-                    payload.get("fallbacks") if isinstance(payload.get("fallbacks"), list) else []
-                )
-                context_tokens_raw = payload.get("context_tokens")
-                thinking_default_raw = payload.get("thinking_default", "off")
-                execution_preset_raw = payload.get("execution_preset", "")
-                main_max_concurrent_raw = payload.get("main_max_concurrent")
-                subagent_max_concurrent_raw = payload.get("subagent_max_concurrent")
-                slot_thinking_raw = payload.get("slot_thinking")
-                try:
-                    applied = self._apply_openclaw_runtime_controls(
-                        primary_raw=primary_raw,
-                        fallbacks_raw=list(fallbacks_raw),
-                        context_tokens_raw=context_tokens_raw,
-                        thinking_default_raw=thinking_default_raw,
-                        execution_preset_raw=execution_preset_raw,
-                        main_max_concurrent_raw=main_max_concurrent_raw,
-                        subagent_max_concurrent_raw=subagent_max_concurrent_raw,
-                        slot_thinking_raw=slot_thinking_raw
-                        if isinstance(slot_thinking_raw, dict)
-                        else {},
-                    )
-                except ValueError as exc:
-                    raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-                self._runtime_lite_cache = None
-                post_apply_routing_status = self._build_openclaw_model_routing_status()
-                post_apply_runtime_controls = self._build_openclaw_runtime_controls()
-                result_payload = {
-                    "runtime": applied,
-                    "routing_status": post_apply_routing_status,
-                    "runtime_controls": post_apply_runtime_controls,
-                }
-                backup_hint = ""
-                if applied.get("backup_openclaw_json"):
-                    backup_hint = " backup создан."
-                message_text = (
-                    f"✅ Глобальная цепочка OpenClaw обновлена: `{applied['primary']}` + "
-                    f"{len(applied['fallbacks'])} fallback(s).{backup_hint}"
-                )
-
-            else:
-                raise HTTPException(status_code=400, detail=f"model_apply_unknown_action: {action}")
-
-            if black_box and hasattr(black_box, "log_event"):
-                black_box.log_event("web_model_apply", f"action={action} result={message_text}")
-
-            catalog_refresh = {
-                "degraded": False,
-                "reason": "",
-                "detail": "",
-            }
-            try:
-                catalog_payload = await asyncio.wait_for(
-                    _build_model_catalog(router),
-                    timeout=self._model_apply_catalog_timeout_sec(),
-                )
-            except asyncio.TimeoutError:
-                catalog_payload = self._build_model_catalog_fallback(
-                    runtime_controls=post_apply_runtime_controls,
-                    routing_status=post_apply_routing_status,
-                    degraded_reason="catalog_refresh_timeout",
-                )
-                self._store_model_catalog_cache(catalog_payload)
-                catalog_refresh = {
-                    "degraded": True,
-                    "reason": "catalog_refresh_timeout",
-                    "detail": "Runtime уже записан, но полный refresh каталога занял слишком много времени; UI временно использует cache.",
-                }
-            except Exception as exc:  # noqa: BLE001
-                catalog_payload = self._build_model_catalog_fallback(
-                    runtime_controls=post_apply_runtime_controls,
-                    routing_status=post_apply_routing_status,
-                    degraded_reason="catalog_refresh_failed",
-                )
-                self._store_model_catalog_cache(catalog_payload)
-                catalog_refresh = {
-                    "degraded": True,
-                    "reason": "catalog_refresh_failed",
-                    "detail": f"Runtime уже записан, но post-apply refresh каталога завершился ошибкой: {exc}",
-                }
-
-            return {
-                "ok": True,
-                "action": action,
-                "message": message_text,
-                "result": result_payload,
-                "catalog": catalog_payload,
-                "catalog_refresh": catalog_refresh,
-            }
+        # /api/model/apply: extracted в src/modules/web_routers/model_router.py
+        # (Phase 2 Wave OO, Session 25). Helpers инжектируются через
+        # model_catalog_build_helper / model_catalog_build_fallback_helper /
+        # model_catalog_store_cache_helper / model_apply_catalog_timeout_helper /
+        # runtime_quick_presets_build_helper / openclaw_runtime_controls_apply_helper /
+        # openclaw_runtime_controls_build_helper / openclaw_model_routing_helper /
+        # runtime_lite_cache_invalidator_helper в _make_router_context.
 
         # /api/model/feedback (GET+POST): extracted в src/modules/web_routers/model_router.py
         # (Phase 2 Wave FF, Session 25). Idempotency cache shared через

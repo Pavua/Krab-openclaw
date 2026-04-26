@@ -26,13 +26,9 @@ Endpoints (Wave GG, READY — Session 25):
 - POST /api/thinking/set             — обновить глобальный thinking_default.
 - GET  /api/depth/status             — алиас thinking/status (depth == thinking).
 
-SKIP (HARD, требуют дополнительной экстракции — не в этом waveе):
-- /api/model/catalog            — `_get_model_catalog_cache` + `_build_model_catalog`
-- /api/model/apply              — много helper'ов + cache invalidation
-                                  (включая `_build_runtime_quick_presets`,
-                                  `_build_model_catalog`, `_build_model_catalog_fallback`,
-                                  `_store_model_catalog_cache`, `_model_apply_catalog_timeout_sec`,
-                                  `normalize_model_alias`).
+Endpoints (Wave OO, READY — Session 25):
+- GET  /api/model/catalog       — каталог моделей/режимов для UI с кнопочным управлением.
+- POST /api/model/apply         — применяет изменения модели/режима из web UI.
 
 Контракт ответов сохранён 1:1 с inline definitions из web_app.py.
 """
@@ -42,10 +38,26 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Body, Header, HTTPException, Query
 
+from src.core.model_aliases import normalize_model_alias
+
 from ._context import RouterContext
+
+
+def _normalize_force_mode_local(force_mode: str) -> str:
+    """Pure нормализация force_* режимов в auto/local/cloud для UI.
+
+    Локальная копия из ``WebApp._normalize_force_mode_static`` (Wave OO).
+    """
+    normalized = str(force_mode or "").strip().lower()
+    if normalized in {"force_local", "local"}:
+        return "local"
+    if normalized in {"force_cloud", "cloud"}:
+        return "cloud"
+    return "auto"
 
 
 def build_model_router(ctx: RouterContext) -> APIRouter:
@@ -493,6 +505,276 @@ def build_model_router(ctx: RouterContext) -> APIRouter:
             "ok": True,
             "thinking_default": applied.get("thinking_default", mode),
             "changed": applied.get("changed", {}),
+        }
+
+    # ============== Wave OO (Session 25) ===================================
+
+    # ---------- GET /api/model/catalog ------------------------------------
+    @router.get("/api/model/catalog")
+    async def model_catalog(force_refresh: bool = Query(default=False)) -> dict:
+        """Каталог моделей/режимов для web-панели с кнопочным управлением."""
+        router_obj = ctx.deps["router"]
+        get_cache = ctx.deps.get("model_catalog_get_cache_helper")
+        build_catalog = ctx.deps.get("model_catalog_build_helper")
+        if build_catalog is None:
+            raise HTTPException(status_code=500, detail="model_catalog_build_helper_missing")
+
+        if not force_refresh and get_cache is not None:
+            cached_catalog = get_cache()
+            if cached_catalog is not None:
+                return {"ok": True, "catalog": cached_catalog, "cached": True}
+
+        catalog = await build_catalog(router_obj)
+        return {"ok": True, "catalog": catalog}
+
+    # ---------- POST /api/model/apply -------------------------------------
+    @router.post("/api/model/apply")
+    async def model_apply(
+        payload: dict = Body(...),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Применяет изменения модели/режима из web UI без ручных команд."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        router_obj = ctx.deps["router"]
+        black_box = ctx.deps.get("black_box")
+
+        build_catalog = ctx.deps.get("model_catalog_build_helper")
+        build_fallback = ctx.deps.get("model_catalog_build_fallback_helper")
+        store_cache = ctx.deps.get("model_catalog_store_cache_helper")
+        apply_timeout_helper = ctx.deps.get("model_apply_catalog_timeout_helper")
+        build_quick_presets = ctx.deps.get("runtime_quick_presets_build_helper")
+        apply_runtime_controls = ctx.deps.get("openclaw_runtime_controls_apply_helper")
+        build_runtime_controls = ctx.deps.get("openclaw_runtime_controls_build_helper")
+        build_routing_status = ctx.deps.get("openclaw_model_routing_helper")
+        runtime_lite_invalidate = ctx.deps.get("runtime_lite_cache_invalidator_helper")
+
+        if (
+            build_catalog is None
+            or build_fallback is None
+            or store_cache is None
+            or apply_timeout_helper is None
+        ):
+            raise HTTPException(status_code=500, detail="model_apply_helpers_missing")
+
+        action = str(payload.get("action", "")).strip().lower()
+        if not action:
+            raise HTTPException(status_code=400, detail="model_apply_action_required")
+
+        result_payload: dict[str, object] = {}
+        message_text = "✅ Изменения применены."
+        post_apply_runtime_controls: dict[str, Any] | None = None
+        post_apply_routing_status: dict[str, Any] | None = None
+
+        if action == "set_mode":
+            mode = str(payload.get("mode", "auto")).strip().lower() or "auto"
+            if mode not in {"auto", "local", "cloud"}:
+                raise HTTPException(status_code=400, detail="model_apply_invalid_mode")
+            if not hasattr(router_obj, "set_force_mode"):
+                raise HTTPException(status_code=400, detail="model_apply_set_mode_not_supported")
+            update_result = router_obj.set_force_mode(mode)
+            result_payload = {
+                "mode": _normalize_force_mode_local(getattr(router_obj, "force_mode", "auto")),
+                "router_response": str(update_result),
+            }
+            message_text = f"✅ Режим обновлен: {result_payload['mode']}"
+
+        elif action == "set_slot_model":
+            slot = str(payload.get("slot", "")).strip().lower()
+            raw_model = str(payload.get("model", "")).strip()
+            if not slot or not raw_model:
+                raise HTTPException(status_code=400, detail="model_apply_slot_and_model_required")
+            if not hasattr(router_obj, "models") or not isinstance(
+                getattr(router_obj, "models"), dict
+            ):
+                raise HTTPException(status_code=400, detail="model_apply_slots_not_supported")
+            if slot not in router_obj.models:
+                available = ", ".join(sorted(router_obj.models.keys()))
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"model_apply_unknown_slot: {slot}; available={available}",
+                )
+            resolved_model, alias_note = normalize_model_alias(raw_model)
+            old_model = str(router_obj.models.get(slot, ""))
+            router_obj.models[slot] = resolved_model
+            result_payload = {
+                "slot": slot,
+                "old_model": old_model,
+                "new_model": resolved_model,
+                "alias_note": alias_note,
+            }
+            message_text = f"✅ Слот `{slot}`: `{old_model}` → `{resolved_model}`"
+
+        elif action == "apply_preset":
+            if build_quick_presets is None:
+                raise HTTPException(
+                    status_code=500, detail="runtime_quick_presets_build_helper_missing"
+                )
+            preset_id = str(payload.get("preset", "")).strip().lower()
+            if not preset_id:
+                raise HTTPException(status_code=400, detail="model_apply_preset_required")
+            if not hasattr(router_obj, "models") or not isinstance(
+                getattr(router_obj, "models"), dict
+            ):
+                raise HTTPException(status_code=400, detail="model_apply_slots_not_supported")
+
+            import os as _os
+
+            local_override = str(payload.get("local_model", "")).strip() or str(
+                getattr(router_obj, "active_local_model", "") or ""
+            )
+            if not local_override:
+                local_override = (
+                    _os.getenv("LOCAL_PREFERRED_MODEL", "nvidia/nemotron-3-nano").strip()
+                    or "nvidia/nemotron-3-nano"
+                )
+
+            presets = build_quick_presets(
+                current_slots={str(k): str(v) for k, v in router_obj.models.items()},
+                local_override=local_override,
+            )
+            chosen = presets.get(preset_id)
+            if not chosen:
+                raise HTTPException(
+                    status_code=400, detail=f"model_apply_unknown_preset: {preset_id}"
+                )
+
+            applied_changes: list[dict[str, str]] = []
+            for slot, model_id in dict(chosen.get("slots", {})).items():
+                if slot not in router_obj.models:
+                    continue
+                resolved_model, _ = normalize_model_alias(str(model_id))
+                previous = str(router_obj.models.get(slot, ""))
+                router_obj.models[slot] = resolved_model
+                applied_changes.append(
+                    {
+                        "slot": str(slot),
+                        "old_model": previous,
+                        "new_model": resolved_model,
+                    }
+                )
+
+            target_mode = (
+                str(payload.get("mode_override", "") or chosen.get("mode", "auto")).strip().lower()
+                or "auto"
+            )
+            if hasattr(router_obj, "set_force_mode"):
+                router_obj.set_force_mode(target_mode)
+
+            result_payload = {
+                "preset": preset_id,
+                "mode": _normalize_force_mode_local(getattr(router_obj, "force_mode", "auto")),
+                "changes": applied_changes,
+            }
+            message_text = f"✅ Пресет `{preset_id}` применён ({len(applied_changes)} слотов)."
+
+        elif action == "set_runtime_chain":
+            if apply_runtime_controls is None:
+                raise HTTPException(
+                    status_code=500, detail="openclaw_runtime_controls_apply_helper_missing"
+                )
+            primary_raw = payload.get("primary")
+            fallbacks_raw = (
+                payload.get("fallbacks") if isinstance(payload.get("fallbacks"), list) else []
+            )
+            context_tokens_raw = payload.get("context_tokens")
+            thinking_default_raw = payload.get("thinking_default", "off")
+            execution_preset_raw = payload.get("execution_preset", "")
+            main_max_concurrent_raw = payload.get("main_max_concurrent")
+            subagent_max_concurrent_raw = payload.get("subagent_max_concurrent")
+            slot_thinking_raw = payload.get("slot_thinking")
+            try:
+                applied = apply_runtime_controls(
+                    primary_raw=primary_raw,
+                    fallbacks_raw=list(fallbacks_raw),
+                    context_tokens_raw=context_tokens_raw,
+                    thinking_default_raw=thinking_default_raw,
+                    execution_preset_raw=execution_preset_raw,
+                    main_max_concurrent_raw=main_max_concurrent_raw,
+                    subagent_max_concurrent_raw=subagent_max_concurrent_raw,
+                    slot_thinking_raw=slot_thinking_raw
+                    if isinstance(slot_thinking_raw, dict)
+                    else {},
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            if runtime_lite_invalidate is not None:
+                runtime_lite_invalidate()
+            if build_routing_status is not None:
+                post_apply_routing_status = build_routing_status()
+            if build_runtime_controls is not None:
+                post_apply_runtime_controls = build_runtime_controls()
+            result_payload = {
+                "runtime": applied,
+                "routing_status": post_apply_routing_status,
+                "runtime_controls": post_apply_runtime_controls,
+            }
+            backup_hint = ""
+            if isinstance(applied, dict) and applied.get("backup_openclaw_json"):
+                backup_hint = " backup создан."
+            primary_id = str(applied.get("primary", "")) if isinstance(applied, dict) else ""
+            fallback_count = (
+                len(applied.get("fallbacks", []) or []) if isinstance(applied, dict) else 0
+            )
+            message_text = (
+                f"✅ Глобальная цепочка OpenClaw обновлена: `{primary_id}` + "
+                f"{fallback_count} fallback(s).{backup_hint}"
+            )
+
+        else:
+            raise HTTPException(status_code=400, detail=f"model_apply_unknown_action: {action}")
+
+        if black_box and hasattr(black_box, "log_event"):
+            black_box.log_event("web_model_apply", f"action={action} result={message_text}")
+
+        catalog_refresh = {
+            "degraded": False,
+            "reason": "",
+            "detail": "",
+        }
+        try:
+            catalog_payload = await asyncio.wait_for(
+                build_catalog(router_obj),
+                timeout=apply_timeout_helper(),
+            )
+        except asyncio.TimeoutError:
+            catalog_payload = build_fallback(
+                runtime_controls=post_apply_runtime_controls,
+                routing_status=post_apply_routing_status,
+                degraded_reason="catalog_refresh_timeout",
+            )
+            store_cache(catalog_payload)
+            catalog_refresh = {
+                "degraded": True,
+                "reason": "catalog_refresh_timeout",
+                "detail": (
+                    "Runtime уже записан, но полный refresh каталога занял слишком "
+                    "много времени; UI временно использует cache."
+                ),
+            }
+        except Exception as exc:  # noqa: BLE001
+            catalog_payload = build_fallback(
+                runtime_controls=post_apply_runtime_controls,
+                routing_status=post_apply_routing_status,
+                degraded_reason="catalog_refresh_failed",
+            )
+            store_cache(catalog_payload)
+            catalog_refresh = {
+                "degraded": True,
+                "reason": "catalog_refresh_failed",
+                "detail": (
+                    f"Runtime уже записан, но post-apply refresh каталога завершился ошибкой: {exc}"
+                ),
+            }
+
+        return {
+            "ok": True,
+            "action": action,
+            "message": message_text,
+            "result": result_payload,
+            "catalog": catalog_payload,
+            "catalog_refresh": catalog_refresh,
         }
 
     # ---------- GET /api/depth/status -------------------------------------
