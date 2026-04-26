@@ -158,6 +158,34 @@ class _SendMessageInput(BaseModel):
     text: str = Field(
         ..., min_length=1, max_length=4096, description="Текст сообщения (до 4096 символов)"
     )
+    reply_to_message_id: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "ID сообщения в этом же чате, на которое отвечаем. Telegram покажет "
+            "ответ как реплай на конкретное сообщение (как при 'Reply' в UI)."
+        ),
+    )
+    quote_text: str | None = Field(
+        default=None,
+        max_length=1024,
+        description=(
+            "Опциональный фрагмент исходного сообщения для цитирования "
+            "(`quote_text` Pyrogram). Используется вместе с reply_to_message_id "
+            "когда хотим процитировать только часть длинного сообщения."
+        ),
+    )
+    parse_mode: str = Field(
+        default="",
+        description=(
+            "Режим разметки текста: 'markdown' / 'html' / 'disabled' / '' (default). "
+            "По умолчанию Pyrogram сам определяет — для безопасности можно указать."
+        ),
+    )
+    disable_web_page_preview: bool = Field(
+        default=False,
+        description="Если True — отключает превью ссылок в сообщении.",
+    )
 
 
 class _MediaInput(BaseModel):
@@ -184,6 +212,17 @@ class _EditMessageInput(BaseModel):
     chat_id: str = Field(..., description="ID чата или username")
     message_id: int = Field(..., gt=0, description="ID сообщения для редактирования")
     text: str = Field(..., min_length=1, max_length=4096, description="Новый текст сообщения")
+    parse_mode: str = Field(
+        default="",
+        description=(
+            "Режим разметки: 'markdown' / 'html' / 'disabled' / '' (default). "
+            "Аналог параметра в telegram_send_message."
+        ),
+    )
+    disable_web_page_preview: bool = Field(
+        default=False,
+        description="Если True — отключает превью ссылок при редактировании.",
+    )
 
 
 class _SendPhotoInput(BaseModel):
@@ -315,23 +354,43 @@ async def telegram_get_chat_history(params: _GetHistoryInput) -> str:
     annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
 )
 async def telegram_send_message(params: _SendMessageInput) -> str:
-    """Отправляет текстовое сообщение в указанный чат Telegram.
+    """Отправляет текстовое сообщение в чат Telegram через **userbot session**
+    (Pyrogram MTProto, не bot API).
 
-    ВНИМАНИЕ: это действие отправляет реальное сообщение от имени аккаунта.
+    Это даёт возможности userbot:
+    - писать в DM любому user_id даже если он не запускал /start (в отличие
+      от bot API, у которого ошибка ``bot not started in DM``);
+    - отвечать на конкретное сообщение через ``reply_to_message_id``
+      (Telegram отрисует это как "Reply" cutout);
+    - цитировать фрагмент исходного сообщения через ``quote_text``;
+    - выбирать parse_mode (markdown/html) и отключать link preview.
+
+    ВНИМАНИЕ: реальная отправка от имени owner-аккаунта.
 
     Args:
-        params: Параметры сообщения:
+        params:
             - chat_id (str): ID чата или @username получателя
             - text (str): Текст сообщения (до 4096 символов)
+            - reply_to_message_id (int|None): ID сообщения для reply (Telegram quote UI)
+            - quote_text (str|None): Фрагмент для цитаты (Pyrogram quote_text)
+            - parse_mode (str): 'markdown' / 'html' / 'disabled' / ''
+            - disable_web_page_preview (bool)
 
     Returns:
-        str: JSON-объект с метаданными отправленного сообщения (id, date, chat_id)
+        str: JSON-объект с метаданными отправленного сообщения (id, date, chat_id, reply_to_message_id)
     """
     try:
         cid: int | str = int(params.chat_id)
     except ValueError:
         cid = params.chat_id
-    result = await _bridge.send_message(cid, params.text)
+    result = await _bridge.send_message(
+        cid,
+        params.text,
+        reply_to_message_id=params.reply_to_message_id,
+        quote_text=params.quote_text,
+        parse_mode=params.parse_mode or None,
+        disable_web_page_preview=params.disable_web_page_preview,
+    )
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -488,16 +547,17 @@ async def telegram_search(params: _SearchInput) -> str:
     annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True},
 )
 async def telegram_edit_message(params: _EditMessageInput) -> str:
-    """Редактирует ранее отправленное сообщение Telegram.
+    """Редактирует ранее отправленное сообщение Telegram (от имени userbot).
 
-    Работает только для сообщений, отправленных самим аккаунтом.
-    Нельзя редактировать сообщения других пользователей.
+    Работает только для сообщений, отправленных этим же аккаунтом.
 
     Args:
         params:
             - chat_id (str): ID чата или @username
             - message_id (int): ID сообщения для редактирования
             - text (str): Новый текст сообщения (до 4096 символов)
+            - parse_mode (str): 'markdown' / 'html' / 'disabled' / ''
+            - disable_web_page_preview (bool)
 
     Returns:
         str: JSON-объект с обновлёнными метаданными сообщения
@@ -506,7 +566,13 @@ async def telegram_edit_message(params: _EditMessageInput) -> str:
         cid: int | str = int(params.chat_id)
     except ValueError:
         cid = params.chat_id
-    result = await _bridge.edit_message(cid, params.message_id, params.text)
+    result = await _bridge.edit_message(
+        cid,
+        params.message_id,
+        params.text,
+        parse_mode=params.parse_mode or None,
+        disable_web_page_preview=params.disable_web_page_preview,
+    )
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -714,6 +780,33 @@ async def telegram_send_voice(params: _SendVoiceInput) -> str:
         return json.dumps(result, ensure_ascii=False, indent=2)
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_session_info",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def telegram_session_info() -> str:
+    """Возвращает информацию о текущей Telegram MCP сессии.
+
+    КРИТИЧНО: используй этот tool **первым делом** при запуске для проверки
+    что session — это userbot (is_bot=False), а не bot. Если is_bot=True,
+    то отправка сообщений в DM первым невозможна (Telegram возвращает
+    ``bot not started in DM``), и нужна re-авторизация:
+    ``./venv/bin/python mcp-servers/telegram/auth_setup.py`` от owner.
+
+    Returns:
+        str: JSON-объект:
+            - ok (bool)
+            - is_bot (bool): True → bot session, False → userbot
+            - user_id (int): Telegram ID
+            - username (str|None): @username аккаунта
+            - first_name (str|None)
+            - session_name (str): имя session (например krab_mcp)
+            - capabilities (list[str]): краткая сводка userbot capabilities
+              если is_bot=False, иначе ограниченный bot toolkit
+    """
+    return await _bridge.session_info_json()
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -76,6 +76,29 @@ def _msg_to_dict(msg: Message) -> dict[str, Any]:
     }
 
 
+def _resolve_parse_mode(raw: str | None):
+    """Конвертит string parse_mode в pyrogram.enums.ParseMode.
+
+    Поддерживает 'markdown' / 'html' / 'disabled' (case-insensitive).
+    None или пустая строка → возвращает None (Pyrogram default).
+    """
+    if not raw:
+        return None
+    try:
+        from pyrogram.enums import ParseMode
+    except ImportError:
+        return None
+    key = raw.strip().lower()
+    mapping = {
+        "markdown": ParseMode.MARKDOWN,
+        "md": ParseMode.MARKDOWN,
+        "html": ParseMode.HTML,
+        "disabled": ParseMode.DISABLED,
+        "none": ParseMode.DISABLED,
+    }
+    return mapping.get(key)
+
+
 class TelegramBridge:
     """
     Singleton-обёртка над Pyrogram Client.
@@ -215,10 +238,36 @@ class TelegramBridge:
 
         return await self._run_client_call(_op)
 
-    async def send_message(self, chat_id: int | str, text: str) -> dict[str, Any]:
-        """Отправляет текстовое сообщение и возвращает его метаданные."""
+    async def send_message(
+        self,
+        chat_id: int | str,
+        text: str,
+        *,
+        reply_to_message_id: int | None = None,
+        quote_text: str | None = None,
+        parse_mode: str | None = None,
+        disable_web_page_preview: bool = False,
+    ) -> dict[str, Any]:
+        """Отправляет текстовое сообщение через userbot Pyrogram session.
+
+        Поддерживает userbot capabilities:
+        - reply_to_message_id: Telegram отрисует как Reply на сообщение
+        - quote_text: цитата фрагмента (Pyrogram quote_text param)
+        - parse_mode: 'markdown' / 'html' / 'disabled' / None
+        - disable_web_page_preview: отключить link preview
+        """
+
         async def _op(client: Client) -> dict[str, Any]:
-            msg = await client.send_message(chat_id, text)
+            kwargs: dict[str, Any] = {}
+            if reply_to_message_id is not None:
+                kwargs["reply_to_message_id"] = reply_to_message_id
+            if quote_text:
+                kwargs["quote_text"] = quote_text
+            if parse_mode:
+                kwargs["parse_mode"] = _resolve_parse_mode(parse_mode)
+            if disable_web_page_preview:
+                kwargs["disable_web_page_preview"] = True
+            msg = await client.send_message(chat_id, text, **kwargs)
             return _msg_to_dict(msg)
 
         return await self._run_client_call(_op)
@@ -266,11 +315,23 @@ class TelegramBridge:
         return await self._run_client_call(_op)
 
     async def edit_message(
-        self, chat_id: int | str, message_id: int, text: str
+        self,
+        chat_id: int | str,
+        message_id: int,
+        text: str,
+        *,
+        parse_mode: str | None = None,
+        disable_web_page_preview: bool = False,
     ) -> dict[str, Any]:
-        """Редактирует ранее отправленное сообщение."""
+        """Редактирует ранее отправленное сообщение (userbot)."""
+
         async def _op(client: Client) -> dict[str, Any]:
-            msg = await client.edit_message_text(chat_id, message_id, text)
+            kwargs: dict[str, Any] = {}
+            if parse_mode:
+                kwargs["parse_mode"] = _resolve_parse_mode(parse_mode)
+            if disable_web_page_preview:
+                kwargs["disable_web_page_preview"] = True
+            msg = await client.edit_message_text(chat_id, message_id, text, **kwargs)
             return _msg_to_dict(msg)
 
         return await self._run_client_call(_op)
@@ -386,3 +447,55 @@ class TelegramBridge:
             return _msg_to_dict(msg)
 
         return await self._run_client_call(_op)
+
+    async def session_info_json(self) -> str:
+        """Возвращает JSON с диагностической инфой о текущей session.
+
+        Используется MCP tool ``telegram_session_info`` для проверки
+        is_bot/is_user — критично для понимания userbot capabilities
+        (бот не может писать в DM первым).
+        """
+        import json
+
+        async def _op(client: Client) -> dict[str, Any]:
+            me = await client.get_me()
+            is_bot = bool(getattr(me, "is_bot", False))
+            user_capabilities = [
+                "send_message_to_dm_first (write to user_id without /start)",
+                "reply_to_message_id (proper Reply UI)",
+                "quote_text (cite a fragment)",
+                "edit_message (own messages)",
+                "send_reaction (emoji reactions)",
+                "pin_message",
+                "forward_message (no bot limits)",
+                "search across all dialogs",
+                "read message history of any joined chat",
+            ]
+            bot_capabilities = [
+                "send_message ONLY если user уже сделал /start",
+                "send_reaction (limited)",
+                "no DM-first",
+                "no proper user search",
+            ]
+            return {
+                "ok": True,
+                "is_bot": is_bot,
+                "user_id": me.id,
+                "username": me.username,
+                "first_name": me.first_name,
+                "session_name": _session_name(),
+                "capabilities": bot_capabilities if is_bot else user_capabilities,
+                "warning": (
+                    "is_bot=True — этой session не хватает userbot capabilities. "
+                    "Для активации userbot mode: удали "
+                    "~/.krab_mcp_sessions/krab_mcp.session и запусти "
+                    "./venv/bin/python mcp-servers/telegram/auth_setup.py "
+                    "(потребуется phone+SMS)."
+                ) if is_bot else None,
+            }
+
+        try:
+            result = await self._run_client_call(_op)
+        except Exception as exc:  # noqa: BLE001
+            result = {"ok": False, "error": str(exc)[:200]}
+        return json.dumps(result, ensure_ascii=False, indent=2)
