@@ -149,9 +149,7 @@ def test_openclaw_remediation_plan_ok() -> None:
 
 
 def test_openclaw_remediation_plan_no_client() -> None:
-    body = (
-        _client(_build_ctx(openclaw=None)).get("/api/openclaw/remediation-plan").json()
-    )
+    body = _client(_build_ctx(openclaw=None)).get("/api/openclaw/remediation-plan").json()
     assert body["available"] is False
     assert body["error"] == "openclaw_client_not_configured"
 
@@ -167,18 +165,14 @@ def test_openclaw_cloud_tier_state_ok() -> None:
 
 
 def test_openclaw_cloud_tier_state_no_client() -> None:
-    body = (
-        _client(_build_ctx(openclaw=None)).get("/api/openclaw/cloud/tier/state").json()
-    )
+    body = _client(_build_ctx(openclaw=None)).get("/api/openclaw/cloud/tier/state").json()
     assert body.get("status") == "failed"
     assert body.get("error_code") == "openclaw_client_not_configured"
 
 
 def test_openclaw_cloud_tier_state_not_supported() -> None:
     body = (
-        _client(_build_ctx(openclaw=_StubNoMethods()))
-        .get("/api/openclaw/cloud/tier/state")
-        .json()
+        _client(_build_ctx(openclaw=_StubNoMethods())).get("/api/openclaw/cloud/tier/state").json()
     )
     assert body.get("status") == "failed"
     assert body.get("error_code") == "tier_state_not_supported"
@@ -229,11 +223,7 @@ def test_openclaw_cloud_tier_reset_valid_auth(monkeypatch: pytest.MonkeyPatch) -
 def test_openclaw_cloud_tier_reset_no_client(monkeypatch: pytest.MonkeyPatch) -> None:
     """openclaw_client отсутствует → openclaw_client_not_configured."""
     monkeypatch.delenv("WEB_API_KEY", raising=False)
-    body = (
-        _client(_build_ctx(openclaw=None))
-        .post("/api/openclaw/cloud/tier/reset")
-        .json()
-    )
+    body = _client(_build_ctx(openclaw=None)).post("/api/openclaw/cloud/tier/reset").json()
     assert body.get("status") == "failed"
     assert body.get("error_code") == "openclaw_client_not_configured"
 
@@ -242,9 +232,7 @@ def test_openclaw_cloud_tier_reset_not_supported(monkeypatch: pytest.MonkeyPatch
     """Клиент без reset_cloud_tier → tier_reset_not_supported."""
     monkeypatch.delenv("WEB_API_KEY", raising=False)
     body = (
-        _client(_build_ctx(openclaw=_StubNoMethods()))
-        .post("/api/openclaw/cloud/tier/reset")
-        .json()
+        _client(_build_ctx(openclaw=_StubNoMethods())).post("/api/openclaw/cloud/tier/reset").json()
     )
     assert body.get("status") == "failed"
     assert body.get("error_code") == "tier_reset_not_supported"
@@ -254,11 +242,7 @@ def test_openclaw_cloud_tier_reset_system_error(monkeypatch: pytest.MonkeyPatch)
     """reset_cloud_tier бросает → tier_reset_error."""
     monkeypatch.delenv("WEB_API_KEY", raising=False)
     fake = _FakeOpenClaw(raise_in="reset")
-    body = (
-        _client(_build_ctx(openclaw=fake))
-        .post("/api/openclaw/cloud/tier/reset")
-        .json()
-    )
+    body = _client(_build_ctx(openclaw=fake)).post("/api/openclaw/cloud/tier/reset").json()
     assert body.get("status") == "failed"
     assert body.get("error_code") == "tier_reset_error"
 
@@ -314,3 +298,161 @@ def test_openclaw_signal_guard_valid_auth_path(monkeypatch: pytest.MonkeyPatch) 
     assert resp.status_code == 200
     body = resp.json()
     assert "ok" in body
+
+
+# ---------------------------------------------------------------------------
+# Wave DD: /api/openclaw/cron/status, /api/openclaw/cron/jobs, /api/openclaw/runtime-config
+# ---------------------------------------------------------------------------
+
+
+def _build_ctx_with_helpers(
+    *,
+    cron_helper: object | None = None,
+    runtime_config_helper: object | None = None,
+) -> RouterContext:
+    """Контекст с инжектированными Wave DD helpers (без openclaw_client)."""
+    deps: dict = {}
+    if cron_helper is not None:
+        deps["openclaw_cron_snapshot_helper"] = cron_helper
+    if runtime_config_helper is not None:
+        deps["openclaw_runtime_config_snapshot_helper"] = runtime_config_helper
+    return RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+
+
+def test_openclaw_cron_status_ok() -> None:
+    """GET /api/openclaw/cron/status возвращает snapshot при ok=True."""
+
+    async def _helper(*, include_all: bool = True) -> dict:
+        return {"ok": True, "summary": {"jobs_total": 2}, "jobs": [{"id": "j1"}, {"id": "j2"}]}
+
+    body = (
+        _client(_build_ctx_with_helpers(cron_helper=_helper))
+        .get("/api/openclaw/cron/status")
+        .json()
+    )
+    assert body["ok"] is True
+    assert body["summary"]["jobs_total"] == 2
+
+
+def test_openclaw_cron_status_helper_unavailable() -> None:
+    """Если helper не инжектирован — мягкая ошибка."""
+    body = _client(_build_ctx_with_helpers()).get("/api/openclaw/cron/status").json()
+    assert body["ok"] is False
+    assert body["error"] == "helper_unavailable"
+
+
+def test_openclaw_cron_status_propagates_error() -> None:
+    """Если helper вернул ok=False — отдаём snapshot как есть."""
+
+    async def _helper(*, include_all: bool = True) -> dict:
+        return {"ok": False, "error": "cli_failed", "detail": "no gateway"}
+
+    body = (
+        _client(_build_ctx_with_helpers(cron_helper=_helper))
+        .get("/api/openclaw/cron/status")
+        .json()
+    )
+    assert body["ok"] is False
+    assert body["error"] == "cli_failed"
+
+
+def test_openclaw_cron_status_timeout() -> None:
+    """TimeoutError из helper → ok=False, error содержит timeout."""
+    import asyncio as _aio
+
+    async def _helper(*, include_all: bool = True) -> dict:
+        raise _aio.TimeoutError
+
+    body = (
+        _client(_build_ctx_with_helpers(cron_helper=_helper))
+        .get("/api/openclaw/cron/status")
+        .json()
+    )
+    assert body["ok"] is False
+    assert "timeout" in body.get("error", "").lower()
+
+
+def test_openclaw_cron_jobs_returns_summary_and_jobs() -> None:
+    """GET /api/openclaw/cron/jobs формирует {summary, jobs}."""
+
+    async def _helper(*, include_all: bool = True) -> dict:
+        return {
+            "ok": True,
+            "summary": {"jobs_total": 1, "scheduler_status": "running"},
+            "jobs": [{"id": "j1", "name": "test"}],
+        }
+
+    body = (
+        _client(_build_ctx_with_helpers(cron_helper=_helper)).get("/api/openclaw/cron/jobs").json()
+    )
+    assert body["ok"] is True
+    assert body["summary"]["jobs_total"] == 1
+    assert body["jobs"] == [{"id": "j1", "name": "test"}]
+
+
+def test_openclaw_cron_jobs_passes_include_all_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Параметр include_all передаётся в helper."""
+    seen: dict = {}
+
+    async def _helper(*, include_all: bool = True) -> dict:
+        seen["include_all"] = include_all
+        return {"ok": True, "summary": {}, "jobs": []}
+
+    _client(_build_ctx_with_helpers(cron_helper=_helper)).get(
+        "/api/openclaw/cron/jobs?include_all=false"
+    ).json()
+    assert seen["include_all"] is False
+
+
+def test_openclaw_cron_jobs_helper_unavailable() -> None:
+    body = _client(_build_ctx_with_helpers()).get("/api/openclaw/cron/jobs").json()
+    assert body["ok"] is False
+    assert body["error"] == "helper_unavailable"
+
+
+def test_openclaw_runtime_config_ok_sync_helper() -> None:
+    """GET /api/openclaw/runtime-config поддерживает sync helper."""
+
+    def _helper() -> dict:
+        return {
+            "ok": True,
+            "openclaw_base_url": "http://127.0.0.1:18789",
+            "gateway_token_present": True,
+            "gateway_token_kind": "plain",
+            "runtime_policy": {"force_cloud": False},
+        }
+
+    body = (
+        _client(_build_ctx_with_helpers(runtime_config_helper=_helper))
+        .get("/api/openclaw/runtime-config")
+        .json()
+    )
+    assert body["ok"] is True
+    assert body["openclaw_base_url"] == "http://127.0.0.1:18789"
+    assert body["runtime_policy"]["force_cloud"] is False
+
+
+def test_openclaw_runtime_config_ok_async_helper() -> None:
+    """GET /api/openclaw/runtime-config поддерживает async helper."""
+
+    async def _helper() -> dict:
+        return {"ok": True, "openclaw_base_url": "http://x", "runtime_policy": {}}
+
+    body = (
+        _client(_build_ctx_with_helpers(runtime_config_helper=_helper))
+        .get("/api/openclaw/runtime-config")
+        .json()
+    )
+    assert body["ok"] is True
+    assert body["openclaw_base_url"] == "http://x"
+
+
+def test_openclaw_runtime_config_helper_unavailable() -> None:
+    body = _client(_build_ctx_with_helpers()).get("/api/openclaw/runtime-config").json()
+    assert body["ok"] is False
+    assert body["error"] == "helper_unavailable"

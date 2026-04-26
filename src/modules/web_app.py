@@ -307,6 +307,75 @@ class WebApp:
         """Возвращает корень проекта Krab."""
         return Path(__file__).resolve().parents[2]
 
+    def _openclaw_runtime_config_snapshot(self) -> dict[str, Any]:
+        """[Wave DD] Snapshot runtime-конфига OpenClaw для openclaw_router.
+
+        Возвращает данные для GET /api/openclaw/runtime-config без секретов.
+        Контракт сохранён 1:1 с inline definition (был в web_app.py).
+        """
+        base_url = (
+            str(getattr(config, "OPENCLAW_URL", "") or "http://127.0.0.1:18789").strip().rstrip("/")
+        )
+        raw_key = str(self._openclaw_gateway_token_from_config() or "").strip()
+        key_present = False
+        key_masked = ""
+        key_kind = "missing"
+        if raw_key:
+            key_present = True
+            if raw_key.startswith("{"):
+                key_kind = "tiered_json"
+                key_masked = "tiered-json-configured"
+            else:
+                key_kind = "plain"
+                key_masked = self._mask_secret(raw_key)
+
+        return {
+            "ok": True,
+            "openclaw_base_url": base_url,
+            "gateway_token_present": key_present,
+            "gateway_token_masked": key_masked,
+            "gateway_token_kind": key_kind,
+            "gateway_auth_state": "configured" if key_present else "missing",
+            "runtime_policy": {
+                "force_cloud": bool(getattr(config, "FORCE_CLOUD", False)),
+                "local_fallback_enabled": bool(getattr(config, "LOCAL_FALLBACK_ENABLED", True)),
+                "native_reasoning_mode": str(
+                    getattr(config, "LM_STUDIO_NATIVE_REASONING_MODE", "off") or "off"
+                )
+                .strip()
+                .lower(),
+                "photo_force_cloud": bool(getattr(config, "USERBOT_FORCE_CLOUD_FOR_PHOTO", True)),
+                "output_tokens": {
+                    "text": int(getattr(config, "USERBOT_MAX_OUTPUT_TOKENS", 1200) or 1200),
+                    "photo": int(getattr(config, "USERBOT_PHOTO_MAX_OUTPUT_TOKENS", 420) or 420),
+                },
+                "history_budget": {
+                    "dialog_messages": int(getattr(config, "HISTORY_WINDOW_MESSAGES", 50) or 50),
+                    "dialog_max_chars": getattr(config, "HISTORY_WINDOW_MAX_CHARS", None),
+                    "local_messages": int(
+                        getattr(config, "LOCAL_HISTORY_WINDOW_MESSAGES", 18) or 18
+                    ),
+                    "local_max_chars": getattr(config, "LOCAL_HISTORY_WINDOW_MAX_CHARS", None),
+                    "retry_messages": int(getattr(config, "RETRY_HISTORY_WINDOW_MESSAGES", 8) or 8),
+                    "retry_max_chars": int(
+                        getattr(config, "RETRY_HISTORY_WINDOW_MAX_CHARS", 4000) or 4000
+                    ),
+                    "retry_message_max_chars": int(
+                        getattr(config, "RETRY_MESSAGE_MAX_CHARS", 1200) or 1200
+                    ),
+                },
+                "timeouts_sec": {
+                    "chunk": float(getattr(config, "OPENCLAW_CHUNK_TIMEOUT_SEC", 180.0) or 180.0),
+                    "first_chunk": float(
+                        getattr(config, "OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC", 420.0) or 420.0
+                    ),
+                    "photo_first_chunk": float(
+                        getattr(config, "OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", 540.0) or 540.0
+                    ),
+                },
+            },
+        }
+
     def _make_router_context(self) -> "RouterContext":
         """Factory для RouterContext — Phase 2 advanced extractions (Session 25).
 
@@ -420,6 +489,21 @@ class WebApp:
         deps_dict.setdefault(
             "resolve_local_runtime_truth_helper",
             self._resolve_local_runtime_truth,
+        )
+
+        # Phase 2 Wave DD (Session 25): inject openclaw helpers для cron/status,
+        # cron/jobs, runtime-config endpoints в openclaw_router. Late-bound через
+        # lambda чтобы существующие тесты, патчащие
+        # ``WebApp._collect_openclaw_cron_snapshot`` или
+        # ``app._collect_openclaw_cron_snapshot`` после инициализации,
+        # продолжали работать без изменений.
+        deps_dict.setdefault(
+            "openclaw_cron_snapshot_helper",
+            lambda *args, **kwargs: self._collect_openclaw_cron_snapshot(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_runtime_config_snapshot_helper",
+            lambda *args, **kwargs: self._openclaw_runtime_config_snapshot(*args, **kwargs),
         )
 
         return RouterContext(
@@ -8440,47 +8524,9 @@ class WebApp:
         # extracted в src/modules/web_routers/voice_router.py
         # (Session 25 Phase 2 Wave L). См. include_router ниже.
 
-        @self.app.get("/api/openclaw/cron/status")
-        async def openclaw_cron_status():
-            """Возвращает truthful snapshot scheduler и recurring jobs из OpenClaw CLI."""
-            # Верхний guard: если CLI не отвечает — не зависаем бесконечно.
-            try:
-                snapshot = await asyncio.wait_for(
-                    self._collect_openclaw_cron_snapshot(include_all=True),
-                    timeout=5.0,
-                )
-            except asyncio.TimeoutError:
-                return {
-                    "ok": False,
-                    "error": "OpenClaw timeout (5s)",
-                    "detail": "gateway not responding",
-                }
-            if not snapshot.get("ok"):
-                return snapshot
-            return snapshot
-
-        @self.app.get("/api/openclaw/cron/jobs")
-        async def openclaw_cron_jobs(include_all: bool = Query(default=True)):
-            """Возвращает recurring jobs для owner UI без дублирования cron-движка."""
-            # Верхний guard: если CLI не отвечает — не зависаем бесконечно.
-            try:
-                snapshot = await asyncio.wait_for(
-                    self._collect_openclaw_cron_snapshot(include_all=bool(include_all)),
-                    timeout=5.0,
-                )
-            except asyncio.TimeoutError:
-                return {
-                    "ok": False,
-                    "error": "OpenClaw timeout (5s)",
-                    "detail": "gateway not responding",
-                }
-            if not snapshot.get("ok"):
-                return snapshot
-            return {
-                "ok": True,
-                "summary": snapshot.get("summary") or {},
-                "jobs": snapshot.get("jobs") or [],
-            }
+        # /api/openclaw/cron/status, /api/openclaw/cron/jobs — extracted в
+        # src/modules/web_routers/openclaw_router.py (Session 25 Phase 2 Wave DD)
+        # через openclaw_cron_snapshot_helper в _make_router_context.
 
         # /api/inbox/* (GET status/items/stale-*, /api/notifications/count, POST
         # update/stale-*/remediate, create) — extracted в
@@ -8735,87 +8781,9 @@ class WebApp:
         # /api/links: extracted в extras_router.py (Phase 2 Wave F, Session 25).
         # See include_router в общем блоке version/extras ниже.
 
-        @self.app.get("/api/openclaw/runtime-config")
-        async def openclaw_runtime_config():
-            """
-            Runtime-конфиг OpenClaw для UI.
-            Важно: секрет не отдаём целиком, только masked + флаг присутствия.
-            """
-            base_url = (
-                str(getattr(config, "OPENCLAW_URL", "") or "http://127.0.0.1:18789")
-                .strip()
-                .rstrip("/")
-            )
-            raw_key = str(self._openclaw_gateway_token_from_config() or "").strip()
-            key_present = False
-            key_masked = ""
-            key_kind = "missing"
-            if raw_key:
-                key_present = True
-                if raw_key.startswith("{"):
-                    key_kind = "tiered_json"
-                    key_masked = "tiered-json-configured"
-                else:
-                    key_kind = "plain"
-                    key_masked = self._mask_secret(raw_key)
-
-            return {
-                "ok": True,
-                "openclaw_base_url": base_url,
-                "gateway_token_present": key_present,
-                "gateway_token_masked": key_masked,
-                "gateway_token_kind": key_kind,
-                "gateway_auth_state": "configured" if key_present else "missing",
-                "runtime_policy": {
-                    "force_cloud": bool(getattr(config, "FORCE_CLOUD", False)),
-                    "local_fallback_enabled": bool(getattr(config, "LOCAL_FALLBACK_ENABLED", True)),
-                    "native_reasoning_mode": str(
-                        getattr(config, "LM_STUDIO_NATIVE_REASONING_MODE", "off") or "off"
-                    )
-                    .strip()
-                    .lower(),
-                    "photo_force_cloud": bool(
-                        getattr(config, "USERBOT_FORCE_CLOUD_FOR_PHOTO", True)
-                    ),
-                    "output_tokens": {
-                        "text": int(getattr(config, "USERBOT_MAX_OUTPUT_TOKENS", 1200) or 1200),
-                        "photo": int(
-                            getattr(config, "USERBOT_PHOTO_MAX_OUTPUT_TOKENS", 420) or 420
-                        ),
-                    },
-                    "history_budget": {
-                        "dialog_messages": int(
-                            getattr(config, "HISTORY_WINDOW_MESSAGES", 50) or 50
-                        ),
-                        "dialog_max_chars": getattr(config, "HISTORY_WINDOW_MAX_CHARS", None),
-                        "local_messages": int(
-                            getattr(config, "LOCAL_HISTORY_WINDOW_MESSAGES", 18) or 18
-                        ),
-                        "local_max_chars": getattr(config, "LOCAL_HISTORY_WINDOW_MAX_CHARS", None),
-                        "retry_messages": int(
-                            getattr(config, "RETRY_HISTORY_WINDOW_MESSAGES", 8) or 8
-                        ),
-                        "retry_max_chars": int(
-                            getattr(config, "RETRY_HISTORY_WINDOW_MAX_CHARS", 4000) or 4000
-                        ),
-                        "retry_message_max_chars": int(
-                            getattr(config, "RETRY_MESSAGE_MAX_CHARS", 1200) or 1200
-                        ),
-                    },
-                    "timeouts_sec": {
-                        "chunk": float(
-                            getattr(config, "OPENCLAW_CHUNK_TIMEOUT_SEC", 180.0) or 180.0
-                        ),
-                        "first_chunk": float(
-                            getattr(config, "OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC", 420.0) or 420.0
-                        ),
-                        "photo_first_chunk": float(
-                            getattr(config, "OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", 540.0)
-                            or 540.0
-                        ),
-                    },
-                },
-            }
+        # /api/openclaw/runtime-config — extracted в
+        # src/modules/web_routers/openclaw_router.py (Session 25 Phase 2 Wave DD)
+        # через openclaw_runtime_config_snapshot_helper в _make_router_context.
 
         @self.app.post("/api/context/checkpoint")
         async def context_checkpoint(

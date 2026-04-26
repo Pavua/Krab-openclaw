@@ -19,11 +19,14 @@ Endpoints (Wave N, POST через ctx.assert_write_access):
 - POST /api/openclaw/channels/runtime-repair    — запуск repair-скрипта
 - POST /api/openclaw/channels/signal-guard-run  — однократный Signal Guard
 
+Endpoints (Wave DD, GET через helper injection):
+- GET /api/openclaw/cron/status        — через `openclaw_cron_snapshot_helper`
+- GET /api/openclaw/cron/jobs          — через `openclaw_cron_snapshot_helper`
+- GET /api/openclaw/runtime-config     — через `openclaw_runtime_config_snapshot_helper`
+
 SKIP (HARD, требуют helper promote):
-- /api/openclaw/cron/status, /api/openclaw/cron/jobs — `_collect_openclaw_cron_*`
 - /api/openclaw/cron/jobs/{create,toggle,remove,run_now} — `_run_openclaw_cli`
 - /api/openclaw/channels/status        — `_collect_openclaw_channels_snapshot`
-- /api/openclaw/runtime-config         — `_load_openclaw_runtime_config`
 - /api/openclaw/cloud, /api/openclaw/cloud/diagnostics — `_openclaw_cloud_diagnostics_impl`
 - /api/openclaw/cloud/runtime-check    — мутирует `self._runtime_lite_cache`
 - /api/openclaw/cloud/switch-tier      — мутирует `self._runtime_lite_cache`
@@ -34,6 +37,7 @@ SKIP (HARD, требуют helper promote):
 from __future__ import annotations
 
 import asyncio
+import inspect
 import sys
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -241,5 +245,67 @@ def build_openclaw_router(ctx: RouterContext) -> APIRouter:
             }
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": "system_error", "detail": str(exc)}
+
+    # ---------- GET /api/openclaw/cron/status (Wave DD) -------------------
+    @router.get("/api/openclaw/cron/status")
+    async def openclaw_cron_status() -> dict:
+        """Truthful snapshot scheduler и recurring jobs из OpenClaw CLI."""
+        helper = ctx.get_dep("openclaw_cron_snapshot_helper")
+        if helper is None:
+            return {"ok": False, "error": "helper_unavailable"}
+        try:
+            result = helper(include_all=True)
+            if inspect.isawaitable(result):
+                snapshot = await asyncio.wait_for(result, timeout=5.0)
+            else:
+                snapshot = result
+        except asyncio.TimeoutError:
+            return {
+                "ok": False,
+                "error": "OpenClaw timeout (5s)",
+                "detail": "gateway not responding",
+            }
+        if not snapshot.get("ok"):
+            return snapshot
+        return snapshot
+
+    # ---------- GET /api/openclaw/cron/jobs (Wave DD) ---------------------
+    @router.get("/api/openclaw/cron/jobs")
+    async def openclaw_cron_jobs(include_all: bool = Query(default=True)) -> dict:
+        """Recurring jobs для owner UI без дублирования cron-движка."""
+        helper = ctx.get_dep("openclaw_cron_snapshot_helper")
+        if helper is None:
+            return {"ok": False, "error": "helper_unavailable"}
+        try:
+            result = helper(include_all=bool(include_all))
+            if inspect.isawaitable(result):
+                snapshot = await asyncio.wait_for(result, timeout=5.0)
+            else:
+                snapshot = result
+        except asyncio.TimeoutError:
+            return {
+                "ok": False,
+                "error": "OpenClaw timeout (5s)",
+                "detail": "gateway not responding",
+            }
+        if not snapshot.get("ok"):
+            return snapshot
+        return {
+            "ok": True,
+            "summary": snapshot.get("summary") or {},
+            "jobs": snapshot.get("jobs") or [],
+        }
+
+    # ---------- GET /api/openclaw/runtime-config (Wave DD) ----------------
+    @router.get("/api/openclaw/runtime-config")
+    async def openclaw_runtime_config() -> dict:
+        """Runtime-конфиг OpenClaw для UI (секрет masked, флаг присутствия)."""
+        helper = ctx.get_dep("openclaw_runtime_config_snapshot_helper")
+        if helper is None:
+            return {"ok": False, "error": "helper_unavailable"}
+        result = helper()
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     return router
