@@ -125,8 +125,12 @@ class TestHandleTimer:
         msg = _make_message("!timer 5m")
 
         # Сбрасываем глобальное состояние
+        # Phase 2 Wave 3 (Session 27): _timer_counter живёт в scheduler_commands
+        from src.handlers.commands import scheduler_commands as sc
+
         hm._active_timers.clear()
         hm._timer_counter = 0
+        sc._timer_counter = 0
 
         with patch("asyncio.create_task") as mock_create_task:
             mock_task = MagicMock()
@@ -151,8 +155,11 @@ class TestHandleTimer:
 
         bot = _make_bot("10m Обед")
         msg = _make_message("!timer 10m Обед")
+        from src.handlers.commands import scheduler_commands as sc
+
         hm._active_timers.clear()
         hm._timer_counter = 0
+        sc._timer_counter = 0
 
         with patch("asyncio.create_task") as mock_create_task:
             mock_create_task.return_value = MagicMock()

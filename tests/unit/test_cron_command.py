@@ -328,7 +328,7 @@ async def test_handle_cron_list_empty(monkeypatch: pytest.MonkeyPatch):
     msg = _make_message("!cron list")
 
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_read_jobs",
+        "src.handlers.commands.scheduler_commands._cron_read_jobs",
         lambda: [],
     )
     await handle_cron(bot, msg)
@@ -344,7 +344,7 @@ async def test_handle_cron_list_shows_jobs(monkeypatch: pytest.MonkeyPatch):
     msg = _make_message("!cron list")
 
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_read_jobs",
+        "src.handlers.commands.scheduler_commands._cron_read_jobs",
         lambda: [_JOB_EVERY, _JOB_CRON_WITH_TZ],
     )
     await handle_cron(bot, msg)
@@ -363,7 +363,7 @@ async def test_handle_cron_list_no_args(monkeypatch: pytest.MonkeyPatch):
     msg = _make_message("!cron")
 
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_read_jobs",
+        "src.handlers.commands.scheduler_commands._cron_read_jobs",
         lambda: [_JOB_EVERY],
     )
     await handle_cron(bot, msg)
@@ -384,7 +384,7 @@ async def test_handle_cron_status_counts(monkeypatch: pytest.MonkeyPatch):
     msg = _make_message("!cron status")
 
     jobs = [_JOB_EVERY, _JOB_CRON_WITH_TZ, _JOB_CRON_NO_TZ, _JOB_EVERY_MIN]
-    monkeypatch.setattr("src.handlers.command_handlers._cron_read_jobs", lambda: jobs)
+    monkeypatch.setattr("src.handlers.commands.scheduler_commands._cron_read_jobs", lambda: jobs)
     await handle_cron(bot, msg)
     rendered = msg.reply.await_args.args[0]
     assert "4" in rendered  # total
@@ -399,7 +399,7 @@ async def test_handle_cron_status_empty(monkeypatch: pytest.MonkeyPatch):
     bot._get_command_args = MagicMock(return_value="status")
     msg = _make_message("!cron status")
 
-    monkeypatch.setattr("src.handlers.command_handlers._cron_read_jobs", lambda: [])
+    monkeypatch.setattr("src.handlers.commands.scheduler_commands._cron_read_jobs", lambda: [])
     await handle_cron(bot, msg)
     rendered = msg.reply.await_args.args[0]
     assert "0" in rendered
@@ -437,7 +437,7 @@ async def test_handle_cron_enable_job_not_found(monkeypatch: pytest.MonkeyPatch)
     bot._get_command_args = MagicMock(return_value="enable Unknown Job")
     msg = _make_message("!cron enable Unknown Job")
 
-    monkeypatch.setattr("src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_EVERY])
+    monkeypatch.setattr("src.handlers.commands.scheduler_commands._cron_read_jobs", lambda: [_JOB_EVERY])
     with pytest.raises(UserInputError):
         await handle_cron(bot, msg)
 
@@ -450,10 +450,10 @@ async def test_handle_cron_enable_by_name_success(monkeypatch: pytest.MonkeyPatc
     msg = _make_message("!cron enable Daily Report")
 
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ]
+        "src.handlers.commands.scheduler_commands._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ]
     )
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_run_openclaw",
+        "src.handlers.commands.scheduler_commands._cron_run_openclaw",
         AsyncMock(return_value=(True, "enabled")),
     )
     await handle_cron(bot, msg)
@@ -469,9 +469,9 @@ async def test_handle_cron_disable_by_id_success(monkeypatch: pytest.MonkeyPatch
     bot._get_command_args = MagicMock(return_value="disable job-every-1")
     msg = _make_message("!cron disable job-every-1")
 
-    monkeypatch.setattr("src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_EVERY])
+    monkeypatch.setattr("src.handlers.commands.scheduler_commands._cron_read_jobs", lambda: [_JOB_EVERY])
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_run_openclaw",
+        "src.handlers.commands.scheduler_commands._cron_run_openclaw",
         AsyncMock(return_value=(True, "disabled")),
     )
     await handle_cron(bot, msg)
@@ -500,7 +500,7 @@ async def test_handle_cron_enable_cli_fails_direct_patch(
     msg = _make_message("!cron enable Daily Report")
 
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_run_openclaw",
+        "src.handlers.commands.scheduler_commands._cron_run_openclaw",
         AsyncMock(return_value=(False, "gateway not responding")),
     )
     await handle_cron(bot, msg)
@@ -535,7 +535,7 @@ async def test_handle_cron_run_job_not_found(monkeypatch: pytest.MonkeyPatch):
     bot._get_command_args = MagicMock(return_value="run Nonexistent")
     msg = _make_message("!cron run Nonexistent")
 
-    monkeypatch.setattr("src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_EVERY])
+    monkeypatch.setattr("src.handlers.commands.scheduler_commands._cron_read_jobs", lambda: [_JOB_EVERY])
     with pytest.raises(UserInputError):
         await handle_cron(bot, msg)
 
@@ -547,9 +547,9 @@ async def test_handle_cron_run_success(monkeypatch: pytest.MonkeyPatch):
     bot._get_command_args = MagicMock(return_value="run Mercadona Restock")
     msg = _make_message("!cron run Mercadona Restock")
 
-    monkeypatch.setattr("src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_EVERY])
+    monkeypatch.setattr("src.handlers.commands.scheduler_commands._cron_read_jobs", lambda: [_JOB_EVERY])
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_run_openclaw",
+        "src.handlers.commands.scheduler_commands._cron_run_openclaw",
         AsyncMock(return_value=(True, "job started")),
     )
     await handle_cron(bot, msg)
@@ -568,10 +568,10 @@ async def test_handle_cron_run_failure(monkeypatch: pytest.MonkeyPatch):
     msg = _make_message("!cron run Daily Report")
 
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ]
+        "src.handlers.commands.scheduler_commands._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ]
     )
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_run_openclaw",
+        "src.handlers.commands.scheduler_commands._cron_run_openclaw",
         AsyncMock(return_value=(False, "gateway not responding")),
     )
     await handle_cron(bot, msg)
@@ -587,10 +587,10 @@ async def test_handle_cron_run_by_id(monkeypatch: pytest.MonkeyPatch):
     msg = _make_message("!cron run job-cron-2")
 
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ]
+        "src.handlers.commands.scheduler_commands._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ]
     )
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_run_openclaw",
+        "src.handlers.commands.scheduler_commands._cron_run_openclaw",
         AsyncMock(return_value=(True, "")),
     )
     await handle_cron(bot, msg)
@@ -631,7 +631,7 @@ async def test_handle_cron_status_alias_stat(monkeypatch: pytest.MonkeyPatch):
     bot._get_command_args = MagicMock(return_value="stat")
     msg = _make_message("!cron stat")
 
-    monkeypatch.setattr("src.handlers.command_handlers._cron_read_jobs", lambda: [])
+    monkeypatch.setattr("src.handlers.commands.scheduler_commands._cron_read_jobs", lambda: [])
     await handle_cron(bot, msg)
     rendered = msg.reply.await_args.args[0]
     assert "Cron" in rendered or "статус" in rendered.lower()
@@ -645,10 +645,10 @@ async def test_handle_cron_enable_ru_alias(monkeypatch: pytest.MonkeyPatch):
     msg = _make_message("!cron вкл Daily Report")
 
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ]
+        "src.handlers.commands.scheduler_commands._cron_read_jobs", lambda: [_JOB_CRON_WITH_TZ]
     )
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_run_openclaw",
+        "src.handlers.commands.scheduler_commands._cron_run_openclaw",
         AsyncMock(return_value=(True, "enabled")),
     )
     await handle_cron(bot, msg)
@@ -663,9 +663,9 @@ async def test_handle_cron_disable_ru_alias(monkeypatch: pytest.MonkeyPatch):
     bot._get_command_args = MagicMock(return_value="выкл Mercadona Restock")
     msg = _make_message("!cron выкл Mercadona Restock")
 
-    monkeypatch.setattr("src.handlers.command_handlers._cron_read_jobs", lambda: [_JOB_EVERY])
+    monkeypatch.setattr("src.handlers.commands.scheduler_commands._cron_read_jobs", lambda: [_JOB_EVERY])
     monkeypatch.setattr(
-        "src.handlers.command_handlers._cron_run_openclaw",
+        "src.handlers.commands.scheduler_commands._cron_run_openclaw",
         AsyncMock(return_value=(True, "disabled")),
     )
     await handle_cron(bot, msg)

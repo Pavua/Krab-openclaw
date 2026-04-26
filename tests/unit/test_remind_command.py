@@ -53,7 +53,7 @@ async def test_remind_event_when_creates_event_reminder() -> None:
     mock_rq.add_event_reminder = MagicMock(return_value="evt-abc")
 
     with (
-        patch("src.handlers.command_handlers.config", mock_cfg),
+        patch("src.handlers.commands.scheduler_commands.config", mock_cfg),
         patch("src.core.reminders_queue.reminders_queue", mock_rq),
     ):
         await handle_remind(bot, msg)
@@ -85,7 +85,7 @@ async def test_remind_event_russian_когда_сделай() -> None:
     mock_rq.add_event_reminder = MagicMock(return_value="evt-ru")
 
     with (
-        patch("src.handlers.command_handlers.config", mock_cfg),
+        patch("src.handlers.commands.scheduler_commands.config", mock_cfg),
         patch("src.core.reminders_queue.reminders_queue", mock_rq),
     ):
         await handle_remind(bot, msg)
@@ -120,8 +120,8 @@ async def test_remind_cancel_falls_back_to_reminders_queue() -> None:
     mock_rq.cancel = MagicMock(return_value=True)
 
     with (
-        patch("src.handlers.command_handlers.config", mock_cfg),
-        patch("src.handlers.command_handlers.krab_scheduler", mock_scheduler),
+        patch("src.handlers.commands.scheduler_commands.config", mock_cfg),
+        patch("src.handlers.commands.scheduler_commands.krab_scheduler", mock_scheduler),
         patch("src.core.reminders_queue.reminders_queue", mock_rq),
     ):
         await handle_remind(bot, msg)
@@ -150,8 +150,8 @@ async def test_remind_cancel_not_found_anywhere() -> None:
     mock_rq.cancel = MagicMock(return_value=False)
 
     with (
-        patch("src.handlers.command_handlers.config", mock_cfg),
-        patch("src.handlers.command_handlers.krab_scheduler", mock_scheduler),
+        patch("src.handlers.commands.scheduler_commands.config", mock_cfg),
+        patch("src.handlers.commands.scheduler_commands.krab_scheduler", mock_scheduler),
         patch("src.core.reminders_queue.reminders_queue", mock_rq),
     ):
         await handle_remind(bot, msg)
@@ -183,8 +183,8 @@ async def test_remind_list_empty_both_scheduler_and_queue() -> None:
     mock_rq.list_pending = MagicMock(return_value=[])
 
     with (
-        patch("src.handlers.command_handlers.config", mock_cfg),
-        patch("src.handlers.command_handlers.krab_scheduler", mock_scheduler),
+        patch("src.handlers.commands.scheduler_commands.config", mock_cfg),
+        patch("src.handlers.commands.scheduler_commands.krab_scheduler", mock_scheduler),
         patch("src.core.reminders_queue.reminders_queue", mock_rq),
     ):
         await handle_remind(bot, msg)
@@ -226,8 +226,8 @@ async def test_remind_list_includes_event_entries() -> None:
     mock_rq.list_pending = MagicMock(return_value=[event_reminder])
 
     with (
-        patch("src.handlers.command_handlers.config", mock_cfg),
-        patch("src.handlers.command_handlers.krab_scheduler", mock_scheduler),
+        patch("src.handlers.commands.scheduler_commands.config", mock_cfg),
+        patch("src.handlers.commands.scheduler_commands.krab_scheduler", mock_scheduler),
         patch("src.core.reminders_queue.reminders_queue", mock_rq),
     ):
         await handle_remind(bot, msg)
