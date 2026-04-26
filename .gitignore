@@ -14,6 +14,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Coverage / pytest artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
 # Logs
 *.log
 logs/
