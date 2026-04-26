@@ -378,3 +378,99 @@ def test_ops_history_passes_limit() -> None:
 def test_ops_history_unsupported() -> None:
     resp = _client_with_router(SimpleNamespace()).get("/api/ops/history")
     assert resp.json() == {"ok": False, "error": "ops_history_not_supported"}
+
+
+# ===================================================================
+# Wave AA: write-protected POST/DELETE endpoints
+# ===================================================================
+
+
+# ---------------- POST /api/ops/maintenance/prune ----------------
+
+
+def test_ops_prune_supported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    fake_router = SimpleNamespace(
+        prune_ops_history=MagicMock(return_value={"deleted": 5})
+    )
+    resp = _client_with_router(fake_router).post(
+        "/api/ops/maintenance/prune", json={"max_age_days": 7, "keep_last": 50}
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "result": {"deleted": 5}}
+    fake_router.prune_ops_history.assert_called_once_with(max_age_days=7, keep_last=50)
+
+
+def test_ops_prune_unsupported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    resp = _client_with_router(SimpleNamespace()).post(
+        "/api/ops/maintenance/prune", json={}
+    )
+    assert resp.json() == {"ok": False, "error": "ops_prune_not_supported"}
+
+
+def test_ops_prune_invalid_auth_returns_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    fake_router = SimpleNamespace(prune_ops_history=MagicMock(return_value={}))
+    resp = _client_with_router(fake_router).post(
+        "/api/ops/maintenance/prune", json={}
+    )
+    assert resp.status_code == 403
+
+
+# ---------------- POST /api/ops/ack/{code} ----------------
+
+
+def test_ops_ack_supported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    fake_router = SimpleNamespace(
+        acknowledge_ops_alert=MagicMock(return_value={"acked": True})
+    )
+    resp = _client_with_router(fake_router).post(
+        "/api/ops/ack/ALERT_X", json={"actor": "ops_admin", "note": "rolling"}
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "result": {"acked": True}}
+    fake_router.acknowledge_ops_alert.assert_called_once_with(
+        code="ALERT_X", actor="ops_admin", note="rolling"
+    )
+
+
+def test_ops_ack_unsupported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    resp = _client_with_router(SimpleNamespace()).post("/api/ops/ack/ALERT_X", json={})
+    assert resp.json() == {"ok": False, "error": "ops_ack_not_supported"}
+
+
+def test_ops_ack_invalid_auth_returns_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    fake_router = SimpleNamespace(acknowledge_ops_alert=MagicMock(return_value={}))
+    resp = _client_with_router(fake_router).post("/api/ops/ack/ALERT_X", json={})
+    assert resp.status_code == 403
+
+
+# ---------------- DELETE /api/ops/ack/{code} ----------------
+
+
+def test_ops_unack_supported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    fake_router = SimpleNamespace(
+        clear_ops_alert_ack=MagicMock(return_value={"cleared": True})
+    )
+    resp = _client_with_router(fake_router).delete("/api/ops/ack/ALERT_X")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "result": {"cleared": True}}
+    fake_router.clear_ops_alert_ack.assert_called_once_with(code="ALERT_X")
+
+
+def test_ops_unack_unsupported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    resp = _client_with_router(SimpleNamespace()).delete("/api/ops/ack/ALERT_X")
+    assert resp.json() == {"ok": False, "error": "ops_unack_not_supported"}
+
+
+def test_ops_unack_invalid_auth_returns_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    fake_router = SimpleNamespace(clear_ops_alert_ack=MagicMock(return_value={}))
+    resp = _client_with_router(fake_router).delete("/api/ops/ack/ALERT_X")
+    assert resp.status_code == 403

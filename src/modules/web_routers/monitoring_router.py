@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Monitoring router — Phase 2 Wave E + Wave T extraction (Session 25).
+Monitoring router — Phase 2 Wave E + Wave T + Wave AA extraction (Session 25).
 
 Wave E: 5 stateless GET endpoints (sla, ops/metrics, ops/timeline +
 alias /api/timeline, archive/growth, reactions/incoming) использующих
@@ -11,20 +11,29 @@ Wave T: factory-pattern conversion + 7 router-backed ops GET endpoints
 через ``ctx.deps["router"]``. Эти endpoints возвращают данные модельного
 роутера (ModelRouter) без зависимости от self.
 
+Wave AA: добавлены write-protected POST/DELETE endpoints для управления
+ops alerts/history через ``ctx.assert_write_access``:
+- POST   /api/ops/maintenance/prune — prune ops history (retention)
+- POST   /api/ops/ack/{code}        — acknowledge alert
+- DELETE /api/ops/ack/{code}        — снять подтверждение alert
+
 Endpoints:
-- GET /api/sla                     — SLA метрики (latency p50/p95, success rate)
-- GET /api/ops/metrics             — flat metrics для V4 ops dashboard sparklines
-- GET /api/ops/timeline            — recent event timeline (с alias /api/timeline)
-- GET /api/timeline                — alias для /api/ops/timeline
-- GET /api/archive/growth          — archive.db рост (snapshot + summary)
-- GET /api/reactions/incoming      — входящие реакции (по сообщению или recent)
-- GET /api/ops/usage               — Wave T: aggregated usage summary
-- GET /api/ops/cost-report         — Wave T: estimated cost report
-- GET /api/ops/runway              — Wave T: credit runway plan
-- GET /api/ops/executive-summary   — Wave T: ops executive summary
-- GET /api/ops/report              — Wave T: unified ops report
-- GET /api/ops/alerts              — Wave T: ops alerts
-- GET /api/ops/history             — Wave T: ops history snapshots
+- GET    /api/sla                     — SLA метрики (latency p50/p95, success rate)
+- GET    /api/ops/metrics             — flat metrics для V4 ops dashboard sparklines
+- GET    /api/ops/timeline            — recent event timeline (с alias /api/timeline)
+- GET    /api/timeline                — alias для /api/ops/timeline
+- GET    /api/archive/growth          — archive.db рост (snapshot + summary)
+- GET    /api/reactions/incoming      — входящие реакции (по сообщению или recent)
+- GET    /api/ops/usage               — Wave T: aggregated usage summary
+- GET    /api/ops/cost-report         — Wave T: estimated cost report
+- GET    /api/ops/runway              — Wave T: credit runway plan
+- GET    /api/ops/executive-summary   — Wave T: ops executive summary
+- GET    /api/ops/report              — Wave T: unified ops report
+- GET    /api/ops/alerts              — Wave T: ops alerts
+- GET    /api/ops/history             — Wave T: ops history snapshots
+- POST   /api/ops/maintenance/prune   — Wave AA: prune ops history
+- POST   /api/ops/ack/{code}          — Wave AA: acknowledge alert
+- DELETE /api/ops/ack/{code}          — Wave AA: clear alert ack
 
 Контракт ответов сохранён 1:1 с inline definitions из web_app.py.
 """
@@ -33,7 +42,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Body, Header, HTTPException, Query
 
 from ._context import RouterContext
 
@@ -255,5 +264,65 @@ def build_monitoring_router(ctx: RouterContext) -> APIRouter:
         if hasattr(model_router, "get_ops_history"):
             return {"ok": True, "history": model_router.get_ops_history(limit=limit)}
         return {"ok": False, "error": "ops_history_not_supported"}
+
+    # ---------------------------------------------------------------------
+    # Wave AA: write-protected POST/DELETE endpoints
+    # ---------------------------------------------------------------------
+
+    @router.post("/api/ops/maintenance/prune")
+    async def ops_prune(
+        payload: dict = Body(default_factory=dict),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Очищает ops history по retention-параметрам."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        model_router = ctx.deps["router"]
+        if not hasattr(model_router, "prune_ops_history"):
+            return {"ok": False, "error": "ops_prune_not_supported"}
+        max_age_days = int(payload.get("max_age_days", 30))
+        keep_last = int(payload.get("keep_last", 100))
+        try:
+            result = model_router.prune_ops_history(max_age_days=max_age_days, keep_last=keep_last)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "result": result}
+
+    @router.post("/api/ops/ack/{code}")
+    async def ops_ack(
+        code: str,
+        payload: dict = Body(default_factory=dict),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Подтверждает alert код оператором."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        model_router = ctx.deps["router"]
+        if not hasattr(model_router, "acknowledge_ops_alert"):
+            return {"ok": False, "error": "ops_ack_not_supported"}
+        actor = str(payload.get("actor", "web_api")).strip() or "web_api"
+        note = str(payload.get("note", "")).strip()
+        try:
+            result = model_router.acknowledge_ops_alert(code=code, actor=actor, note=note)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "result": result}
+
+    @router.delete("/api/ops/ack/{code}")
+    async def ops_unack(
+        code: str,
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Снимает подтверждение alert кода."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        model_router = ctx.deps["router"]
+        if not hasattr(model_router, "clear_ops_alert_ack"):
+            return {"ok": False, "error": "ops_unack_not_supported"}
+        try:
+            result = model_router.clear_ops_alert_ack(code=code)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "result": result}
 
     return router

@@ -53,7 +53,6 @@ from src.core.capability_registry import (  # noqa: E402
     build_policy_matrix,
     build_system_control_snapshot,
 )
-from src.core.chat_window_manager import chat_window_manager  # noqa: E402
 from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
 from src.core.inbox_service import inbox_service  # noqa: E402
 from src.core.lm_studio_auth import build_lm_studio_auth_headers  # noqa: E402
@@ -11016,47 +11015,9 @@ class WebApp:
                 "cloud_runtime": cloud_runtime,
             }
 
-        @self.app.post("/api/runtime/chat-session/clear")
-        async def runtime_chat_session_clear(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Очищает runtime chat-session по chat_id через owner-only web endpoint.
-
-            Зачем это нужно:
-            - `!clear` в Telegram полезен, но требует ручного сообщения из owner-чата;
-            - для recover/handoff/ops нам нужен тот же эффект из owner panel/CLI без похода в Telegram;
-            - endpoint чистит и in-memory историю, и persisted `history_cache.db` через общий
-              `openclaw_client.clear_session`, не дублируя логику в web-слое.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            data = payload or {}
-            chat_id = str(data.get("chat_id") or "").strip()
-            if not chat_id:
-                raise HTTPException(status_code=400, detail="chat_id_required")
-
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw or not hasattr(openclaw, "clear_session"):
-                raise HTTPException(status_code=503, detail="chat_session_clear_not_supported")
-
-            note = str(data.get("note") or "").strip()
-            try:
-                openclaw.clear_session(chat_id)
-            except Exception as exc:  # noqa: BLE001
-                raise HTTPException(
-                    status_code=500, detail=f"chat_session_clear_failed: {exc}"
-                ) from exc
-
-            runtime_after = await self._collect_runtime_lite_snapshot()
-            return {
-                "ok": True,
-                "action": "clear_chat_session",
-                "chat_id": chat_id,
-                "note": note,
-                "runtime_after": runtime_after,
-            }
+        # /api/runtime/chat-session/clear extracted в
+        # src/modules/web_routers/system_router.py (Phase 2 Wave AA, Session 25).
+        # См. include_router system_router выше.
 
         @self.app.get("/api/openclaw/channels/status")
         async def openclaw_channels_status():
@@ -12519,61 +12480,9 @@ class WebApp:
         # /api/ops/alerts, /api/ops/history:
         # extracted в src/modules/web_routers/monitoring_router.py (Wave T).
 
-        @self.app.post("/api/ops/maintenance/prune")
-        async def ops_prune(
-            payload: dict = Body(default={}),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Очищает ops history по retention-параметрам."""
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps["router"]
-            if not hasattr(router, "prune_ops_history"):
-                return {"ok": False, "error": "ops_prune_not_supported"}
-            max_age_days = int(payload.get("max_age_days", 30))
-            keep_last = int(payload.get("keep_last", 100))
-            try:
-                result = router.prune_ops_history(max_age_days=max_age_days, keep_last=keep_last)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return {"ok": True, "result": result}
-
-        @self.app.post("/api/ops/ack/{code}")
-        async def ops_ack(
-            code: str,
-            payload: dict = Body(default={}),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Подтверждает alert код оператором."""
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps["router"]
-            if not hasattr(router, "acknowledge_ops_alert"):
-                return {"ok": False, "error": "ops_ack_not_supported"}
-            actor = str(payload.get("actor", "web_api")).strip() or "web_api"
-            note = str(payload.get("note", "")).strip()
-            try:
-                result = router.acknowledge_ops_alert(code=code, actor=actor, note=note)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return {"ok": True, "result": result}
-
-        @self.app.delete("/api/ops/ack/{code}")
-        async def ops_unack(
-            code: str,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Снимает подтверждение alert кода."""
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps["router"]
-            if not hasattr(router, "clear_ops_alert_ack"):
-                return {"ok": False, "error": "ops_unack_not_supported"}
-            try:
-                result = router.clear_ops_alert_ack(code=code)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return {"ok": True, "result": result}
+        # /api/ops/maintenance/prune, /api/ops/ack/{code} (POST + DELETE)
+        # extracted в src/modules/web_routers/monitoring_router.py
+        # (Phase 2 Wave AA, Session 25). См. include_router monitoring_router выше.
 
         @self.app.get("/api/ops/openclaw-procs")
         async def ops_openclaw_procs():
@@ -13879,40 +13788,8 @@ class WebApp:
 
         # /api/chat_windows/config, /api/chat_windows/list extracted в
         # src/modules/web_routers/misc_router.py (Phase 2 Wave Z, Session 25).
-        # См. include_router рядом с health_router.
-        # POST endpoints (/api/chat_windows/evict_idle, /api/chat_windows/clear)
-        # сохранены inline — требуют write access (отложены на след. wave).
-
-        @self.app.post("/api/chat_windows/evict_idle")
-        async def chat_windows_evict_idle(
-            max_age_sec: int = Query(default=3600),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Выгнать окна, неактивные дольше max_age_sec."""
-            self._assert_write_access(x_krab_web_key, token)
-            from src.core.chat_window_manager import IDLE_EVICTION_SEC
-
-            timeout = max_age_sec if max_age_sec > 0 else IDLE_EVICTION_SEC
-            count = chat_window_manager.evict_idle(timeout_sec=timeout)
-            return {
-                "ok": True,
-                "evicted": count,
-                "timeout_sec": timeout,
-            }
-
-        @self.app.post("/api/chat_windows/clear")
-        async def chat_windows_clear(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Очистить все окна (owner-only)."""
-            self._assert_write_access(x_krab_web_key, token)
-            count = chat_window_manager.clear_all()
-            return {
-                "ok": True,
-                "cleared": count,
-            }
+        # /api/chat_windows/evict_idle, /api/chat_windows/clear extracted в
+        # misc_router.py (Phase 2 Wave AA, Session 25). См. include_router выше.
 
     async def start(self):
         """Запуск сервера в фоне."""

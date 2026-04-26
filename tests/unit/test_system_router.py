@@ -303,3 +303,56 @@ def test_system_diagnostics_returns_error_when_no_router() -> None:
     body = resp.json()
     assert body["ok"] is False
     assert body["error"] == "router_not_found"
+
+
+# ---------------------------------------------------------------------------
+# Wave AA: POST /api/runtime/chat-session/clear
+# ---------------------------------------------------------------------------
+
+
+class _FakeOpenclaw:
+    def __init__(self) -> None:
+        self.cleared: list[str] = []
+
+    def clear_session(self, chat_id: str) -> None:
+        self.cleared.append(chat_id)
+
+
+def test_runtime_chat_session_clear_ok(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    fake_oc = _FakeOpenclaw()
+    client = _make_client(deps_overrides={"openclaw_client": fake_oc})
+    resp = client.post(
+        "/api/runtime/chat-session/clear", json={"chat_id": "777", "note": "ops"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["action"] == "clear_chat_session"
+    assert body["chat_id"] == "777"
+    assert body["note"] == "ops"
+    assert "runtime_after" in body
+    assert fake_oc.cleared == ["777"]
+
+
+def test_runtime_chat_session_clear_missing_chat_id(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    client = _make_client(deps_overrides={"openclaw_client": _FakeOpenclaw()})
+    resp = client.post("/api/runtime/chat-session/clear", json={})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "chat_id_required"
+
+
+def test_runtime_chat_session_clear_unsupported(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    client = _make_client(deps_overrides={"openclaw_client": None})
+    resp = client.post("/api/runtime/chat-session/clear", json={"chat_id": "1"})
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "chat_session_clear_not_supported"
+
+
+def test_runtime_chat_session_clear_invalid_auth(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+    client = _make_client(deps_overrides={"openclaw_client": _FakeOpenclaw()})
+    resp = client.post("/api/runtime/chat-session/clear", json={"chat_id": "1"})
+    assert resp.status_code == 403

@@ -1,23 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-Misc router — Phase 2 Wave Z extraction (Session 25).
+Misc router — Phase 2 Wave Z + Wave AA extraction (Session 25).
 
-Объединяет miscellaneous read-only GET endpoints, которые не вписываются
-доменно в уже существующие routers, но self-contained через RouterContext
-(используют только ``ctx.deps`` + module-level singletons).
+Объединяет miscellaneous endpoints, которые не вписываются доменно в уже
+существующие routers, но self-contained через RouterContext (используют
+только ``ctx.deps`` + module-level singletons).
 
 Endpoints:
-- GET /api/transcriber/status      — readiness транскрибатора (perceptor + voice stack)
-- GET /api/reactions/stats         — сводка реакций reaction_engine (опц. chat_id)
-- GET /api/mood/{chat_id}          — mood-профиль конкретного чата
-- GET /api/inbox/events            — SSE stream обновлений inbox
-- GET /api/chat_windows/config     — env-конфигурация ChatWindowManager
-- GET /api/chat_windows/list       — активные окна с метаданными
+- GET  /api/transcriber/status      — readiness транскрибатора (perceptor + voice stack)
+- GET  /api/reactions/stats         — сводка реакций reaction_engine (опц. chat_id)
+- GET  /api/mood/{chat_id}          — mood-профиль конкретного чата
+- GET  /api/inbox/events            — SSE stream обновлений inbox
+- GET  /api/chat_windows/config     — env-конфигурация ChatWindowManager
+- GET  /api/chat_windows/list       — активные окна с метаданными
+- POST /api/chat_windows/evict_idle — Wave AA: выгнать окна старше max_age_sec
+- POST /api/chat_windows/clear      — Wave AA: очистить все окна (owner-only)
 
-POST endpoints (`/api/chat_windows/clear`, `/api/chat_windows/evict_idle`,
-`/api/diagnostics/smoke`) сохранены inline — Wave Z ограничивается
-read-only extraction. /api/session10/summary тоже inline (depends on
-multiple WebApp helpers, deferred к отдельной wave).
+Wave AA добавляет POST endpoints через ``ctx.assert_write_access``.
+``/api/diagnostics/smoke`` остаётся inline — endpoint без write_access guard
+и зависит от WebApp helpers (deferred). /api/session10/summary тоже inline.
 
 Контракт ответов сохранён 1:1 с inline definitions из web_app.py.
 """
@@ -31,7 +32,7 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Header, Query
 from fastapi.responses import StreamingResponse
 
 from ._context import RouterContext
@@ -251,6 +252,43 @@ def build_misc_router(ctx: RouterContext) -> APIRouter:
             "ok": True,
             "total": len(windows),
             "windows": windows,
+        }
+
+    # ── /api/chat_windows/evict_idle (Wave AA) ──────────────────────────────
+
+    @router.post("/api/chat_windows/evict_idle")
+    async def chat_windows_evict_idle(
+        max_age_sec: int = Query(default=3600),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Выгнать окна, неактивные дольше max_age_sec."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        from src.core.chat_window_manager import IDLE_EVICTION_SEC, chat_window_manager
+
+        timeout = max_age_sec if max_age_sec > 0 else IDLE_EVICTION_SEC
+        count = chat_window_manager.evict_idle(timeout_sec=timeout)
+        return {
+            "ok": True,
+            "evicted": count,
+            "timeout_sec": timeout,
+        }
+
+    # ── /api/chat_windows/clear (Wave AA) ───────────────────────────────────
+
+    @router.post("/api/chat_windows/clear")
+    async def chat_windows_clear(
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Очистить все окна (owner-only)."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        from src.core.chat_window_manager import chat_window_manager
+
+        count = chat_window_manager.clear_all()
+        return {
+            "ok": True,
+            "cleared": count,
         }
 
     return router

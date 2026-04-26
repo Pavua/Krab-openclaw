@@ -1,20 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-System router — Phase 2 Wave Y extraction (Session 25).
+System router — Phase 2 Wave Y + Wave AA extraction (Session 25).
 
-Объединяет runtime/stats/system read-only endpoints, агрегирующих состояние
+Объединяет runtime/stats/system endpoints, агрегирующих состояние
 Краба для Dashboard V4 и diagnostics:
 
-- GET /api/runtime/operator-profile — machine-readable профиль учётки/runtime
-- GET /api/runtime/summary          — единый summary (health/route/costs/swarm/...)
-- GET /api/dashboard/summary        — Dashboard V4 агрегатор (15 источников в один)
-- GET /api/stats                    — router/black_box/rag stats
-- GET /api/stats/caches             — chat_ban/capability/voice cache counts
-- GET /api/system/diagnostics       — RAM/CPU/budget/local LLM diagnostics
+- GET  /api/runtime/operator-profile   — machine-readable профиль учётки/runtime
+- GET  /api/runtime/summary            — единый summary (health/route/costs/swarm/...)
+- GET  /api/dashboard/summary          — Dashboard V4 агрегатор (15 источников в один)
+- GET  /api/stats                      — router/black_box/rag stats
+- GET  /api/stats/caches               — chat_ban/capability/voice cache counts
+- GET  /api/system/diagnostics         — RAM/CPU/budget/local LLM diagnostics
+- POST /api/runtime/chat-session/clear — Wave AA: очистка runtime chat-session
 
-POST endpoints (`/api/runtime/recover`, `/api/runtime/chat-session/clear`,
-`/api/runtime/repair-active-shared-permissions`) сохранены inline — Wave Y
-ограничивается read-only extraction.
+POST endpoints (`/api/runtime/recover`,
+`/api/runtime/repair-active-shared-permissions`) сохранены inline — они
+зависят от WebApp helpers (``_run_project_python_script``, etc), отложены
+на отдельную wave.
 
 Helper-методы WebApp (``_runtime_operator_profile``,
 ``_build_stats_router_payload``, ``_resolve_local_runtime_truth``)
@@ -27,7 +29,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Body, Header, HTTPException, Query
 
 from ._context import RouterContext
 
@@ -222,6 +224,50 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
                 if watchdog_dep
                 else {}
             },
+        }
+
+    # ── /api/runtime/chat-session/clear (Wave AA) ───────────────────────────
+
+    @router.post("/api/runtime/chat-session/clear")
+    async def runtime_chat_session_clear(
+        payload: dict = Body(default_factory=dict),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Очищает runtime chat-session по chat_id через owner-only web endpoint.
+
+        Зачем нужно:
+        - `!clear` в Telegram требует ручного сообщения из owner-чата;
+        - для recover/handoff/ops нужен тот же эффект из owner panel/CLI без
+          похода в Telegram;
+        - endpoint чистит и in-memory историю, и persisted `history_cache.db`
+          через общий `openclaw_client.clear_session`, не дублируя логику.
+        """
+        ctx.assert_write_access(x_krab_web_key, token)
+        data = payload or {}
+        chat_id = str(data.get("chat_id") or "").strip()
+        if not chat_id:
+            raise HTTPException(status_code=400, detail="chat_id_required")
+
+        openclaw = ctx.get_dep("openclaw_client")
+        if not openclaw or not hasattr(openclaw, "clear_session"):
+            raise HTTPException(status_code=503, detail="chat_session_clear_not_supported")
+
+        note = str(data.get("note") or "").strip()
+        try:
+            openclaw.clear_session(chat_id)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=500, detail=f"chat_session_clear_failed: {exc}"
+            ) from exc
+
+        runtime_after = await ctx.collect_runtime_lite()
+        return {
+            "ok": True,
+            "action": "clear_chat_session",
+            "chat_id": chat_id,
+            "note": note,
+            "runtime_after": runtime_after,
         }
 
     return router

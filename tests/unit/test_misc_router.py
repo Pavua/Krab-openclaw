@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-Тесты ``src.modules.web_routers.misc_router`` — Phase 2 Wave Z (Session 25).
+Тесты ``src.modules.web_routers.misc_router`` — Phase 2 Wave Z + Wave AA
+(Session 25).
 
 Покрывают factory-pattern: ``build_misc_router(ctx)`` работает stand-alone
 с mocked RouterContext. Контракт endpoint'ов сохранён 1:1 с inline
-definitions из web_app.py.
+definitions из web_app.py. Wave AA добавляет POST endpoints
+``/api/chat_windows/{evict_idle,clear}`` через ``ctx.assert_write_access``.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -187,3 +190,65 @@ def test_inbox_events_route_registered() -> None:
     router = build_misc_router(ctx)
     paths = {route.path for route in router.routes}
     assert "/api/inbox/events" in paths
+
+
+# ── Wave AA: /api/chat_windows/evict_idle (POST) ────────────────────────────
+
+
+def test_chat_windows_evict_idle_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    fake_mgr = MagicMock()
+    fake_mgr.evict_idle.return_value = 3
+    with patch("src.core.chat_window_manager.chat_window_manager", fake_mgr):
+        resp = _client(_build_ctx()).post("/api/chat_windows/evict_idle")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["evicted"] == 3
+    assert data["timeout_sec"] == 3600
+    fake_mgr.evict_idle.assert_called_once_with(timeout_sec=3600)
+
+
+def test_chat_windows_evict_idle_custom_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    fake_mgr = MagicMock()
+    fake_mgr.evict_idle.return_value = 1
+    with patch("src.core.chat_window_manager.chat_window_manager", fake_mgr):
+        resp = _client(_build_ctx()).post(
+            "/api/chat_windows/evict_idle?max_age_sec=120"
+        )
+    assert resp.status_code == 200
+    assert resp.json()["timeout_sec"] == 120
+    fake_mgr.evict_idle.assert_called_once_with(timeout_sec=120)
+
+
+def test_chat_windows_evict_idle_invalid_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+    fake_mgr = MagicMock()
+    with patch("src.core.chat_window_manager.chat_window_manager", fake_mgr):
+        resp = _client(_build_ctx()).post("/api/chat_windows/evict_idle")
+    assert resp.status_code == 403
+
+
+# ── Wave AA: /api/chat_windows/clear (POST) ─────────────────────────────────
+
+
+def test_chat_windows_clear_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    fake_mgr = MagicMock()
+    fake_mgr.clear_all.return_value = 7
+    with patch("src.core.chat_window_manager.chat_window_manager", fake_mgr):
+        resp = _client(_build_ctx()).post("/api/chat_windows/clear")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["cleared"] == 7
+    fake_mgr.clear_all.assert_called_once()
+
+
+def test_chat_windows_clear_invalid_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+    fake_mgr = MagicMock()
+    with patch("src.core.chat_window_manager.chat_window_manager", fake_mgr):
+        resp = _client(_build_ctx()).post("/api/chat_windows/clear")
+    assert resp.status_code == 403
