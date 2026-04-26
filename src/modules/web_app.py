@@ -662,6 +662,40 @@ class WebApp:
             lambda **kwargs: _sys.modules[__name__]._run_openclaw_model_autoswitch(**kwargs),
         )
 
+        # Phase 2 Wave GG (Session 25): inject helpers для thinking/depth + model
+        # provider-action / local load-default+unload в model_router.
+        # Late-bound через lambda — позволяет тестам монкей-патчить
+        # WebApp methods после init (existing тесты уже это делают через
+        # patch.object(WebApp, "_build_openclaw_runtime_controls", ...)).
+        deps_dict.setdefault(
+            "openclaw_runtime_controls_build_helper",
+            lambda *args, **kwargs: self._build_openclaw_runtime_controls(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_runtime_controls_apply_helper",
+            lambda *args, **kwargs: self._apply_openclaw_runtime_controls(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "thinking_normalize_helper",
+            lambda *args, **kwargs: self._normalize_thinking_mode(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "lmstudio_snapshot_invalidate_helper",
+            lambda: self._invalidate_lmstudio_snapshot_cache(),
+        )
+        deps_dict.setdefault(
+            "provider_ui_metadata_helper",
+            lambda provider_name: self._provider_ui_metadata(provider_name),
+        )
+        deps_dict.setdefault(
+            "provider_repair_helper_path_helper",
+            lambda provider_name: self._provider_repair_helper_path(provider_name),
+        )
+        deps_dict.setdefault(
+            "launch_local_app_helper",
+            lambda target_path: self._launch_local_app(target_path),
+        )
+
         return RouterContext(
             deps=deps_dict,
             project_root=self._project_root(),
@@ -11289,57 +11323,10 @@ class WebApp:
         # extracted в src/modules/web_routers/model_router.py
         # (Phase 2 Wave FF, Session 25).
 
-        @self.app.post("/api/model/local/load-default")
-        async def model_local_load_default(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Загружает предпочтительную локальную модель (write endpoint)."""
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps["router"]
-            preferred = str(getattr(router, "local_preferred_model", "") or "").strip()
-            if not preferred:
-                # Страховка для compat-роутеров/старых инстансов, где поле могло
-                # не быть проброшено, хотя canonical preferred model уже есть в config.
-                fallback_preferred = str(getattr(config, "LOCAL_PREFERRED_MODEL", "") or "").strip()
-                if fallback_preferred.lower() not in {"", "auto", "smallest"}:
-                    preferred = fallback_preferred
-            if not preferred:
-                return {"ok": False, "error": "no_preferred_model_configured"}
-
-            # Используем существующий механизм smart_load
-            success = await router._smart_load(preferred, reason="web_forced")
-            self._invalidate_lmstudio_snapshot_cache()
-            return {"ok": success, "model": preferred}
-
-        @self.app.post("/api/model/local/unload")
-        async def model_local_unload(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Выгружает все локальные модели для освобождения памяти (write endpoint)."""
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps["router"]
-
-            freed_gb = 0.0
-            if hasattr(router, "_evict_idle_models"):
-                # Вызываем с огромным нужным объемом или просто через unload_local_model
-                # Но проще через unload_local_model если мы знаем active_model
-                active = getattr(router, "active_local_model", None)
-                if active:
-                    success = await router.unload_local_model(active)
-                    if success:
-                        router.active_local_model = None
-                        self._invalidate_lmstudio_snapshot_cache()
-                        return {"ok": True, "unloaded": active}
-
-                # Если активной нет, но есть загруженные (по данным _evict_idle_models)
-                freed_gb = await router._evict_idle_models(
-                    needed_gb=100.0
-                )  # Попытаемся выгрузить всё
-                self._invalidate_lmstudio_snapshot_cache()
-
-            return {"ok": True, "freed_gb_estimate": round(freed_gb, 1)}
+        # /api/model/local/load-default, /api/model/local/unload:
+        # extracted в src/modules/web_routers/model_router.py
+        # (Phase 2 Wave GG, Session 25). Helpers инжектируются через
+        # lmstudio_snapshot_invalidate_helper в _make_router_context.
 
         # /api/model/explain: extracted в src/modules/web_routers/model_router.py
         # (Phase 2 Wave FF, Session 25).
@@ -11650,127 +11637,21 @@ class WebApp:
                     return {"ok": True, "catalog": cached_catalog, "cached": True}
             return {"ok": True, "catalog": await _build_model_catalog(router)}
 
-        @self.app.post("/api/model/provider-action")
-        async def model_provider_action(
-            payload: dict = Body(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Запускает provider-specific repair/migration action из owner-панели."""
-            self._assert_write_access(x_krab_web_key, token)
-
-            provider = str(payload.get("provider", "") or "").strip().lower()
-            action = str(payload.get("action", "") or "").strip().lower()
-            if not provider:
-                raise HTTPException(status_code=400, detail="provider_action_provider_required")
-            if not action:
-                raise HTTPException(status_code=400, detail="provider_action_action_required")
-
-            provider_ui = self._provider_ui_metadata(provider)
-            expected_action = str(provider_ui.get("repair_action", "") or "").strip().lower()
-            if action not in {"repair_oauth", "migrate_to_gemini_cli"}:
-                raise HTTPException(status_code=400, detail=f"provider_action_unsupported:{action}")
-            if not expected_action or action != expected_action:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"provider_action_not_available:{provider}:{action}",
-                )
-
-            helper_provider = "google-gemini-cli" if action == "migrate_to_gemini_cli" else provider
-            helper_path = self._provider_repair_helper_path(helper_provider)
-            if not helper_path or not helper_path.exists():
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"provider_action_helper_missing:{helper_provider}",
-                )
-
-            launch = self._launch_local_app(helper_path)
-            if not launch.get("ok"):
-                raise HTTPException(
-                    status_code=500,
-                    detail=str(launch.get("error") or "provider_action_launch_failed"),
-                )
-
-            detail = str(provider_ui.get("repair_detail", "") or "").strip()
-            if action == "migrate_to_gemini_cli":
-                message = "✅ Открыт helper миграции на Gemini CLI OAuth."
-            else:
-                message = f"✅ Открыт helper для провайдера `{provider}`."
-
-            return {
-                "ok": True,
-                "provider": provider,
-                "action": action,
-                "message": message,
-                "detail": detail,
-                "launch": launch,
-            }
+        # /api/model/provider-action: extracted в src/modules/web_routers/model_router.py
+        # (Phase 2 Wave GG, Session 25). Helpers инжектируются через
+        # provider_ui_metadata_helper / provider_repair_helper_path_helper /
+        # launch_local_app_helper в _make_router_context.
 
         # /api/openclaw/model-routing/status: extracted в
         # src/modules/web_routers/openclaw_router.py (Phase 2 Wave EE, Session 25).
         # Helpers инжектируются через openclaw_model_routing_helper +
         # openclaw_model_routing_overlay_helper в _make_router_context.
 
-        @self.app.get("/api/thinking/status")
-        async def thinking_status():
-            """Текущий thinking_default и список доступных режимов."""
-            controls = self._build_openclaw_runtime_controls()
-            return {
-                "ok": True,
-                "thinking_default": controls.get("thinking_default", "off"),
-                "thinking_modes": controls.get(
-                    "thinking_modes",
-                    ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
-                ),
-                "chain_items": controls.get("chain_items", []),
-            }
-
-        @self.app.post("/api/thinking/set")
-        async def thinking_set(
-            payload: dict = Body(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Устанавливает глобальный thinking_default без изменения моделей."""
-            self._assert_write_access(x_krab_web_key, token)
-            raw_mode = str(payload.get("mode", "")).strip().lower()
-            try:
-                mode = self._normalize_thinking_mode(raw_mode)
-            except ValueError:
-                raise HTTPException(status_code=400, detail=f"invalid_thinking_mode: {raw_mode!r}")
-            # Считываем текущую chain, чтобы не затирать primary/fallbacks
-            current = self._build_openclaw_runtime_controls()
-            try:
-                applied = self._apply_openclaw_runtime_controls(
-                    primary_raw=current.get("primary") or "",
-                    fallbacks_raw=list(current.get("fallbacks") or []),
-                    context_tokens_raw=current.get("context_tokens"),
-                    thinking_default_raw=mode,
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            self._runtime_lite_cache = None
-            return {
-                "ok": True,
-                "thinking_default": applied.get("thinking_default", mode),
-                "changed": applied.get("changed", {}),
-            }
-
-        @self.app.get("/api/depth/status")
-        async def depth_status():
-            """Алиас /api/thinking/status — depth == thinking_default в терминах OpenClaw."""
-            controls = self._build_openclaw_runtime_controls()
-            thinking_default = controls.get("thinking_default", "off")
-            modes = controls.get(
-                "thinking_modes",
-                ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
-            )
-            return {
-                "ok": True,
-                "depth": thinking_default,
-                "thinking_default": thinking_default,
-                "available_modes": modes,
-            }
+        # /api/thinking/status, /api/thinking/set, /api/depth/status:
+        # extracted в src/modules/web_routers/model_router.py
+        # (Phase 2 Wave GG, Session 25). Helpers через
+        # openclaw_runtime_controls_build_helper / openclaw_runtime_controls_apply_helper /
+        # thinking_normalize_helper / lmstudio_snapshot_invalidate_helper.
 
         # /api/userbot/acl/status и /api/userbot/acl/update extracted в
         # src/modules/web_routers/admin_router.py (Phase 2 Wave W, Session 25).
