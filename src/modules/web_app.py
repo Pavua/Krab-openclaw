@@ -81,8 +81,8 @@ from src.core.openclaw_runtime_signal_truth import (  # noqa: E402
 from src.core.openclaw_workspace import build_workspace_state_snapshot  # noqa: E402
 from src.core.operator_identity import current_account_id, current_operator_id  # noqa: E402
 from src.core.runtime_policy import current_runtime_mode, provider_runtime_policy  # noqa: E402
-from src.core.shared_worktree_permissions import (  # noqa: E402
-    normalize_shared_worktree_permissions,
+from src.core.shared_worktree_permissions import (  # noqa: E402, F401
+    normalize_shared_worktree_permissions,  # экспортируется в module namespace для system_router helper-injection (Wave QQ)
     sample_non_writable_shared_items,
 )
 from src.core.translator_live_trial_preflight import (  # noqa: E402
@@ -860,6 +860,31 @@ class WebApp:
         deps_dict.setdefault(
             "inbox_service_get_summary_helper",
             lambda: getattr(_wam, "inbox_service").get_summary(),
+        )
+
+        # Phase 2 Wave QQ (Session 25): inject runtime recover/repair helpers
+        # для extraction /api/runtime/repair-active-shared-permissions и
+        # /api/runtime/recover в system_router.py. Late-bound через lambda —
+        # позволяет тестам монкей-патчить методы WebApp после init.
+        deps_dict.setdefault(
+            "active_shared_root_helper",
+            lambda: WebApp._active_shared_root(),
+        )
+        deps_dict.setdefault(
+            "active_shared_permission_health_helper",
+            lambda: self._active_shared_permission_health_snapshot(),
+        )
+        deps_dict.setdefault(
+            "normalize_shared_worktree_permissions_helper",
+            lambda root: getattr(_wam, "normalize_shared_worktree_permissions")(root),
+        )
+        deps_dict.setdefault(
+            "run_project_python_script_helper",
+            lambda *args, **kwargs: self._run_project_python_script(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "bool_env_helper",
+            lambda value, default=False: WebApp._bool_env(value, default),
         )
 
         return RouterContext(
@@ -9366,21 +9391,12 @@ class WebApp:
         # /api/runtime/operator-profile: extracted в system_router.py
         # (Phase 2 Wave Y, Session 25). См. include_router ниже.
 
-        @self.app.post("/api/runtime/repair-active-shared-permissions")
-        async def runtime_repair_active_shared_permissions(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Нормализует group-write права в `Краб-active` через owner web-key."""
-            self._assert_write_access(x_krab_web_key, token)
-            active_shared_root = self._active_shared_root()
-            repair_summary = normalize_shared_worktree_permissions(active_shared_root)
-            permission_health = self._active_shared_permission_health_snapshot()
-            return {
-                "ok": bool(repair_summary.get("ok")),
-                "repair": repair_summary,
-                "active_shared_permission_health": permission_health,
-            }
+        # /api/runtime/repair-active-shared-permissions: extracted в
+        # src/modules/web_routers/system_router.py (Phase 2 Wave QQ, Session 25).
+        # Helpers: ``active_shared_root_helper``,
+        # ``active_shared_permission_health_helper``,
+        # ``normalize_shared_worktree_permissions_helper``
+        # инжектируются через _make_router_context.
 
         # /api/capabilities/registry + /api/channels/capabilities: extracted
         # в capabilities_router.py (Phase 2 Wave R, Session 25).
@@ -10397,135 +10413,9 @@ class WebApp:
         # /api/silence/status: extracted в runtime_status_router (Wave D).
         # POST /api/silence/toggle — extracted в write_router.py (Phase 2 Wave J, Session 25).
 
-        @self.app.post("/api/runtime/recover")
-        async def runtime_recover(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Безопасный recovery-плейбук для runtime-контуров.
-
-            Что делает:
-            1) `openclaw_runtime_repair.command` (по умолчанию включен),
-            2) `sync_openclaw_models.command` (по умолчанию включен),
-            3) optional manual tier switch (`force_tier=free|paid`),
-            4) optional cloud runtime probe (`probe_cloud_runtime=true`),
-            5) возвращает post-check снимок.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            data = payload or {}
-            run_repair = (
-                data.get("run_openclaw_runtime_repair", True)
-                if isinstance(data.get("run_openclaw_runtime_repair", True), bool)
-                else self._bool_env(str(data.get("run_openclaw_runtime_repair", "1")), True)
-            )
-            run_sync = (
-                data.get("run_sync_openclaw_models", True)
-                if isinstance(data.get("run_sync_openclaw_models", True), bool)
-                else self._bool_env(str(data.get("run_sync_openclaw_models", "1")), True)
-            )
-            probe_cloud = (
-                data.get("probe_cloud_runtime", False)
-                if isinstance(data.get("probe_cloud_runtime", False), bool)
-                else self._bool_env(str(data.get("probe_cloud_runtime", "0")), False)
-            )
-            force_tier = str(data.get("force_tier", "") or "").strip().lower()
-
-            steps: list[dict[str, Any]] = []
-
-            if run_repair:
-                repair_result = self._run_project_python_script(
-                    self._project_root() / "scripts" / "openclaw_runtime_repair.py",
-                    timeout_seconds=120,
-                )
-                steps.append(
-                    {
-                        "step": "openclaw_runtime_repair",
-                        "ok": bool(repair_result.get("ok")),
-                        "exit_code": int(repair_result.get("exit_code", 1)),
-                        "error": str(repair_result.get("error") or ""),
-                        "stdout_tail": str(repair_result.get("stdout_tail") or ""),
-                    }
-                )
-            else:
-                steps.append({"step": "openclaw_runtime_repair", "ok": True, "skipped": True})
-
-            if run_sync:
-                sync_result = self._run_project_python_script(
-                    self._project_root() / "scripts" / "sync_openclaw_models.py",
-                    timeout_seconds=120,
-                )
-                steps.append(
-                    {
-                        "step": "sync_openclaw_models",
-                        "ok": bool(sync_result.get("ok")),
-                        "exit_code": int(sync_result.get("exit_code", 1)),
-                        "error": str(sync_result.get("error") or ""),
-                        "stdout_tail": str(sync_result.get("stdout_tail") or ""),
-                    }
-                )
-            else:
-                steps.append({"step": "sync_openclaw_models", "ok": True, "skipped": True})
-
-            openclaw = self.deps.get("openclaw_client")
-            if force_tier in {"free", "paid"}:
-                if not openclaw or not hasattr(openclaw, "switch_cloud_tier"):
-                    steps.append(
-                        {
-                            "step": "switch_cloud_tier",
-                            "ok": False,
-                            "error": "switch_cloud_tier_not_supported",
-                            "requested_tier": force_tier,
-                        }
-                    )
-                else:
-                    try:
-                        tier_result = await openclaw.switch_cloud_tier(force_tier)
-                        steps.append(
-                            {
-                                "step": "switch_cloud_tier",
-                                "ok": bool(tier_result.get("ok")),
-                                "requested_tier": force_tier,
-                                "result": tier_result,
-                            }
-                        )
-                    except Exception as exc:
-                        steps.append(
-                            {
-                                "step": "switch_cloud_tier",
-                                "ok": False,
-                                "requested_tier": force_tier,
-                                "error": str(exc),
-                            }
-                        )
-
-            cloud_runtime: dict[str, Any] | None = None
-            if probe_cloud:
-                if not openclaw or not hasattr(openclaw, "get_cloud_runtime_check"):
-                    cloud_runtime = {
-                        "available": False,
-                        "error": "cloud_runtime_check_not_supported",
-                    }
-                else:
-                    try:
-                        probe = await asyncio.wait_for(
-                            openclaw.get_cloud_runtime_check(), timeout=18.0
-                        )
-                        cloud_runtime = {"available": True, "report": probe}
-                    except asyncio.TimeoutError:
-                        cloud_runtime = {"available": False, "error": "timeout"}
-                    except Exception as exc:
-                        cloud_runtime = {"available": False, "error": str(exc)}
-
-            runtime_after = await self._collect_runtime_lite_snapshot()
-            ok = all(bool(item.get("ok")) for item in steps)
-            return {
-                "ok": ok,
-                "steps": steps,
-                "runtime_after": runtime_after,
-                "cloud_runtime": cloud_runtime,
-            }
+        # /api/runtime/recover: extracted в src/modules/web_routers/system_router.py
+        # (Phase 2 Wave QQ, Session 25). Helpers: ``run_project_python_script_helper``,
+        # ``bool_env_helper`` инжектируются через _make_router_context.
 
         # /api/runtime/chat-session/clear extracted в
         # src/modules/web_routers/system_router.py (Phase 2 Wave AA, Session 25).

@@ -223,11 +223,12 @@ def test_stats_caches_returns_zero_counts_when_caches_empty() -> None:
     client = _make_client()
     # Внутренние модули могут быть импортированы; чтобы не зависеть от
     # глобального состояния, патчим оба cache module.
-    with patch(
-        "src.core.chat_ban_cache.chat_ban_cache.list_entries", return_value=[]
-    ), patch(
-        "src.core.chat_capability_cache.chat_capability_cache.list_entries",
-        return_value=[],
+    with (
+        patch("src.core.chat_ban_cache.chat_ban_cache.list_entries", return_value=[]),
+        patch(
+            "src.core.chat_capability_cache.chat_capability_cache.list_entries",
+            return_value=[],
+        ),
     ):
         resp = client.get("/api/stats/caches")
     assert resp.status_code == 200
@@ -240,16 +241,19 @@ def test_stats_caches_returns_zero_counts_when_caches_empty() -> None:
 
 def test_stats_caches_aggregates_capability_flags() -> None:
     client = _make_client()
-    with patch(
-        "src.core.chat_ban_cache.chat_ban_cache.list_entries",
-        return_value=[{"chat_id": "1"}, {"chat_id": "2"}],
-    ), patch(
-        "src.core.chat_capability_cache.chat_capability_cache.list_entries",
-        return_value=[
-            {"voice_allowed": False, "slow_mode_seconds": 30},
-            {"voice_allowed": True, "slow_mode_seconds": 0},
-            {"voice_allowed": False},
-        ],
+    with (
+        patch(
+            "src.core.chat_ban_cache.chat_ban_cache.list_entries",
+            return_value=[{"chat_id": "1"}, {"chat_id": "2"}],
+        ),
+        patch(
+            "src.core.chat_capability_cache.chat_capability_cache.list_entries",
+            return_value=[
+                {"voice_allowed": False, "slow_mode_seconds": 30},
+                {"voice_allowed": True, "slow_mode_seconds": 0},
+                {"voice_allowed": False},
+            ],
+        ),
     ):
         resp = client.get("/api/stats/caches")
     assert resp.status_code == 200
@@ -322,9 +326,7 @@ def test_runtime_chat_session_clear_ok(monkeypatch) -> None:
     monkeypatch.delenv("WEB_API_KEY", raising=False)
     fake_oc = _FakeOpenclaw()
     client = _make_client(deps_overrides={"openclaw_client": fake_oc})
-    resp = client.post(
-        "/api/runtime/chat-session/clear", json={"chat_id": "777", "note": "ops"}
-    )
+    resp = client.post("/api/runtime/chat-session/clear", json={"chat_id": "777", "note": "ops"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
@@ -355,4 +357,216 @@ def test_runtime_chat_session_clear_invalid_auth(monkeypatch) -> None:
     monkeypatch.setenv("WEB_API_KEY", "secret-key")
     client = _make_client(deps_overrides={"openclaw_client": _FakeOpenclaw()})
     resp = client.post("/api/runtime/chat-session/clear", json={"chat_id": "1"})
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Wave QQ: POST /api/runtime/repair-active-shared-permissions
+# ---------------------------------------------------------------------------
+
+
+def test_runtime_repair_active_shared_permissions_ok(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    calls: dict[str, Any] = {}
+
+    def _fake_normalize(root: Any) -> dict:
+        calls["root"] = root
+        return {"ok": True, "fixed": 5}
+
+    def _fake_health() -> dict:
+        return {"non_writable_count": 0, "status": "ready"}
+
+    client = _make_client(
+        deps_overrides={
+            "active_shared_root_helper": lambda: Path("/tmp/Краб-active"),
+            "normalize_shared_worktree_permissions_helper": _fake_normalize,
+            "active_shared_permission_health_helper": _fake_health,
+        }
+    )
+    resp = client.post("/api/runtime/repair-active-shared-permissions")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["repair"] == {"ok": True, "fixed": 5}
+    assert body["active_shared_permission_health"]["status"] == "ready"
+    assert calls["root"] == Path("/tmp/Краб-active")
+
+
+def test_runtime_repair_active_shared_permissions_failure(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    client = _make_client(
+        deps_overrides={
+            "active_shared_root_helper": lambda: Path("/tmp/krab-active"),
+            "normalize_shared_worktree_permissions_helper": lambda root: {
+                "ok": False,
+                "error": "permission_denied",
+            },
+            "active_shared_permission_health_helper": lambda: {
+                "non_writable_count": 3,
+                "status": "attention",
+            },
+        }
+    )
+    resp = client.post("/api/runtime/repair-active-shared-permissions")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["repair"]["error"] == "permission_denied"
+    assert body["active_shared_permission_health"]["non_writable_count"] == 3
+
+
+def test_runtime_repair_active_shared_permissions_invalid_auth(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+    client = _make_client()
+    resp = client.post("/api/runtime/repair-active-shared-permissions")
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Wave QQ: POST /api/runtime/recover
+# ---------------------------------------------------------------------------
+
+
+class _FakeOpenclawCloud:
+    def __init__(
+        self,
+        *,
+        switch_result: dict | None = None,
+        probe_result: dict | None = None,
+        switch_raises: Exception | None = None,
+        probe_raises: Exception | None = None,
+    ) -> None:
+        self.switch_result = switch_result or {"ok": True, "tier": "paid"}
+        self.probe_result = probe_result or {"reachable": True}
+        self.switch_raises = switch_raises
+        self.probe_raises = probe_raises
+        self.switch_calls: list[str] = []
+
+    async def switch_cloud_tier(self, tier: str) -> dict:
+        self.switch_calls.append(tier)
+        if self.switch_raises:
+            raise self.switch_raises
+        return dict(self.switch_result)
+
+    async def get_cloud_runtime_check(self) -> dict:
+        if self.probe_raises:
+            raise self.probe_raises
+        return dict(self.probe_result)
+
+
+def test_runtime_recover_runs_default_steps_and_skips_optional(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    invocations: list[Any] = []
+
+    def _fake_run(script_path: Any, *, timeout_seconds: int) -> dict:
+        invocations.append((script_path.name, timeout_seconds))
+        return {"ok": True, "exit_code": 0, "stdout_tail": "done", "error": ""}
+
+    client = _make_client(
+        deps_overrides={
+            "run_project_python_script_helper": _fake_run,
+            "bool_env_helper": lambda value, default=False: (
+                str(value).lower() in {"1", "true", "yes", "on"}
+            ),
+        }
+    )
+    resp = client.post("/api/runtime/recover", json={})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    steps_by_name = {s["step"]: s for s in body["steps"]}
+    assert steps_by_name["openclaw_runtime_repair"]["ok"] is True
+    assert steps_by_name["sync_openclaw_models"]["ok"] is True
+    assert "switch_cloud_tier" not in steps_by_name
+    assert body["cloud_runtime"] is None
+    # Helper called with proper script names.
+    names = [item[0] for item in invocations]
+    assert "openclaw_runtime_repair.py" in names
+    assert "sync_openclaw_models.py" in names
+
+
+def test_runtime_recover_can_skip_default_steps(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+
+    def _fake_run(script_path: Any, *, timeout_seconds: int) -> dict:
+        raise AssertionError("run_script must not be called when skipped")
+
+    client = _make_client(deps_overrides={"run_project_python_script_helper": _fake_run})
+    resp = client.post(
+        "/api/runtime/recover",
+        json={
+            "run_openclaw_runtime_repair": False,
+            "run_sync_openclaw_models": False,
+        },
+    )
+    assert resp.status_code == 200
+    steps = resp.json()["steps"]
+    assert all(s.get("skipped") for s in steps)
+    assert all(s["ok"] for s in steps)
+
+
+def test_runtime_recover_force_tier_switches_via_openclaw(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    fake_oc = _FakeOpenclawCloud(switch_result={"ok": True, "tier": "free"})
+
+    client = _make_client(
+        deps_overrides={
+            "openclaw_client": fake_oc,
+            "run_project_python_script_helper": lambda *a, **kw: {
+                "ok": True,
+                "exit_code": 0,
+                "stdout_tail": "",
+                "error": "",
+            },
+        }
+    )
+    resp = client.post(
+        "/api/runtime/recover",
+        json={
+            "run_openclaw_runtime_repair": False,
+            "run_sync_openclaw_models": False,
+            "force_tier": "free",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    tier_step = next(s for s in body["steps"] if s["step"] == "switch_cloud_tier")
+    assert tier_step["ok"] is True
+    assert tier_step["requested_tier"] == "free"
+    assert fake_oc.switch_calls == ["free"]
+
+
+def test_runtime_recover_probe_cloud_runtime_returns_report(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    fake_oc = _FakeOpenclawCloud(probe_result={"tier": "paid", "reachable": True})
+
+    client = _make_client(
+        deps_overrides={
+            "openclaw_client": fake_oc,
+            "run_project_python_script_helper": lambda *a, **kw: {
+                "ok": True,
+                "exit_code": 0,
+                "stdout_tail": "",
+                "error": "",
+            },
+        }
+    )
+    resp = client.post(
+        "/api/runtime/recover",
+        json={
+            "run_openclaw_runtime_repair": False,
+            "run_sync_openclaw_models": False,
+            "probe_cloud_runtime": True,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cloud_runtime"]["available"] is True
+    assert body["cloud_runtime"]["report"]["tier"] == "paid"
+
+
+def test_runtime_recover_invalid_auth(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+    client = _make_client()
+    resp = client.post("/api/runtime/recover", json={})
     assert resp.status_code == 403

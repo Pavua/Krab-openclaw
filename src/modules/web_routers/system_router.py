@@ -12,11 +12,8 @@ System router — Phase 2 Wave Y + Wave AA extraction (Session 25).
 - GET  /api/stats/caches               — chat_ban/capability/voice cache counts
 - GET  /api/system/diagnostics         — RAM/CPU/budget/local LLM diagnostics
 - POST /api/runtime/chat-session/clear — Wave AA: очистка runtime chat-session
-
-POST endpoints (`/api/runtime/recover`,
-`/api/runtime/repair-active-shared-permissions`) сохранены inline — они
-зависят от WebApp helpers (``_run_project_python_script``, etc), отложены
-на отдельную wave.
+- POST /api/runtime/repair-active-shared-permissions — Wave QQ: нормализация прав в `Краб-active`
+- POST /api/runtime/recover — Wave QQ: recovery playbook (repair + sync + tier/probe)
 
 Helper-методы WebApp (``_runtime_operator_profile``,
 ``_build_stats_router_payload``, ``_resolve_local_runtime_truth``)
@@ -26,6 +23,7 @@ Helper-методы WebApp (``_runtime_operator_profile``,
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -268,6 +266,182 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
             "chat_id": chat_id,
             "note": note,
             "runtime_after": runtime_after,
+        }
+
+    # ── /api/runtime/repair-active-shared-permissions (Wave QQ) ─────────────
+
+    @router.post("/api/runtime/repair-active-shared-permissions")
+    async def runtime_repair_active_shared_permissions(
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Нормализует group-write права в `Краб-active` через owner web-key."""
+        ctx.assert_write_access(x_krab_web_key, token)
+
+        active_shared_root_helper = ctx.get_dep("active_shared_root_helper")
+        normalize_helper = ctx.get_dep("normalize_shared_worktree_permissions_helper")
+        permission_health_helper = ctx.get_dep("active_shared_permission_health_helper")
+
+        active_shared_root = (
+            active_shared_root_helper() if callable(active_shared_root_helper) else None
+        )
+        repair_summary = (
+            normalize_helper(active_shared_root)
+            if callable(normalize_helper) and active_shared_root is not None
+            else {"ok": False, "error": "normalize_helper_unavailable"}
+        )
+        permission_health = permission_health_helper() if callable(permission_health_helper) else {}
+        return {
+            "ok": bool(repair_summary.get("ok")),
+            "repair": repair_summary,
+            "active_shared_permission_health": permission_health,
+        }
+
+    # ── /api/runtime/recover (Wave QQ) ──────────────────────────────────────
+
+    @router.post("/api/runtime/recover")
+    async def runtime_recover(
+        payload: dict = Body(default_factory=dict),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """
+        Безопасный recovery-плейбук для runtime-контуров.
+
+        Что делает:
+        1) `openclaw_runtime_repair.command` (по умолчанию включен),
+        2) `sync_openclaw_models.command` (по умолчанию включен),
+        3) optional manual tier switch (`force_tier=free|paid`),
+        4) optional cloud runtime probe (`probe_cloud_runtime=true`),
+        5) возвращает post-check снимок.
+        """
+        ctx.assert_write_access(x_krab_web_key, token)
+        data = payload or {}
+
+        bool_env_fn = ctx.get_dep("bool_env_helper")
+
+        def _to_bool(value: Any, default: bool) -> bool:
+            if isinstance(value, bool):
+                return value
+            if callable(bool_env_fn):
+                return bool_env_fn(str(value), default)
+            return default
+
+        run_repair = _to_bool(data.get("run_openclaw_runtime_repair", True), True)
+        run_sync = _to_bool(data.get("run_sync_openclaw_models", True), True)
+        probe_cloud = _to_bool(data.get("probe_cloud_runtime", False), False)
+        force_tier = str(data.get("force_tier", "") or "").strip().lower()
+
+        run_script = ctx.get_dep("run_project_python_script_helper")
+        project_root = ctx.project_root
+
+        steps: list[dict[str, Any]] = []
+
+        if run_repair:
+            if callable(run_script):
+                repair_result = run_script(
+                    project_root / "scripts" / "openclaw_runtime_repair.py",
+                    timeout_seconds=120,
+                )
+            else:
+                repair_result = {
+                    "ok": False,
+                    "exit_code": 1,
+                    "error": "run_script_helper_unavailable",
+                    "stdout_tail": "",
+                }
+            steps.append(
+                {
+                    "step": "openclaw_runtime_repair",
+                    "ok": bool(repair_result.get("ok")),
+                    "exit_code": int(repair_result.get("exit_code", 1)),
+                    "error": str(repair_result.get("error") or ""),
+                    "stdout_tail": str(repair_result.get("stdout_tail") or ""),
+                }
+            )
+        else:
+            steps.append({"step": "openclaw_runtime_repair", "ok": True, "skipped": True})
+
+        if run_sync:
+            if callable(run_script):
+                sync_result = run_script(
+                    project_root / "scripts" / "sync_openclaw_models.py",
+                    timeout_seconds=120,
+                )
+            else:
+                sync_result = {
+                    "ok": False,
+                    "exit_code": 1,
+                    "error": "run_script_helper_unavailable",
+                    "stdout_tail": "",
+                }
+            steps.append(
+                {
+                    "step": "sync_openclaw_models",
+                    "ok": bool(sync_result.get("ok")),
+                    "exit_code": int(sync_result.get("exit_code", 1)),
+                    "error": str(sync_result.get("error") or ""),
+                    "stdout_tail": str(sync_result.get("stdout_tail") or ""),
+                }
+            )
+        else:
+            steps.append({"step": "sync_openclaw_models", "ok": True, "skipped": True})
+
+        openclaw = ctx.get_dep("openclaw_client")
+        if force_tier in {"free", "paid"}:
+            if not openclaw or not hasattr(openclaw, "switch_cloud_tier"):
+                steps.append(
+                    {
+                        "step": "switch_cloud_tier",
+                        "ok": False,
+                        "error": "switch_cloud_tier_not_supported",
+                        "requested_tier": force_tier,
+                    }
+                )
+            else:
+                try:
+                    tier_result = await openclaw.switch_cloud_tier(force_tier)
+                    steps.append(
+                        {
+                            "step": "switch_cloud_tier",
+                            "ok": bool(tier_result.get("ok")),
+                            "requested_tier": force_tier,
+                            "result": tier_result,
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    steps.append(
+                        {
+                            "step": "switch_cloud_tier",
+                            "ok": False,
+                            "requested_tier": force_tier,
+                            "error": str(exc),
+                        }
+                    )
+
+        cloud_runtime: dict[str, Any] | None = None
+        if probe_cloud:
+            if not openclaw or not hasattr(openclaw, "get_cloud_runtime_check"):
+                cloud_runtime = {
+                    "available": False,
+                    "error": "cloud_runtime_check_not_supported",
+                }
+            else:
+                try:
+                    probe = await asyncio.wait_for(openclaw.get_cloud_runtime_check(), timeout=18.0)
+                    cloud_runtime = {"available": True, "report": probe}
+                except asyncio.TimeoutError:
+                    cloud_runtime = {"available": False, "error": "timeout"}
+                except Exception as exc:  # noqa: BLE001
+                    cloud_runtime = {"available": False, "error": str(exc)}
+
+        runtime_after = await ctx.collect_runtime_lite()
+        ok = all(bool(item.get("ok")) for item in steps)
+        return {
+            "ok": ok,
+            "steps": steps,
+            "runtime_after": runtime_after,
+            "cloud_runtime": cloud_runtime,
         }
 
     return router
