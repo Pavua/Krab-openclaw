@@ -35,6 +35,7 @@ Endpoints (Wave JJ, POST через CLI helper injection):
 - POST /api/openclaw/cron/jobs/create   — `openclaw_cli_runner_helper` + cron snapshot
 - POST /api/openclaw/cron/jobs/toggle   — same helpers
 - POST /api/openclaw/cron/jobs/remove   — same helpers
+- POST /api/openclaw/cron/jobs/run_now  — cron_native_scheduler internals (W32 debug)
 - POST /api/openclaw/model-autoswitch/apply — через `openclaw_model_autoswitch_helper`
 
 Endpoints (Wave KK, GET self-contained):
@@ -68,8 +69,10 @@ Endpoints (Wave NN, оставшиеся HARD через helper injection):
 - GET  /api/openclaw/routing/effective  — `resolve_local_runtime_truth_helper`
                                            + ``router`` dep + inline force_mode normalize
 
-SKIP (HARD, требуют дополнительный helper promote):
-- /api/openclaw/cron/jobs/run_now      — cron_native_scheduler internals (W32 debug)
+Endpoints (Wave VV, fire-and-forget cron debug):
+- POST /api/openclaw/cron/jobs/run_now — `cron_native_store.list_jobs` +
+                                         `cron_native_scheduler._run_job` (W32 debug,
+                                         fire-and-forget, не дожидается LLM-ответа)
 
 Контракт ответов сохранён 1:1 с inline definitions из web_app.py.
 """
@@ -609,6 +612,64 @@ def build_openclaw_router(ctx: RouterContext) -> APIRouter:
             "summary": snapshot.get("summary") or {},
             "jobs": snapshot.get("jobs") or [],
             "status": snapshot.get("status") or {},
+        }
+
+    # ---------- POST /api/openclaw/cron/jobs/run_now (Wave VV) -----------
+    @router.post("/api/openclaw/cron/jobs/run_now")
+    async def openclaw_cron_job_run_now(
+        request: Request,
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """W32 debug: запускает cron job вручную, возвращает sender state.
+
+        Не дожидается LLM-ответа (fire-and-forget) — но проверяет что
+        sender bound. Возвращает: ok, job_id, sender_bound, scheduler_running.
+        """
+        ctx.assert_write_access(x_krab_web_key, token)
+        body = (
+            await request.json()
+            if request.headers.get("content-type", "").startswith("application/json")
+            else {}
+        )
+        job_id = str((body or {}).get("id") or "").strip()
+        if not job_id:
+            raise HTTPException(status_code=400, detail="cron_id_required")
+
+        from src.core import cron_native_store  # noqa: PLC0415
+        from src.core.cron_native_scheduler import cron_native_scheduler  # noqa: PLC0415
+
+        jobs = cron_native_store.list_jobs()
+        target = next((j for j in jobs if str(j.get("id")) == job_id), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail=f"cron_id_unknown:{job_id}")
+
+        sender_bound = cron_native_scheduler._sender is not None
+        running = cron_native_scheduler.is_running
+
+        # Fire-and-forget — async task запускает _run_job
+        import asyncio  # noqa: PLC0415
+
+        asyncio.ensure_future(cron_native_scheduler._run_job(target))
+
+        try:
+            import structlog as _structlog  # noqa: PLC0415
+
+            _structlog.get_logger("WebApp").info(
+                "cron_native_manual_run_now",
+                job_id=job_id,
+                sender_bound=sender_bound,
+                scheduler_running=running,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "sender_bound": sender_bound,
+            "scheduler_running": running,
+            "note": "fire-and-forget — check logs for cron_native_job_done / cron_native_job_sender_not_bound",
         }
 
     # ---------- POST /api/openclaw/model-autoswitch/apply (Wave JJ) -------

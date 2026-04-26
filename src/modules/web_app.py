@@ -9246,56 +9246,10 @@ class WebApp:
         # /api/openclaw/cron/jobs/remove: extracted в src/modules/web_routers/openclaw_router.py
         # (Phase 2 Wave JJ, Session 25). См. include_router рядом с openclaw_router.
 
-        @self.app.post("/api/openclaw/cron/jobs/run_now")
-        async def cron_native_run_now(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """W32 debug: запускает cron job вручную, возвращает sender state.
-
-            Не дожидается LLM-ответа (fire-and-forget) — но проверяет что
-            sender bound. Возвращает: ok, job_id, sender_bound, scheduler_running.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            body = (
-                await request.json()
-                if request.headers.get("content-type", "").startswith("application/json")
-                else {}
-            )
-            job_id = str((body or {}).get("id") or "").strip()
-            if not job_id:
-                raise HTTPException(status_code=400, detail="cron_id_required")
-
-            from ..core import cron_native_store  # noqa: PLC0415
-            from ..core.cron_native_scheduler import cron_native_scheduler  # noqa: PLC0415
-
-            jobs = cron_native_store.list_jobs()
-            target = next((j for j in jobs if str(j.get("id")) == job_id), None)
-            if target is None:
-                raise HTTPException(status_code=404, detail=f"cron_id_unknown:{job_id}")
-
-            sender_bound = cron_native_scheduler._sender is not None
-            running = cron_native_scheduler.is_running
-
-            # Fire-and-forget — async task запускает _run_job
-            import asyncio  # noqa: PLC0415
-
-            asyncio.ensure_future(cron_native_scheduler._run_job(target))
-
-            logger.info(
-                "cron_native_manual_run_now",
-                job_id=job_id,
-                sender_bound=sender_bound,
-                scheduler_running=running,
-            )
-            return {
-                "ok": True,
-                "job_id": job_id,
-                "sender_bound": sender_bound,
-                "scheduler_running": running,
-                "note": "fire-and-forget — check logs for cron_native_job_done / cron_native_job_sender_not_bound",
-            }
+        # /api/openclaw/cron/jobs/run_now: extracted в src/modules/web_routers/openclaw_router.py
+        # (Phase 2 Wave VV, Session 25). Использует cron_native_store.list_jobs() +
+        # cron_native_scheduler._run_job (fire-and-forget). См. include_router рядом
+        # с openclaw_router ниже.
 
         # /api/policy: extracted в capabilities_router.py (Phase 2 Wave R, Session 25).
         # См. include_router рядом с policy_router.
