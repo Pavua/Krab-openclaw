@@ -1001,3 +1001,164 @@ def test_control_compat_status_subprocess_failure() -> None:
     assert body["has_schema_warning"] is False
     assert body["impact_level"] == "runtime_risk"
     assert "ok" in body
+
+
+# =============================================================================
+# Wave LL: browser/photo smoke endpoints (Session 25)
+# =============================================================================
+
+
+def _build_ctx_wave_ll(
+    *,
+    browser_smoke=None,
+    photo_smoke=None,
+    launch_owner_chrome=None,
+    assert_write_fn=None,
+) -> RouterContext:
+    deps: dict = {}
+    if browser_smoke is not None:
+        deps["openclaw_browser_smoke_helper"] = browser_smoke
+    if photo_smoke is not None:
+        deps["openclaw_photo_smoke_helper"] = photo_smoke
+    if launch_owner_chrome is not None:
+        deps["openclaw_launch_owner_chrome_helper"] = launch_owner_chrome
+    return RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "secret",
+        assert_write_access_fn=assert_write_fn or (lambda h, t: None),
+    )
+
+
+# ---------- /api/openclaw/browser-smoke -------------------------------------
+
+
+def test_openclaw_browser_smoke_ok() -> None:
+    captured: dict = {}
+
+    async def _helper(url: str) -> dict:
+        captured["url"] = url
+        return {"browser_smoke": {"ok": True, "channel": "endpoint"}}
+
+    body = _client(_build_ctx_wave_ll(browser_smoke=_helper)).get(
+        "/api/openclaw/browser-smoke?url=https://test.example"
+    ).json()
+    assert body["available"] is True
+    assert body["report"]["browser_smoke"]["ok"] is True
+    assert captured["url"] == "https://test.example"
+
+
+def test_openclaw_browser_smoke_default_url() -> None:
+    seen: dict = {}
+
+    async def _helper(url: str) -> dict:
+        seen["url"] = url
+        return {"browser_smoke": {"ok": False}}
+
+    body = _client(_build_ctx_wave_ll(browser_smoke=_helper)).get(
+        "/api/openclaw/browser-smoke"
+    ).json()
+    assert body["available"] is True
+    assert seen["url"] == "https://example.com"
+
+
+def test_openclaw_browser_smoke_helper_missing() -> None:
+    body = _client(_build_ctx_wave_ll()).get("/api/openclaw/browser-smoke").json()
+    assert body["available"] is False
+    assert body["error"] == "openclaw_browser_smoke_helper_unavailable"
+
+
+def test_openclaw_browser_smoke_timeout_guard() -> None:
+    import asyncio as _asyncio
+
+    async def _slow_helper(url: str) -> dict:
+        await _asyncio.sleep(10.0)
+        return {"browser_smoke": {"ok": True}}
+
+    # patching to short timeout - but easier to raise TimeoutError directly
+    async def _timeout_helper(url: str) -> dict:
+        raise _asyncio.TimeoutError()
+
+    # Smoke helper that raises TimeoutError synchronously won't trigger; we need
+    # asyncio.wait_for to fire — use a helper that is awaitable but never
+    # completes. Simpler: monkeypatch wait_for via a tiny wrapper.
+    body = _client(_build_ctx_wave_ll(browser_smoke=_timeout_helper)).get(
+        "/api/openclaw/browser-smoke"
+    ).json()
+    # TimeoutError raised inside helper still bubbles up to the wait_for branch
+    assert body["available"] is False
+    assert body["error"] == "OpenClaw timeout (5s)"
+
+
+# ---------- /api/openclaw/photo-smoke ---------------------------------------
+
+
+def test_openclaw_photo_smoke_ok_async() -> None:
+    async def _helper() -> dict:
+        return {"available": True, "report": {"photo_smoke": {"ok": True}}}
+
+    body = _client(_build_ctx_wave_ll(photo_smoke=_helper)).get(
+        "/api/openclaw/photo-smoke"
+    ).json()
+    assert body["available"] is True
+    assert body["report"]["photo_smoke"]["ok"] is True
+
+
+def test_openclaw_photo_smoke_helper_missing() -> None:
+    body = _client(_build_ctx_wave_ll()).get("/api/openclaw/photo-smoke").json()
+    assert body["available"] is False
+    assert body["error"] == "openclaw_photo_smoke_helper_unavailable"
+
+
+def test_openclaw_photo_smoke_sync_helper() -> None:
+    """Helper может быть sync — endpoint должен корректно возвращать payload."""
+    def _helper() -> dict:
+        return {"available": False, "error": "router_unavailable"}
+
+    body = _client(_build_ctx_wave_ll(photo_smoke=_helper)).get(
+        "/api/openclaw/photo-smoke"
+    ).json()
+    assert body["available"] is False
+    assert body["error"] == "router_unavailable"
+
+
+# ---------- /api/openclaw/browser/open-owner-chrome -------------------------
+
+
+def test_openclaw_open_owner_chrome_ok() -> None:
+    calls: list[bool] = []
+
+    def _helper() -> dict:
+        calls.append(True)
+        return {"ok": True, "method": "command_helper", "path": "/tmp/x.command"}
+
+    body = _client(_build_ctx_wave_ll(launch_owner_chrome=_helper)).post(
+        "/api/openclaw/browser/open-owner-chrome",
+        headers={"X-Krab-Web-Key": "secret"},
+    ).json()
+    assert body["ok"] is True
+    assert body["method"] == "command_helper"
+    assert calls == [True]
+
+
+def test_openclaw_open_owner_chrome_forbidden(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WEB_API_KEY установлен, header не передан → 403."""
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+
+    def _helper() -> dict:
+        return {"ok": True}
+
+    resp = _client(_build_ctx_wave_ll(launch_owner_chrome=_helper)).post(
+        "/api/openclaw/browser/open-owner-chrome"
+    )
+    # ctx.assert_write_access raises HTTPException(403) → FastAPI returns 403
+    assert resp.status_code == 403
+
+
+def test_openclaw_open_owner_chrome_helper_missing() -> None:
+    resp = _client(_build_ctx_wave_ll()).post(
+        "/api/openclaw/browser/open-owner-chrome",
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "helper_unavailable"

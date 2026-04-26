@@ -43,6 +43,11 @@ Endpoints (Wave KK, GET self-contained):
 - GET /api/openclaw/control-compat/status — subprocess (`openclaw channels status --probe`,
                                             `openclaw logs --tail 200`), pure self-contained
 
+Endpoints (Wave LL, browser/smoke через helper injection):
+- GET  /api/openclaw/browser-smoke              — `openclaw_browser_smoke_helper`
+- GET  /api/openclaw/photo-smoke                — `openclaw_photo_smoke_helper`
+- POST /api/openclaw/browser/open-owner-chrome  — `openclaw_launch_owner_chrome_helper`
+
 SKIP (HARD, требуют дополнительный helper promote):
 - /api/openclaw/cron/jobs/run_now      — cron_native_scheduler internals (W32 debug)
 - /api/openclaw/channels/status        — `_collect_openclaw_channels_snapshot`
@@ -777,5 +782,77 @@ def build_openclaw_router(ctx: RouterContext) -> APIRouter:
                 "error": "OpenClaw timeout (5s)",
                 "detail": "gateway not responding",
             }
+
+    # ---------- Wave LL: browser/photo smoke endpoints --------------------
+
+    # ---------- GET /api/openclaw/browser-smoke (Wave LL) ----------------
+    @router.get("/api/openclaw/browser-smoke")
+    async def openclaw_browser_smoke(url: str = "https://example.com") -> dict:
+        """Browser relay smoke check с явным attached/not attached статусом.
+
+        Контур:
+        1) `openclaw gateway probe` (reachability gateway ws),
+        2) HTTP probe browser-server (`http://127.0.0.1:18791/`).
+        """
+        helper = ctx.get_dep("openclaw_browser_smoke_helper")
+        if helper is None:
+            return {
+                "available": False,
+                "error": "openclaw_browser_smoke_helper_unavailable",
+            }
+        # Верхний guard: не зависаем если gateway не отвечает.
+        try:
+            coro = helper(url)
+            if inspect.isawaitable(coro):
+                report = await asyncio.wait_for(coro, timeout=5.0)
+            else:
+                report = coro
+        except asyncio.TimeoutError:
+            return {
+                "available": False,
+                "error": "OpenClaw timeout (5s)",
+                "detail": "gateway not responding",
+            }
+        return {
+            "available": True,
+            "report": report,
+        }
+
+    # ---------- GET /api/openclaw/photo-smoke (Wave LL) ------------------
+    @router.get("/api/openclaw/photo-smoke")
+    async def openclaw_photo_smoke() -> dict:
+        """Легковесная проверка готовности photo/vision маршрута.
+
+        Проверяет:
+        1) доступ к model manager через router;
+        2) наличие vision-capable локальных моделей;
+        3) выбранную модель для `has_photo=True`.
+        """
+        helper = ctx.get_dep("openclaw_photo_smoke_helper")
+        if helper is None:
+            return {
+                "available": False,
+                "error": "openclaw_photo_smoke_helper_unavailable",
+            }
+        result = helper()
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+
+    # ---------- POST /api/openclaw/browser/open-owner-chrome (Wave LL) ---
+    @router.post("/api/openclaw/browser/open-owner-chrome")
+    async def openclaw_browser_open_owner_chrome(
+        token: str = Query(default=""),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+    ) -> dict:
+        """Открывает helper для relaunch обычного Chrome владельца с Remote Debugging."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        helper = ctx.get_dep("openclaw_launch_owner_chrome_helper")
+        if helper is None:
+            raise HTTPException(status_code=500, detail="helper_unavailable")
+        result = helper()
+        if inspect.isawaitable(result):
+            result = await result
+        return result
 
     return router

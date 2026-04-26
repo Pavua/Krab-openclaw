@@ -671,6 +671,23 @@ class WebApp:
             lambda *args, **kwargs: self._run_openclaw_cli(*args, **kwargs),
         )
 
+        # Phase 2 Wave LL (Session 25): inject openclaw browser/smoke helpers
+        # для /api/openclaw/browser-smoke, /api/openclaw/photo-smoke,
+        # /api/openclaw/browser/open-owner-chrome. Late-bound через lambda —
+        # позволяет тестам монкей-патчить WebApp methods после init.
+        deps_dict.setdefault(
+            "openclaw_browser_smoke_helper",
+            lambda *args, **kwargs: self._collect_openclaw_browser_smoke_report(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_photo_smoke_helper",
+            lambda *args, **kwargs: self._collect_openclaw_photo_smoke_payload(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_launch_owner_chrome_helper",
+            lambda: self._launch_owner_chrome_remote_debugging(),
+        )
+
         # Phase 2 Wave GG (Session 25): inject helpers для thinking/depth + model
         # provider-action / local load-default+unload в model_router.
         # Late-bound через lambda — позволяет тестам монкей-патчить
@@ -11831,31 +11848,9 @@ class WebApp:
         # extracted в src/modules/web_routers/openclaw_router.py (Session 25 Phase 2 Wave M).
         # См. include_router рядом с voice_router.
 
-        @self.app.get("/api/openclaw/browser-smoke")
-        async def openclaw_browser_smoke(url: str = "https://example.com"):
-            """
-            Browser relay smoke check с явным attached/not attached статусом.
-
-            Контур:
-            1) `openclaw gateway probe` (reachability gateway ws),
-            2) HTTP probe browser-server (`http://127.0.0.1:18791/`).
-            """
-            # Верхний guard: не зависаем если gateway не отвечает.
-            try:
-                report = await asyncio.wait_for(
-                    self._collect_openclaw_browser_smoke_report(url),
-                    timeout=5.0,
-                )
-            except asyncio.TimeoutError:
-                return {
-                    "available": False,
-                    "error": "OpenClaw timeout (5s)",
-                    "detail": "gateway not responding",
-                }
-            return {
-                "available": True,
-                "report": report,
-            }
+        # /api/openclaw/browser-smoke: extracted в src/modules/web_routers/openclaw_router.py
+        # (Phase 2 Wave LL, Session 25). Helper инжектируется через
+        # openclaw_browser_smoke_helper в _make_router_context.
 
         @self.app.post("/api/diagnostics/smoke")
         async def diagnostics_smoke():
@@ -11969,14 +11964,10 @@ class WebApp:
                 },
             }
 
-        @self.app.post("/api/openclaw/browser/open-owner-chrome")
-        async def openclaw_browser_open_owner_chrome(
-            token: str = Query(default=""),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-        ):
-            """Открывает helper для relaunch обычного Chrome владельца с Remote Debugging."""
-            self._assert_write_access(x_krab_web_key, token)
-            return self._launch_owner_chrome_remote_debugging()
+        # /api/openclaw/browser/open-owner-chrome: extracted в
+        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave LL, Session 25).
+        # Helper инжектируется через openclaw_launch_owner_chrome_helper в
+        # _make_router_context.
 
         # /api/chrome/dedicated/* перенесены в web_routers.browser_router
         # (Phase 2 Wave U, Session 25). См. include_router ниже.
@@ -12057,17 +12048,9 @@ class WebApp:
                     "detail": "gateway not responding",
                 }
 
-        @self.app.get("/api/openclaw/photo-smoke")
-        async def openclaw_photo_smoke():
-            """
-            Легковесная проверка готовности photo/vision маршрута.
-
-            Проверяет:
-            1) доступ к model manager через router;
-            2) наличие vision-capable локальных моделей;
-            3) выбранную модель для `has_photo=True`.
-            """
-            return await self._collect_openclaw_photo_smoke_payload()
+        # /api/openclaw/photo-smoke: extracted в src/modules/web_routers/openclaw_router.py
+        # (Phase 2 Wave LL, Session 25). Helper инжектируется через
+        # openclaw_photo_smoke_helper в _make_router_context.
 
         # /api/openclaw/cloud, /api/openclaw/cloud/diagnostics: extracted в
         # src/modules/web_routers/openclaw_router.py (Phase 2 Wave KK, Session 25).
