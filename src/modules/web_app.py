@@ -8755,100 +8755,9 @@ class WebApp:
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
 
-        # ── Browser Bridge API ──────────────────────────────────────────────
-        from ..integrations.browser_bridge import browser_bridge as _browser_bridge
-
-        browser_bridge_timeout_sec = 8.0
-
-        @self.app.get("/api/browser/status")
-        async def browser_status():
-            try:
-                attached = await asyncio.wait_for(
-                    _browser_bridge.is_attached(), timeout=browser_bridge_timeout_sec
-                )
-                tabs = (
-                    await asyncio.wait_for(
-                        _browser_bridge.list_tabs(), timeout=browser_bridge_timeout_sec
-                    )
-                    if attached
-                    else []
-                )
-            except Exception as exc:
-                return {
-                    "ok": False,
-                    "error": "browser_timeout",
-                    "detail": str(exc),
-                    "attached": False,
-                    "tab_count": 0,
-                    "active_url": None,
-                }
-            active_url = tabs[-1]["url"] if tabs else None
-            return {
-                "ok": True,
-                "attached": attached,
-                "tab_count": len(tabs),
-                "active_url": active_url,
-            }
-
-        @self.app.get("/api/browser/tabs")
-        async def browser_tabs():
-            try:
-                tabs = await asyncio.wait_for(
-                    _browser_bridge.list_tabs(), timeout=browser_bridge_timeout_sec
-                )
-            except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "tabs": []}
-            return tabs
-
-        @self.app.post("/api/browser/navigate")
-        async def browser_navigate(body: dict = Body(...)):
-            url = str(body.get("url") or "").strip()
-            if not url:
-                raise HTTPException(status_code=400, detail="url required")
-            try:
-                current_url = await asyncio.wait_for(
-                    _browser_bridge.navigate(url), timeout=browser_bridge_timeout_sec
-                )
-            except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
-            return {"ok": True, "current_url": current_url}
-
-        @self.app.post("/api/browser/screenshot")
-        async def browser_screenshot():
-            try:
-                data = await asyncio.wait_for(
-                    _browser_bridge.screenshot_base64(), timeout=browser_bridge_timeout_sec
-                )
-            except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
-            if data is None:
-                return {"ok": False, "error": "screenshot_failed"}
-            return {"ok": True, "data": data}
-
-        @self.app.post("/api/browser/read")
-        async def browser_read():
-            try:
-                text = await asyncio.wait_for(
-                    _browser_bridge.get_page_text(), timeout=browser_bridge_timeout_sec
-                )
-            except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "text": ""}
-            return {"ok": True, "text": text}
-
-        @self.app.post("/api/browser/js")
-        async def browser_js(body: dict = Body(...)):
-            code = str(body.get("code") or "").strip()
-            if not code:
-                raise HTTPException(status_code=400, detail="code required")
-            try:
-                result = await asyncio.wait_for(
-                    _browser_bridge.execute_js(code), timeout=browser_bridge_timeout_sec
-                )
-            except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
-            return {"ok": True, "result": result}
-
-        # ────────────────────────────────────────────────────────────────────
+        # ── Browser Bridge API + Dedicated Chrome ───────────────────────────
+        # Перенесено в ``web_routers.browser_router`` (Phase 2 Wave U,
+        # Session 25). См. include_router ниже после блока /api/chrome/.
 
         @self.app.get("/api/transcriber/status")
         async def transcriber_status():
@@ -13795,41 +13704,11 @@ class WebApp:
             self._assert_write_access(x_krab_web_key, token)
             return self._launch_owner_chrome_remote_debugging()
 
-        @self.app.get("/api/chrome/dedicated/status")
-        async def chrome_dedicated_status():
-            """Статус dedicated Chrome (isolated profile на /tmp/krab-chrome)."""
-            from ..integrations.dedicated_chrome import (
-                DEFAULT_CDP_PORT,
-                find_chrome_binary,
-                is_dedicated_chrome_running,
-            )
+        # /api/chrome/dedicated/* перенесены в web_routers.browser_router
+        # (Phase 2 Wave U, Session 25). См. include_router ниже.
+        from .web_routers.browser_router import build_browser_router as _build_browser
 
-            port = int(os.environ.get("DEDICATED_CHROME_PORT") or DEFAULT_CDP_PORT)
-            enabled = os.environ.get("DEDICATED_CHROME_ENABLED", "false").lower() in (
-                "true",
-                "1",
-                "yes",
-            )
-            return {
-                "ok": True,
-                "enabled": enabled,
-                "running": is_dedicated_chrome_running(port),
-                "port": port,
-                "binary": find_chrome_binary(),
-                "profile_dir": os.environ.get("DEDICATED_CHROME_PROFILE_DIR") or "/tmp/krab-chrome",
-            }
-
-        @self.app.post("/api/chrome/dedicated/launch")
-        async def chrome_dedicated_launch(
-            token: str = Query(default=""),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-        ):
-            """Ручной запуск dedicated Chrome (идемпотентно)."""
-            self._assert_write_access(x_krab_web_key, token)
-            from ..integrations.dedicated_chrome import launch_dedicated_chrome
-
-            ok, status = await asyncio.to_thread(launch_dedicated_chrome)
-            return {"ok": ok, "status": status}
+        self.app.include_router(_build_browser(self._make_router_context()))
 
         @self.app.get("/api/openclaw/browser-mcp-readiness")
         async def openclaw_browser_mcp_readiness(url: str = "https://example.com"):
