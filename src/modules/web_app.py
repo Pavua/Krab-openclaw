@@ -23,7 +23,10 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+if TYPE_CHECKING:
+    from .web_routers._context import RouterContext
 
 import httpx
 import structlog
@@ -305,6 +308,24 @@ class WebApp:
     def _project_root() -> Path:
         """Возвращает корень проекта Krab."""
         return Path(__file__).resolve().parents[2]
+
+    def _make_router_context(self) -> "RouterContext":
+        """Factory для RouterContext — Phase 2 advanced extractions (Session 25).
+
+        Используется при include_router для передачи WebApp deps + helpers
+        в extracted router-модули без зависимости от WebApp class.
+        """
+        from .web_routers._context import RouterContext
+
+        return RouterContext(
+            deps=getattr(self, "deps", {}) or {},
+            project_root=self._project_root(),
+            web_api_key_fn=self._web_api_key,
+            assert_write_access_fn=self._assert_write_access,
+            rate_state={},
+            idempotency_state={},
+            default_port=self.port,
+        )
 
     @staticmethod
     def _tail_text(text: str, max_chars: int = 2000) -> str:

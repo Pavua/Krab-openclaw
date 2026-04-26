@@ -43,7 +43,23 @@ class RouterContext:
     assert_write_access_fn: Callable[..., None]
     rate_state: dict[str, Any] = field(default_factory=dict)
     idempotency_state: dict[str, Any] = field(default_factory=dict)
+    default_port: int = 8080
 
     def get_dep(self, name: str, default: Any = None) -> Any:
         """Удобный alias для self.deps.get(name, default)."""
         return self.deps.get(name, default)
+
+    def assert_write_access(self, header_key: str, token: str) -> None:
+        """Делегирует ``_helpers.assert_write_access`` — env-based проверка
+        ``WEB_API_KEY``. Method добавлен в Phase 2 (Session 25); legacy
+        ``assert_write_access_fn`` сохранён для backwards-compat.
+        """
+        from ._helpers import assert_write_access as _impl
+
+        _impl(header_key, token)
+
+    def public_base_url(self) -> str:
+        """Возвращает внешний base URL панели через ``_helpers``."""
+        from ._helpers import get_public_base_url
+
+        return get_public_base_url(default_port=self.default_port)
