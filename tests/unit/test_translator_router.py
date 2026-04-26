@@ -669,3 +669,247 @@ def test_session_post_endpoints_require_write_access(monkeypatch) -> None:
     ):
         resp = client.post(path, json={})
         assert resp.status_code == 403, f"{path} should require write access"
+
+
+# ---------------------------------------------------------------------------
+# Wave II — translator/mobile POST endpoints + session/escalate
+# ---------------------------------------------------------------------------
+
+
+class _FakeMobileGateway(_FakeVoiceGateway):
+    """Расширяет _FakeVoiceGateway mobile-методами."""
+
+    async def register_mobile_device(self, **kwargs):
+        self.calls.append(("register_mobile_device", (), kwargs))
+        return self._result(device_id=kwargs.get("device_id"))
+
+    async def bind_mobile_device(self, device_id, **kwargs):
+        self.calls.append(("bind_mobile_device", (device_id,), kwargs))
+        return self._result(device_id=device_id)
+
+    async def delete_mobile_device(self, device_id):
+        self.calls.append(("delete_mobile_device", (device_id,), {}))
+        return self._result(device_id=device_id)
+
+
+def _build_wave_ii_ctx(
+    *,
+    gateway: _FakeMobileGateway | None = None,
+    inbox_upsert_ok: bool = True,
+    inspector_payload: dict | None = None,
+) -> tuple[RouterContext, dict]:
+    """RouterContext с инжектированными wave-II helpers (mobile + escalate)."""
+    captured: dict = {
+        "mobile_action_calls": [],
+        "inbox_upsert_calls": [],
+    }
+    gw = gateway or _FakeMobileGateway()
+
+    def _gw_helper():
+        return gw
+
+    async def _resolve(*, requested_session_id: str = ""):
+        sid = requested_session_id or "sess-current"
+        return sid, {"runtime": "lite"}, {"sessions": {"current_session_id": sid}}
+
+    async def _mobile_action_response(
+        *, action, gateway_result, runtime_lite=None, current_control_plane=None
+    ):
+        captured["mobile_action_calls"].append(
+            (action, dict(gateway_result), runtime_lite, current_control_plane)
+        )
+        return {
+            "ok": True,
+            "action": action,
+            "gateway_result": gateway_result,
+        }
+
+    def _mobile_err_detail(result, *, fallback):
+        return 503, str(result.get("error") or fallback)
+
+    async def _control_plane_snapshot(*, runtime_lite=None):
+        return {"sessions": {"current_session_id": "sess-current"}}
+
+    async def _mobile_readiness_snapshot(*, runtime_lite=None, current_control_plane=None):
+        return {
+            "devices": {
+                "selected_device_id": "iphone-default",
+                "items": [],
+            }
+        }
+
+    async def _session_inspector(*, runtime_lite=None, current_control_plane=None):
+        return inspector_payload or {
+            "session_status": "active",
+            "gateway_status": "ok",
+            "why_report": {"items": ["latency-spike"]},
+            "timeline": {"stats": {"events": 3}},
+            "escalation": {
+                "suggested_title": "Translator session diagnostics",
+                "suggested_body": "Latency spike detected, please review.",
+            },
+        }
+
+    async def _readiness(*, runtime_lite=None):
+        return {"ok": True, "ready": True}
+
+    def _inbox_upsert(**kwargs):
+        captured["inbox_upsert_calls"].append(kwargs)
+        if not inbox_upsert_ok:
+            return {"ok": False, "error": "inbox_upsert_failed"}
+        return {
+            "ok": True,
+            "item": {
+                "kind": "owner_task",
+                "source": kwargs.get("source"),
+                "title": kwargs.get("title"),
+            },
+        }
+
+    def _inbox_summary():
+        return {"pending_owner_tasks": 1}
+
+    async def _runtime_lite_provider():
+        return {"runtime": "lite"}
+
+    deps_extra = {
+        "translator_gateway_client_helper": _gw_helper,
+        "translator_resolve_session_context_helper": _resolve,
+        "translator_mobile_action_response_helper": _mobile_action_response,
+        "translator_mobile_gateway_error_detail_helper": _mobile_err_detail,
+        "translator_control_plane_snapshot": _control_plane_snapshot,
+        "translator_mobile_readiness_snapshot": _mobile_readiness_snapshot,
+        "translator_session_inspector_snapshot": _session_inspector,
+        "translator_readiness_snapshot": _readiness,
+        "inbox_service_upsert_owner_task_helper": _inbox_upsert,
+        "inbox_service_get_summary_helper": _inbox_summary,
+    }
+    ctx = _build_ctx(deps_extra=deps_extra, runtime_lite_provider=_runtime_lite_provider)
+    return ctx, captured
+
+
+def test_mobile_register_happy_path(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeMobileGateway()
+    ctx, cap = _build_wave_ii_ctx(gateway=gw)
+    resp = _client(ctx).post(
+        "/api/translator/mobile/register",
+        json={"device_id": "iphone-1", "voip_push_token": "tok"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["action"] == "register_mobile_device"
+    method, _args, kwargs = gw.calls[-1]
+    assert method == "register_mobile_device"
+    assert kwargs.get("device_id") == "iphone-1"
+
+
+def test_mobile_register_gateway_error_returns_503(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeMobileGateway(ok=False, error="apns_unauthorized")
+    ctx, _cap = _build_wave_ii_ctx(gateway=gw)
+    resp = _client(ctx).post("/api/translator/mobile/register", json={})
+    assert resp.status_code == 503
+    assert "apns_unauthorized" in resp.json()["detail"]
+
+
+def test_mobile_bind_requires_device_id(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    ctx, _cap = _build_wave_ii_ctx()
+    resp = _client(ctx).post("/api/translator/mobile/bind", json={})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "device_id_required"
+
+
+def test_mobile_bind_happy_path(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeMobileGateway()
+    ctx, cap = _build_wave_ii_ctx(gateway=gw)
+    resp = _client(ctx).post(
+        "/api/translator/mobile/bind",
+        json={"device_id": "IPHONE-2", "session_id": "sess-9"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["action"] == "bind_mobile_device"
+    method, args, kwargs = gw.calls[-1]
+    assert method == "bind_mobile_device"
+    # device_id нормализуется в lower
+    assert args == ("iphone-2",)
+    assert kwargs.get("session_id") == "sess-9"
+
+
+def test_mobile_remove_uses_selected_device_when_body_empty(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeMobileGateway()
+    ctx, _cap = _build_wave_ii_ctx(gateway=gw)
+    resp = _client(ctx).post("/api/translator/mobile/remove", json={})
+    assert resp.status_code == 200
+    assert resp.json()["action"] == "remove_mobile_device"
+    method, args, _kwargs = gw.calls[-1]
+    assert method == "delete_mobile_device"
+    # fallback на selected_device_id из mobile_readiness
+    assert args == ("iphone-default",)
+
+
+def test_mobile_remove_gateway_error_returns_503(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeMobileGateway(ok=False, error="device_not_found")
+    ctx, _cap = _build_wave_ii_ctx(gateway=gw)
+    resp = _client(ctx).post(
+        "/api/translator/mobile/remove", json={"device_id": "iphone-x"}
+    )
+    assert resp.status_code == 503
+    assert "device_not_found" in resp.json()["detail"]
+
+
+def test_session_escalate_requires_title_or_body(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    # inspector без escalation suggestions → 400 при отсутствии title/body в body
+    ctx, _cap = _build_wave_ii_ctx(
+        inspector_payload={
+            "session_status": "active",
+            "gateway_status": "ok",
+            "why_report": {"items": []},
+            "timeline": {"stats": {}},
+            "escalation": {},
+        }
+    )
+    resp = _client(ctx).post("/api/translator/session/escalate", json={})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "translator_session_escalation_title_body_required"
+
+
+def test_session_escalate_happy_path(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    ctx, cap = _build_wave_ii_ctx()
+    resp = _client(ctx).post("/api/translator/session/escalate", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["action"] == "escalate_session"
+    assert data["inbox_result"]["source"] == "translator-ui"
+    assert data["inbox_summary"]["pending_owner_tasks"] == 1
+    # severity warning из-за непустых why_items
+    upsert_call = cap["inbox_upsert_calls"][-1]
+    assert upsert_call["severity"] == "warning"
+    assert upsert_call["team_id"] == "translator"
+
+
+def test_session_escalate_inbox_failure_returns_500(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    ctx, _cap = _build_wave_ii_ctx(inbox_upsert_ok=False)
+    resp = _client(ctx).post("/api/translator/session/escalate", json={})
+    assert resp.status_code == 500
+    assert "inbox_upsert_failed" in resp.json()["detail"]
+
+
+def test_wave_ii_post_endpoints_require_write_access(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    ctx, _cap = _build_wave_ii_ctx()
+    client = _client(ctx)
+    for path in (
+        "/api/translator/mobile/register",
+        "/api/translator/mobile/bind",
+        "/api/translator/mobile/remove",
+        "/api/translator/session/escalate",
+    ):
+        resp = client.post(path, json={})
+        assert resp.status_code == 403, f"{path} should require write access"

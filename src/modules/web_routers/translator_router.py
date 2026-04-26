@@ -694,4 +694,288 @@ def build_translator_router(ctx: RouterContext) -> APIRouter:
             )
         )
 
+    # ------------------------------------------------------------------
+    # Wave II — translator/mobile POST endpoints + session/escalate
+    # через helper injection (mobile_action_response, mobile_gateway_error,
+    # inbox_service_upsert_owner_task). Контракт ответов сохранён 1:1 с
+    # inline definitions из web_app.py.
+    # ------------------------------------------------------------------
+
+    @router.post("/api/translator/mobile/register")
+    async def translator_mobile_register(
+        request: Request,
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ):
+        """Регистрирует/обновляет iPhone companion через owner panel."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        _require_helpers(
+            "translator_gateway_client_helper",
+            "translator_mobile_action_response_helper",
+            "translator_mobile_gateway_error_detail_helper",
+        )
+        voice_gateway = ctx.get_dep("translator_gateway_client_helper")()
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="translator_mobile_register_body_required")
+
+        result = await voice_gateway.register_mobile_device(
+            device_id=str(body.get("device_id") or "").strip(),
+            voip_push_token=str(body.get("voip_push_token") or "").strip(),
+            apns_environment=str(body.get("apns_environment") or "development").strip()
+            or "development",
+            app_version=str(body.get("app_version") or "").strip(),
+            locale=str(body.get("locale") or "ru").strip() or "ru",
+            preferred_source_lang=str(body.get("preferred_source_lang") or "auto").strip()
+            or "auto",
+            preferred_target_lang=str(body.get("preferred_target_lang") or "ru").strip() or "ru",
+            notify_default=bool(body.get("notify_default", True)),
+        )
+        if not result.get("ok"):
+            err_helper = ctx.get_dep("translator_mobile_gateway_error_detail_helper")
+            status_code, detail = err_helper(result, fallback="translator_mobile_register_failed")
+            raise HTTPException(status_code=status_code, detail=detail)
+
+        runtime_lite = await ctx.collect_runtime_lite()
+        return await _await_if_needed(
+            ctx.get_dep("translator_mobile_action_response_helper")(
+                action="register_mobile_device",
+                gateway_result=result,
+                runtime_lite=runtime_lite,
+            )
+        )
+
+    @router.post("/api/translator/mobile/bind")
+    async def translator_mobile_bind(
+        request: Request,
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ):
+        """Привязывает companion-device к активной translator session."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        _require_helpers(
+            "translator_gateway_client_helper",
+            "translator_resolve_session_context_helper",
+            "translator_mobile_action_response_helper",
+            "translator_mobile_gateway_error_detail_helper",
+            "translator_control_plane_snapshot",
+        )
+        voice_gateway = ctx.get_dep("translator_gateway_client_helper")()
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="translator_mobile_bind_body_required")
+
+        device_id = str(body.get("device_id") or "").strip().lower()
+        if not device_id:
+            raise HTTPException(status_code=400, detail="device_id_required")
+        (
+            session_id,
+            runtime_lite,
+            _control_plane,
+        ) = await _await_if_needed(
+            ctx.get_dep("translator_resolve_session_context_helper")(
+                requested_session_id=str(body.get("session_id") or "").strip()
+            )
+        )
+        result = await voice_gateway.bind_mobile_device(device_id, session_id=session_id)
+        if not result.get("ok"):
+            err_helper = ctx.get_dep("translator_mobile_gateway_error_detail_helper")
+            status_code, detail = err_helper(result, fallback="translator_mobile_bind_failed")
+            raise HTTPException(status_code=status_code, detail=detail)
+
+        refreshed_control_plane = await _await_if_needed(
+            ctx.get_dep("translator_control_plane_snapshot")(runtime_lite=runtime_lite)
+        )
+        return await _await_if_needed(
+            ctx.get_dep("translator_mobile_action_response_helper")(
+                action="bind_mobile_device",
+                gateway_result={
+                    "ok": True,
+                    "device_id": device_id,
+                    "session_id": session_id,
+                    "result": result.get("result")
+                    if isinstance(result.get("result"), dict)
+                    else {},
+                },
+                runtime_lite=runtime_lite,
+                current_control_plane=refreshed_control_plane,
+            )
+        )
+
+    @router.post("/api/translator/mobile/remove")
+    async def translator_mobile_remove(
+        request: Request,
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ):
+        """Удаляет companion-device из registry через owner panel."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        _require_helpers(
+            "translator_gateway_client_helper",
+            "translator_mobile_action_response_helper",
+            "translator_mobile_gateway_error_detail_helper",
+            "translator_control_plane_snapshot",
+            "translator_mobile_readiness_snapshot",
+        )
+        voice_gateway = ctx.get_dep("translator_gateway_client_helper")()
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="translator_mobile_remove_body_required")
+
+        runtime_lite = await ctx.collect_runtime_lite()
+        control_plane = await _await_if_needed(
+            ctx.get_dep("translator_control_plane_snapshot")(runtime_lite=runtime_lite)
+        )
+        mobile_readiness = await _await_if_needed(
+            ctx.get_dep("translator_mobile_readiness_snapshot")(
+                runtime_lite=runtime_lite,
+                current_control_plane=control_plane,
+            )
+        )
+        device_id = (
+            str(body.get("device_id") or "").strip().lower()
+            or str(((mobile_readiness.get("devices") or {}).get("selected_device_id") or ""))
+            .strip()
+            .lower()
+        )
+        if not device_id:
+            raise HTTPException(status_code=400, detail="device_id_required")
+
+        result = await voice_gateway.delete_mobile_device(device_id)
+        if not result.get("ok"):
+            err_helper = ctx.get_dep("translator_mobile_gateway_error_detail_helper")
+            status_code, detail = err_helper(result, fallback="translator_mobile_remove_failed")
+            raise HTTPException(status_code=status_code, detail=detail)
+
+        refreshed_control_plane = await _await_if_needed(
+            ctx.get_dep("translator_control_plane_snapshot")(runtime_lite=runtime_lite)
+        )
+        return await _await_if_needed(
+            ctx.get_dep("translator_mobile_action_response_helper")(
+                action="remove_mobile_device",
+                gateway_result={
+                    "ok": True,
+                    "device_id": device_id,
+                    "session_id": str(
+                        (
+                            (refreshed_control_plane.get("sessions") or {}).get(
+                                "current_session_id"
+                            )
+                            or ""
+                        )
+                    ).strip(),
+                    "result": result.get("result")
+                    if isinstance(result.get("result"), dict)
+                    else {},
+                },
+                runtime_lite=runtime_lite,
+                current_control_plane=refreshed_control_plane,
+            )
+        )
+
+    @router.post("/api/translator/session/escalate")
+    async def translator_session_escalate(
+        request: Request,
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ):
+        """Эскалирует diagnostics текущей translator session в owner inbox."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        _require_helpers(
+            "translator_resolve_session_context_helper",
+            "translator_session_inspector_snapshot",
+            "translator_readiness_snapshot",
+            "inbox_service_upsert_owner_task_helper",
+            "inbox_service_get_summary_helper",
+        )
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="translator_session_escalate_body_required")
+
+        (
+            session_id,
+            runtime_lite,
+            control_plane,
+        ) = await _await_if_needed(
+            ctx.get_dep("translator_resolve_session_context_helper")(
+                requested_session_id=str(body.get("session_id") or "").strip()
+            )
+        )
+        inspector = await _await_if_needed(
+            ctx.get_dep("translator_session_inspector_snapshot")(
+                runtime_lite=runtime_lite,
+                current_control_plane=control_plane,
+            )
+        )
+        escalation = (
+            dict(inspector.get("escalation") or {})
+            if isinstance(inspector.get("escalation"), dict)
+            else {}
+        )
+        title = str(body.get("title") or escalation.get("suggested_title") or "").strip()
+        summary_body = str(body.get("body") or escalation.get("suggested_body") or "").strip()
+        if not title or not summary_body:
+            raise HTTPException(
+                status_code=400, detail="translator_session_escalation_title_body_required"
+            )
+
+        why_items = (
+            [
+                str(item).strip()
+                for item in ((inspector.get("why_report") or {}).get("items") or [])
+                if str(item).strip()
+            ]
+            if isinstance(inspector.get("why_report"), dict)
+            else []
+        )
+        severity = (
+            "warning"
+            if why_items or str(inspector.get("status") or "") == "gateway_unavailable"
+            else "info"
+        )
+        task_key = str(
+            body.get("task_key") or f"translator-session:{session_id}:diagnostics"
+        ).strip()
+        upsert_helper = ctx.get_dep("inbox_service_upsert_owner_task_helper")
+        result = upsert_helper(
+            title=title,
+            body=summary_body,
+            task_key=task_key,
+            source="translator-ui",
+            severity=severity,
+            team_id="translator",
+            trace_id=f"translator-session:{session_id}",
+            metadata={
+                "translator_session_id": session_id,
+                "translator_session_status": str(inspector.get("session_status") or "").strip(),
+                "translator_gateway_status": str(inspector.get("gateway_status") or "").strip(),
+                "translator_why_items": why_items,
+                "translator_timeline_stats": (
+                    ((inspector.get("timeline") or {}).get("stats") or {})
+                    if isinstance(inspector.get("timeline"), dict)
+                    else {}
+                ),
+                "source_surface": "owner_panel_translator",
+            },
+        )
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=500,
+                detail=str(result.get("error") or "translator_session_escalation_failed"),
+            )
+        readiness = await _await_if_needed(
+            ctx.get_dep("translator_readiness_snapshot")(runtime_lite=runtime_lite)
+        )
+        summary_helper = ctx.get_dep("inbox_service_get_summary_helper")
+        return {
+            "ok": True,
+            "action": "escalate_session",
+            "session_id": session_id,
+            "inbox_result": result.get("item") if isinstance(result.get("item"), dict) else result,
+            "readiness": readiness,
+            "control_plane": control_plane,
+            "session_inspector": inspector,
+            "inbox_summary": summary_helper(),
+        }
+
     return router
