@@ -8690,110 +8690,9 @@ class WebApp:
         # Перенесено в ``web_routers.browser_router`` (Phase 2 Wave U,
         # Session 25). См. include_router ниже после блока /api/chrome/.
 
-        @self.app.get("/api/transcriber/status")
-        async def transcriber_status():
-            """
-            Операционный статус транскрибатора.
-            Нужен для быстрого понимания: жив ли voice-контур и включена ли crash-защита STT.
-            """
-            openclaw = self.deps.get("openclaw_client")
-            voice_gateway = self.deps.get("voice_gateway_client")
-            krab_ear = self.deps.get("krab_ear_client")
-            perceptor = self.deps.get("perceptor")
-            kraab_userbot = self.deps.get("kraab_userbot")
-
-            openclaw_ok = False
-            voice_gateway_ok = False
-            krab_ear_ok = False
-            try:
-                openclaw_ok = bool(await openclaw.health_check()) if openclaw else False
-            except Exception:
-                openclaw_ok = False
-            try:
-                voice_gateway_ok = (
-                    bool(await voice_gateway.health_check()) if voice_gateway else False
-                )
-            except Exception:
-                voice_gateway_ok = False
-            try:
-                krab_ear_ok = bool(await krab_ear.health_check()) if krab_ear else False
-            except Exception:
-                krab_ear_ok = False
-
-            def _env_on(key: str, default: str = "0") -> bool:
-                return str(os.getenv(key, default)).strip().lower() in {"1", "true", "yes", "on"}
-
-            stt_isolated_worker = _env_on("STT_ISOLATED_WORKER", "1")
-            perceptor_ready = bool(perceptor) and hasattr(perceptor, "transcribe")
-            perceptor_isolated_worker = bool(
-                getattr(perceptor, "stt_isolated_worker", stt_isolated_worker)
-            )
-            stt_worker_timeout = int(
-                str(os.getenv("STT_WORKER_TIMEOUT_SECONDS", "240")).strip() or "240"
-            )
-            voice_stack_ready = bool(voice_gateway_ok and krab_ear_ok)
-            voice_profile = {}
-            if kraab_userbot and hasattr(kraab_userbot, "get_voice_runtime_profile"):
-                try:
-                    voice_profile = dict(kraab_userbot.get_voice_runtime_profile() or {})
-                except Exception:
-                    voice_profile = {}
-            live_voice_ready = bool(
-                perceptor_ready and voice_stack_ready and voice_profile.get("enabled")
-            )
-
-            if perceptor_ready and perceptor_isolated_worker and voice_stack_ready:
-                readiness = "ready"
-            elif perceptor_ready:
-                readiness = "degraded"
-            else:
-                readiness = "down"
-            recommendations: list[str] = []
-            if not perceptor_ready:
-                recommendations.append(
-                    "Perceptor/STT не подключён: voice notes не будут транскрибироваться"
-                )
-                recommendations.append("Запусти ./transcriber_doctor.command --heal")
-            if perceptor_ready and not perceptor_isolated_worker:
-                recommendations.append("Включи STT_ISOLATED_WORKER=1 и перезапусти Krab")
-            if not voice_gateway_ok:
-                recommendations.append(
-                    "Voice Gateway недоступен: звонки и live voice-stream будут ограничены"
-                )
-            if not krab_ear_ok:
-                recommendations.append(
-                    "Krab Ear недоступен: wake/call-часть voice-контура деградировала"
-                )
-            if voice_profile:
-                if not bool(voice_profile.get("enabled")):
-                    recommendations.append(
-                        "Voice replies выключены: входящий voice ingress готов, но ответы голосом отключены"
-                    )
-                elif live_voice_ready:
-                    recommendations.append(
-                        "Voice replies включены: foundation для live voice готова"
-                    )
-            if not recommendations:
-                recommendations.append("Система транскрибации в рабочем режиме")
-
-            return {
-                "ok": True,
-                "status": {
-                    "readiness": readiness,
-                    "openclaw_ok": openclaw_ok,
-                    "voice_gateway_ok": voice_gateway_ok,
-                    "krab_ear_ok": krab_ear_ok,
-                    "perceptor_ready": perceptor_ready,
-                    "stt_isolated_worker": perceptor_isolated_worker,
-                    "stt_worker_timeout_seconds": stt_worker_timeout,
-                    "voice_gateway_url": os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090"),
-                    "whisper_model": str(getattr(perceptor, "whisper_model", "")),
-                    "audio_warmup_enabled": _env_on("PERCEPTOR_AUDIO_WARMUP", "0"),
-                    "voice_profile": voice_profile,
-                    "live_voice_ready": live_voice_ready,
-                    "recommendations": recommendations,
-                },
-            }
+        # /api/transcriber/status extracted в
+        # src/modules/web_routers/misc_router.py (Phase 2 Wave Z, Session 25).
+        # См. include_router рядом с health_router.
 
         # /api/voice/runtime, /api/voice/runtime/update, /api/krab_ear/status —
         # extracted в src/modules/web_routers/voice_router.py
@@ -9086,24 +8985,10 @@ class WebApp:
         # (Phase 2 Wave G, Session 25 — RouterContext-based extraction).
         # См. include_router рядом с extras_router.
 
-        @self.app.get("/api/reactions/stats")
-        async def get_reactions_stats(chat_id: int | None = Query(default=None)):
-            """Сводка по реакциям (общая или по чату)."""
-            reaction_engine = self.deps.get("reaction_engine")
-            if not reaction_engine:
-                return {"ok": False, "error": "reaction_engine_not_configured"}
-            return {"ok": True, "stats": reaction_engine.get_reaction_stats(chat_id=chat_id)}
-
-        # /api/reactions/incoming: extracted в src/modules/web_routers/monitoring_router.py
-        # (Session 25 Phase 2 Wave E). См. include_router рядом с runtime_status_router.
-
-        @self.app.get("/api/mood/{chat_id}")
-        async def get_chat_mood(chat_id: int):
-            """Возвращает mood-профиль конкретного чата."""
-            reaction_engine = self.deps.get("reaction_engine")
-            if not reaction_engine:
-                return {"ok": False, "error": "reaction_engine_not_configured"}
-            return {"ok": True, "mood": reaction_engine.get_chat_mood(chat_id)}
+        # /api/reactions/stats, /api/mood/{chat_id} extracted в
+        # src/modules/web_routers/misc_router.py (Phase 2 Wave Z, Session 25).
+        # См. include_router рядом с health_router.
+        # /api/reactions/incoming: extracted в monitoring_router (Wave E).
 
         # /api/links: extracted в extras_router.py (Phase 2 Wave F, Session 25).
         # See include_router в общем блоке version/extras ниже.
@@ -13193,58 +13078,9 @@ class WebApp:
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
-        @self.app.get("/api/inbox/events")
-        async def inbox_events(token: str = Query(default="")):
-            """SSE stream для inbox updates.
-
-            Стримит summary (open/attention/escalations/stale) + items list.
-            Эмитит event 'update' только при реальном изменении состояния.
-            Heartbeat каждые 5 секунд.
-            """
-            from fastapi.responses import StreamingResponse as _StreamingResponse
-
-            async def event_stream():
-                last_hash: Optional[str] = None
-                while True:
-                    try:
-                        workflow = inbox_service.get_workflow_snapshot()
-                        summary = workflow.get("summary") or {}
-                        items = inbox_service.list_items(status="all", kind="", limit=20)
-
-                        payload = {
-                            "summary": summary,
-                            "workflow": workflow,
-                            "items": items,
-                            "ts": datetime.now(timezone.utc).isoformat(),
-                        }
-
-                        current_hash = hashlib.sha256(
-                            json.dumps(
-                                {"summary": summary, "items": items},
-                                sort_keys=True,
-                                default=str,
-                            ).encode()
-                        ).hexdigest()
-
-                        if current_hash != last_hash:
-                            last_hash = current_hash
-                            yield f"event: update\ndata: {json.dumps(payload, default=str)}\n\n"
-                        else:
-                            yield ": heartbeat\n\n"
-
-                        await asyncio.sleep(5)
-                    except asyncio.CancelledError:
-                        break
-                    except Exception as exc:
-                        logger.error("inbox_events_error", error=str(exc))
-                        yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
-                        await asyncio.sleep(10)
-
-            return _StreamingResponse(
-                event_stream(),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
+        # /api/inbox/events extracted в
+        # src/modules/web_routers/misc_router.py (Phase 2 Wave Z, Session 25).
+        # См. include_router рядом с health_router.
 
         # /api/openclaw/report, /api/openclaw/deep-check, /api/openclaw/remediation-plan:
         # extracted в src/modules/web_routers/openclaw_router.py (Session 25 Phase 2 Wave M).
@@ -14032,34 +13868,20 @@ class WebApp:
 
         self.app.include_router(_build_health(self._make_router_context()))
 
+        # /api/transcriber/status, /api/reactions/stats, /api/mood/{chat_id},
+        # /api/inbox/events, /api/chat_windows/{config,list} extracted в
+        # src/modules/web_routers/misc_router.py (Phase 2 Wave Z, Session 25).
+        from .web_routers.misc_router import build_misc_router as _build_misc
+
+        self.app.include_router(_build_misc(self._make_router_context()))
+
         # ── Chat Window Manager endpoints ────────────────────────────────────
 
-        @self.app.get("/api/chat_windows/config")
-        async def chat_windows_config():
-            """Возвращает env-конфигурацию ChatWindowManager."""
-
-            from src.core.chat_window_manager import (
-                CAPACITY,
-                IDLE_EVICTION_SEC,
-                MESSAGE_CAP_PER_WINDOW,
-            )
-
-            return {
-                "ok": True,
-                "capacity": CAPACITY,
-                "message_cap_per_window": MESSAGE_CAP_PER_WINDOW,
-                "idle_eviction_sec": IDLE_EVICTION_SEC,
-            }
-
-        @self.app.get("/api/chat_windows/list")
-        async def chat_windows_list():
-            """Список всех активных окон с метаданными."""
-            windows = chat_window_manager.list_windows()
-            return {
-                "ok": True,
-                "total": len(windows),
-                "windows": windows,
-            }
+        # /api/chat_windows/config, /api/chat_windows/list extracted в
+        # src/modules/web_routers/misc_router.py (Phase 2 Wave Z, Session 25).
+        # См. include_router рядом с health_router.
+        # POST endpoints (/api/chat_windows/evict_idle, /api/chat_windows/clear)
+        # сохранены inline — требуют write access (отложены на след. wave).
 
         @self.app.post("/api/chat_windows/evict_idle")
         async def chat_windows_evict_idle(
