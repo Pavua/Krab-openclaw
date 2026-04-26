@@ -335,6 +335,7 @@ class WebApp:
             idempotency_state={},
             default_port=self.port,
             boot_ts_holder=self._boot_ts_holder,
+            runtime_lite_provider=self._collect_runtime_lite_snapshot,
         )
 
     @staticmethod
@@ -9527,14 +9528,9 @@ class WebApp:
                 "policy_matrix": policy_matrix,
             }
 
-        @self.app.get("/api/policy/matrix")
-        async def get_policy_matrix():
-            """Возвращает unified policy matrix для owner/full/partial/guest."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            return {
-                "ok": True,
-                "policy_matrix": self._policy_matrix_snapshot(runtime_lite=runtime_lite),
-            }
+        # /api/policy/matrix: extracted в policy_router.py
+        # (Phase 2 Wave I, Session 25 — RouterContext-based extraction).
+        # См. include_router рядом с extras_router.
 
         # /api/queue + /api/ctx: extracted в runtime_inspect_router.py
         # (Phase 2 Wave G, Session 25 — RouterContext-based extraction).
@@ -11242,6 +11238,12 @@ class WebApp:
         )
 
         self.app.include_router(_build_runtime_inspect(self._make_router_context()))
+
+        # /api/policy/matrix: extracted в policy_router.py
+        # (Phase 2 Wave I, Session 25).
+        from .web_routers.policy_router import build_policy_router as _build_policy
+
+        self.app.include_router(_build_policy(self._make_router_context()))
 
         # /api/system/info: extracted в src/modules/web_routers/meta_router.py
         # (Session 25). См. include_router ниже.

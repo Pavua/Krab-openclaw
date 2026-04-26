@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable, Optional
 
 
 @dataclass
@@ -48,6 +48,12 @@ class RouterContext:
     # WebApp передаёт sebnyo же list-ref что и в `_boot_ts`, чтобы router
     # видел те же значения.
     boot_ts_holder: list[float] = field(default_factory=list)
+    # Phase 2 Wave I: optional async provider для runtime_lite snapshot.
+    # Если None — router передаёт ``runtime_lite=None`` в helper (matrix
+    # будет построена без runtime-аугментации). WebApp factory передаёт
+    # ``self._collect_runtime_lite_snapshot`` для сохранения исходного
+    # контракта endpoint'ов.
+    runtime_lite_provider: Optional[Callable[[], Awaitable[dict[str, Any]]]] = None
 
     def get_dep(self, name: str, default: Any = None) -> Any:
         """Удобный alias для self.deps.get(name, default)."""
@@ -94,3 +100,13 @@ class RouterContext:
         if not self.boot_ts_holder:
             self.boot_ts_holder.append(_t.time())
         return self.boot_ts_holder[0]
+
+    async def collect_runtime_lite(self) -> dict[str, Any]:
+        """Возвращает runtime_lite snapshot через provider или {}.
+
+        Phase 2 Wave I (Session 25): unblock policy/matrix extraction —
+        router получает runtime_lite через ctx без прямого доступа к WebApp.
+        """
+        if self.runtime_lite_provider is None:
+            return {}
+        return await self.runtime_lite_provider()
