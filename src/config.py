@@ -702,7 +702,7 @@ class Config:
             env_path.write_text("\n".join(new_lines) + "\n")
             return True
         except Exception as e:
-            print(f"Error updating config: {e}")
+            _config_logger.error("config_update_failed", exc_info=True, extra={"error": str(e)})
             return False
 
     @classmethod

@@ -676,10 +676,12 @@ Endpoints session 7 (добавлены, ~249 итого после Session 22):
 | Session 7 | ~6826+ |
 | Session 17 | ~7226+ (+400 новых: memory doctor/rerank/heatmap, skill_scope, cross_ai_review) |
 | Session 22 | 9991 (collected, после Wave 11/12 cleanup) |
+| Session 23 | 9991 collected, 1 intermittent flake (Wave 13 cleanup) |
+| Session 24 | **9527 passed**, 94 skipped, 0 failed (clean state, 538s full run; +busy_timeout test, +health_deep session 24 tests, +sentry markers tests) |
 
 <!-- BEGIN:auto-endpoints -->
 
-### Auto-generated endpoints table (249 маршрутов)
+### Auto-generated endpoints table (257 маршрутов на Session 24)
 
 | Endpoint | Метод |
 |----------|-------|

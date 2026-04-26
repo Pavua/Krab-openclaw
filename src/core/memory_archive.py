@@ -264,6 +264,12 @@ def open_archive(
         conn = sqlite3.connect(paths.db)
 
     conn.execute("PRAGMA foreign_keys = ON;")
+    # busy_timeout=30000 ms (30 sec) — graceful retry на concurrent writers
+    # вместо immediate `database is locked` fail. Defense in depth поверх
+    # WAL journal_mode (который сам по себе уменьшает write-write contention).
+    # Закрывает Session 24 finding: db_lock_monitor pragma_baseline показал
+    # busy_timeout=0 — ноль defensive поведения при race conditions.
+    conn.execute("PRAGMA busy_timeout = 30000;")
     return conn
 
 
