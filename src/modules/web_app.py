@@ -11143,6 +11143,11 @@ class WebApp:
 
         self.app.include_router(_build_voice(self._make_router_context()))
 
+        # Phase 2 Wave M (Session 25): простые openclaw GET endpoints через RouterContext.
+        from .web_routers.openclaw_router import build_openclaw_router as _build_openclaw
+
+        self.app.include_router(_build_openclaw(self._make_router_context()))
+
         # /api/system/info: extracted в src/modules/web_routers/meta_router.py
         # (Session 25). См. include_router ниже.
 
@@ -14149,55 +14154,9 @@ class WebApp:
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
-        @self.app.get("/api/openclaw/report")
-        async def openclaw_report():
-            """Агрегированный health-report OpenClaw."""
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw:
-                return {"available": False, "error": "openclaw_client_not_configured"}
-            if not hasattr(openclaw, "get_health_report"):
-                return {"available": False, "error": "openclaw_report_not_supported"}
-            try:
-                report = await openclaw.get_health_report()
-            except Exception as exc:
-                return {"available": False, "error": "openclaw_report_failed", "detail": str(exc)}
-            return {"available": True, "report": report}
-
-        @self.app.get("/api/openclaw/deep-check")
-        async def openclaw_deep_check():
-            """Расширенная проверка OpenClaw (включая tool smoke и remediation)."""
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw:
-                return {"available": False, "error": "openclaw_client_not_configured"}
-            if not hasattr(openclaw, "get_deep_health_report"):
-                return {"available": False, "error": "openclaw_deep_check_not_supported"}
-            try:
-                report = await openclaw.get_deep_health_report()
-            except Exception as exc:
-                return {
-                    "available": False,
-                    "error": "openclaw_deep_check_failed",
-                    "detail": str(exc),
-                }
-            return {"available": True, "report": report}
-
-        @self.app.get("/api/openclaw/remediation-plan")
-        async def openclaw_remediation_plan():
-            """Пошаговый план исправления OpenClaw контуров."""
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw:
-                return {"available": False, "error": "openclaw_client_not_configured"}
-            if not hasattr(openclaw, "get_remediation_plan"):
-                return {"available": False, "error": "openclaw_remediation_not_supported"}
-            try:
-                report = await openclaw.get_remediation_plan()
-            except Exception as exc:
-                return {
-                    "available": False,
-                    "error": "openclaw_remediation_failed",
-                    "detail": str(exc),
-                }
-            return {"available": True, "report": report}
+        # /api/openclaw/report, /api/openclaw/deep-check, /api/openclaw/remediation-plan:
+        # extracted в src/modules/web_routers/openclaw_router.py (Session 25 Phase 2 Wave M).
+        # См. include_router рядом с voice_router.
 
         @self.app.get("/api/openclaw/browser-smoke")
         async def openclaw_browser_smoke(url: str = "https://example.com"):
@@ -14540,35 +14499,8 @@ class WebApp:
             except Exception as exc:
                 return {"ok": False, "error": "switch_cloud_tier_failed", "detail": str(exc)}
 
-        @self.app.get("/api/openclaw/cloud/tier/state")
-        async def openclaw_cloud_tier_state():
-            """
-            [R23/R25] Диагностика Cloud Tier State.
-
-            Возвращает текущий активный tier (free/paid/default), статистику
-            переключений, метрики (cloud_attempts_total и др.) и конфигурацию.
-            Не содержит секретов — только счётчики событий.
-            """
-            try:
-                openclaw = self.deps.get("openclaw_client")
-                if not openclaw:
-                    return build_ops_response(
-                        status="failed",
-                        error_code="openclaw_client_not_configured",
-                        summary="Openclaw client not configured",
-                    )
-                if not hasattr(openclaw, "get_tier_state_export"):
-                    return build_ops_response(
-                        status="failed",
-                        error_code="tier_state_not_supported",
-                        summary="Tier state not supported",
-                    )
-                tier_state = openclaw.get_tier_state_export()
-                return build_ops_response(status="ok", data={"tier_state": tier_state})
-            except Exception as exc:
-                return build_ops_response(
-                    status="failed", error_code="system_error", summary=str(exc)
-                )
+        # /api/openclaw/cloud/tier/state: extracted в src/modules/web_routers/openclaw_router.py
+        # (Session 25 Phase 2 Wave M). См. include_router рядом с voice_router.
 
         @self.app.post("/api/openclaw/cloud/tier/reset")
         async def openclaw_cloud_tier_reset(
