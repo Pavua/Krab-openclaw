@@ -19,6 +19,11 @@ Endpoints (Wave Q):
 - GET /api/translator/mobile-readiness — readiness iPhone companion
 - GET /api/translator/delivery-matrix  — product truth ordinary/internet tracks
 
+Endpoints (Wave PP):
+- GET /api/translator/bootstrap        — единый first-paint aggregator
+- GET /api/translator/live-trial-preflight — one-shot ordinary-call preflight
+- GET /api/translator/mobile/onboarding   — packet для iPhone companion trial
+
 Контракт ответов сохранён 1:1 с inline definitions из web_app.py.
 """
 
@@ -207,6 +212,130 @@ def build_translator_router(ctx: RouterContext) -> APIRouter:
             current_control_plane=control_plane,
             current_mobile_readiness=mobile_readiness,
         )
+
+    # ------------------------------------------------------------------
+    # Wave PP — HARD aggregator endpoints через помощники snapshot'ов.
+    # bootstrap агрегирует все snapshot'ы (один HTTP roundtrip вместо
+    # каскада); live-trial-preflight и mobile/onboarding — производные
+    # от того же chain'а (readiness → control_plane → mobile → delivery →
+    # preflight → onboarding).
+    # ------------------------------------------------------------------
+
+    async def _translator_full_snapshot_chain(include_onboarding: bool = True) -> dict:
+        """Собирает полный snapshot chain через injected helpers.
+
+        Возвращает dict со всеми срезами, чтобы каждый endpoint мог взять
+        ровно те поля, что ему нужны. include_onboarding=False позволяет
+        избежать лишнего helper-вызова, когда onboarding не нужен.
+        """
+        readiness_fn = ctx.get_dep("translator_readiness_snapshot")
+        control_plane_fn = ctx.get_dep("translator_control_plane_snapshot")
+        inspector_fn = ctx.get_dep("translator_session_inspector_snapshot")
+        mobile_fn = ctx.get_dep("translator_mobile_readiness_snapshot")
+        delivery_fn = ctx.get_dep("translator_delivery_matrix_snapshot")
+        preflight_fn = ctx.get_dep("translator_live_trial_preflight_snapshot")
+        onboarding_fn = ctx.get_dep("translator_mobile_onboarding_snapshot")
+        runtime_lite = await ctx.collect_runtime_lite()
+        readiness = await readiness_fn(runtime_lite=runtime_lite)
+        control_plane = await control_plane_fn(runtime_lite=runtime_lite)
+        session_inspector = await inspector_fn(
+            runtime_lite=runtime_lite,
+            current_control_plane=control_plane,
+        )
+        mobile_readiness = await mobile_fn(
+            runtime_lite=runtime_lite,
+            current_control_plane=control_plane,
+        )
+        delivery_matrix = await delivery_fn(
+            runtime_lite=runtime_lite,
+            current_readiness=readiness,
+            current_control_plane=control_plane,
+            current_mobile_readiness=mobile_readiness,
+        )
+        live_trial_preflight = await preflight_fn(
+            runtime_lite=runtime_lite,
+            current_readiness=readiness,
+            current_delivery_matrix=delivery_matrix,
+            current_mobile_readiness=mobile_readiness,
+        )
+        mobile_onboarding = None
+        if include_onboarding:
+            mobile_onboarding = await onboarding_fn(
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+                current_control_plane=control_plane,
+                current_mobile_readiness=mobile_readiness,
+                current_delivery_matrix=delivery_matrix,
+                current_live_trial_preflight=live_trial_preflight,
+            )
+        return {
+            "runtime_lite": runtime_lite,
+            "readiness": readiness,
+            "control_plane": control_plane,
+            "session_inspector": session_inspector,
+            "mobile_readiness": mobile_readiness,
+            "delivery_matrix": delivery_matrix,
+            "live_trial_preflight": live_trial_preflight,
+            "mobile_onboarding": mobile_onboarding,
+        }
+
+    def _require_pp_helpers() -> None:
+        names = (
+            "translator_readiness_snapshot",
+            "translator_control_plane_snapshot",
+            "translator_session_inspector_snapshot",
+            "translator_mobile_readiness_snapshot",
+            "translator_delivery_matrix_snapshot",
+            "translator_live_trial_preflight_snapshot",
+            "translator_mobile_onboarding_snapshot",
+        )
+        for n in names:
+            if ctx.get_dep(n) is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"translator_helper_missing:{n}",
+                )
+
+    @router.get("/api/translator/bootstrap")
+    async def translator_bootstrap() -> dict:
+        """Единый bootstrap payload для first-paint translator-карточки.
+
+        Снижает cold-load стоимость owner panel: один HTTP roundtrip
+        вместо каскада отдельных fetch; повторно используем snapshot'ы
+        вместо пересчёта readiness/control/mobile по кругу.
+        """
+        from datetime import datetime, timezone
+
+        _require_pp_helpers()
+        chain = await _translator_full_snapshot_chain(include_onboarding=True)
+        readiness = dict(chain["readiness"]) if isinstance(chain["readiness"], dict) else {}
+        readiness["capability_registry_endpoint"] = "/api/capabilities/registry"
+        readiness["policy_matrix_endpoint"] = "/api/policy/matrix"
+        return {
+            "ok": True,
+            "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "readiness": readiness,
+            "control_plane": chain["control_plane"],
+            "session_inspector": chain["session_inspector"],
+            "mobile_readiness": chain["mobile_readiness"],
+            "delivery_matrix": chain["delivery_matrix"],
+            "live_trial_preflight": chain["live_trial_preflight"],
+            "mobile_onboarding": chain["mobile_onboarding"],
+        }
+
+    @router.get("/api/translator/live-trial-preflight")
+    async def translator_live_trial_preflight() -> dict:
+        """Возвращает one-shot truthful preflight для ordinary-call live trial."""
+        _require_pp_helpers()
+        chain = await _translator_full_snapshot_chain(include_onboarding=False)
+        return chain["live_trial_preflight"]
+
+    @router.get("/api/translator/mobile/onboarding")
+    async def translator_mobile_onboarding() -> dict:
+        """Возвращает onboarding packet для реального iPhone companion trial."""
+        _require_pp_helpers()
+        chain = await _translator_full_snapshot_chain(include_onboarding=True)
+        return chain["mobile_onboarding"]
 
     # ------------------------------------------------------------------
     # Wave S — POST endpoints через ctx.assert_write_access.

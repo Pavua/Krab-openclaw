@@ -542,6 +542,17 @@ class WebApp:
             "translator_delivery_matrix_snapshot",
             self._translator_delivery_matrix_snapshot,
         )
+        # Phase 2 Wave PP (Session 25): inject preflight/onboarding snapshot helpers
+        # для extracted aggregator endpoints (bootstrap, live-trial-preflight,
+        # mobile/onboarding) в translator_router.py.
+        deps_dict.setdefault(
+            "translator_live_trial_preflight_snapshot",
+            self._translator_live_trial_preflight_snapshot,
+        )
+        deps_dict.setdefault(
+            "translator_mobile_onboarding_snapshot",
+            self._translator_mobile_onboarding_snapshot,
+        )
 
         # Phase 2 Wave R (Session 25): inject capability/channel snapshot helpers
         # для capabilities_router (без self-bind на WebApp).
@@ -9384,119 +9395,13 @@ class WebApp:
         # /api/translator/history — extracted в translator_router.py (Phase 2 Wave K).
         # /api/translator/translate — extracted в translator_router.py (Phase 2 Wave S).
 
-        @self.app.get("/api/translator/bootstrap")
-        async def translator_bootstrap():
-            """
-            Возвращает единый bootstrap payload для first-paint translator-карточки.
-
-            Это снижает cold-load стоимость owner panel:
-            - один HTTP roundtrip вместо каскада отдельных fetch;
-            - повторно используем уже собранные snapshot'ы, а не пересчитываем
-              readiness/control/mobile по кругу в соседних endpoint'ах.
-            """
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            readiness["capability_registry_endpoint"] = "/api/capabilities/registry"
-            readiness["policy_matrix_endpoint"] = "/api/policy/matrix"
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            session_inspector = await self._translator_session_inspector_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-            mobile_readiness = await self._translator_mobile_readiness_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-            delivery_matrix = await self._translator_delivery_matrix_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-            )
-            live_trial_preflight = await self._translator_live_trial_preflight_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_delivery_matrix=delivery_matrix,
-                current_mobile_readiness=mobile_readiness,
-            )
-            mobile_onboarding = await self._translator_mobile_onboarding_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-                current_delivery_matrix=delivery_matrix,
-                current_live_trial_preflight=live_trial_preflight,
-            )
-            return {
-                "ok": True,
-                "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "readiness": readiness,
-                "control_plane": control_plane,
-                "session_inspector": session_inspector,
-                "mobile_readiness": mobile_readiness,
-                "delivery_matrix": delivery_matrix,
-                "live_trial_preflight": live_trial_preflight,
-                "mobile_onboarding": mobile_onboarding,
-            }
-
+        # /api/translator/bootstrap — extracted в translator_router.py (Phase 2 Wave PP).
         # /api/translator/control-plane — extracted в translator_router.py (Phase 2 Wave Q).
         # /api/translator/session-inspector — extracted в translator_router.py (Phase 2 Wave Q).
         # /api/translator/mobile-readiness — extracted в translator_router.py (Phase 2 Wave Q).
         # /api/translator/delivery-matrix — extracted в translator_router.py (Phase 2 Wave Q).
-
-        @self.app.get("/api/translator/live-trial-preflight")
-        async def translator_live_trial_preflight():
-            """Возвращает one-shot truthful preflight для ordinary-call live trial."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            mobile_readiness = await self._translator_mobile_readiness_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-            delivery_matrix = await self._translator_delivery_matrix_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-            )
-            return await self._translator_live_trial_preflight_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_delivery_matrix=delivery_matrix,
-                current_mobile_readiness=mobile_readiness,
-            )
-
-        @self.app.get("/api/translator/mobile/onboarding")
-        async def translator_mobile_onboarding():
-            """Возвращает onboarding packet для реального iPhone companion trial."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            mobile_readiness = await self._translator_mobile_readiness_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-            delivery_matrix = await self._translator_delivery_matrix_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-            )
-            live_trial_preflight = await self._translator_live_trial_preflight_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_delivery_matrix=delivery_matrix,
-                current_mobile_readiness=mobile_readiness,
-            )
-            return await self._translator_mobile_onboarding_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-                current_delivery_matrix=delivery_matrix,
-                current_live_trial_preflight=live_trial_preflight,
-            )
+        # /api/translator/live-trial-preflight — extracted в translator_router.py (Phase 2 Wave PP).
+        # /api/translator/mobile/onboarding — extracted в translator_router.py (Phase 2 Wave PP).
 
         @self.app.post("/api/translator/mobile/onboarding/export")
         async def translator_mobile_onboarding_export(

@@ -913,3 +913,143 @@ def test_wave_ii_post_endpoints_require_write_access(monkeypatch) -> None:
     ):
         resp = client.post(path, json={})
         assert resp.status_code == 403, f"{path} should require write access"
+
+
+# ---------------------------------------------------------------------------
+# Wave PP — bootstrap / live-trial-preflight / mobile/onboarding
+# ---------------------------------------------------------------------------
+
+
+def _wave_pp_helpers() -> dict:
+    """Helpers Wave PP: расширяет Wave Q-набор preflight + onboarding."""
+    base = _wave_q_helpers()
+    captured = base["_captured"]
+
+    async def live_trial_preflight(
+        *,
+        runtime_lite=None,
+        current_readiness=None,
+        current_delivery_matrix=None,
+        current_mobile_readiness=None,
+    ):
+        captured["calls"].append(
+            ("preflight", current_readiness, current_delivery_matrix, current_mobile_readiness)
+        )
+        return {
+            "ok": True,
+            "kind": "preflight",
+            "readiness_in": current_readiness,
+            "delivery_in": current_delivery_matrix,
+        }
+
+    async def mobile_onboarding(
+        *,
+        runtime_lite=None,
+        current_readiness=None,
+        current_control_plane=None,
+        current_mobile_readiness=None,
+        current_delivery_matrix=None,
+        current_live_trial_preflight=None,
+    ):
+        captured["calls"].append(
+            (
+                "onboarding",
+                current_readiness,
+                current_control_plane,
+                current_mobile_readiness,
+                current_delivery_matrix,
+                current_live_trial_preflight,
+            )
+        )
+        return {
+            "ok": True,
+            "kind": "onboarding",
+            "preflight_in": current_live_trial_preflight,
+        }
+
+    base["translator_live_trial_preflight_snapshot"] = live_trial_preflight
+    base["translator_mobile_onboarding_snapshot"] = mobile_onboarding
+    return base
+
+
+def _ctx_with_pp_helpers() -> tuple[RouterContext, dict]:
+    helpers = _wave_pp_helpers()
+    captured = helpers.pop("_captured")
+    ctx = _build_ctx(deps_extra=helpers, runtime_lite_provider=_fake_runtime_lite)
+    return ctx, captured
+
+
+def test_bootstrap_aggregates_full_chain() -> None:
+    ctx, captured = _ctx_with_pp_helpers()
+    data = _client(ctx).get("/api/translator/bootstrap").json()
+    assert data["ok"] is True
+    assert "collected_at" in data
+    # readiness обогащён двумя endpoint-ссылками.
+    assert data["readiness"]["capability_registry_endpoint"] == "/api/capabilities/registry"
+    assert data["readiness"]["policy_matrix_endpoint"] == "/api/policy/matrix"
+    # все срезы возвращаются.
+    assert data["control_plane"]["kind"] == "control_plane"
+    assert data["session_inspector"]["kind"] == "inspector"
+    assert data["mobile_readiness"]["kind"] == "mobile"
+    assert data["delivery_matrix"]["kind"] == "delivery"
+    assert data["live_trial_preflight"]["kind"] == "preflight"
+    assert data["mobile_onboarding"]["kind"] == "onboarding"
+    # порядок вызовов: readiness и control_plane → перед остальными;
+    # preflight → перед onboarding.
+    kinds = [c[0] for c in captured["calls"]]
+    assert kinds.index("readiness") < kinds.index("delivery")
+    assert kinds.index("control_plane") < kinds.index("mobile")
+    assert kinds.index("preflight") < kinds.index("onboarding")
+
+
+def test_bootstrap_helper_missing_returns_503() -> None:
+    """Без injected helper'ов → HTTPException 503."""
+    ctx = _build_ctx(runtime_lite_provider=_fake_runtime_lite)
+    resp = _client(ctx).get("/api/translator/bootstrap")
+    assert resp.status_code == 503
+    assert "translator_helper_missing" in resp.json()["detail"]
+
+
+def test_live_trial_preflight_returns_helper_payload_with_chain() -> None:
+    ctx, captured = _ctx_with_pp_helpers()
+    data = _client(ctx).get("/api/translator/live-trial-preflight").json()
+    assert data["kind"] == "preflight"
+    # readiness/delivery должны быть прицеплены к preflight-вызову.
+    assert data["readiness_in"]["kind"] == "readiness"
+    assert data["delivery_in"]["kind"] == "delivery"
+    kinds = [c[0] for c in captured["calls"]]
+    # onboarding НЕ должен быть вызван для preflight endpoint.
+    assert "onboarding" not in kinds
+    assert "preflight" in kinds
+
+
+def test_live_trial_preflight_helper_missing_returns_503() -> None:
+    ctx = _build_ctx(runtime_lite_provider=_fake_runtime_lite)
+    resp = _client(ctx).get("/api/translator/live-trial-preflight")
+    assert resp.status_code == 503
+
+
+def test_mobile_onboarding_chains_preflight() -> None:
+    ctx, captured = _ctx_with_pp_helpers()
+    data = _client(ctx).get("/api/translator/mobile/onboarding").json()
+    assert data["kind"] == "onboarding"
+    # onboarding получает preflight payload.
+    assert data["preflight_in"]["kind"] == "preflight"
+    kinds = [c[0] for c in captured["calls"]]
+    # Полная цепочка вплоть до onboarding.
+    for required in (
+        "readiness",
+        "control_plane",
+        "mobile",
+        "delivery",
+        "preflight",
+        "onboarding",
+    ):
+        assert required in kinds
+    assert kinds.index("preflight") < kinds.index("onboarding")
+
+
+def test_mobile_onboarding_helper_missing_returns_503() -> None:
+    ctx = _build_ctx(runtime_lite_provider=_fake_runtime_lite)
+    resp = _client(ctx).get("/api/translator/mobile/onboarding")
+    assert resp.status_code == 503
