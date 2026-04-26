@@ -215,6 +215,65 @@ def test_router_context_assert_write_access_method(monkeypatch):
         ctx.assert_write_access("bad", "")
 
 
+def test_helpers_collect_policy_matrix_snapshot_basic(monkeypatch):
+    """Phase 2 Wave H: promoted policy_matrix snapshot возвращает dict с ключами."""
+    from src.modules.web_routers._helpers import collect_policy_matrix_snapshot
+
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    snap = collect_policy_matrix_snapshot()
+    assert isinstance(snap, dict)
+    # build_policy_matrix должен вернуть structured payload — сверяем
+    # минимум что это dict не пустой (точная shape проверяется на уровне
+    # capability_registry tests).
+    assert snap, "policy matrix snapshot не должен быть пустым"
+
+
+def test_helpers_collect_policy_matrix_snapshot_runtime_lite_passed(monkeypatch):
+    """runtime_lite arg прокидывается в build_policy_matrix без mutation."""
+    from src.modules.web_routers import _helpers as helpers_mod
+
+    captured: dict = {}
+
+    def _fake_build_policy_matrix(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "runtime_seen": kwargs.get("runtime_lite")}
+
+    monkeypatch.setattr(
+        "src.core.capability_registry.build_policy_matrix",
+        _fake_build_policy_matrix,
+    )
+    monkeypatch.setenv("WEB_API_KEY", "abc")
+
+    runtime = {"key": "value"}
+    out = helpers_mod.collect_policy_matrix_snapshot(runtime_lite=runtime)
+    assert out == {"ok": True, "runtime_seen": runtime}
+    assert captured["runtime_lite"] == runtime
+    assert captured["web_write_requires_key"] is True
+
+
+def test_router_context_policy_matrix_snapshot_delegates(monkeypatch):
+    """RouterContext.policy_matrix_snapshot — thin delegating wrapper."""
+    from pathlib import Path
+
+    from src.modules.web_routers._context import RouterContext
+
+    def _fake(**kwargs):
+        return {"delegated": True, "rl": kwargs.get("runtime_lite")}
+
+    monkeypatch.setattr(
+        "src.modules.web_routers._helpers.collect_policy_matrix_snapshot",
+        _fake,
+    )
+    ctx = RouterContext(
+        deps={},
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda *a, **k: None,
+    )
+    out = ctx.policy_matrix_snapshot(runtime_lite={"x": 1})
+    assert out == {"delegated": True, "rl": {"x": 1}}
+
+
 def test_router_context_public_base_url_method(monkeypatch):
     """RouterContext.public_base_url делегирует и учитывает default_port."""
     from pathlib import Path

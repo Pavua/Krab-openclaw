@@ -15,6 +15,7 @@ RouterContext через delegating-методы и могут быть импо
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from fastapi import HTTPException
 
@@ -52,3 +53,27 @@ def assert_write_access(header_key: str, token: str) -> None:
     provided = (header_key or "").strip() or (token or "").strip()
     if provided != expected:
         raise HTTPException(status_code=403, detail="forbidden: invalid WEB_API_KEY")
+
+
+def collect_policy_matrix_snapshot(
+    *,
+    runtime_lite: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Собирает policy matrix поверх ACL и live runtime-lite truth.
+
+    Promoted из ``WebApp._policy_matrix_snapshot`` (Session 25 Wave H).
+    Зависимости разрешаются через module-level helpers / core imports —
+    self-state не требуется.
+    """
+    # Локальные импорты чтобы избежать циклов при загрузке web_routers package.
+    from src.core.access_control import load_acl_runtime_state
+    from src.core.capability_registry import build_policy_matrix
+    from src.core.operator_identity import current_account_id, current_operator_id
+
+    return build_policy_matrix(
+        operator_id=current_operator_id(),
+        account_id=current_account_id(),
+        acl_state=load_acl_runtime_state(),
+        web_write_requires_key=bool(get_web_api_key()),
+        runtime_lite=runtime_lite or {},
+    )

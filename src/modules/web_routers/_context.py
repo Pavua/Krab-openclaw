@@ -68,6 +68,20 @@ class RouterContext:
 
         return get_public_base_url(default_port=self.default_port)
 
+    def policy_matrix_snapshot(
+        self,
+        *,
+        runtime_lite: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Делегирует ``_helpers.collect_policy_matrix_snapshot``.
+
+        Phase 2 Wave H (Session 25): unblock extraction для policy/capabilities
+        endpoints без зависимости от WebApp instance.
+        """
+        from ._helpers import collect_policy_matrix_snapshot
+
+        return collect_policy_matrix_snapshot(runtime_lite=runtime_lite)
+
     def get_boot_ts(self) -> float:
         """Возвращает boot timestamp Krab runtime (lazy init).
 

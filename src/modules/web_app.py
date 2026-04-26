@@ -3610,7 +3610,13 @@ class WebApp:
         *,
         runtime_lite: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Собирает policy matrix поверх ACL и live runtime-lite truth."""
+        """Собирает policy matrix поверх ACL и live runtime-lite truth.
+
+        Phase 2 Wave H (Session 25): тело осталось inline для backwards-compat
+        с тестами, которые патчат ``src.modules.web_app.load_acl_runtime_state``.
+        Promoted module-level вариант — ``web_routers._helpers.collect_policy_matrix_snapshot``
+        — предназначен для router-модулей extracted в Wave I+.
+        """
         return build_policy_matrix(
             operator_id=current_operator_id(),
             account_id=current_account_id(),
