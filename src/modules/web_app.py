@@ -7701,22 +7701,9 @@ class WebApp:
                 else {"enabled": False, "count": 0},
             }
 
-        @self.app.get("/api/message_batcher/stats")
-        async def batcher_stats():
-            """Статистика per-chat message batcher (backpressure буфер)."""
-            from ..core.message_batcher import message_batcher
-
-            return {"ok": True, **message_batcher.stats()}
-
-        @self.app.get("/api/chat_windows/stats")
-        async def chat_windows_stats():
-            """Статистика per-chat ChatWindow LRU manager (Chado blueprint)."""
-            try:
-                from ..core.chat_window_manager import chat_window_manager
-
-                return {"ok": True, **chat_window_manager.stats()}
-            except Exception as exc:  # noqa: BLE001
-                return {"ok": False, "error": str(exc)}
+        # /api/message_batcher/stats, /api/chat_windows/stats:
+        # extracted в src/modules/web_routers/runtime_status_router.py
+        # (Session 25 Phase 2 Wave D). См. include_router рядом с meta_router.
 
         @self.app.get("/api/health")
         async def get_health():
@@ -11422,6 +11409,11 @@ class WebApp:
 
         self.app.include_router(_meta_router)
 
+        # Wave D: 4 stateless GET status endpoints (silence/notify/batcher/chat_windows).
+        from .web_routers.runtime_status_router import router as _runtime_status_router
+
+        self.app.include_router(_runtime_status_router)
+
         @self.app.get("/api/dashboard/summary")
         async def dashboard_summary():
             """Агрегатор для Dashboard V4 — один запрос вместо 15.
@@ -11505,11 +11497,7 @@ class WebApp:
                 "active": str(getattr(_mm, "active_model_id", model)),
             }
 
-        @self.app.get("/api/notify/status")
-        async def notify_status():
-            """Статус tool narration toggle."""
-            return {"ok": True, "enabled": bool(getattr(config, "TOOL_NARRATION_ENABLED", True))}
-
+        # /api/notify/status: extracted в runtime_status_router (Wave D).
         @self.app.post("/api/notify/toggle")
         async def notify_toggle(
             payload: dict = Body(default_factory=dict),
@@ -11757,13 +11745,7 @@ class WebApp:
                 "timeout_sec": swarm_loop_guard._timeout_sec,
             }
 
-        @self.app.get("/api/silence/status")
-        async def silence_status():
-            """Текущий статус тишины."""
-            from ..core.silence_mode import silence_manager
-
-            return {"ok": True, **silence_manager.status()}
-
+        # /api/silence/status: extracted в runtime_status_router (Wave D).
         @self.app.post("/api/silence/toggle")
         async def silence_toggle(
             payload: dict = Body(default_factory=dict),
