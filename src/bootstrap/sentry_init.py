@@ -30,9 +30,18 @@ logger = structlog.get_logger(__name__)
 
 
 # Маркеры benign-ошибок, которые НЕ должны попадать в Sentry.
-# userbot_not_ready: 503 во время Krab boot (15-30s) — это transient,
-# не runtime bug; клиент должен retry по Retry-After.
-_BENIGN_ERROR_MARKERS: tuple[str, ...] = ("userbot_not_ready",)
+# Все три — transient HTTPException во время Krab boot (15-30s):
+#   userbot_not_ready: 503 пока userbot ещё не connected;
+#   router_not_configured: 503 пока model_router не успел init;
+#   Client has not been started yet: pyrogram client startup race;
+# Проявляются если запрос приходит в окно ~5-15s после старта web_app, до
+# полной инициализации userbot/router. Не runtime bug — клиент должен retry
+# по Retry-After.
+_BENIGN_ERROR_MARKERS: tuple[str, ...] = (
+    "userbot_not_ready",
+    "router_not_configured",
+    "Client has not been started yet",
+)
 
 
 def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
