@@ -10921,11 +10921,15 @@ class WebApp:
 
         self.app.include_router(_runtime_status_router)
 
-        # Wave E: 5 stateless GET monitoring endpoints
-        # (sla, ops/metrics, ops/timeline + alias /api/timeline, archive/growth, reactions/incoming).
-        from .web_routers.monitoring_router import router as _monitoring_router
+        # Wave E + Wave T: monitoring + ops endpoints
+        # Wave E: sla, ops/metrics, ops/timeline + alias /api/timeline, archive/growth, reactions/incoming
+        # Wave T: ops/usage, ops/cost-report, ops/runway, ops/executive-summary,
+        #         ops/report, ops/alerts, ops/history (factory pattern, ctx.deps["router"]).
+        from .web_routers.monitoring_router import (
+            build_monitoring_router as _build_monitoring_router,
+        )
 
-        self.app.include_router(_monitoring_router)
+        self.app.include_router(_build_monitoring_router(self._make_router_context()))
 
         @self.app.get("/api/dashboard/summary")
         async def dashboard_summary():
@@ -12870,79 +12874,10 @@ class WebApp:
             self._idempotency_set("model_feedback_submit", idem_key, response_payload)
             return response_payload
 
-        @self.app.get("/api/ops/usage")
-        async def ops_usage():
-            """Агрегированный usage-срез роутера моделей."""
-            router = self.deps["router"]
-            if hasattr(router, "get_usage_summary"):
-                return {"ok": True, "usage": router.get_usage_summary()}
-            return {"ok": False, "error": "usage_summary_not_supported"}
-
-        @self.app.get("/api/ops/cost-report")
-        async def ops_cost_report(
-            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
-        ):
-            """Оценочный отчет по затратам local/cloud маршрутизации."""
-            router = self.deps["router"]
-            if hasattr(router, "get_cost_report"):
-                return {
-                    "ok": True,
-                    "report": router.get_cost_report(monthly_calls_forecast=monthly_calls_forecast),
-                }
-            return {"ok": False, "error": "cost_report_not_supported"}
-
-        @self.app.get("/api/ops/runway")
-        async def ops_runway(
-            credits_usd: float = Query(default=300.0, ge=0.0, le=1000000.0),
-            horizon_days: int = Query(default=80, ge=1, le=3650),
-            reserve_ratio: float = Query(default=0.1, ge=0.0, le=0.95),
-            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
-        ):
-            """План расхода кредитов: burn-rate, runway и safe calls/day."""
-            router = self.deps["router"]
-            if hasattr(router, "get_credit_runway_report"):
-                return {
-                    "ok": True,
-                    "runway": router.get_credit_runway_report(
-                        credits_usd=credits_usd,
-                        horizon_days=horizon_days,
-                        reserve_ratio=reserve_ratio,
-                        monthly_calls_forecast=monthly_calls_forecast,
-                    ),
-                }
-            return {"ok": False, "error": "ops_runway_not_supported"}
-
-        @self.app.get("/api/ops/executive-summary")
-        async def ops_executive_summary(
-            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
-        ):
-            """Компактный ops executive summary: KPI + риски + рекомендации."""
-            router = self.deps["router"]
-            if hasattr(router, "get_ops_executive_summary"):
-                return {
-                    "ok": True,
-                    "summary": router.get_ops_executive_summary(
-                        monthly_calls_forecast=monthly_calls_forecast
-                    ),
-                }
-            return {"ok": False, "error": "ops_executive_summary_not_supported"}
-
-        @self.app.get("/api/ops/report")
-        async def ops_report(
-            history_limit: int = Query(default=20, ge=1, le=200),
-            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
-        ):
-            """Единый ops отчет: usage + alerts + costs + history."""
-            router = self.deps["router"]
-            if hasattr(router, "get_ops_report"):
-                return {
-                    "ok": True,
-                    "report": router.get_ops_report(
-                        history_limit=history_limit,
-                        monthly_calls_forecast=monthly_calls_forecast,
-                    ),
-                }
-            return {"ok": False, "error": "ops_report_not_supported"}
+        # /api/ops/usage, /api/ops/cost-report, /api/ops/runway,
+        # /api/ops/executive-summary, /api/ops/report:
+        # extracted в src/modules/web_routers/monitoring_router.py
+        # (Session 25 Phase 2 Wave T). См. include_router рядом с runtime_status_router.
 
         @self.app.get("/api/ops/report/export")
         async def ops_report_export(
@@ -13038,21 +12973,8 @@ class WebApp:
                 filename=out_path.name,
             )
 
-        @self.app.get("/api/ops/alerts")
-        async def ops_alerts():
-            """Операционные алерты по расходам и маршрутизации."""
-            router = self.deps["router"]
-            if hasattr(router, "get_ops_alerts"):
-                return {"ok": True, "alerts": router.get_ops_alerts()}
-            return {"ok": False, "error": "ops_alerts_not_supported"}
-
-        @self.app.get("/api/ops/history")
-        async def ops_history(limit: int = Query(default=30, ge=1, le=200)):
-            """История ops snapshot-ов (alerts/status over time)."""
-            router = self.deps["router"]
-            if hasattr(router, "get_ops_history"):
-                return {"ok": True, "history": router.get_ops_history(limit=limit)}
-            return {"ok": False, "error": "ops_history_not_supported"}
+        # /api/ops/alerts, /api/ops/history:
+        # extracted в src/modules/web_routers/monitoring_router.py (Wave T).
 
         @self.app.post("/api/ops/maintenance/prune")
         async def ops_prune(

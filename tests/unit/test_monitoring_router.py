@@ -1,17 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-Unit-тесты для monitoring_router (Phase 2 Wave E, Session 25).
+Unit-тесты для monitoring_router (Phase 2 Wave E + Wave T, Session 25).
 
-Покрывают 5 stateless GET endpoints:
+Wave E (5 stateless GET endpoints, singletons / sub-modules):
 - /api/sla
 - /api/ops/metrics
 - /api/ops/timeline + alias /api/timeline
 - /api/archive/growth
 - /api/reactions/incoming
+
+Wave T (7 ops endpoints через ctx.deps["router"]):
+- /api/ops/usage
+- /api/ops/cost-report
+- /api/ops/runway
+- /api/ops/executive-summary
+- /api/ops/report
+- /api/ops/alerts
+- /api/ops/history
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -19,13 +29,32 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.modules.web_routers.monitoring_router import router
+from src.modules.web_routers._context import RouterContext
+from src.modules.web_routers.monitoring_router import build_monitoring_router
+
+
+def _make_ctx(model_router: object | None = None) -> RouterContext:
+    deps: dict = {}
+    if model_router is not None:
+        deps["router"] = model_router
+    return RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: None,
+        assert_write_access_fn=lambda *a, **kw: None,
+    )
 
 
 @pytest.fixture
 def client() -> TestClient:
     app = FastAPI()
-    app.include_router(router)
+    app.include_router(build_monitoring_router(_make_ctx()))
+    return TestClient(app)
+
+
+def _client_with_router(model_router: object) -> TestClient:
+    app = FastAPI()
+    app.include_router(build_monitoring_router(_make_ctx(model_router)))
     return TestClient(app)
 
 
@@ -163,11 +192,7 @@ def _install_fake_reaction_handler(
     stats=None,
     raise_on_recent: Exception | None = None,
 ):
-    """Helper: inject fake src.core.reaction_handler в sys.modules.
-
-    Модуль отсутствует в production codebase (endpoint всегда падает в
-    except path), поэтому для contract-теста мы создаём stub.
-    """
+    """Helper: inject fake src.core.reaction_handler в sys.modules."""
     import sys
     import types
 
@@ -221,3 +246,135 @@ def test_reactions_incoming_module_missing_returns_error(client: TestClient) -> 
     body = resp.json()
     assert body["ok"] is False
     assert "error" in body
+
+
+# ===================================================================
+# Wave T: ops endpoints (ctx.deps["router"])
+# ===================================================================
+
+
+# ---------------- /api/ops/usage ----------------
+
+
+def test_ops_usage_supported() -> None:
+    fake_router = SimpleNamespace(get_usage_summary=MagicMock(return_value={"calls": 42}))
+    resp = _client_with_router(fake_router).get("/api/ops/usage")
+    body = resp.json()
+    assert body == {"ok": True, "usage": {"calls": 42}}
+    fake_router.get_usage_summary.assert_called_once_with()
+
+
+def test_ops_usage_unsupported() -> None:
+    fake_router = SimpleNamespace()  # без метода
+    resp = _client_with_router(fake_router).get("/api/ops/usage")
+    assert resp.json() == {"ok": False, "error": "usage_summary_not_supported"}
+
+
+# ---------------- /api/ops/cost-report ----------------
+
+
+def test_ops_cost_report_passes_forecast() -> None:
+    fake_router = SimpleNamespace(get_cost_report=MagicMock(return_value={"local": 1.0}))
+    resp = _client_with_router(fake_router).get("/api/ops/cost-report?monthly_calls_forecast=8000")
+    body = resp.json()
+    assert body == {"ok": True, "report": {"local": 1.0}}
+    fake_router.get_cost_report.assert_called_once_with(monthly_calls_forecast=8000)
+
+
+def test_ops_cost_report_unsupported() -> None:
+    resp = _client_with_router(SimpleNamespace()).get("/api/ops/cost-report")
+    assert resp.json() == {"ok": False, "error": "cost_report_not_supported"}
+
+
+# ---------------- /api/ops/runway ----------------
+
+
+def test_ops_runway_passes_all_params() -> None:
+    fake_router = SimpleNamespace(
+        get_credit_runway_report=MagicMock(return_value={"days_left": 60})
+    )
+    resp = _client_with_router(fake_router).get(
+        "/api/ops/runway?credits_usd=500&horizon_days=120&reserve_ratio=0.2"
+        "&monthly_calls_forecast=10000"
+    )
+    body = resp.json()
+    assert body == {"ok": True, "runway": {"days_left": 60}}
+    fake_router.get_credit_runway_report.assert_called_once_with(
+        credits_usd=500.0,
+        horizon_days=120,
+        reserve_ratio=0.2,
+        monthly_calls_forecast=10000,
+    )
+
+
+def test_ops_runway_unsupported() -> None:
+    resp = _client_with_router(SimpleNamespace()).get("/api/ops/runway")
+    assert resp.json() == {"ok": False, "error": "ops_runway_not_supported"}
+
+
+# ---------------- /api/ops/executive-summary ----------------
+
+
+def test_ops_executive_summary_supported() -> None:
+    fake_router = SimpleNamespace(
+        get_ops_executive_summary=MagicMock(return_value={"kpi": "ok"})
+    )
+    resp = _client_with_router(fake_router).get("/api/ops/executive-summary")
+    body = resp.json()
+    assert body == {"ok": True, "summary": {"kpi": "ok"}}
+    fake_router.get_ops_executive_summary.assert_called_once_with(monthly_calls_forecast=5000)
+
+
+def test_ops_executive_summary_unsupported() -> None:
+    resp = _client_with_router(SimpleNamespace()).get("/api/ops/executive-summary")
+    assert resp.json() == {"ok": False, "error": "ops_executive_summary_not_supported"}
+
+
+# ---------------- /api/ops/report ----------------
+
+
+def test_ops_report_passes_params() -> None:
+    fake_router = SimpleNamespace(get_ops_report=MagicMock(return_value={"x": 1}))
+    resp = _client_with_router(fake_router).get(
+        "/api/ops/report?history_limit=50&monthly_calls_forecast=7000"
+    )
+    body = resp.json()
+    assert body == {"ok": True, "report": {"x": 1}}
+    fake_router.get_ops_report.assert_called_once_with(
+        history_limit=50, monthly_calls_forecast=7000
+    )
+
+
+def test_ops_report_unsupported() -> None:
+    resp = _client_with_router(SimpleNamespace()).get("/api/ops/report")
+    assert resp.json() == {"ok": False, "error": "ops_report_not_supported"}
+
+
+# ---------------- /api/ops/alerts ----------------
+
+
+def test_ops_alerts_supported() -> None:
+    fake_router = SimpleNamespace(get_ops_alerts=MagicMock(return_value=[{"code": "X"}]))
+    resp = _client_with_router(fake_router).get("/api/ops/alerts")
+    assert resp.json() == {"ok": True, "alerts": [{"code": "X"}]}
+
+
+def test_ops_alerts_unsupported() -> None:
+    resp = _client_with_router(SimpleNamespace()).get("/api/ops/alerts")
+    assert resp.json() == {"ok": False, "error": "ops_alerts_not_supported"}
+
+
+# ---------------- /api/ops/history ----------------
+
+
+def test_ops_history_passes_limit() -> None:
+    fake_router = SimpleNamespace(get_ops_history=MagicMock(return_value=[{"ts": 1}]))
+    resp = _client_with_router(fake_router).get("/api/ops/history?limit=75")
+    body = resp.json()
+    assert body == {"ok": True, "history": [{"ts": 1}]}
+    fake_router.get_ops_history.assert_called_once_with(limit=75)
+
+
+def test_ops_history_unsupported() -> None:
+    resp = _client_with_router(SimpleNamespace()).get("/api/ops/history")
+    assert resp.json() == {"ok": False, "error": "ops_history_not_supported"}
