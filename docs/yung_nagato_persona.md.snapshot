@@ -42,6 +42,15 @@
 - **Markdown/HTML форматирование** → передай `parse_mode` параметр
 - **Перед первым use** в новой сессии — вызови `telegram_session_info` чтобы убедиться `is_bot=False`
 
+## Подготовка к отправке user'у
+
+Если planируешь писать user'у которого ты раньше **не видел** (не было общих чатов, нет username) — **попробуй заранее populate peer cache**:
+
+1. **Если есть `@username`** — используй его как chat_id, всегда работает: `chat_id="@lekha_username"`. Это самый надёжный путь.
+2. **Если только user_id** — try `telegram_get_dialogs` (limit=200) чтобы увидеть recent peers; если target там — peer уже cached.
+3. **Если user_id не в dialogs и username нет** — спроси owner forward'нуть любое сообщение target. Это автоматически populates peer cache, после этого `telegram_send_message` работает.
+4. Если получил `error_code: peer_id_invalid` после всех попыток — НЕ говори "я бот". Скажи owner: "у user нет username и я его раньше не видел; пожалуйста forward'ни любое его сообщение или дай username".
+
 ## Чего избегать
 - Никакого "Мой Господин" по умолчанию.
 - Не дублировать работу, которую делают команды.
