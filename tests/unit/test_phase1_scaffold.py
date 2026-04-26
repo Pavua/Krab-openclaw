@@ -290,3 +290,95 @@ def test_router_context_public_base_url_method(monkeypatch):
         default_port=8765,
     )
     assert ctx.public_base_url() == "http://127.0.0.1:8765"
+
+
+# -------------------------------------------------------------------------
+# Phase 2 Wave P (Session 25): collect_runtime_lite_via_provider helper
+# -------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_helpers_collect_runtime_lite_via_provider_none_returns_empty():
+    """Provider=None → пустой dict, без exception."""
+    from src.modules.web_routers._helpers import collect_runtime_lite_via_provider
+
+    out = await collect_runtime_lite_via_provider(None)
+    assert out == {}
+
+
+@pytest.mark.asyncio
+async def test_helpers_collect_runtime_lite_via_provider_async_provider():
+    """Async provider awaited; dict returned as-is."""
+    from src.modules.web_routers._helpers import collect_runtime_lite_via_provider
+
+    async def provider(*, force_refresh: bool = False):
+        return {"state": "ok", "force_refresh": force_refresh}
+
+    out = await collect_runtime_lite_via_provider(provider, force_refresh=True)
+    assert out == {"state": "ok", "force_refresh": True}
+
+
+@pytest.mark.asyncio
+async def test_helpers_collect_runtime_lite_via_provider_sync_provider():
+    """Sync provider returning dict — without await."""
+    from src.modules.web_routers._helpers import collect_runtime_lite_via_provider
+
+    def provider(*, force_refresh: bool = False):
+        return {"sync": True, "fr": force_refresh}
+
+    out = await collect_runtime_lite_via_provider(provider, force_refresh=False)
+    assert out == {"sync": True, "fr": False}
+
+
+@pytest.mark.asyncio
+async def test_helpers_collect_runtime_lite_via_provider_legacy_signature():
+    """Provider без force_refresh — fallback к bare call (TypeError ladder)."""
+    from src.modules.web_routers._helpers import collect_runtime_lite_via_provider
+
+    async def legacy_provider():
+        return {"legacy": True}
+
+    out = await collect_runtime_lite_via_provider(legacy_provider, force_refresh=True)
+    assert out == {"legacy": True}
+
+
+@pytest.mark.asyncio
+async def test_router_context_collect_runtime_lite_force_refresh(monkeypatch):
+    """RouterContext.collect_runtime_lite пробрасывает force_refresh."""
+    from pathlib import Path
+
+    from src.modules.web_routers._context import RouterContext
+
+    captured: dict[str, bool] = {}
+
+    async def provider(*, force_refresh: bool = False):
+        captured["force_refresh"] = force_refresh
+        return {"ok": True}
+
+    ctx = RouterContext(
+        deps={},
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda *a, **k: None,
+        runtime_lite_provider=provider,
+    )
+    out = await ctx.collect_runtime_lite(force_refresh=True)
+    assert out == {"ok": True}
+    assert captured["force_refresh"] is True
+
+
+@pytest.mark.asyncio
+async def test_router_context_collect_runtime_lite_no_provider_returns_empty():
+    """RouterContext без provider → {}."""
+    from pathlib import Path
+
+    from src.modules.web_routers._context import RouterContext
+
+    ctx = RouterContext(
+        deps={},
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda *a, **k: None,
+    )
+    out = await ctx.collect_runtime_lite()
+    assert out == {}

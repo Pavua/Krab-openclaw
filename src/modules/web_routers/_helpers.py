@@ -55,6 +55,49 @@ def assert_write_access(header_key: str, token: str) -> None:
         raise HTTPException(status_code=403, detail="forbidden: invalid WEB_API_KEY")
 
 
+async def collect_runtime_lite_via_provider(
+    provider: Any,
+    *,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    """Вызывает runtime_lite snapshot через переданный provider.
+
+    Promoted shim для Phase 2 Wave P (Session 25). Полная decoupled-promote
+    исходного ``WebApp._collect_runtime_lite_snapshot`` отложена — у него
+    глубокий граф зависимостей (``_build_runtime_lite_snapshot_uncached`` →
+    ``_overlay_tier_state_on_last_runtime_route`` →
+    ``_normalize_telegram_session_truth`` → ``_telegram_session_snapshot`` →
+    ``_lmstudio_model_snapshot`` → ``_derive_openclaw_auth_state`` →
+    ``_runtime_operator_profile`` + кэш на ``self``). Их вместе ~600 LOC
+    с mutating cache state — promote только всем стеком, без частичного
+    extract'a.
+
+    Этот helper — функциональный fallback: router'ы могут получить snapshot
+    через ``ctx.collect_runtime_lite()`` (уже unblock'ило большинство
+    extractions), либо напрямую через эту функцию + provider (например,
+    в тестах через ``AsyncMock``).
+
+    Args:
+        provider: callable (sync or async) возвращающий snapshot dict;
+            обычно ``WebApp._collect_runtime_lite_snapshot``.
+        force_refresh: если provider поддерживает ``force_refresh`` kwarg —
+            будет передан, иначе игнорируется.
+
+    Returns:
+        dict со snapshot или ``{}`` если provider == None.
+    """
+    if provider is None:
+        return {}
+    try:
+        result = provider(force_refresh=force_refresh)
+    except TypeError:
+        # provider не принимает force_refresh — fallback к bare call.
+        result = provider()
+    if hasattr(result, "__await__"):
+        result = await result
+    return dict(result or {})
+
+
 def collect_policy_matrix_snapshot(
     *,
     runtime_lite: dict[str, Any] | None = None,

@@ -101,12 +101,24 @@ class RouterContext:
             self.boot_ts_holder.append(_t.time())
         return self.boot_ts_holder[0]
 
-    async def collect_runtime_lite(self) -> dict[str, Any]:
+    async def collect_runtime_lite(
+        self,
+        *,
+        force_refresh: bool = False,
+    ) -> dict[str, Any]:
         """Возвращает runtime_lite snapshot через provider или {}.
 
         Phase 2 Wave I (Session 25): unblock policy/matrix extraction —
         router получает runtime_lite через ctx без прямого доступа к WebApp.
+
+        Phase 2 Wave P (Session 25): добавлен ``force_refresh`` kwarg
+        (для endpoints, которым нужен свежий snapshot минуя TTL-cache),
+        делегируется через ``_helpers.collect_runtime_lite_via_provider``
+        для совместимости с provider'ами разных сигнатур.
         """
-        if self.runtime_lite_provider is None:
-            return {}
-        return await self.runtime_lite_provider()
+        from ._helpers import collect_runtime_lite_via_provider
+
+        return await collect_runtime_lite_via_provider(
+            self.runtime_lite_provider,
+            force_refresh=force_refresh,
+        )
