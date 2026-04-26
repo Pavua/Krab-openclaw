@@ -11395,23 +11395,11 @@ class WebApp:
                 "endpoints": sorted(routes, key=lambda r: r["path"]),
             }
 
-        @self.app.get("/api/version")
-        async def version_info():
-            """Версия Краба и session info."""
-            return {
-                "ok": True,
-                "version": "session5",
-                "commits": 113,
-                "tests": 2043,
-                "api_endpoints": 184,
-                "features": [
-                    "translator_mvp",
-                    "swarm_execution",
-                    "channel_parity",
-                    "finops",
-                    "hammerspoon_mcp",
-                ],
-            }
+        # /api/version: extracted в src/modules/web_routers/version_router.py
+        # (Phase 2 proof-of-concept, Session 25). Подключаем через include_router.
+        from .web_routers.version_router import router as _version_router
+
+        self.app.include_router(_version_router)
 
         @self.app.get("/api/uptime")
         async def uptime():
