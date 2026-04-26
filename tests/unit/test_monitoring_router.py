@@ -316,9 +316,7 @@ def test_ops_runway_unsupported() -> None:
 
 
 def test_ops_executive_summary_supported() -> None:
-    fake_router = SimpleNamespace(
-        get_ops_executive_summary=MagicMock(return_value={"kpi": "ok"})
-    )
+    fake_router = SimpleNamespace(get_ops_executive_summary=MagicMock(return_value={"kpi": "ok"}))
     resp = _client_with_router(fake_router).get("/api/ops/executive-summary")
     body = resp.json()
     assert body == {"ok": True, "summary": {"kpi": "ok"}}
@@ -390,9 +388,7 @@ def test_ops_history_unsupported() -> None:
 
 def test_ops_prune_supported(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("WEB_API_KEY", raising=False)
-    fake_router = SimpleNamespace(
-        prune_ops_history=MagicMock(return_value={"deleted": 5})
-    )
+    fake_router = SimpleNamespace(prune_ops_history=MagicMock(return_value={"deleted": 5}))
     resp = _client_with_router(fake_router).post(
         "/api/ops/maintenance/prune", json={"max_age_days": 7, "keep_last": 50}
     )
@@ -403,18 +399,14 @@ def test_ops_prune_supported(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_ops_prune_unsupported(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("WEB_API_KEY", raising=False)
-    resp = _client_with_router(SimpleNamespace()).post(
-        "/api/ops/maintenance/prune", json={}
-    )
+    resp = _client_with_router(SimpleNamespace()).post("/api/ops/maintenance/prune", json={})
     assert resp.json() == {"ok": False, "error": "ops_prune_not_supported"}
 
 
 def test_ops_prune_invalid_auth_returns_403(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WEB_API_KEY", "secret")
     fake_router = SimpleNamespace(prune_ops_history=MagicMock(return_value={}))
-    resp = _client_with_router(fake_router).post(
-        "/api/ops/maintenance/prune", json={}
-    )
+    resp = _client_with_router(fake_router).post("/api/ops/maintenance/prune", json={})
     assert resp.status_code == 403
 
 
@@ -423,9 +415,7 @@ def test_ops_prune_invalid_auth_returns_403(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_ops_ack_supported(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("WEB_API_KEY", raising=False)
-    fake_router = SimpleNamespace(
-        acknowledge_ops_alert=MagicMock(return_value={"acked": True})
-    )
+    fake_router = SimpleNamespace(acknowledge_ops_alert=MagicMock(return_value={"acked": True}))
     resp = _client_with_router(fake_router).post(
         "/api/ops/ack/ALERT_X", json={"actor": "ops_admin", "note": "rolling"}
     )
@@ -454,9 +444,7 @@ def test_ops_ack_invalid_auth_returns_403(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_ops_unack_supported(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("WEB_API_KEY", raising=False)
-    fake_router = SimpleNamespace(
-        clear_ops_alert_ack=MagicMock(return_value={"cleared": True})
-    )
+    fake_router = SimpleNamespace(clear_ops_alert_ack=MagicMock(return_value={"cleared": True}))
     resp = _client_with_router(fake_router).delete("/api/ops/ack/ALERT_X")
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "result": {"cleared": True}}
@@ -474,3 +462,203 @@ def test_ops_unack_invalid_auth_returns_403(monkeypatch: pytest.MonkeyPatch) -> 
     fake_router = SimpleNamespace(clear_ops_alert_ack=MagicMock(return_value={}))
     resp = _client_with_router(fake_router).delete("/api/ops/ack/ALERT_X")
     assert resp.status_code == 403
+
+
+# ===========================================================================
+# Phase 2 Part 2B (Session 27) — /api/ops/{diagnostics, runtime_snapshot,
+# models, report/export, bundle, bundle/export, openclaw-procs}
+# ===========================================================================
+
+
+def _make_ctx_full(
+    *,
+    model_router: object | None = None,
+    extra_deps: dict | None = None,
+) -> RouterContext:
+    deps: dict = {}
+    if model_router is not None:
+        deps["router"] = model_router
+    if extra_deps:
+        deps.update(extra_deps)
+    return RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: None,
+        assert_write_access_fn=lambda *a, **kw: None,
+    )
+
+
+def _client_full(ctx: RouterContext) -> TestClient:
+    app = FastAPI()
+    app.include_router(build_monitoring_router(ctx))
+    return TestClient(app)
+
+
+def test_ops_diagnostics_router_missing(client: TestClient) -> None:
+    """diagnostics возвращает router_not_found без router в deps."""
+    resp = client.get("/api/ops/diagnostics")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": False, "error": "router_not_found"}
+
+
+def test_ops_diagnostics_with_health_service() -> None:
+    """diagnostics использует health_service из deps + resolve helper."""
+
+    class _FakeHealth:
+        async def collect(self) -> dict:
+            return {"resources": {"cpu": 1}, "budget": {"used": 0}}
+
+    fake_router = SimpleNamespace(active_tier="default", local_engine="lmstudio")
+
+    async def _resolve(_r):
+        return {"runtime_reachable": True, "active_model": "m", "loaded_models": []}
+
+    ctx = _make_ctx_full(
+        model_router=fake_router,
+        extra_deps={
+            "health_service": _FakeHealth(),
+            "resolve_local_runtime_truth_helper": _resolve,
+            "watchdog": SimpleNamespace(last_recovery_attempt={"ts": 1}),
+        },
+    )
+    resp = _client_full(ctx).get("/api/ops/diagnostics")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["status"] == "ok"
+    assert data["resources"] == {"cpu": 1}
+    assert data["local_ai"]["available"] is True
+
+
+def test_ops_runtime_snapshot_router_missing(client: TestClient) -> None:
+    """runtime_snapshot без router → router_not_found."""
+    resp = client.get("/api/ops/runtime_snapshot")
+    assert resp.json() == {"ok": False, "error": "router_not_found"}
+
+
+def test_ops_runtime_snapshot_minimal() -> None:
+    """runtime_snapshot собирает agg-snapshot когда router available."""
+    fake_router = SimpleNamespace(
+        active_tier="default",
+        _stats={"local_failures": 1, "cloud_failures": 0},
+        _preflight_cache={},
+        openclaw_client=SimpleNamespace(get_tier_state_export=lambda: {"tier": "default"}),
+    )
+
+    async def _resolve(_r):
+        return {"runtime_reachable": True, "active_model": "x", "loaded_models": ["x"]}
+
+    ctx = _make_ctx_full(
+        model_router=fake_router,
+        extra_deps={"resolve_local_runtime_truth_helper": _resolve},
+    )
+    resp = _client_full(ctx).get("/api/ops/runtime_snapshot")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["router_state"]["active_local_model"] == "x"
+    assert data["tier_state"] == {"tier": "default"}
+
+
+def test_ops_models_unknown_action() -> None:
+    """ops/models возвращает invalid_action для незнакомого action."""
+    fake_router = SimpleNamespace()
+    resp = _client_full(_make_ctx_full(model_router=fake_router)).post(
+        "/api/ops/models", json={"action": "weird"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["error"] == "invalid_action"
+
+
+def test_ops_models_load_requires_model_name() -> None:
+    fake_router = SimpleNamespace()
+    resp = _client_full(_make_ctx_full(model_router=fake_router)).post(
+        "/api/ops/models", json={"action": "load"}
+    )
+    assert resp.json() == {"ok": False, "error": "model_name_required"}
+
+
+def test_ops_models_unload_all_calls_router() -> None:
+    """unload_all action invokes router.unload_models_manual."""
+
+    class _FakeRouter:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def unload_models_manual(self) -> None:
+            self.called = True
+
+    fr = _FakeRouter()
+    resp = _client_full(_make_ctx_full(model_router=fr)).post(
+        "/api/ops/models", json={"action": "unload_all"}
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "action": "unload_all"}
+    assert fr.called is True
+
+
+def test_ops_report_export_unsupported() -> None:
+    """report/export возвращает ops_report_not_supported когда method отсутствует."""
+    fake_router = SimpleNamespace()  # no get_ops_report
+    resp = _client_full(_make_ctx_full(model_router=fake_router)).get("/api/ops/report/export")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": False, "error": "ops_report_not_supported"}
+
+
+def test_ops_bundle_unsupported() -> None:
+    fake_router = SimpleNamespace()
+    resp = _client_full(_make_ctx_full(model_router=fake_router)).get("/api/ops/bundle")
+    assert resp.json() == {"ok": False, "error": "ops_report_not_supported"}
+
+
+def test_ops_bundle_with_health() -> None:
+    """ops/bundle собирает health snapshot из deps."""
+
+    class _Router:
+        def get_ops_report(self, **kwargs):
+            return {"summary": {}}
+
+        async def check_local_health(self) -> bool:
+            return True
+
+    class _OC:
+        async def health_check(self) -> bool:
+            return True
+
+    ctx = _make_ctx_full(
+        model_router=_Router(),
+        extra_deps={"openclaw_client": _OC(), "voice_gateway_client": None},
+    )
+    resp = _client_full(ctx).get("/api/ops/bundle")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["bundle"]["health"]["openclaw"] is True
+    assert data["bundle"]["health"]["local_lm"] is True
+    assert data["bundle"]["health"]["voice_gateway"] is False
+
+
+def test_ops_openclaw_procs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """openclaw-procs возвращает агрегат через core.openclaw_cli_budget."""
+    from src.core import openclaw_cli_budget as ob
+
+    monkeypatch.setattr(
+        ob,
+        "list_openclaw_procs",
+        lambda: [
+            {"is_gateway": True, "pid": 1},
+            {"is_gateway": False, "pid": 2},
+            {"is_gateway": False, "pid": 3},
+        ],
+    )
+    monkeypatch.setattr(ob, "budget_available", lambda: 2)
+    monkeypatch.setattr(ob, "OPENCLAW_CLI_BUDGET", 3)
+
+    resp = _client_full(_make_ctx_full()).get("/api/ops/openclaw-procs")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["total"] == 3
+    assert data["gateway_count"] == 1
+    assert data["transient_count"] == 2
+    assert data["leak_suspected"] is False

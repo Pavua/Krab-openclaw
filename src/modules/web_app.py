@@ -21,7 +21,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .web_routers._context import RouterContext
@@ -30,7 +30,7 @@ import httpx
 import structlog
 import uvicorn
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.config import config  # noqa: E402
@@ -52,7 +52,6 @@ from src.core.capability_registry import (  # noqa: E402
     build_policy_matrix,
     build_system_control_snapshot,
 )
-from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
 from src.core.inbox_service import inbox_service  # noqa: E402
 from src.core.lm_studio_auth import build_lm_studio_auth_headers  # noqa: E402
 from src.core.mcp_registry import (  # noqa: E402
@@ -8921,279 +8920,22 @@ class WebApp:
             """Возвращает capability-срез по control plane и внешним voice/audio сервисам."""
             return await self._ecosystem_capabilities_snapshot()
 
-        async def _system_diagnostics_inline() -> dict:
-            """Локальная реализация system_diagnostics для алиаса /api/ops/diagnostics.
-
-            Логика идентична extracted endpoint'у — дублирование оправдано
-            тем, что ops_diagnostics остаётся inline (Wave T extracted уже
-            ops/* в monitoring_router без него; перенос ops_diagnostics в
-            system_router нарушил бы доменное разделение)."""
-            router = self.deps.get("router")
-            if not router:
-                return {"ok": False, "error": "router_not_found"}
-            health_service = self.deps.get("health_service")
-            if not health_service:
-                health_service = EcosystemHealthService(router=router)
-            health_data = await health_service.collect()
-            local_truth = await self._resolve_local_runtime_truth(router)
-            status = "ok"
-            if not bool(local_truth.get("runtime_reachable")):
-                status = "degraded"
-                if getattr(router, "active_tier", "") == "default":
-                    status = "failed"
-            elif getattr(router, "active_tier", "") == "paid":
-                status = "degraded"
-            return {
-                "ok": True,
-                "status": status,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "resources": health_data.get("resources", {}),
-                "budget": health_data.get("budget", {}),
-                "local_ai": {
-                    "engine": local_truth.get("engine", getattr(router, "local_engine", "unknown")),
-                    "model": local_truth.get("active_model", ""),
-                    "available": bool(local_truth.get("runtime_reachable")),
-                    "loaded_models": local_truth.get("loaded_models", []),
-                },
-                "watchdog": {
-                    "last_recoveries": getattr(
-                        self.deps.get("watchdog"), "last_recovery_attempt", {}
-                    )
-                },
-            }
-
-        @self.app.get("/api/ops/diagnostics")
-        async def ops_diagnostics():
-            """[R12] Унифицированный операционный отчет (алиас system/diagnostics с расширением)."""
-            return await _system_diagnostics_inline()
-
-        @self.app.get("/api/ops/runtime_snapshot")
-        async def ops_runtime_snapshot():
-            """Deep observability snapshot linking all states."""
-            router = self.deps.get("router")
-            if not router:
-                return {"ok": False, "error": "router_not_found"}
-            local_truth = await self._resolve_local_runtime_truth(router)
-
-            task_queue = self.deps.get("queue")
-            queue_stats = (
-                task_queue.get_metrics() if getattr(task_queue, "get_metrics", None) else {}
-            )
-
-            openclaw = router.openclaw_client
-            tier_state = (
-                openclaw.get_tier_state_export()
-                if getattr(openclaw, "get_tier_state_export", None)
-                else {}
-            )
-            operator_workflow = inbox_service.get_workflow_snapshot()
-            workspace_state = build_workspace_state_snapshot()
-
-            return {
-                "ok": True,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "router_state": {
-                    "is_local_available": bool(local_truth.get("runtime_reachable")),
-                    "active_local_model": local_truth.get("active_model", ""),
-                    "loaded_local_models": local_truth.get("loaded_models", []),
-                    "active_tier": getattr(router, "active_tier", "default"),
-                    "local_failures": router._stats.get("local_failures", 0),
-                    "cloud_failures": router._stats.get("cloud_failures", 0),
-                },
-                "tier_state": tier_state,
-                "breaker_state": {
-                    "preflight_cache": {
-                        k: {"expires_in": v[0] - time.time(), "error": v[1]}
-                        for k, v in getattr(router, "_preflight_cache", {}).items()
-                        if v[0] > time.time()
-                    }
-                },
-                "operator_workflow": operator_workflow,
-                "workspace_state": workspace_state,
-                "queue_depth": queue_stats.get("active_tasks", 0),
-                "queue_stats": queue_stats,
-                "observability": get_observability_snapshot(),
-            }
-
-        @self.app.post("/api/ops/models")
-        async def ops_models_control(
-            payload: Dict[str, Any] = Body(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            [R12] Управление жизненным циклом локальных моделей.
-            Payload: {"action": "load"|"unload"|"unload_all", "model": "model_name"}
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps.get("router")
-            if not router:
-                return {"ok": False, "error": "router_not_found"}
-
-            action = payload.get("action")
-            model_name = payload.get("model")
-
-            try:
-                if action == "load":
-                    if not model_name:
-                        return {"ok": False, "error": "model_name_required"}
-                    success = await router.load_local_model(model_name)
-                    return {"ok": success, "action": action, "model": model_name}
-
-                elif action == "unload":
-                    if not model_name:
-                        return {"ok": False, "error": "model_name_required"}
-                    success = await router.unload_model_manual(model_name)
-                    return {"ok": success, "action": action, "model": model_name}
-
-                elif action == "unload_all":
-                    await router.unload_models_manual()
-                    return {"ok": True, "action": action}
-
-                else:
-                    return {
-                        "ok": False,
-                        "error": "invalid_action",
-                        "supported": ["load", "unload", "unload_all"],
-                    }
-            except Exception as e:
-                logger.error("ops_models_control_failed", error=str(e))
-                return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        # /api/ops/{diagnostics, runtime_snapshot, models, report/export,
+        # bundle, bundle/export, openclaw-procs} — extracted в
+        # monitoring_router.py (Phase 2 Part 2B, Session 27).
+        # Удалено _system_diagnostics_inline + 7 endpoints inline.
 
         def _normalize_force_mode(force_mode: str) -> str:
-            """Нормализует внутренние force_* режимы в UI-вид: auto/local/cloud."""
+            """Нормализует внутренние force_* режимы в UI-вид: auto/local/cloud.
+
+            Используется ниже в /api/assistant/* endpoints (inline).
+            """
             normalized = str(force_mode or "").strip().lower()
             if normalized in {"force_local", "local"}:
                 return "local"
             if normalized in {"force_cloud", "cloud"}:
                 return "cloud"
             return "auto"
-
-        @self.app.get("/api/ops/report/export")
-        async def ops_report_export(
-            history_limit: int = Query(default=50, ge=1, le=200),
-            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
-        ):
-            """Экспортирует полный ops report в JSON-файл."""
-            router = self.deps["router"]
-            if not hasattr(router, "get_ops_report"):
-                return {"ok": False, "error": "ops_report_not_supported"}
-            report = router.get_ops_report(
-                history_limit=history_limit,
-                monthly_calls_forecast=monthly_calls_forecast,
-            )
-            ops_dir = Path("artifacts/ops")
-            ops_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
-            out_path = ops_dir / f"ops_report_web_{stamp}.json"
-            with out_path.open("w", encoding="utf-8") as fp:
-                json.dump(report, fp, ensure_ascii=False, indent=2)
-            return FileResponse(
-                str(out_path),
-                media_type="application/json",
-                filename=out_path.name,
-            )
-
-        @self.app.get("/api/ops/bundle")
-        async def ops_bundle(
-            history_limit: int = Query(default=50, ge=1, le=200),
-            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
-        ):
-            """Единый bundle: ops report + health snapshot."""
-            router = self.deps["router"]
-            if not hasattr(router, "get_ops_report"):
-                return {"ok": False, "error": "ops_report_not_supported"}
-            openclaw = self.deps.get("openclaw_client")
-            voice_gateway = self.deps.get("voice_gateway_client")
-            local_ok = await router.check_local_health()
-            openclaw_ok = await openclaw.health_check() if openclaw else False
-            voice_ok = await voice_gateway.health_check() if voice_gateway else False
-            return {
-                "ok": True,
-                "bundle": {
-                    "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                    "ops_report": router.get_ops_report(
-                        history_limit=history_limit,
-                        monthly_calls_forecast=monthly_calls_forecast,
-                    ),
-                    "health": {
-                        "openclaw": openclaw_ok,
-                        "local_lm": local_ok,
-                        "voice_gateway": voice_ok,
-                    },
-                },
-            }
-
-        @self.app.get("/api/ops/bundle/export")
-        async def ops_bundle_export(
-            history_limit: int = Query(default=50, ge=1, le=200),
-            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
-        ):
-            """Экспортирует единый ops bundle в JSON-файл."""
-            router = self.deps["router"]
-            if not hasattr(router, "get_ops_report"):
-                return {"ok": False, "error": "ops_report_not_supported"}
-            openclaw = self.deps.get("openclaw_client")
-            voice_gateway = self.deps.get("voice_gateway_client")
-            local_ok = await router.check_local_health()
-            openclaw_ok = await openclaw.health_check() if openclaw else False
-            voice_ok = await voice_gateway.health_check() if voice_gateway else False
-
-            payload = {
-                "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "ops_report": router.get_ops_report(
-                    history_limit=history_limit,
-                    monthly_calls_forecast=monthly_calls_forecast,
-                ),
-                "health": {
-                    "openclaw": openclaw_ok,
-                    "local_lm": local_ok,
-                    "voice_gateway": voice_ok,
-                },
-            }
-            ops_dir = Path("artifacts/ops")
-            ops_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
-            out_path = ops_dir / f"ops_bundle_web_{stamp}.json"
-            with out_path.open("w", encoding="utf-8") as fp:
-                json.dump(payload, fp, ensure_ascii=False, indent=2)
-            return FileResponse(
-                str(out_path),
-                media_type="application/json",
-                filename=out_path.name,
-            )
-
-        @self.app.get("/api/ops/openclaw-procs")
-        async def ops_openclaw_procs():
-            """Список текущих openclaw-процессов с командой, возрастом и RSS MB.
-
-            Steady-state ожидаемые: 1 openclaw-gateway.
-            Transient CLI (openclaw models status/list, cron list и т.д.) должны
-            появляться только под семафором budget=3 и исчезать сразу после завершения.
-            Количество > 4 указывает на лик.
-            """
-            from ..core.openclaw_cli_budget import (
-                OPENCLAW_CLI_BUDGET,
-                budget_available,
-                list_openclaw_procs,
-            )
-
-            procs = list_openclaw_procs()
-            gateways = [p for p in procs if p.get("is_gateway")]
-            transient = [p for p in procs if not p.get("is_gateway")]
-            total = len(procs)
-            leak_suspected = total > (1 + OPENCLAW_CLI_BUDGET)
-            return {
-                "ok": True,
-                "total": total,
-                "expected_steady_state": 1,
-                "transient_count": len(transient),
-                "gateway_count": len(gateways),
-                "budget_slots_free": budget_available(),
-                "budget_total": OPENCLAW_CLI_BUDGET,
-                "leak_suspected": leak_suspected,
-                "processes": procs,
-            }
 
         from .web_routers.assistant_router import build_assistant_router as _build_assistant
 

@@ -325,4 +325,281 @@ def build_monitoring_router(ctx: RouterContext) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "result": result}
 
+    # ---------------------------------------------------------------------
+    # Phase 2 Part 2B (Session 27): /api/ops/{diagnostics, runtime_snapshot,
+    # models, report/export, bundle, bundle/export, openclaw-procs}
+    # ---------------------------------------------------------------------
+
+    @router.get("/api/ops/diagnostics")
+    async def ops_diagnostics() -> dict:
+        """[R12] Унифицированный операционный отчет (alias system/diagnostics)."""
+        from datetime import datetime, timezone
+
+        from ...core.ecosystem_health import EcosystemHealthService
+
+        model_router = ctx.deps.get("router")
+        if not model_router:
+            return {"ok": False, "error": "router_not_found"}
+        health_service = ctx.deps.get("health_service")
+        if not health_service:
+            health_service = EcosystemHealthService(router=model_router)
+        health_data = await health_service.collect()
+
+        resolve_helper = ctx.get_dep("resolve_local_runtime_truth_helper")
+        if resolve_helper is None:
+            local_truth = {}
+        else:
+            local_truth = await resolve_helper(model_router)
+
+        watchdog = ctx.deps.get("watchdog")
+        status = "ok"
+        if not bool(local_truth.get("runtime_reachable")):
+            status = "degraded"
+            if getattr(model_router, "active_tier", "") == "default":
+                status = "failed"
+        elif getattr(model_router, "active_tier", "") == "paid":
+            status = "degraded"
+        return {
+            "ok": True,
+            "status": status,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "resources": health_data.get("resources", {}),
+            "budget": health_data.get("budget", {}),
+            "local_ai": {
+                "engine": local_truth.get(
+                    "engine", getattr(model_router, "local_engine", "unknown")
+                ),
+                "model": local_truth.get("active_model", ""),
+                "available": bool(local_truth.get("runtime_reachable")),
+                "loaded_models": local_truth.get("loaded_models", []),
+            },
+            "watchdog": {
+                "last_recoveries": getattr(watchdog, "last_recovery_attempt", {}),
+            },
+        }
+
+    @router.get("/api/ops/runtime_snapshot")
+    async def ops_runtime_snapshot() -> dict:
+        """Deep observability snapshot linking all states."""
+        # Late-bound inbox_service для совместимости с monkeypatch via web_app.
+        import sys as _sys
+        import time as _time
+        from datetime import datetime, timezone
+
+        from ...core.observability import get_observability_snapshot
+        from ...core.openclaw_workspace import build_workspace_state_snapshot
+
+        _wam = _sys.modules.get("src.modules.web_app")
+        if _wam is not None and hasattr(_wam, "inbox_service"):
+            _inbox_service = getattr(_wam, "inbox_service")
+        else:
+            from ...core.inbox_service import inbox_service as _inbox_service
+
+        model_router = ctx.deps.get("router")
+        if not model_router:
+            return {"ok": False, "error": "router_not_found"}
+
+        resolve_helper = ctx.get_dep("resolve_local_runtime_truth_helper")
+        if resolve_helper is None:
+            local_truth = {}
+        else:
+            local_truth = await resolve_helper(model_router)
+
+        task_queue = ctx.deps.get("queue")
+        queue_stats = task_queue.get_metrics() if getattr(task_queue, "get_metrics", None) else {}
+
+        openclaw = getattr(model_router, "openclaw_client", None)
+        tier_state = (
+            openclaw.get_tier_state_export()
+            if openclaw is not None and getattr(openclaw, "get_tier_state_export", None)
+            else {}
+        )
+        operator_workflow = _inbox_service.get_workflow_snapshot()
+        workspace_state = build_workspace_state_snapshot()
+
+        return {
+            "ok": True,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "router_state": {
+                "is_local_available": bool(local_truth.get("runtime_reachable")),
+                "active_local_model": local_truth.get("active_model", ""),
+                "loaded_local_models": local_truth.get("loaded_models", []),
+                "active_tier": getattr(model_router, "active_tier", "default"),
+                "local_failures": model_router._stats.get("local_failures", 0),
+                "cloud_failures": model_router._stats.get("cloud_failures", 0),
+            },
+            "tier_state": tier_state,
+            "breaker_state": {
+                "preflight_cache": {
+                    k: {"expires_in": v[0] - _time.time(), "error": v[1]}
+                    for k, v in getattr(model_router, "_preflight_cache", {}).items()
+                    if v[0] > _time.time()
+                }
+            },
+            "operator_workflow": operator_workflow,
+            "workspace_state": workspace_state,
+            "queue_depth": queue_stats.get("active_tasks", 0),
+            "queue_stats": queue_stats,
+            "observability": get_observability_snapshot(),
+        }
+
+    @router.post("/api/ops/models")
+    async def ops_models_control(
+        payload: dict = Body(...),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """[R12] Управление жизненным циклом локальных моделей.
+
+        Payload: {"action": "load"|"unload"|"unload_all", "model": "model_name"}.
+        """
+        ctx.assert_write_access(x_krab_web_key, token)
+        model_router = ctx.deps.get("router")
+        if not model_router:
+            return {"ok": False, "error": "router_not_found"}
+
+        action = payload.get("action")
+        model_name = payload.get("model")
+        try:
+            if action == "load":
+                if not model_name:
+                    return {"ok": False, "error": "model_name_required"}
+                success = await model_router.load_local_model(model_name)
+                return {"ok": success, "action": action, "model": model_name}
+            elif action == "unload":
+                if not model_name:
+                    return {"ok": False, "error": "model_name_required"}
+                success = await model_router.unload_model_manual(model_name)
+                return {"ok": success, "action": action, "model": model_name}
+            elif action == "unload_all":
+                await model_router.unload_models_manual()
+                return {"ok": True, "action": action}
+            else:
+                return {
+                    "ok": False,
+                    "error": "invalid_action",
+                    "supported": ["load", "unload", "unload_all"],
+                }
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    @router.get("/api/ops/report/export")
+    async def ops_report_export(
+        history_limit: int = Query(default=50, ge=1, le=200),
+        monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
+    ):
+        """Экспортирует полный ops report в JSON-файл."""
+        import json as _json
+        from datetime import datetime, timezone
+        from pathlib import Path as _Path
+
+        from fastapi.responses import FileResponse
+
+        model_router = ctx.deps["router"]
+        if not hasattr(model_router, "get_ops_report"):
+            return {"ok": False, "error": "ops_report_not_supported"}
+        report = model_router.get_ops_report(
+            history_limit=history_limit,
+            monthly_calls_forecast=monthly_calls_forecast,
+        )
+        ops_dir = _Path("artifacts/ops")
+        ops_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
+        out_path = ops_dir / f"ops_report_web_{stamp}.json"
+        with out_path.open("w", encoding="utf-8") as fp:
+            _json.dump(report, fp, ensure_ascii=False, indent=2)
+        return FileResponse(
+            str(out_path),
+            media_type="application/json",
+            filename=out_path.name,
+        )
+
+    async def _build_ops_bundle_payload(history_limit: int, monthly_calls_forecast: int) -> dict:
+        from datetime import datetime, timezone
+
+        model_router = ctx.deps["router"]
+        if not hasattr(model_router, "get_ops_report"):
+            return {"_error": "ops_report_not_supported"}
+        openclaw = ctx.deps.get("openclaw_client")
+        voice_gateway = ctx.deps.get("voice_gateway_client")
+        local_ok = await model_router.check_local_health()
+        openclaw_ok = await openclaw.health_check() if openclaw else False
+        voice_ok = await voice_gateway.health_check() if voice_gateway else False
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "ops_report": model_router.get_ops_report(
+                history_limit=history_limit,
+                monthly_calls_forecast=monthly_calls_forecast,
+            ),
+            "health": {
+                "openclaw": openclaw_ok,
+                "local_lm": local_ok,
+                "voice_gateway": voice_ok,
+            },
+        }
+
+    @router.get("/api/ops/bundle")
+    async def ops_bundle(
+        history_limit: int = Query(default=50, ge=1, le=200),
+        monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
+    ) -> dict:
+        """Единый bundle: ops report + health snapshot."""
+        payload = await _build_ops_bundle_payload(history_limit, monthly_calls_forecast)
+        if "_error" in payload:
+            return {"ok": False, "error": payload["_error"]}
+        return {"ok": True, "bundle": payload}
+
+    @router.get("/api/ops/bundle/export")
+    async def ops_bundle_export(
+        history_limit: int = Query(default=50, ge=1, le=200),
+        monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
+    ):
+        """Экспортирует единый ops bundle в JSON-файл."""
+        import json as _json
+        from datetime import datetime, timezone
+        from pathlib import Path as _Path
+
+        from fastapi.responses import FileResponse
+
+        payload = await _build_ops_bundle_payload(history_limit, monthly_calls_forecast)
+        if "_error" in payload:
+            return {"ok": False, "error": payload["_error"]}
+        ops_dir = _Path("artifacts/ops")
+        ops_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
+        out_path = ops_dir / f"ops_bundle_web_{stamp}.json"
+        with out_path.open("w", encoding="utf-8") as fp:
+            _json.dump(payload, fp, ensure_ascii=False, indent=2)
+        return FileResponse(
+            str(out_path),
+            media_type="application/json",
+            filename=out_path.name,
+        )
+
+    @router.get("/api/ops/openclaw-procs")
+    async def ops_openclaw_procs() -> dict:
+        """Список текущих openclaw-процессов с командой, возрастом и RSS MB."""
+        from ...core.openclaw_cli_budget import (
+            OPENCLAW_CLI_BUDGET,
+            budget_available,
+            list_openclaw_procs,
+        )
+
+        procs = list_openclaw_procs()
+        gateways = [p for p in procs if p.get("is_gateway")]
+        transient = [p for p in procs if not p.get("is_gateway")]
+        total = len(procs)
+        leak_suspected = total > (1 + OPENCLAW_CLI_BUDGET)
+        return {
+            "ok": True,
+            "total": total,
+            "expected_steady_state": 1,
+            "transient_count": len(transient),
+            "gateway_count": len(gateways),
+            "budget_slots_free": budget_available(),
+            "budget_total": OPENCLAW_CLI_BUDGET,
+            "leak_suspected": leak_suspected,
+            "processes": procs,
+        }
+
     return router
