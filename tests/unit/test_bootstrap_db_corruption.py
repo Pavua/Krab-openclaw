@@ -55,8 +55,14 @@ def test_is_corruption_error_positive_malformed() -> None:
     )
 
 
-def test_is_corruption_error_positive_disk_io() -> None:
-    assert is_corruption_error("disk I/O error")
+def test_is_corruption_error_disk_io_excluded_from_hard_markers() -> None:
+    """Session 26 lesson: disk I/O error — transient OS issue, не corruption.
+
+    False positive case 26.04: Pyrogram открыл WAL когда file system был busy,
+    integrity_check на quarantined session показал 'ok', 380 peers, valid auth_key.
+    Quarantine был ложным. disk I/O error удалён из _HARD_CORRUPTION_MARKERS.
+    """
+    assert not is_corruption_error("disk I/O error")
 
 
 def test_is_corruption_error_positive_not_a_database() -> None:

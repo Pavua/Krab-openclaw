@@ -57,9 +57,17 @@ _CORRUPTION_MARKERS: tuple[str, ...] = (
 
 # Реальные corruption-маркеры (обязательная quarantine).
 # `database is locked` НЕ здесь — он transient, не corruption.
+# Session 26 lesson: `disk i/o error` исключён из HARD markers — он часто
+# transient (OS-level file system busy / WAL contention), не corruption.
+# False positive case 26.04: после Krab restart Pyrogram открыл WAL
+# когда file system был busy, integrity_check на quarantined session
+# показал 'ok', 380 peers, valid auth_key. Quarantine был ложным.
+# Теперь disk i/o error НЕ trigger-it auto-quarantine; вместо этого
+# bootstrap ловит OperationalError, log warning, retry на следующем cycle
+# (launchd KeepAlive перезапустит). Если after retry — реально corrupt
+# (malformed pages) — другой marker сработает.
 _HARD_CORRUPTION_MARKERS: tuple[str, ...] = (
     "database disk image is malformed",
-    "disk i/o error",
     "file is not a database",
     "file is encrypted or is not a database",
     "malformed database schema",
