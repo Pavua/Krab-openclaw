@@ -456,3 +456,220 @@ def test_openclaw_runtime_config_helper_unavailable() -> None:
     body = _client(_build_ctx_with_helpers()).get("/api/openclaw/runtime-config").json()
     assert body["ok"] is False
     assert body["error"] == "helper_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# Wave EE: /api/openclaw/model-routing/status, /api/openclaw/model-compat/probe
+# ---------------------------------------------------------------------------
+
+
+def _build_ctx_wave_ee(
+    *,
+    routing_helper: object | None = None,
+    overlay_helper: object | None = None,
+    compat_probe_helper: object | None = None,
+    autoswitch_helper: object | None = None,
+    openclaw: object | None = None,
+) -> RouterContext:
+    """Контекст с инжектированными Wave EE helpers."""
+    deps: dict = {}
+    if routing_helper is not None:
+        deps["openclaw_model_routing_helper"] = routing_helper
+    if overlay_helper is not None:
+        deps["openclaw_model_routing_overlay_helper"] = overlay_helper
+    if compat_probe_helper is not None:
+        deps["openclaw_model_compat_probe_helper"] = compat_probe_helper
+    if autoswitch_helper is not None:
+        deps["openclaw_model_autoswitch_helper"] = autoswitch_helper
+    if openclaw is not None:
+        deps["openclaw_client"] = openclaw
+    return RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+
+
+def test_openclaw_model_routing_status_ok_with_overlay() -> None:
+    """GET /api/openclaw/model-routing/status: routing + overlay helper вызваны."""
+    seen: dict = {}
+
+    def _routing() -> dict:
+        return {"primary": "gemini-3-pro", "fallbacks": []}
+
+    def _overlay(*, routing: dict, last_runtime_route: dict) -> dict:
+        seen["routing"] = routing
+        seen["last_route"] = last_runtime_route
+        return {**routing, "last_runtime_route": last_runtime_route}
+
+    class _Client:
+        def get_last_runtime_route(self) -> dict:
+            return {"channel": "openclaw_cloud", "model": "gemini-3-pro"}
+
+    body = (
+        _client(
+            _build_ctx_wave_ee(
+                routing_helper=_routing,
+                overlay_helper=_overlay,
+                openclaw=_Client(),
+            )
+        )
+        .get("/api/openclaw/model-routing/status")
+        .json()
+    )
+    assert body["ok"] is True
+    assert body["routing"]["primary"] == "gemini-3-pro"
+    assert body["routing"]["last_runtime_route"]["channel"] == "openclaw_cloud"
+    assert seen["last_route"]["model"] == "gemini-3-pro"
+
+
+def test_openclaw_model_routing_status_no_openclaw_client() -> None:
+    """Без openclaw_client overlay получает пустой last_runtime_route."""
+    captured: dict = {}
+
+    def _routing() -> dict:
+        return {"primary": "p"}
+
+    def _overlay(*, routing: dict, last_runtime_route: dict) -> dict:
+        captured["last"] = last_runtime_route
+        return routing
+
+    body = (
+        _client(_build_ctx_wave_ee(routing_helper=_routing, overlay_helper=_overlay))
+        .get("/api/openclaw/model-routing/status")
+        .json()
+    )
+    assert body["ok"] is True
+    assert captured["last"] == {}
+
+
+def test_openclaw_model_routing_status_helper_unavailable() -> None:
+    """Если helpers не инжектированы — soft error."""
+    body = _client(_build_ctx_wave_ee()).get("/api/openclaw/model-routing/status").json()
+    assert body["ok"] is False
+    assert body["error"] == "helper_unavailable"
+
+
+def test_openclaw_model_routing_status_swallows_get_last_route_error() -> None:
+    """Если openclaw.get_last_runtime_route бросает — last_runtime_route={}, не падаем."""
+
+    def _routing() -> dict:
+        return {"primary": "p"}
+
+    captured: dict = {}
+
+    def _overlay(*, routing: dict, last_runtime_route: dict) -> dict:
+        captured["last"] = last_runtime_route
+        return routing
+
+    class _BadClient:
+        def get_last_runtime_route(self) -> dict:
+            raise RuntimeError("boom")
+
+    body = (
+        _client(
+            _build_ctx_wave_ee(
+                routing_helper=_routing, overlay_helper=_overlay, openclaw=_BadClient()
+            )
+        )
+        .get("/api/openclaw/model-routing/status")
+        .json()
+    )
+    assert body["ok"] is True
+    assert captured["last"] == {}
+
+
+def test_openclaw_model_compat_probe_ok_passes_query() -> None:
+    """GET /api/openclaw/model-compat/probe передаёт query params в helper."""
+    seen: dict = {}
+
+    def _helper(*, model: str, reasoning: str, skip_reasoning: bool) -> dict:
+        seen.update(model=model, reasoning=reasoning, skip_reasoning=skip_reasoning)
+        return {"compatible": True, "model": model}
+
+    body = (
+        _client(_build_ctx_wave_ee(compat_probe_helper=_helper))
+        .get(
+            "/api/openclaw/model-compat/probe",
+            params={"model": "gemini-3-pro", "reasoning": "low", "skip_reasoning": "true"},
+        )
+        .json()
+    )
+    assert body["ok"] is True
+    assert body["probe"]["compatible"] is True
+    assert seen == {"model": "gemini-3-pro", "reasoning": "low", "skip_reasoning": True}
+
+
+def test_openclaw_model_compat_probe_default_query() -> None:
+    """Default query params: empty model, reasoning='high', skip_reasoning=False."""
+    seen: dict = {}
+
+    def _helper(*, model: str, reasoning: str, skip_reasoning: bool) -> dict:
+        seen.update(model=model, reasoning=reasoning, skip_reasoning=skip_reasoning)
+        return {"ok_probe": True}
+
+    _client(_build_ctx_wave_ee(compat_probe_helper=_helper)).get(
+        "/api/openclaw/model-compat/probe"
+    ).json()
+    assert seen == {"model": "", "reasoning": "high", "skip_reasoning": False}
+
+
+def test_openclaw_model_compat_probe_helper_unavailable() -> None:
+    """Без helper — 500 helper_unavailable."""
+    resp = _client(_build_ctx_wave_ee()).get("/api/openclaw/model-compat/probe")
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "helper_unavailable"
+
+
+def test_openclaw_model_autoswitch_status_ok_passes_query() -> None:
+    """GET /api/openclaw/model-autoswitch/status: profile передаётся в helper."""
+    seen: dict = {}
+
+    def _helper(*, dry_run: bool, profile: str, toggle: bool) -> dict:
+        seen.update(dry_run=dry_run, profile=profile, toggle=toggle)
+        return {"status": "OK", "reason": "test"}
+
+    body = (
+        _client(_build_ctx_wave_ee(autoswitch_helper=_helper))
+        .get("/api/openclaw/model-autoswitch/status", params={"profile": "local-first"})
+        .json()
+    )
+    assert body["ok"] is True
+    assert body["autoswitch"]["status"] == "OK"
+    assert seen == {"dry_run": True, "profile": "local-first", "toggle": False}
+
+
+def test_openclaw_model_autoswitch_status_default_profile() -> None:
+    """Default profile='current'."""
+    seen: dict = {}
+
+    def _helper(*, dry_run: bool, profile: str, toggle: bool) -> dict:
+        seen.update(dry_run=dry_run, profile=profile, toggle=toggle)
+        return {"status": "OK"}
+
+    _client(_build_ctx_wave_ee(autoswitch_helper=_helper)).get(
+        "/api/openclaw/model-autoswitch/status"
+    ).json()
+    assert seen == {"dry_run": True, "profile": "current", "toggle": False}
+
+
+def test_openclaw_model_autoswitch_status_helper_unavailable() -> None:
+    resp = _client(_build_ctx_wave_ee()).get("/api/openclaw/model-autoswitch/status")
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "helper_unavailable"
+
+
+def test_openclaw_model_compat_probe_async_helper() -> None:
+    """Async helper тоже awaitsя."""
+
+    async def _helper(*, model: str, reasoning: str, skip_reasoning: bool) -> dict:
+        return {"async_ok": True, "model": model}
+
+    body = (
+        _client(_build_ctx_wave_ee(compat_probe_helper=_helper))
+        .get("/api/openclaw/model-compat/probe", params={"model": "x"})
+        .json()
+    )
+    assert body["ok"] is True
+    assert body["probe"]["async_ok"] is True

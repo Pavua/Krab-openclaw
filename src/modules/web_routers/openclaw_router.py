@@ -24,6 +24,13 @@ Endpoints (Wave DD, GET через helper injection):
 - GET /api/openclaw/cron/jobs          — через `openclaw_cron_snapshot_helper`
 - GET /api/openclaw/runtime-config     — через `openclaw_runtime_config_snapshot_helper`
 
+Endpoints (Wave EE, GET через helper injection):
+- GET /api/openclaw/model-routing/status — через `openclaw_model_routing_helper`
+                                            + `openclaw_model_routing_overlay_helper`
+                                            + `openclaw_client.get_last_runtime_route`
+- GET /api/openclaw/model-compat/probe   — через `openclaw_model_compat_probe_helper`
+- GET /api/openclaw/model-autoswitch/status — через `openclaw_model_autoswitch_helper`
+
 SKIP (HARD, требуют helper promote):
 - /api/openclaw/cron/jobs/{create,toggle,remove,run_now} — `_run_openclaw_cli`
 - /api/openclaw/channels/status        — `_collect_openclaw_channels_snapshot`
@@ -307,5 +314,66 @@ def build_openclaw_router(ctx: RouterContext) -> APIRouter:
         if inspect.isawaitable(result):
             return await result
         return result
+
+    # ---------- GET /api/openclaw/model-routing/status (Wave EE) ----------
+    @router.get("/api/openclaw/model-routing/status")
+    async def openclaw_model_routing_status() -> dict:
+        """Read-only статус runtime model routing для owner-панели."""
+        routing_helper = ctx.get_dep("openclaw_model_routing_helper")
+        overlay_helper = ctx.get_dep("openclaw_model_routing_overlay_helper")
+        if routing_helper is None or overlay_helper is None:
+            return {"ok": False, "error": "helper_unavailable"}
+
+        routing = routing_helper()
+        if inspect.isawaitable(routing):
+            routing = await routing
+
+        last_runtime_route: dict = {}
+        openclaw = ctx.get_dep("openclaw_client")
+        if openclaw is not None and hasattr(openclaw, "get_last_runtime_route"):
+            try:
+                last_runtime_route = dict(openclaw.get_last_runtime_route() or {})
+            except Exception:  # noqa: BLE001
+                last_runtime_route = {}
+
+        overlaid = overlay_helper(routing=routing, last_runtime_route=last_runtime_route)
+        if inspect.isawaitable(overlaid):
+            overlaid = await overlaid
+
+        return {"ok": True, "routing": overlaid}
+
+    # ---------- GET /api/openclaw/model-autoswitch/status (Wave EE) ------
+    @router.get("/api/openclaw/model-autoswitch/status")
+    async def openclaw_model_autoswitch_status(
+        profile: str = Query(default="current"),
+    ) -> dict:
+        """Read-only статус autoswitch (dry-run) без изменения runtime-конфига."""
+        helper = ctx.get_dep("openclaw_model_autoswitch_helper")
+        if helper is None:
+            raise HTTPException(status_code=500, detail="helper_unavailable")
+        result = helper(dry_run=True, profile=profile, toggle=False)
+        if inspect.isawaitable(result):
+            result = await result
+        return {"ok": True, "autoswitch": result}
+
+    # ---------- GET /api/openclaw/model-compat/probe (Wave EE) ------------
+    @router.get("/api/openclaw/model-compat/probe")
+    async def openclaw_model_compat_probe(
+        model: str = Query(default=""),
+        reasoning: str = Query(default="high"),
+        skip_reasoning: bool = Query(default=False),
+    ) -> dict:
+        """Read-only compatibility probe для target-модели через OpenClaw gateway."""
+        helper = ctx.get_dep("openclaw_model_compat_probe_helper")
+        if helper is None:
+            raise HTTPException(status_code=500, detail="helper_unavailable")
+        result = helper(
+            model=model,
+            reasoning=reasoning,
+            skip_reasoning=skip_reasoning,
+        )
+        if inspect.isawaitable(result):
+            result = await result
+        return {"ok": True, "probe": result}
 
     return router

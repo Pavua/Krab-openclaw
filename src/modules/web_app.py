@@ -125,6 +125,136 @@ def _resolve_memory_indexer_queue_size() -> int:
         return 0
 
 
+def _run_openclaw_model_autoswitch(
+    *,
+    dry_run: bool,
+    profile: str = "",
+    toggle: bool = False,
+) -> dict:
+    """
+    Запускает autoswitch-утилиту OpenClaw.
+    dry_run=True: только диагностика, без изменения конфигурации.
+
+    Module-level версия для helper injection (Phase 2 Wave EE, Session 25).
+    Используется и из openclaw_router (через ctx.get_dep), и из inline
+    POST endpoint /api/openclaw/model-autoswitch/apply в web_app.py.
+    """
+    project_root = Path(__file__).resolve().parents[2]
+    script_path = project_root / "scripts" / "openclaw_model_autoswitch.py"
+    if not script_path.exists():
+        raise HTTPException(status_code=500, detail="openclaw_model_autoswitch_script_missing")
+
+    # Единый venv (Py 3.13) в приоритете; legacy .venv — фолбек.
+    python_bin = project_root / "venv" / "bin" / "python"
+    if not python_bin.exists():
+        python_bin = project_root / ".venv" / "bin" / "python"
+    if not python_bin.exists():
+        python_bin = Path(sys.executable or "python3")
+
+    cmd = [str(python_bin), str(script_path)]
+    requested_profile = str(profile or "").strip().lower()
+    if toggle:
+        requested_profile = "toggle"
+    elif not requested_profile:
+        requested_profile = "current" if dry_run else "local-first"
+    if requested_profile:
+        cmd.extend(["--profile", requested_profile])
+    if dry_run:
+        cmd.append("--dry-run")
+
+    proc = subprocess.run(
+        cmd,
+        cwd=str(project_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"openclaw_model_autoswitch_failed: {stderr or stdout or proc.returncode}",
+        )
+
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    if not lines:
+        raise HTTPException(status_code=500, detail="openclaw_model_autoswitch_empty_output")
+    try:
+        payload = json.loads(lines[-1])
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"openclaw_model_autoswitch_invalid_json: {exc}",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="openclaw_model_autoswitch_invalid_payload")
+    return payload
+
+
+def _run_openclaw_model_compat_probe(
+    *,
+    model: str = "",
+    reasoning: str = "high",
+    skip_reasoning: bool = False,
+) -> dict:
+    """
+    Запускает read-only probe совместимости target-модели в OpenClaw runtime.
+
+    Module-level версия для helper injection (Phase 2 Wave EE, Session 25).
+    """
+    project_root = Path(__file__).resolve().parents[2]
+    script_path = project_root / "scripts" / "openclaw_model_compat_probe.py"
+    if not script_path.exists():
+        raise HTTPException(status_code=500, detail="openclaw_model_compat_probe_script_missing")
+
+    # Единый venv (Py 3.13) в приоритете; legacy .venv — фолбек.
+    python_bin = project_root / "venv" / "bin" / "python"
+    if not python_bin.exists():
+        python_bin = project_root / ".venv" / "bin" / "python"
+    if not python_bin.exists():
+        python_bin = Path(sys.executable or "python3")
+
+    cmd = [str(python_bin), str(script_path)]
+    normalized_model = str(model or "").strip()
+    normalized_reasoning = str(reasoning or "high").strip().lower() or "high"
+    if normalized_model:
+        cmd.extend(["--model", normalized_model])
+    if normalized_reasoning:
+        cmd.extend(["--reasoning", normalized_reasoning])
+    if skip_reasoning:
+        cmd.append("--skip-reasoning")
+
+    proc = subprocess.run(
+        cmd,
+        cwd=str(project_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"openclaw_model_compat_probe_failed: {stderr or stdout or proc.returncode}",
+        )
+
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    if not lines:
+        raise HTTPException(status_code=500, detail="openclaw_model_compat_probe_empty_output")
+    try:
+        payload = json.loads(lines[-1])
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"openclaw_model_compat_probe_invalid_json: {exc}",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="openclaw_model_compat_probe_invalid_payload")
+    return payload
+
+
 class WebApp:
     """Web-панель Krab с API статуса экосистемы."""
 
@@ -504,6 +634,30 @@ class WebApp:
         deps_dict.setdefault(
             "openclaw_runtime_config_snapshot_helper",
             lambda *args, **kwargs: self._openclaw_runtime_config_snapshot(*args, **kwargs),
+        )
+
+        # Phase 2 Wave EE (Session 25): inject openclaw model/routing helpers для
+        # /api/openclaw/model-routing/status и /api/openclaw/model-compat/probe.
+        # Late-bound через lambda — позволяет тестам монкей-патчить
+        # WebApp._build_openclaw_model_routing_status и module-level
+        # _run_openclaw_model_compat_probe после init.
+        deps_dict.setdefault(
+            "openclaw_model_routing_helper",
+            lambda: self._build_openclaw_model_routing_status(),
+        )
+        deps_dict.setdefault(
+            "openclaw_model_routing_overlay_helper",
+            lambda *args, **kwargs: self._overlay_live_route_on_openclaw_model_routing_status(
+                *args, **kwargs
+            ),
+        )
+        deps_dict.setdefault(
+            "openclaw_model_compat_probe_helper",
+            lambda **kwargs: _sys.modules[__name__]._run_openclaw_model_compat_probe(**kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_model_autoswitch_helper",
+            lambda **kwargs: _sys.modules[__name__]._run_openclaw_model_autoswitch(**kwargs),
         )
 
         return RouterContext(
@@ -11720,26 +11874,10 @@ class WebApp:
                 "launch": launch,
             }
 
-        @self.app.get("/api/openclaw/model-routing/status")
-        async def openclaw_model_routing_status():
-            """Read-only статус runtime model routing для owner-панели."""
-            routing = self._build_openclaw_model_routing_status()
-            openclaw = self.deps.get("openclaw_client")
-            last_runtime_route: dict[str, Any] = {}
-            if openclaw and hasattr(openclaw, "get_last_runtime_route"):
-                try:
-                    last_runtime_route = dict(openclaw.get_last_runtime_route() or {})
-                except Exception:
-                    last_runtime_route = {}
-            routing = self._overlay_live_route_on_openclaw_model_routing_status(
-                routing=routing,
-                last_runtime_route=last_runtime_route,
-            )
-
-            return {
-                "ok": True,
-                "routing": routing,
-            }
+        # /api/openclaw/model-routing/status: extracted в
+        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave EE, Session 25).
+        # Helpers инжектируются через openclaw_model_routing_helper +
+        # openclaw_model_routing_overlay_helper в _make_router_context.
 
         @self.app.get("/api/thinking/status")
         async def thinking_status():
@@ -11806,19 +11944,10 @@ class WebApp:
         # src/modules/web_routers/admin_router.py (Phase 2 Wave W, Session 25).
         # См. include_router в общем блоке admin_router ниже.
 
-        @self.app.get("/api/openclaw/model-compat/probe")
-        async def openclaw_model_compat_probe(
-            model: str = Query(default=""),
-            reasoning: str = Query(default="high"),
-            skip_reasoning: bool = Query(default=False),
-        ):
-            """Read-only compatibility probe для target-модели через текущий OpenClaw gateway."""
-            payload = _run_openclaw_model_compat_probe(
-                model=model,
-                reasoning=reasoning,
-                skip_reasoning=skip_reasoning,
-            )
-            return {"ok": True, "probe": payload}
+        # /api/openclaw/model-compat/probe: extracted в
+        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave EE, Session 25).
+        # Subprocess helper hoisted в module-level _run_openclaw_model_compat_probe
+        # и инжектируется через openclaw_model_compat_probe_helper в _make_router_context.
 
         @self.app.post("/api/model/apply")
         async def model_apply(
@@ -13023,147 +13152,10 @@ class WebApp:
         # /api/openclaw/cloud/tier/reset: extracted в src/modules/web_routers/openclaw_router.py
         # (Session 25 Phase 2 Wave N). См. include_router рядом с voice_router.
 
-        def _run_openclaw_model_autoswitch(
-            *,
-            dry_run: bool,
-            profile: str = "",
-            toggle: bool = False,
-        ) -> dict:
-            """
-            Запускает autoswitch-утилиту OpenClaw.
-            dry_run=True: только диагностика, без изменения конфигурации.
-            """
-            project_root = Path(__file__).resolve().parents[2]
-            script_path = project_root / "scripts" / "openclaw_model_autoswitch.py"
-            if not script_path.exists():
-                raise HTTPException(
-                    status_code=500, detail="openclaw_model_autoswitch_script_missing"
-                )
-
-            # Единый venv (Py 3.13) в приоритете; legacy .venv — фолбек.
-            python_bin = project_root / "venv" / "bin" / "python"
-            if not python_bin.exists():
-                python_bin = project_root / ".venv" / "bin" / "python"
-            if not python_bin.exists():
-                python_bin = Path(sys.executable or "python3")
-
-            cmd = [str(python_bin), str(script_path)]
-            requested_profile = str(profile or "").strip().lower()
-            if toggle:
-                requested_profile = "toggle"
-            elif not requested_profile:
-                requested_profile = "current" if dry_run else "local-first"
-            if requested_profile:
-                cmd.extend(["--profile", requested_profile])
-            if dry_run:
-                cmd.append("--dry-run")
-
-            proc = subprocess.run(
-                cmd,
-                cwd=str(project_root),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            stdout = (proc.stdout or "").strip()
-            stderr = (proc.stderr or "").strip()
-            if proc.returncode != 0:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"openclaw_model_autoswitch_failed: {stderr or stdout or proc.returncode}",
-                )
-
-            lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-            if not lines:
-                raise HTTPException(
-                    status_code=500, detail="openclaw_model_autoswitch_empty_output"
-                )
-            try:
-                payload = json.loads(lines[-1])
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"openclaw_model_autoswitch_invalid_json: {exc}",
-                ) from exc
-            if not isinstance(payload, dict):
-                raise HTTPException(
-                    status_code=500, detail="openclaw_model_autoswitch_invalid_payload"
-                )
-            return payload
-
-        def _run_openclaw_model_compat_probe(
-            *,
-            model: str = "",
-            reasoning: str = "high",
-            skip_reasoning: bool = False,
-        ) -> dict:
-            """
-            Запускает read-only probe совместимости target-модели в OpenClaw runtime.
-            """
-            project_root = Path(__file__).resolve().parents[2]
-            script_path = project_root / "scripts" / "openclaw_model_compat_probe.py"
-            if not script_path.exists():
-                raise HTTPException(
-                    status_code=500, detail="openclaw_model_compat_probe_script_missing"
-                )
-
-            # Единый venv (Py 3.13) в приоритете; legacy .venv — фолбек.
-            python_bin = project_root / "venv" / "bin" / "python"
-            if not python_bin.exists():
-                python_bin = project_root / ".venv" / "bin" / "python"
-            if not python_bin.exists():
-                python_bin = Path(sys.executable or "python3")
-
-            cmd = [str(python_bin), str(script_path)]
-            normalized_model = str(model or "").strip()
-            normalized_reasoning = str(reasoning or "high").strip().lower() or "high"
-            if normalized_model:
-                cmd.extend(["--model", normalized_model])
-            if normalized_reasoning:
-                cmd.extend(["--reasoning", normalized_reasoning])
-            if skip_reasoning:
-                cmd.append("--skip-reasoning")
-
-            proc = subprocess.run(
-                cmd,
-                cwd=str(project_root),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            stdout = (proc.stdout or "").strip()
-            stderr = (proc.stderr or "").strip()
-            if proc.returncode != 0:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"openclaw_model_compat_probe_failed: {stderr or stdout or proc.returncode}",
-                )
-
-            lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-            if not lines:
-                raise HTTPException(
-                    status_code=500, detail="openclaw_model_compat_probe_empty_output"
-                )
-            try:
-                payload = json.loads(lines[-1])
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"openclaw_model_compat_probe_invalid_json: {exc}",
-                ) from exc
-            if not isinstance(payload, dict):
-                raise HTTPException(
-                    status_code=500, detail="openclaw_model_compat_probe_invalid_payload"
-                )
-            return payload
-
-        @self.app.get("/api/openclaw/model-autoswitch/status")
-        async def openclaw_model_autoswitch_status(
-            profile: str = Query(default="current"),
-        ):
-            """Статус autoswitch без изменения runtime-конфига."""
-            payload = _run_openclaw_model_autoswitch(dry_run=True, profile=profile, toggle=False)
-            return {"ok": True, "autoswitch": payload}
+        # /api/openclaw/model-autoswitch/status: extracted в
+        # src/modules/web_routers/openclaw_router.py (Phase 2 Wave EE, Session 25).
+        # Subprocess helper hoisted в module-level _run_openclaw_model_autoswitch
+        # и инжектируется через openclaw_model_autoswitch_helper в _make_router_context.
 
         @self.app.post("/api/openclaw/model-autoswitch/apply")
         async def openclaw_model_autoswitch_apply(
