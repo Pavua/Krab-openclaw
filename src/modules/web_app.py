@@ -696,6 +696,35 @@ class WebApp:
             lambda target_path: self._launch_local_app(target_path),
         )
 
+        # Phase 2 Wave HH (Session 25): inject translator session POST helpers
+        # для extraction /api/translator/session/{start,policy,action,runtime-tune,
+        # quick-phrase,summary} в translator_router.py. Late-bound через lambda —
+        # позволяет тестам монкей-патчить методы WebApp после init.
+        deps_dict.setdefault(
+            "translator_gateway_client_helper",
+            lambda: self._translator_gateway_client_or_raise(),
+        )
+        deps_dict.setdefault(
+            "translator_resolve_session_context_helper",
+            lambda *args, **kwargs: self._translator_resolve_session_context(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "translator_action_response_helper",
+            lambda *args, **kwargs: self._translator_action_response(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "translator_gateway_error_detail_helper",
+            lambda *args, **kwargs: self._translator_gateway_error_detail(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "vg_subscriber_start_helper",
+            lambda *args, **kwargs: self._start_vg_subscriber(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "vg_subscriber_stop_helper",
+            lambda *args, **kwargs: self._stop_vg_subscriber(*args, **kwargs),
+        )
+
         return RouterContext(
             deps=deps_dict,
             project_root=self._project_root(),
@@ -9276,329 +9305,11 @@ class WebApp:
                 "onboarding": onboarding,
             }
 
-        @self.app.post("/api/translator/session/start")
-        async def translator_session_start(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Создаёт translator session из owner panel без прямого доступа UI к Voice Gateway."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(
-                    status_code=400, detail="translator_session_start_body_required"
-                )
-
-            source = str(body.get("source") or "mic").strip() or "mic"
-            translation_mode = (
-                str(body.get("translation_mode") or "auto_to_ru").strip() or "auto_to_ru"
-            )
-            notify_mode = str(body.get("notify_mode") or "auto_on").strip() or "auto_on"
-            tts_mode = str(body.get("tts_mode") or "hybrid").strip() or "hybrid"
-            src_lang = str(body.get("src_lang") or "auto").strip() or "auto"
-            tgt_lang = str(body.get("tgt_lang") or "ru").strip() or "ru"
-            label = str(body.get("label") or "").strip()
-            meta = dict(body.get("meta") or {}) if isinstance(body.get("meta"), dict) else {}
-            meta["initiated_by"] = "owner_panel"
-            meta["operator_id"] = current_operator_id()
-            meta["account_id"] = current_account_id()
-            if label:
-                meta["session_label"] = label
-
-            result = await voice_gateway.start_session(
-                source=source,
-                translation_mode=translation_mode,
-                notify_mode=notify_mode,
-                tts_mode=tts_mode,
-                src_lang=src_lang,
-                tgt_lang=tgt_lang,
-                meta=meta,
-            )
-            if not result.get("ok"):
-                status_code, detail = self._translator_gateway_error_detail(
-                    result,
-                    fallback="translator_session_start_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-
-            # E4.2: Запускаем WS-подписчик для LLM reasoning
-            new_session_id = str(result.get("session_id") or "").strip()
-            if new_session_id:
-                await self._start_vg_subscriber(new_session_id, voice_gateway)
-
-            return await self._translator_action_response(
-                action="start_session", gateway_result=result
-            )
-
-        @self.app.post("/api/translator/session/policy")
-        async def translator_session_policy_update(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Обновляет policy текущей translator session через owner panel."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(
-                    status_code=400, detail="translator_session_policy_body_required"
-                )
-
-            (
-                session_id,
-                runtime_lite,
-                _control_plane,
-            ) = await self._translator_resolve_session_context(
-                requested_session_id=str(body.get("session_id") or "").strip()
-            )
-            patch: dict[str, Any] = {}
-            for key in ("translation_mode", "notify_mode", "tts_mode", "src_lang", "tgt_lang"):
-                value = body.get(key)
-                if value is not None:
-                    clean = str(value).strip()
-                    if clean:
-                        patch[key] = clean
-            if not patch:
-                raise HTTPException(
-                    status_code=400, detail="translator_session_policy_patch_required"
-                )
-
-            result = await voice_gateway.patch_session(session_id, **patch)
-            if not result.get("ok"):
-                status_code, detail = self._translator_gateway_error_detail(
-                    result,
-                    fallback="translator_session_policy_update_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-            return await self._translator_action_response(
-                action="update_session_policy",
-                gateway_result=result,
-                runtime_lite=runtime_lite,
-            )
-
-        @self.app.post("/api/translator/session/action")
-        async def translator_session_action(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Выполняет lifecycle-действие над translator session: pause/resume/stop."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(
-                    status_code=400, detail="translator_session_action_body_required"
-                )
-
-            action = str(body.get("action") or "").strip().lower()
-            if action not in {"pause", "resume", "stop"}:
-                raise HTTPException(status_code=400, detail="translator_session_action_invalid")
-
-            (
-                session_id,
-                runtime_lite,
-                _control_plane,
-            ) = await self._translator_resolve_session_context(
-                requested_session_id=str(body.get("session_id") or "").strip()
-            )
-            if action == "stop":
-                await self._stop_vg_subscriber()
-                result = await voice_gateway.stop_session(session_id)
-            else:
-                target_status = "paused" if action == "pause" else "running"
-                result = await voice_gateway.patch_session(session_id, status=target_status)
-
-            if not result.get("ok"):
-                status_code, detail = self._translator_gateway_error_detail(
-                    result,
-                    fallback=f"translator_session_{action}_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-            return await self._translator_action_response(
-                action=f"{action}_session",
-                gateway_result=result,
-                runtime_lite=runtime_lite,
-            )
-
-        @self.app.post("/api/translator/session/runtime-tune")
-        async def translator_session_runtime_tune(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Обновляет runtime tuning текущей translator session."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="translator_runtime_tune_body_required")
-
-            (
-                session_id,
-                runtime_lite,
-                _control_plane,
-            ) = await self._translator_resolve_session_context(
-                requested_session_id=str(body.get("session_id") or "").strip()
-            )
-            buffering_mode = str(body.get("buffering_mode") or "").strip() or None
-            target_latency_raw = body.get("target_latency_ms")
-            vad_raw = body.get("vad_sensitivity")
-
-            target_latency_ms = None
-            if target_latency_raw not in (None, ""):
-                try:
-                    target_latency_ms = int(target_latency_raw)
-                except (TypeError, ValueError) as exc:
-                    raise HTTPException(
-                        status_code=400, detail="translator_target_latency_invalid"
-                    ) from exc
-
-            vad_sensitivity = None
-            if vad_raw not in (None, ""):
-                try:
-                    vad_sensitivity = float(vad_raw)
-                except (TypeError, ValueError) as exc:
-                    raise HTTPException(
-                        status_code=400, detail="translator_vad_sensitivity_invalid"
-                    ) from exc
-
-            if buffering_mode is None and target_latency_ms is None and vad_sensitivity is None:
-                raise HTTPException(
-                    status_code=400, detail="translator_runtime_tune_patch_required"
-                )
-
-            result = await voice_gateway.tune_runtime(
-                session_id,
-                buffering_mode=buffering_mode,
-                target_latency_ms=target_latency_ms,
-                vad_sensitivity=vad_sensitivity,
-            )
-            if not result.get("ok"):
-                status_code, detail = self._translator_gateway_error_detail(
-                    result,
-                    fallback="translator_runtime_tune_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-            return await self._translator_action_response(
-                action="runtime_tune_session",
-                gateway_result=result,
-                runtime_lite=runtime_lite,
-            )
-
-        @self.app.post("/api/translator/session/quick-phrase")
-        async def translator_session_quick_phrase(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Публикует quick-phrase в текущую translator session через owner panel."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="translator_quick_phrase_body_required")
-
-            (
-                session_id,
-                runtime_lite,
-                control_plane,
-            ) = await self._translator_resolve_session_context(
-                requested_session_id=str(body.get("session_id") or "").strip()
-            )
-            text = str(body.get("text") or "").strip()
-            if not text:
-                raise HTTPException(status_code=400, detail="translator_quick_phrase_text_required")
-
-            defaults = (
-                ((control_plane.get("operator_actions") or {}).get("draft_defaults") or {})
-                if isinstance(control_plane.get("operator_actions"), dict)
-                else {}
-            )
-            source_lang = (
-                str(
-                    body.get("source_lang") or defaults.get("quick_phrase_source_lang") or "ru"
-                ).strip()
-                or "ru"
-            )
-            target_lang = (
-                str(
-                    body.get("target_lang") or defaults.get("quick_phrase_target_lang") or "es"
-                ).strip()
-                or "es"
-            )
-            voice = (
-                str(body.get("voice") or defaults.get("quick_phrase_voice") or "default").strip()
-                or "default"
-            )
-            style = (
-                str(body.get("style") or defaults.get("quick_phrase_style") or "neutral").strip()
-                or "neutral"
-            )
-
-            result = await voice_gateway.send_quick_phrase(
-                session_id,
-                text=text,
-                source_lang=source_lang,
-                target_lang=target_lang,
-                voice=voice,
-                style=style,
-            )
-            if not result.get("ok"):
-                status_code, detail = self._translator_gateway_error_detail(
-                    result,
-                    fallback="translator_quick_phrase_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-            return await self._translator_action_response(
-                action="quick_phrase_session",
-                gateway_result=result,
-                runtime_lite=runtime_lite,
-            )
-
-        @self.app.post("/api/translator/session/summary")
-        async def translator_session_summary(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Принудительно пересобирает session summary через Voice Gateway."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(
-                    status_code=400, detail="translator_session_summary_body_required"
-                )
-            (
-                session_id,
-                runtime_lite,
-                _control_plane,
-            ) = await self._translator_resolve_session_context(
-                requested_session_id=str(body.get("session_id") or "").strip()
-            )
-            max_items_raw = body.get("max_items", 20)
-            try:
-                max_items = int(max_items_raw)
-            except (TypeError, ValueError) as exc:
-                raise HTTPException(
-                    status_code=400, detail="translator_summary_max_items_invalid"
-                ) from exc
-            result = await voice_gateway.build_summary(session_id, max_items=max_items)
-            if not result.get("ok"):
-                status_code, detail = self._translator_gateway_error_detail(
-                    result,
-                    fallback="translator_session_summary_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-            return await self._translator_action_response(
-                action="build_session_summary",
-                gateway_result=result,
-                runtime_lite=runtime_lite,
-            )
+        # Phase 2 Wave HH (Session 25): /api/translator/session/{start,policy,action,
+        # runtime-tune,quick-phrase,summary} extracted в translator_router.py
+        # через helper injection (translator_*_helper, vg_subscriber_*_helper).
+        # Inline остаётся /api/translator/session/escalate из-за зависимости от
+        # inbox_service.upsert_owner_task + session_inspector_snapshot pipeline.
 
         @self.app.post("/api/translator/session/escalate")
         async def translator_session_escalate(

@@ -393,3 +393,279 @@ def test_post_endpoints_require_write_access(monkeypatch) -> None:
         else:
             resp = client.post(path, json=body)
         assert resp.status_code == 403, f"{path} should require write access"
+
+
+# ---------------------------------------------------------------------------
+# Wave HH — translator session POST endpoints через helper injection
+# ---------------------------------------------------------------------------
+
+
+class _FakeVoiceGateway:
+    """Стаб Voice Gateway client для session POST endpoints."""
+
+    def __init__(self, *, ok: bool = True, error: str = "") -> None:
+        self.ok = ok
+        self.error = error
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def _result(self, **extra) -> dict:
+        if not self.ok:
+            return {"ok": False, "error": self.error or "gateway_failed"}
+        out = {"ok": True, "session_id": "sess-1", "result": {}}
+        out.update(extra)
+        return out
+
+    async def start_session(self, **kwargs):
+        self.calls.append(("start_session", (), kwargs))
+        return self._result()
+
+    async def patch_session(self, session_id, **kwargs):
+        self.calls.append(("patch_session", (session_id,), kwargs))
+        return self._result(session_id=session_id)
+
+    async def stop_session(self, session_id):
+        self.calls.append(("stop_session", (session_id,), {}))
+        return self._result(session_id=session_id)
+
+    async def tune_runtime(self, session_id, **kwargs):
+        self.calls.append(("tune_runtime", (session_id,), kwargs))
+        return self._result(session_id=session_id)
+
+    async def send_quick_phrase(self, session_id, **kwargs):
+        self.calls.append(("send_quick_phrase", (session_id,), kwargs))
+        return self._result(session_id=session_id)
+
+    async def build_summary(self, session_id, **kwargs):
+        self.calls.append(("build_summary", (session_id,), kwargs))
+        return self._result(session_id=session_id)
+
+
+def _build_wave_hh_ctx(
+    gateway: _FakeVoiceGateway | None = None,
+    *,
+    resolve_raises: bool = False,
+    action_response_payload: dict | None = None,
+) -> tuple[RouterContext, dict]:
+    """RouterContext с инжектированными wave-HH helpers."""
+    captured: dict = {"vg_start_calls": [], "vg_stop_calls": [], "action_calls": []}
+    gw = gateway or _FakeVoiceGateway()
+
+    def _gw_helper():
+        return gw
+
+    async def _resolve(*, requested_session_id: str = ""):
+        if resolve_raises:
+            from fastapi import HTTPException as _HE
+
+            raise _HE(status_code=400, detail="translator_session_required")
+        sid = requested_session_id or "sess-current"
+        return sid, {"runtime": "lite"}, {"operator_actions": {"draft_defaults": {}}}
+
+    async def _action_response(*, action, gateway_result, runtime_lite=None):
+        captured["action_calls"].append((action, gateway_result, runtime_lite))
+        return action_response_payload or {
+            "ok": True,
+            "action": action,
+            "session_id": str(gateway_result.get("session_id") or ""),
+        }
+
+    def _err_detail(result, *, fallback):
+        return 503, str(result.get("error") or fallback)
+
+    async def _vg_start(session_id, voice_gateway):
+        captured["vg_start_calls"].append((session_id, voice_gateway))
+
+    async def _vg_stop():
+        captured["vg_stop_calls"].append(True)
+
+    deps_extra = {
+        "translator_gateway_client_helper": _gw_helper,
+        "translator_resolve_session_context_helper": _resolve,
+        "translator_action_response_helper": _action_response,
+        "translator_gateway_error_detail_helper": _err_detail,
+        "vg_subscriber_start_helper": _vg_start,
+        "vg_subscriber_stop_helper": _vg_stop,
+    }
+    return _build_ctx(deps_extra=deps_extra), captured
+
+
+def test_session_start_happy_path(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    ctx, cap = _build_wave_hh_ctx()
+    resp = _client(ctx).post(
+        "/api/translator/session/start",
+        json={"label": "demo", "src_lang": "es", "tgt_lang": "ru"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["action"] == "start_session"
+    # vg subscriber запущен после успешного старта
+    assert cap["vg_start_calls"], "vg_subscriber_start_helper must be invoked"
+    assert cap["vg_start_calls"][0][0] == "sess-1"
+
+
+def test_session_start_gateway_failure_raises_503(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeVoiceGateway(ok=False, error="gateway_down")
+    ctx, _cap = _build_wave_hh_ctx(gateway=gw)
+    resp = _client(ctx).post("/api/translator/session/start", json={})
+    assert resp.status_code == 503
+    assert "gateway_down" in resp.json()["detail"]
+
+
+def test_session_policy_requires_patch(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    ctx, _cap = _build_wave_hh_ctx()
+    resp = _client(ctx).post("/api/translator/session/policy", json={"session_id": "sess-x"})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "translator_session_policy_patch_required"
+
+
+def test_session_policy_applies_patch(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeVoiceGateway()
+    ctx, cap = _build_wave_hh_ctx(gateway=gw)
+    resp = _client(ctx).post(
+        "/api/translator/session/policy",
+        json={"session_id": "sid-9", "translation_mode": "auto_to_ru"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["action"] == "update_session_policy"
+    # patch_session должен быть вызван с переданным session_id
+    method, args, kwargs = gw.calls[-1]
+    assert method == "patch_session"
+    assert args == ("sid-9",)
+    assert kwargs.get("translation_mode") == "auto_to_ru"
+
+
+def test_session_action_invalid_value(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    ctx, _cap = _build_wave_hh_ctx()
+    resp = _client(ctx).post("/api/translator/session/action", json={"action": "fly"})
+    assert resp.status_code == 400
+
+
+def test_session_action_stop_calls_vg_stop(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeVoiceGateway()
+    ctx, cap = _build_wave_hh_ctx(gateway=gw)
+    resp = _client(ctx).post(
+        "/api/translator/session/action", json={"action": "stop", "session_id": "sid-3"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["action"] == "stop_session"
+    assert cap["vg_stop_calls"], "vg_subscriber_stop_helper must be invoked on stop"
+    assert gw.calls[-1][0] == "stop_session"
+
+
+def test_session_action_pause_uses_patch(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeVoiceGateway()
+    ctx, _cap = _build_wave_hh_ctx(gateway=gw)
+    resp = _client(ctx).post(
+        "/api/translator/session/action", json={"action": "pause"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["action"] == "pause_session"
+    method, _args, kwargs = gw.calls[-1]
+    assert method == "patch_session"
+    assert kwargs.get("status") == "paused"
+
+
+def test_session_runtime_tune_requires_some_field(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    ctx, _cap = _build_wave_hh_ctx()
+    resp = _client(ctx).post("/api/translator/session/runtime-tune", json={})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "translator_runtime_tune_patch_required"
+
+
+def test_session_runtime_tune_invalid_latency(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    ctx, _cap = _build_wave_hh_ctx()
+    resp = _client(ctx).post(
+        "/api/translator/session/runtime-tune", json={"target_latency_ms": "not-int"}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "translator_target_latency_invalid"
+
+
+def test_session_runtime_tune_happy(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeVoiceGateway()
+    ctx, _cap = _build_wave_hh_ctx(gateway=gw)
+    resp = _client(ctx).post(
+        "/api/translator/session/runtime-tune",
+        json={"target_latency_ms": 250, "vad_sensitivity": 0.6, "buffering_mode": "low"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["action"] == "runtime_tune_session"
+    method, _args, kwargs = gw.calls[-1]
+    assert method == "tune_runtime"
+    assert kwargs == {
+        "buffering_mode": "low",
+        "target_latency_ms": 250,
+        "vad_sensitivity": 0.6,
+    }
+
+
+def test_session_quick_phrase_requires_text(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    ctx, _cap = _build_wave_hh_ctx()
+    resp = _client(ctx).post("/api/translator/session/quick-phrase", json={"text": ""})
+    assert resp.status_code == 400
+
+
+def test_session_quick_phrase_uses_defaults(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeVoiceGateway()
+    ctx, _cap = _build_wave_hh_ctx(gateway=gw)
+    resp = _client(ctx).post(
+        "/api/translator/session/quick-phrase",
+        json={"text": "Hola", "target_lang": "en"},
+    )
+    assert resp.status_code == 200
+    method, _args, kwargs = gw.calls[-1]
+    assert method == "send_quick_phrase"
+    assert kwargs.get("text") == "Hola"
+    assert kwargs.get("target_lang") == "en"
+    # дефолты применяются для отсутствующих полей
+    assert kwargs.get("source_lang") == "ru"
+
+
+def test_session_summary_invalid_max_items(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    ctx, _cap = _build_wave_hh_ctx()
+    resp = _client(ctx).post(
+        "/api/translator/session/summary", json={"max_items": "abc"}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "translator_summary_max_items_invalid"
+
+
+def test_session_summary_happy(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "")
+    gw = _FakeVoiceGateway()
+    ctx, _cap = _build_wave_hh_ctx(gateway=gw)
+    resp = _client(ctx).post("/api/translator/session/summary", json={"max_items": 5})
+    assert resp.status_code == 200
+    assert resp.json()["action"] == "build_session_summary"
+    method, _args, kwargs = gw.calls[-1]
+    assert method == "build_summary"
+    assert kwargs == {"max_items": 5}
+
+
+def test_session_post_endpoints_require_write_access(monkeypatch) -> None:
+    """С WEB_API_KEY=secret и без header → 403 на каждый wave-HH POST."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    ctx, _cap = _build_wave_hh_ctx()
+    client = _client(ctx)
+    for path in (
+        "/api/translator/session/start",
+        "/api/translator/session/policy",
+        "/api/translator/session/action",
+        "/api/translator/session/runtime-tune",
+        "/api/translator/session/quick-phrase",
+        "/api/translator/session/summary",
+    ):
+        resp = client.post(path, json={})
+        assert resp.status_code == 403, f"{path} should require write access"
