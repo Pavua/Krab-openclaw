@@ -9050,27 +9050,12 @@ class WebApp:
                 "jobs": snapshot.get("jobs") or [],
             }
 
-        @self.app.get("/api/inbox/status")
-        async def inbox_status():
-            """Возвращает persisted summary owner-visible inbox/escalation слоя."""
-            workflow = inbox_service.get_workflow_snapshot()
-            return {
-                "ok": True,
-                "summary": workflow.get("summary") or {},
-                "workflow": workflow,
-            }
+        # /api/inbox/status, /api/inbox/items, /api/inbox/stale-*, /api/notifications/count:
+        # extracted в src/modules/web_routers/inbox_router.py (Session 25 Phase 2).
+        # Read-only endpoints. POST (update/remediate) — TODO RouterContext extraction.
+        from .web_routers.inbox_router import router as _inbox_router
 
-        @self.app.get("/api/inbox/items")
-        async def inbox_items(
-            status: str = Query(default="open"),
-            kind: str = Query(default=""),
-            limit: int = Query(default=20),
-        ):
-            """Возвращает inbox items с простыми фильтрами для owner UI/API."""
-            return {
-                "ok": True,
-                "items": inbox_service.list_items(status=status, kind=kind, limit=limit),
-            }
+        self.app.include_router(_inbox_router)
 
         @self.app.post("/api/inbox/update")
         async def inbox_update(
@@ -9113,33 +9098,7 @@ class WebApp:
                 "result": result,
             }
 
-        @self.app.get("/api/inbox/stale-processing")
-        async def inbox_stale_processing(
-            kind: str = Query(default="owner_request"),
-            limit: int = Query(default=20),
-        ):
-            """Возвращает stale `acked` item-ы для owner remediation runbook."""
-            items = inbox_service.list_stale_processing_items(kind=kind, limit=limit)
-            return {
-                "ok": True,
-                "kind": str(kind or "").strip().lower(),
-                "count": len(items),
-                "items": items,
-            }
-
-        @self.app.get("/api/inbox/stale-open")
-        async def inbox_stale_open(
-            kind: str = Query(default="owner_request"),
-            limit: int = Query(default=20),
-        ):
-            """Возвращает старые `open` item-ы для owner remediation runbook."""
-            items = inbox_service.list_stale_open_items(kind=kind, limit=limit)
-            return {
-                "ok": True,
-                "kind": str(kind or "").strip().lower(),
-                "count": len(items),
-                "items": items,
-            }
+        # /api/inbox/stale-processing, /api/inbox/stale-open: extracted в inbox_router.py
 
         @self.app.post("/api/inbox/stale-processing/remediate")
         async def inbox_stale_processing_remediate(
@@ -9316,15 +9275,7 @@ class WebApp:
                 "result": result,
             }
 
-        @self.app.get("/api/notifications/count")
-        async def notification_count():
-            """Количество уведомлений для badge в UI."""
-            try:
-                items = inbox_service.list_items(status="open", limit=100)
-                attention = [i for i in items if i.get("severity") in ("error", "warning")]
-                return {"ok": True, "total": len(items), "attention": len(attention)}
-            except Exception:
-                return {"ok": True, "total": 0, "attention": 0}
+        # /api/notifications/count: extracted в src/modules/web_routers/inbox_router.py (Session 25).
 
         @self.app.post("/api/openclaw/cron/jobs/create")
         async def openclaw_cron_job_create(
