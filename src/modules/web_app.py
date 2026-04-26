@@ -35,12 +35,12 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.config import config  # noqa: E402
-from src.core.access_control import (  # noqa: E402
+from src.core.access_control import (  # noqa: E402, F401
     PARTIAL_ACCESS_COMMANDS,
-    get_effective_owner_label,
-    get_effective_owner_subjects,
-    load_acl_runtime_state,
-    update_acl_subject,
+    get_effective_owner_label,  # re-exported для admin_router (test-patch surface)
+    get_effective_owner_subjects,  # re-exported для admin_router (test-patch surface)
+    load_acl_runtime_state,  # re-exported для admin_router (test-patch surface)
+    update_acl_subject,  # re-exported для admin_router (test-patch surface)
 )
 from src.core.auth_recovery_readiness import (  # noqa: E402
     build_auth_recovery_readiness_snapshot,
@@ -374,6 +374,38 @@ class WebApp:
             "assistant_attachment_build_prompt_helper",
             self._build_attachment_prompt,
         )
+
+        # Phase 2 Wave W (Session 25): inject admin_router deps —
+        # idempotency cache (shared с WebApp instance) и ACL helpers.
+        # ACL helpers резолвятся через текущий module namespace
+        # (``src.modules.web_app``), чтобы существующие тесты, патчащие
+        # ``src.modules.web_app.load_acl_runtime_state`` / ``get_effective_owner_*``
+        # / ``update_acl_subject``, продолжали работать без изменений.
+        import sys as _sys
+
+        _wam = _sys.modules.get(__name__)
+        deps_dict.setdefault("idempotency_get", self._idempotency_get)
+        deps_dict.setdefault("idempotency_set", self._idempotency_set)
+        deps_dict.setdefault(
+            "acl_load_state_helper",
+            lambda: getattr(_wam, "load_acl_runtime_state")(),
+        )
+        deps_dict.setdefault(
+            "acl_owner_label_helper",
+            lambda: getattr(_wam, "get_effective_owner_label")(),
+        )
+        deps_dict.setdefault(
+            "acl_owner_subjects_helper",
+            lambda: getattr(_wam, "get_effective_owner_subjects")(),
+        )
+        deps_dict.setdefault(
+            "acl_update_subject_helper",
+            lambda level, subject, add: getattr(_wam, "update_acl_subject")(
+                level, subject, add=add
+            ),
+        )
+        deps_dict.setdefault("acl_partial_commands", PARTIAL_ACCESS_COMMANDS)
+        deps_dict.setdefault("acl_file_path", str(config.USERBOT_ACL_FILE))
 
         return RouterContext(
             deps=deps_dict,
@@ -12471,52 +12503,9 @@ class WebApp:
                 "available_modes": modes,
             }
 
-        @self.app.get("/api/userbot/acl/status")
-        async def userbot_acl_status():
-            """Read-only runtime ACL userbot."""
-            return {
-                "ok": True,
-                "acl": {
-                    "path": str(config.USERBOT_ACL_FILE),
-                    "owner_username": get_effective_owner_label(),
-                    "owner_subjects": get_effective_owner_subjects(),
-                    "state": load_acl_runtime_state(),
-                    "partial_commands": sorted(PARTIAL_ACCESS_COMMANDS),
-                },
-            }
-
-        @self.app.post("/api/userbot/acl/update")
-        async def userbot_acl_update(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Обновляет runtime ACL userbot через owner web-key."""
-            self._assert_write_access(x_krab_web_key, token)
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="acl_update_body_required")
-            action = str(body.get("action") or "").strip().lower()
-            level = str(body.get("level") or "").strip().lower()
-            subject = str(body.get("subject") or "").strip()
-            if action not in {"grant", "revoke"}:
-                raise HTTPException(status_code=400, detail="acl_update_invalid_action")
-            try:
-                result = update_acl_subject(level, subject, add=(action == "grant"))
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return {
-                "ok": True,
-                "acl": {
-                    "action": action,
-                    "level": result["level"],
-                    "subject": result["subject"],
-                    "changed": bool(result["changed"]),
-                    "path": str(result["path"]),
-                    "state": result["state"],
-                    "partial_commands": sorted(PARTIAL_ACCESS_COMMANDS),
-                },
-            }
+        # /api/userbot/acl/status и /api/userbot/acl/update extracted в
+        # src/modules/web_routers/admin_router.py (Phase 2 Wave W, Session 25).
+        # См. include_router в общем блоке admin_router ниже.
 
         @self.app.get("/api/openclaw/model-compat/probe")
         async def openclaw_model_compat_probe(
@@ -14287,105 +14276,12 @@ class WebApp:
                 "decision_notes": decision_notes,
             }
 
-        @self.app.get("/api/provisioning/templates")
-        async def provisioning_templates(entity: str = Query(default="agent")):
-            """Возвращает шаблоны для provisioning UI/API."""
-            provisioning = self.deps.get("provisioning_service")
-            if not provisioning:
-                raise HTTPException(status_code=503, detail="provisioning_service_not_configured")
-            return {"entity": entity, "templates": provisioning.list_templates(entity)}
+        # /api/provisioning/* и /api/userbot/acl/* extracted в
+        # src/modules/web_routers/admin_router.py (Phase 2 Wave W, Session 25).
+        # ACL helpers + idempotency cache инжектированы через _make_router_context.
+        from .web_routers.admin_router import build_admin_router as _build_admin
 
-        @self.app.get("/api/provisioning/drafts")
-        async def provisioning_drafts(
-            status: str | None = Query(default=None),
-            limit: int = Query(default=20, ge=1, le=200),
-        ):
-            """Список provisioning draft'ов."""
-            provisioning = self.deps.get("provisioning_service")
-            if not provisioning:
-                raise HTTPException(status_code=503, detail="provisioning_service_not_configured")
-            return {"drafts": provisioning.list_drafts(limit=limit, status=status)}
-
-        @self.app.post("/api/provisioning/drafts")
-        async def provisioning_create_draft(
-            payload: dict = Body(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            x_idempotency_key: str = Header(default="", alias="X-Idempotency-Key"),
-            token: str = Query(default=""),
-        ):
-            """Создает provisioning draft (write endpoint)."""
-            self._assert_write_access(x_krab_web_key, token)
-            idem_key = (x_idempotency_key or "").strip()
-            cached = self._idempotency_get("provisioning_create_draft", idem_key)
-            if cached:
-                return cached
-            provisioning = self.deps.get("provisioning_service")
-            if not provisioning:
-                raise HTTPException(status_code=503, detail="provisioning_service_not_configured")
-
-            try:
-                draft = provisioning.create_draft(
-                    entity_type=payload.get("entity_type", "agent"),
-                    name=payload.get("name", ""),
-                    role=payload.get("role", ""),
-                    description=payload.get("description", ""),
-                    requested_by=payload.get("requested_by", "web_api"),
-                    settings=payload.get("settings", {}),
-                )
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            black_box = self.deps.get("black_box")
-            if black_box and hasattr(black_box, "log_event"):
-                black_box.log_event(
-                    "web_provisioning_draft_create",
-                    f"entity={payload.get('entity_type', 'agent')} name={payload.get('name', '')}",
-                )
-            response_payload = {"ok": True, "draft": draft}
-            self._idempotency_set("provisioning_create_draft", idem_key, response_payload)
-            return response_payload
-
-        @self.app.get("/api/provisioning/preview/{draft_id}")
-        async def provisioning_preview(draft_id: str):
-            """Показывает diff для draft перед apply."""
-            provisioning = self.deps.get("provisioning_service")
-            if not provisioning:
-                raise HTTPException(status_code=503, detail="provisioning_service_not_configured")
-            try:
-                preview = provisioning.preview_diff(draft_id)
-            except Exception as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from exc
-            return {"ok": True, "preview": preview}
-
-        @self.app.post("/api/provisioning/apply/{draft_id}")
-        async def provisioning_apply(
-            draft_id: str,
-            confirm: bool = Query(default=False),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            x_idempotency_key: str = Header(default="", alias="X-Idempotency-Key"),
-            token: str = Query(default=""),
-        ):
-            """Применяет draft в catalog (write endpoint)."""
-            self._assert_write_access(x_krab_web_key, token)
-            idem_key = (x_idempotency_key or "").strip()
-            cached = self._idempotency_get("provisioning_apply", f"{draft_id}:{idem_key}")
-            if cached:
-                return cached
-            provisioning = self.deps.get("provisioning_service")
-            if not provisioning:
-                raise HTTPException(status_code=503, detail="provisioning_service_not_configured")
-            try:
-                result = provisioning.apply_draft(draft_id, confirmed=confirm)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            black_box = self.deps.get("black_box")
-            if black_box and hasattr(black_box, "log_event"):
-                black_box.log_event(
-                    "web_provisioning_apply",
-                    f"draft_id={draft_id} confirmed={confirm}",
-                )
-            response_payload = {"ok": True, "result": result}
-            self._idempotency_set("provisioning_apply", f"{draft_id}:{idem_key}", response_payload)
-            return response_payload
+        self.app.include_router(_build_admin(self._make_router_context()))
 
         # ── Chat Window Manager endpoints ────────────────────────────────────
 
