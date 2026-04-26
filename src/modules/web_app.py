@@ -67,11 +67,11 @@ from src.core.model_aliases import (  # noqa: E402
     parse_model_set_request,
     render_model_presets_text,
 )
-from src.core.observability import (  # noqa: E402
+from src.core.observability import (  # noqa: E402, F401
     build_ops_response,
     get_observability_snapshot,
-    metrics,
-    timeline,
+    metrics,  # F401: re-exported для патчинга в legacy тестах (dual-patch).
+    timeline,  # F401: re-exported для патчинга в legacy тестах (dual-patch).
 )
 from src.core.openclaw_runtime_signal_truth import (  # noqa: E402
     discover_gateway_signal_log,
@@ -9527,45 +9527,8 @@ class WebApp:
                 return {"ok": False, "error": "reaction_engine_not_configured"}
             return {"ok": True, "stats": reaction_engine.get_reaction_stats(chat_id=chat_id)}
 
-        @self.app.get("/api/reactions/incoming")
-        async def get_reactions_incoming(
-            chat_id: int | None = Query(default=None),
-            message_id: int | None = Query(default=None),
-            limit: int = Query(default=50, ge=1, le=500),
-        ):
-            """
-            Входящие реакции от пользователей (кто что поставил).
-
-            Query params:
-              - chat_id + message_id: реакции на конкретное сообщение
-              - limit: ограничение на количество последних событий (default 50)
-            """
-            try:
-                from src.core.reaction_handler import (  # noqa: PLC0415
-                    get_reactions_for_message,
-                    get_recent_reactions,
-                    get_stats,
-                )
-
-                if chat_id is not None and message_id is not None:
-                    events = get_reactions_for_message(chat_id, message_id)
-                    return {
-                        "ok": True,
-                        "chat_id": chat_id,
-                        "message_id": message_id,
-                        "reactions": events,
-                        "count": len(events),
-                    }
-
-                recent = get_recent_reactions(limit=limit)
-                stats = get_stats()
-                return {
-                    "ok": True,
-                    "recent": recent,
-                    "stats": stats,
-                }
-            except Exception as exc:  # noqa: BLE001
-                return {"ok": False, "error": str(exc)}
+        # /api/reactions/incoming: extracted в src/modules/web_routers/monitoring_router.py
+        # (Session 25 Phase 2 Wave E). См. include_router рядом с runtime_status_router.
 
         @self.app.get("/api/mood/{chat_id}")
         async def get_chat_mood(chat_id: int):
@@ -11414,6 +11377,12 @@ class WebApp:
 
         self.app.include_router(_runtime_status_router)
 
+        # Wave E: 5 stateless GET monitoring endpoints
+        # (sla, ops/metrics, ops/timeline + alias /api/timeline, archive/growth, reactions/incoming).
+        from .web_routers.monitoring_router import router as _monitoring_router
+
+        self.app.include_router(_monitoring_router)
+
         @self.app.get("/api/dashboard/summary")
         async def dashboard_summary():
             """Агрегатор для Dashboard V4 — один запрос вместо 15.
@@ -12392,65 +12361,9 @@ class WebApp:
             """[R12] Унифицированный операционный отчет (алиас system/diagnostics с расширением)."""
             return await system_diagnostics()
 
-        @self.app.get("/api/ops/metrics")
-        async def ops_metrics():
-            """Export internal metrics — flat fields для V4 ops dashboard sparklines."""
-            snap = metrics.get_snapshot()
-            counters = snap.get("counters", {})
-            latencies = snap.get("latencies", {})
-
-            # Производные метрики для V4 ops.html sparklines
-            success = counters.get("llm_success", 0)
-            errors = counters.get("llm_error", 0)
-            total = success + errors
-            error_rate = (errors / total * 100) if total > 0 else 0.0
-
-            return {
-                "ok": True,
-                "metrics": snap,
-                # Плоские поля для V4 ops dashboard
-                "latency_p50": latencies.get("p50_ms", 0),
-                "latency_p95": latencies.get("p95_ms", 0),
-                "latency_p99": 0,  # LatencyTracker считает p50/p95; p99 зарезервирован
-                "error_rate": round(error_rate, 2),
-                "throughput": total,
-            }
-
-        @self.app.get("/api/ops/timeline")
-        @self.app.get("/api/timeline")
-        async def ops_timeline(
-            limit: int = 200, min_severity: Optional[str] = None, channel: Optional[str] = None
-        ):
-            """Export recent event timeline."""
-            return {
-                "ok": True,
-                "events": timeline.get_events(
-                    limit=limit, min_severity=min_severity, channel=channel
-                ),
-            }
-
-        @self.app.get("/api/sla")
-        async def get_sla_metrics():
-            """Returns dynamic SLA metrics for the NOC-lite UI (Latency p50/p95, Success Rate)."""
-            snap = metrics.get_snapshot()
-            counters = snap.get("counters", {})
-            latencies = snap.get("latencies", {"p50_ms": 0.0, "p95_ms": 0.0})
-
-            # Calculate basic success rate based on counters (this is a simplified sliding window approximation).
-            total_success = counters.get("local_success", 0) + counters.get("cloud_success", 0)
-            total_fail = counters.get("local_failures", 0) + counters.get("cloud_failures", 0)
-            total = total_success + total_fail
-            success_rate = (total_success / total * 100.0) if total > 0 else 100.0
-
-            fail_fast_count = counters.get("force_cloud_failfast_total", 0)
-
-            return {
-                "ok": True,
-                "latency_p50_ms": latencies.get("p50_ms", 0.0),
-                "latency_p95_ms": latencies.get("p95_ms", 0.0),
-                "success_rate_pct": round(success_rate, 2),
-                "fail_fast_count": fail_fast_count,
-            }
+        # /api/ops/metrics, /api/ops/timeline, /api/timeline, /api/sla:
+        # extracted в src/modules/web_routers/monitoring_router.py
+        # (Session 25 Phase 2 Wave E). См. include_router рядом с runtime_status_router.
 
         @self.app.get("/api/ops/runtime_snapshot")
         async def ops_runtime_snapshot():
@@ -13812,17 +13725,8 @@ class WebApp:
                 "processes": procs,
             }
 
-        @self.app.get("/api/archive/growth")
-        async def archive_growth():
-            """Archive.db рост: текущий snapshot + статистика по истории."""
-            from ..core.archive_growth_monitor import growth_summary, take_snapshot
-
-            current = take_snapshot()
-            return {
-                "ok": True,
-                "current": current.__dict__ if current else None,
-                **growth_summary(),
-            }
+        # /api/archive/growth: extracted в src/modules/web_routers/monitoring_router.py
+        # (Session 25 Phase 2 Wave E). См. include_router рядом с runtime_status_router.
 
         @self.app.post("/api/assistant/attachment")
         async def assistant_attachment_upload(
