@@ -44,6 +44,10 @@ class RouterContext:
     rate_state: dict[str, Any] = field(default_factory=dict)
     idempotency_state: dict[str, Any] = field(default_factory=dict)
     default_port: int = 8080
+    # Phase 2 Wave F: shared mutable holder для boot_ts (lazy init).
+    # WebApp передаёт sebnyo же list-ref что и в `_boot_ts`, чтобы router
+    # видел те же значения.
+    boot_ts_holder: list[float] = field(default_factory=list)
 
     def get_dep(self, name: str, default: Any = None) -> Any:
         """Удобный alias для self.deps.get(name, default)."""
@@ -63,3 +67,16 @@ class RouterContext:
         from ._helpers import get_public_base_url
 
         return get_public_base_url(default_port=self.default_port)
+
+    def get_boot_ts(self) -> float:
+        """Возвращает boot timestamp Krab runtime (lazy init).
+
+        Используется для /api/uptime и dashboard summary. Holder shared
+        с WebApp instance (через factory ``_make_router_context``), так что
+        первый вызов из любого места устанавливает значение for-all.
+        """
+        import time as _t
+
+        if not self.boot_ts_holder:
+            self.boot_ts_holder.append(_t.time())
+        return self.boot_ts_holder[0]

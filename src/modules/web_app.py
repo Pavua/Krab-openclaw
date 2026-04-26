@@ -317,6 +317,15 @@ class WebApp:
         """
         from .web_routers._context import RouterContext
 
+        # Shared mutable holder для boot_ts (Phase 2 Wave F).
+        # Reuse on second call чтобы router и WebApp видели одно значение.
+        # Также seed-им holder из self._boot_ts если уже был установлен
+        # (например, dashboard_summary мог вызваться первым).
+        if not hasattr(self, "_boot_ts_holder"):
+            self._boot_ts_holder: list[float] = []
+        if getattr(self, "_boot_ts", None) and not self._boot_ts_holder:
+            self._boot_ts_holder.append(float(self._boot_ts))
+
         return RouterContext(
             deps=getattr(self, "deps", {}) or {},
             project_root=self._project_root(),
@@ -325,6 +334,7 @@ class WebApp:
             rate_state={},
             idempotency_state={},
             default_port=self.port,
+            boot_ts_holder=self._boot_ts_holder,
         )
 
     @staticmethod
@@ -9559,26 +9569,8 @@ class WebApp:
                 return {"ok": False, "error": "reaction_engine_not_configured"}
             return {"ok": True, "mood": reaction_engine.get_chat_mood(chat_id)}
 
-        @self.app.get("/api/links")
-        async def get_links():
-            """Ссылки по экосистеме в одном месте."""
-            base = self._public_base_url()
-            return {
-                "dashboard": base,
-                "stats_api": f"{base}/api/stats",
-                "health_api": f"{base}/api/health",
-                "health_lite_api": f"{base}/api/health/lite",
-                "ecosystem_health_api": f"{base}/api/ecosystem/health",
-                "links_api": f"{base}/api/links",
-                "openclaw_cloud_api": f"{base}/api/openclaw/cloud",
-                "runtime_handoff_api": f"{base}/api/runtime/handoff",
-                "runtime_recover_api": f"{base}/api/runtime/recover",
-                "context_checkpoint_api": f"{base}/api/context/checkpoint",
-                "context_transition_pack_api": f"{base}/api/context/transition-pack",
-                "context_latest_api": f"{base}/api/context/latest",
-                "voice_gateway": os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090"),
-                "openclaw": os.getenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789"),
-            }
+        # /api/links: extracted в extras_router.py (Phase 2 Wave F, Session 25).
+        # See include_router в общем блоке version/extras ниже.
 
         @self.app.get("/api/openclaw/runtime-config")
         async def openclaw_runtime_config():
@@ -11247,16 +11239,11 @@ class WebApp:
 
         self.app.include_router(_version_router)
 
-        @self.app.get("/api/uptime")
-        async def uptime():
-            """Uptime Краба в секундах."""
-            import time as _t
+        # /api/uptime + /api/links: extracted в extras_router.py
+        # (Phase 2 Wave F, Session 25 — first RouterContext-based extraction).
+        from .web_routers.extras_router import build_extras_router as _build_extras
 
-            boot = getattr(self, "_boot_ts", None)
-            if not boot:
-                self._boot_ts = _t.time()
-                boot = self._boot_ts
-            return {"ok": True, "uptime_sec": round(_t.time() - boot), "boot_ts": boot}
+        self.app.include_router(_build_extras(self._make_router_context()))
 
         # /api/system/info: extracted в src/modules/web_routers/meta_router.py
         # (Session 25). См. include_router ниже.
@@ -11412,15 +11399,22 @@ class WebApp:
             activity counters и alerts. Graceful fallback — при ошибке любого
             источника поле возвращается null, 500 не выбрасывается.
             """
-            # boot_ts ленится так же, как в /api/uptime
+            # boot_ts ленится так же, как в /api/uptime.
+            # Phase 2 Wave F: используем shared holder если router уже инит-нул.
             import time as _t
 
             from ..core.dashboard_summary import collect_dashboard_summary_async
 
+            holder = getattr(self, "_boot_ts_holder", None)
             boot = getattr(self, "_boot_ts", None)
-            if not boot:
+            if holder:
+                boot = holder[0]
+                self._boot_ts = boot
+            elif not boot:
                 self._boot_ts = _t.time()
                 boot = self._boot_ts
+                if holder is not None:
+                    holder.append(boot)
 
             router = self.deps.get("router")
             return await collect_dashboard_summary_async(boot_ts=boot, router=router)
