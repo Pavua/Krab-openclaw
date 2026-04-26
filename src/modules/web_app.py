@@ -3125,8 +3125,11 @@ class WebApp:
             status_snapshot=status_snapshot,
         )
 
+        # 27.04.2026: harness "codex-cli" больше не registered в OpenClaw 2026.4.24
+        # (правильный — "codex"). Модель swapped на gpt-5.5 + harness rename.
+        # См. recovery 5-layers в Session 27 handoff.
         target_primary = str(
-            os.getenv("OPENCLAW_TARGET_PRIMARY_MODEL", "codex-cli/gpt-5.4") or ""
+            os.getenv("OPENCLAW_TARGET_PRIMARY_MODEL", "codex/gpt-5.5") or ""
         ).strip()
         target_provider = (
             str(target_primary.split("/", 1)[0] if "/" in target_primary else "").strip().lower()

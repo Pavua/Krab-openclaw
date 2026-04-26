@@ -79,8 +79,12 @@ class Config:
     ]
     MODEL: str = os.getenv("MODEL", "google/gemini-2.5-flash")
 
-    # LM Studio: preferred local model (substring match)
-    LOCAL_PREFERRED_MODEL: str = os.getenv("LOCAL_PREFERRED_MODEL", "nvidia/nemotron-3-nano")
+    # LM Studio: preferred local model (substring match).
+    # Default пуст: НЕ грузить ничего автоматически — user сам выбирает модель.
+    # Раньше дефолт был "nvidia/nemotron-3-nano" — устаревшая модель, вызвала
+    # RAM overflow incident 27.04.2026 при reboot (auto-load поверх тестовой модели
+    # пользователя). См. .env комментарий + LOCAL_AUTOLOAD_FALLBACK_LIMIT=0.
+    LOCAL_PREFERRED_MODEL: str = os.getenv("LOCAL_PREFERRED_MODEL", "")
     # LM Studio: preferred local vision model (для фото/изображений)
     LOCAL_PREFERRED_VISION_MODEL: str = os.getenv(
         "LOCAL_PREFERRED_VISION_MODEL",

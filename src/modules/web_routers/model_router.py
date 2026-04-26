@@ -624,10 +624,10 @@ def build_model_router(ctx: RouterContext) -> APIRouter:
                 getattr(router_obj, "active_local_model", "") or ""
             )
             if not local_override:
-                local_override = (
-                    _os.getenv("LOCAL_PREFERRED_MODEL", "nvidia/nemotron-3-nano").strip()
-                    or "nvidia/nemotron-3-nano"
-                )
+                # 27.04.2026: убран nvidia/nemotron-3-nano default — устаревший,
+                # вызывал auto-load incident. Если local_override пуст — пусть
+                # build_quick_presets сам решает (или fallback empty в UI).
+                local_override = _os.getenv("LOCAL_PREFERRED_MODEL", "").strip()
 
             presets = build_quick_presets(
                 current_slots={str(k): str(v) for k, v in router_obj.models.items()},
