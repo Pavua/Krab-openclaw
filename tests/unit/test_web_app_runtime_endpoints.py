@@ -6675,6 +6675,7 @@ def test_inbox_status_and_items_return_persisted_summary(
         due_at_iso="2026-03-12T10:00:00+00:00",
     )
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client()
 
     status_resp = client.get("/api/inbox/status")
@@ -6703,6 +6704,7 @@ def test_inbox_update_requires_web_key(monkeypatch: pytest.MonkeyPatch, tmp_path
         severity="error",
     )["item"]
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client()
 
     denied = client.post("/api/inbox/update", json={"item_id": item["item_id"], "status": "acked"})
@@ -6728,6 +6730,7 @@ def test_inbox_create_builds_owner_task_and_approval_request(
     monkeypatch.setenv("WEB_API_KEY", "secret")
     inbox = InboxService(state_path=tmp_path / "inbox.json")
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client()
 
     task_resp = client.post(
@@ -6776,6 +6779,7 @@ def test_inbox_update_approval_path_preserves_owner_note(
         approval_scope="money",
     )["item"]
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client()
 
     resp = client.post(
@@ -6837,6 +6841,7 @@ def test_inbox_stale_processing_preview_and_bulk_remediation(
     )
 
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client()
 
     preview_resp = client.get("/api/inbox/stale-processing?kind=owner_request&limit=10")
@@ -6901,6 +6906,7 @@ def test_inbox_stale_open_preview_and_bulk_remediation(
     )
 
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client()
 
     preview_resp = client.get("/api/inbox/stale-open?kind=owner_request&limit=10")
@@ -6943,6 +6949,7 @@ def test_inbox_create_can_escalate_from_existing_source_item(
         is_reply_to_me=True,
     )["item"]
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client()
 
     resp = client.post(
