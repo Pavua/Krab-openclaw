@@ -40,12 +40,42 @@ logger = get_logger(__name__)
 
 _STICKERS_FILE = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "saved_stickers.json"
 
+# Baseline (frozen на import) — нужен чтобы отличить override в текущем
+# модуле (sc) от override в command_handlers (исторический namespace).
+_STICKERS_FILE_BASELINE = _STICKERS_FILE
+_CONFIG_BASELINE = config
+
+
+def _stickers_path() -> pathlib.Path:
+    """Resolve path с поддержкой обоих namespace (Phase 2 dual-patch).
+
+    Тесты могут патчить либо ``social_commands._STICKERS_FILE`` (новый),
+    либо ``command_handlers._STICKERS_FILE`` (исторический). Берём
+    override из того, кто отличается от baseline.
+    """
+    import sys
+
+    self_mod = sys.modules[__name__]
+    self_val = self_mod.__dict__.get("_STICKERS_FILE", _STICKERS_FILE_BASELINE)
+    if self_val is not _STICKERS_FILE_BASELINE:
+        return self_val
+    try:
+        from .. import command_handlers as _ch
+
+        ch_val = getattr(_ch, "_STICKERS_FILE", _STICKERS_FILE_BASELINE)
+        if ch_val is not _STICKERS_FILE_BASELINE:
+            return ch_val
+    except Exception:  # noqa: BLE001
+        pass
+    return self_val
+
 
 def _load_stickers() -> dict[str, str]:
     """Загружает словарь {name: file_id} из JSON-файла."""
+    path = _stickers_path()
     try:
-        if _STICKERS_FILE.exists():
-            return json.loads(_STICKERS_FILE.read_text(encoding="utf-8"))
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
         pass
     return {}
@@ -53,8 +83,9 @@ def _load_stickers() -> dict[str, str]:
 
 def _save_stickers(data: dict[str, str]) -> None:
     """Сохраняет словарь {name: file_id} в JSON-файл."""
-    _STICKERS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _STICKERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    path = _stickers_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +293,19 @@ async def handle_react(bot: "KraabUserbot", message: Message) -> None:
         !react ❤️          — сердечко
         !react 🔥          — огонь
     """
-    if not bool(getattr(config, "TELEGRAM_REACTIONS_ENABLED", True)):
+    # Dual-namespace lookup config (Phase 2): тесты могут патчить либо
+    # ``social_commands.config``, либо ``command_handlers.config``.
+    # Берём override из того namespace, где значение отличается от _CONFIG_BASELINE.
+    _config = config
+    try:
+        from .. import command_handlers as _ch
+
+        ch_cfg = getattr(_ch, "config", _CONFIG_BASELINE)
+        if ch_cfg is not _CONFIG_BASELINE and _config is _CONFIG_BASELINE:
+            _config = ch_cfg
+    except Exception:  # noqa: BLE001
+        pass
+    if not bool(getattr(_config, "TELEGRAM_REACTIONS_ENABLED", True)):
         await message.reply("⚠️ Реакции отключены (TELEGRAM_REACTIONS_ENABLED=0).")
         return
 

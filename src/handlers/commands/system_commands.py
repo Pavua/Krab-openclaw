@@ -1455,7 +1455,12 @@ async def handle_ip(bot: "KraabUserbot", message: Message) -> None:
     """
     args = bot._get_command_args(message).strip().lower()
 
-    local_ip = _get_local_ip()
+    # Ленивый lookup — тесты патчат command_handlers._get_local_ip / _get_public_ip
+    from .. import command_handlers as _ch
+
+    _local_fn = getattr(_ch, "_get_local_ip", _get_local_ip)
+    _public_fn = getattr(_ch, "_get_public_ip", _get_public_ip)
+    local_ip = _local_fn()
 
     if args == "local":
         # Только локальный IP
@@ -1465,7 +1470,7 @@ async def handle_ip(bot: "KraabUserbot", message: Message) -> None:
 
     # Публичный + локальный
     try:
-        public_ip = await _get_public_ip()
+        public_ip = await _public_fn()
     except Exception as exc:  # noqa: BLE001
         raise UserInputError(user_message=f"❌ Не удалось получить публичный IP: {exc}") from exc
 

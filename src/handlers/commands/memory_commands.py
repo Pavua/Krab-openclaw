@@ -126,15 +126,49 @@ def _format_memory_layer_section(results: list[dict]) -> str:
     return "\n".join(lines)
 
 
+# Baseline-снимки имён для дифференциации ``mc.<X>`` vs ``command_handlers.<X>``
+# monkeypatch в ``handle_recall`` (Phase 2 split). Не патчить!
+_RECALL_BASELINES: dict[str, object] = {
+    "recall_workspace_memory": recall_workspace_memory,
+    "memory_manager": memory_manager,
+    "_recall_memory_layer": _recall_memory_layer,
+}
+
+
 async def handle_recall(bot: "KraabUserbot", message: Message) -> None:
     """Вспомнить факт — workspace + vector + Memory Layer archive (hybrid)."""
     text = bot._get_command_args(message)
     if not text:
         raise UserInputError(user_message="🧠 Что вспомнить? Напиши: `!recall <запрос>`")
     try:
-        workspace_facts = recall_workspace_memory(text)
-        vector_facts = memory_manager.recall(text)
-        memory_layer_results = await _recall_memory_layer(text, limit=5)
+        # Lazy lookup — тесты патчат либо `mc.<sym>` (новый namespace),
+        # либо `command_handlers.<sym>` (исторический). Берём override
+        # из текущего модуля (приоритет), затем из command_handlers.
+        import sys
+
+        _self_mod = sys.modules[__name__]
+        try:
+            from .. import command_handlers as _ch
+        except Exception:  # noqa: BLE001
+            _ch = None  # type: ignore[assignment]
+
+        def _resolve(name: str, default):
+            self_val = _self_mod.__dict__.get(name, default)
+            orig = _RECALL_BASELINES.get(name, default)
+            if self_val is not orig:
+                return self_val  # patched в текущем модуле (mc)
+            if _ch is not None:
+                ch_val = getattr(_ch, name, default)
+                if ch_val is not orig:
+                    return ch_val  # patched в command_handlers
+            return self_val
+
+        _recall_fn = _resolve("recall_workspace_memory", recall_workspace_memory)
+        _mm = _resolve("memory_manager", memory_manager)
+        _rml = _resolve("_recall_memory_layer", _recall_memory_layer)
+        workspace_facts = _recall_fn(text)
+        vector_facts = _mm.recall(text)
+        memory_layer_results = await _rml(text, limit=5)
 
         sections: list[str] = []
         if workspace_facts:
@@ -216,12 +250,20 @@ _BUILTIN_QUOTES: list[str] = [
 _SAVED_QUOTES_PATH = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "saved_quotes.json"
 
 
+def _quotes_path() -> pathlib.Path:
+    """Lazy lookup пути к файлу цитат через parent namespace (Phase 2)."""
+    from .. import command_handlers as _ch
+
+    return getattr(_ch, "_SAVED_QUOTES_PATH", _SAVED_QUOTES_PATH)
+
+
 def _load_saved_quotes() -> list[dict]:
     """Загружает сохранённые цитаты из JSON-файла."""
-    if not _SAVED_QUOTES_PATH.exists():
+    path = _quotes_path()
+    if not path.exists():
         return []
     try:
-        data = json.loads(_SAVED_QUOTES_PATH.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, list) else []
     except Exception:
         return []
@@ -229,8 +271,9 @@ def _load_saved_quotes() -> list[dict]:
 
 def _save_quotes(quotes: list[dict]) -> None:
     """Сохраняет список цитат в JSON-файл."""
-    _SAVED_QUOTES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _SAVED_QUOTES_PATH.write_text(
+    path = _quotes_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
         json.dumps(quotes, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -334,11 +377,23 @@ async def handle_quote(bot: "KraabUserbot", message: Message) -> None:
 _TAGS_FILE = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "message_tags.json"
 
 
+def _tags_path() -> pathlib.Path:
+    """Возвращает путь к файлу тегов через parent namespace.
+
+    Lazy lookup нужен чтобы тесты, патчащие ``command_handlers._TAGS_FILE``
+    (исторический путь до Phase 2 split) видели свой override здесь.
+    """
+    from .. import command_handlers as _ch
+
+    return getattr(_ch, "_TAGS_FILE", _TAGS_FILE)
+
+
 def _load_tags() -> dict[str, dict[str, list[str]]]:
     """Загружает теги из JSON. Формат: {chat_id: {message_id: [tags]}}."""
+    path = _tags_path()
     try:
-        if _TAGS_FILE.exists():
-            return json.loads(_TAGS_FILE.read_text(encoding="utf-8"))
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
         pass
     return {}
@@ -346,8 +401,9 @@ def _load_tags() -> dict[str, dict[str, list[str]]]:
 
 def _save_tags(data: dict[str, dict[str, list[str]]]) -> None:
     """Сохраняет теги в JSON-файл."""
-    _TAGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _TAGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    path = _tags_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _make_msg_link(chat_id: int, message_id: int) -> str:

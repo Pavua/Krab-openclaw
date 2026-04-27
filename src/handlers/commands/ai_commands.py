@@ -26,15 +26,37 @@ from pyrogram.types import Message
 
 from ...config import config
 from ...core.access_control import AccessLevel
-from ...core.cost_analytics import cost_analytics
+from ...core.cost_analytics import cost_analytics as _cost_analytics_default
 from ...core.exceptions import UserInputError
-from ...core.inbox_service import inbox_service
+from ...core.inbox_service import inbox_service as _inbox_service_default
 from ...core.logger import get_logger
 from ...core.swarm import AgentRoom
-from ...core.weekly_digest import weekly_digest
+from ...core.weekly_digest import weekly_digest as _weekly_digest_default
 from ...employee_templates import get_role_prompt, list_roles, save_role
-from ...openclaw_client import openclaw_client
-from ...search_engine import search_brave
+from ...openclaw_client import openclaw_client as _openclaw_client_default
+from ...search_engine import search_brave as _search_brave_default
+
+# Доступ к локальным дефолтам через ленивый lookup в parent namespace.
+# Тесты патчат ``command_handlers.<symbol>`` → используем actual override,
+# иначе fallback на импортированный модуль.
+
+
+def _ch_attr(name: str, default):
+    """Lazy proxy к ``command_handlers.<name>`` с fallback на default."""
+    try:
+        from .. import command_handlers as _ch
+    except Exception:  # noqa: BLE001
+        return default
+    return getattr(_ch, name, default)
+
+
+# Module-level алиасы — оставлены для обратной совместимости. Вызовы внутри
+# модуля используют функции ниже, не сами имена.
+cost_analytics = _cost_analytics_default
+inbox_service = _inbox_service_default
+weekly_digest = _weekly_digest_default
+search_brave = _search_brave_default
+openclaw_client = _openclaw_client_default
 
 if TYPE_CHECKING:
     from ...userbot_bridge import KraabUserbot
@@ -248,9 +270,10 @@ def _collect_daily_report_data() -> dict:
     # --- Расходы за сегодня ---
     try:
         today_start = _time.mktime(datetime.date.today().timetuple())
-        today_calls = [r for r in cost_analytics._calls if r.timestamp >= today_start]
+        ca = _ch_attr("cost_analytics", _cost_analytics_default)
+        today_calls = [r for r in ca._calls if r.timestamp >= today_start]
         data["cost_today_usd"] = round(sum(r.cost_usd for r in today_calls), 4)
-        data["cost_month_usd"] = round(cost_analytics.get_monthly_cost_usd(), 4)
+        data["cost_month_usd"] = round(ca.get_monthly_cost_usd(), 4)
         data["calls_today"] = len(today_calls)
         data["tokens_today"] = sum(r.input_tokens + r.output_tokens for r in today_calls)
     except Exception:  # noqa: BLE001
@@ -274,7 +297,7 @@ def _collect_daily_report_data() -> dict:
 
     # --- Errors/warnings из inbox ---
     try:
-        summary = inbox_service.get_summary()
+        summary = _ch_attr("inbox_service", _inbox_service_default).get_summary()
         data["inbox_open"] = summary.get("open", 0)
         data["inbox_errors"] = summary.get("error", 0)
         data["inbox_warnings"] = summary.get("warning", 0)
@@ -360,7 +383,7 @@ async def handle_search(bot: "KraabUserbot", message: Message) -> None:
         # --- Режим raw: прямой Brave-поиск без AI ---
         msg = await message.reply(f"🔍 **Ищу (raw):** `{query}`...")
         try:
-            results = await search_brave(query)
+            results = await _ch_attr("search_brave", _search_brave_default)(query)
             if not results:
                 await msg.edit("❌ Ничего не найдено.")
                 return
@@ -385,7 +408,9 @@ async def handle_search(bot: "KraabUserbot", message: Message) -> None:
 
     try:
         chunks: list[str] = []
-        async for chunk in openclaw_client.send_message_stream(
+        async for chunk in _ch_attr(
+            "openclaw_client", _openclaw_client_default
+        ).send_message_stream(
             message=prompt,
             chat_id=session_id,
             disable_tools=False,  # обязательно использует web_search
@@ -599,7 +624,9 @@ async def handle_summary(bot: "KraabUserbot", message: Message) -> None:
     last_edit_len = 0
 
     try:
-        async for chunk in openclaw_client.send_message_stream(
+        async for chunk in _ch_attr(
+            "openclaw_client", _openclaw_client_default
+        ).send_message_stream(
             message=prompt,
             # Изолированная сессия — не портит основной контекст чата
             chat_id=f"summary_{message.chat.id}",
@@ -713,7 +740,9 @@ async def handle_ask(bot: "KraabUserbot", message: Message) -> None:
 
     try:
         chunks: list[str] = []
-        async for chunk in openclaw_client.send_message_stream(
+        async for chunk in _ch_attr(
+            "openclaw_client", _openclaw_client_default
+        ).send_message_stream(
             message=prompt,
             chat_id=session_id,
             system_prompt=system_prompt,
@@ -779,7 +808,9 @@ async def handle_fix(bot: "KraabUserbot", message: Message) -> None:
 
     try:
         chunks: list[str] = []
-        async for chunk in openclaw_client.send_message_stream(
+        async for chunk in _ch_attr(
+            "openclaw_client", _openclaw_client_default
+        ).send_message_stream(
             message=prompt,
             chat_id=session_id,
             disable_tools=True,  # только текстовый ответ, без tool_calls
@@ -868,7 +899,9 @@ async def handle_rewrite(bot: "KraabUserbot", message: Message) -> None:
 
     try:
         chunks: list[str] = []
-        async for chunk in openclaw_client.send_message_stream(
+        async for chunk in _ch_attr(
+            "openclaw_client", _openclaw_client_default
+        ).send_message_stream(
             message=prompt,
             chat_id=session_id,
             system_prompt=system_prompt,
@@ -924,8 +957,9 @@ async def handle_report(bot: "KraabUserbot", message: Message) -> None:
     if args.lower() in {"daily", "день", "дневной"}:
         status_msg = await message.reply("⏳ Собираю данные за сегодня...")
         try:
-            data = _collect_daily_report_data()
-            report_text = _render_daily_report(data)
+            # Ленивый lookup — тесты патчат command_handlers._collect_daily_report_data
+            data = _ch_attr("_collect_daily_report_data", _collect_daily_report_data)()
+            report_text = _ch_attr("_render_daily_report", _render_daily_report)(data)
         except Exception as exc:  # noqa: BLE001
             logger.warning("handle_report_daily_failed", error=str(exc))
             await status_msg.edit(f"❌ Ошибка сбора данных: {exc}")
@@ -937,7 +971,7 @@ async def handle_report(bot: "KraabUserbot", message: Message) -> None:
     if args.lower() in {"weekly", "неделя", "недельный"}:
         status_msg = await message.reply("⏳ Генерирую недельный отчёт...")
         try:
-            result = await weekly_digest.generate_digest()
+            result = await _ch_attr("weekly_digest", _weekly_digest_default).generate_digest()
         except Exception as exc:  # noqa: BLE001
             logger.warning("handle_report_weekly_failed", error=str(exc))
             await status_msg.edit(f"❌ Ошибка генерации недельного отчёта: {exc}")
@@ -977,7 +1011,7 @@ async def handle_report(bot: "KraabUserbot", message: Message) -> None:
 
     # Собираем контекст системных данных для LLM
     try:
-        daily_data = _collect_daily_report_data()
+        daily_data = _ch_attr("_collect_daily_report_data", _collect_daily_report_data)()
         context_block = (
             f"Текущие системные данные Краба (на {datetime.date.today().isoformat()}):\n"
             f"- Расходы сегодня: ${daily_data['cost_today_usd']:.4f} ({daily_data['calls_today']} вызовов)\n"
@@ -1008,7 +1042,9 @@ async def handle_report(bot: "KraabUserbot", message: Message) -> None:
     edit_threshold = 200
 
     try:
-        async for chunk in openclaw_client.send_message_stream(
+        async for chunk in _ch_attr(
+            "openclaw_client", _openclaw_client_default
+        ).send_message_stream(
             message=prompt,
             chat_id=f"report_{message.chat.id}_{int(datetime.datetime.now().timestamp())}",
             disable_tools=True,
@@ -1087,7 +1123,9 @@ async def handle_rate(bot: "KraabUserbot", message: Message) -> None:
 
     try:
         chunks: list[str] = []
-        async for chunk in openclaw_client.send_message_stream(
+        async for chunk in _ch_attr(
+            "openclaw_client", _openclaw_client_default
+        ).send_message_stream(
             message=prompt,
             chat_id=session_id,
             disable_tools=False,  # AI использует web_search для актуальных данных
@@ -1156,7 +1194,9 @@ async def handle_explain(bot: "KraabUserbot", message: Message) -> None:
 
     try:
         chunks: list[str] = []
-        async for chunk in openclaw_client.send_message_stream(
+        async for chunk in _ch_attr(
+            "openclaw_client", _openclaw_client_default
+        ).send_message_stream(
             message=prompt,
             chat_id=session_id,
             disable_tools=True,

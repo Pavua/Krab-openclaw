@@ -46,6 +46,7 @@ from ..core.openclaw_runtime_models import get_runtime_primary_model
 from ..core.openclaw_workspace import (
     append_workspace_memory_entry,
     list_workspace_memory_entries,
+    recall_workspace_memory,  # noqa: F401  # re-export для тестов (Phase 2)
 )
 from ..core.proactive_watch import proactive_watch
 from ..core.scheduler import parse_due_time, split_reminder_input
@@ -60,6 +61,7 @@ from ..mcp_client import mcp_manager
 from ..memory_engine import memory_manager
 from ..model_manager import model_manager
 from ..openclaw_client import openclaw_client
+from ..search_engine import search_brave  # noqa: F401  # re-export для тестов (Phase 2)
 
 logger = get_logger(__name__)
 
