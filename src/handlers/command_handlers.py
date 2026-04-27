@@ -40,7 +40,10 @@ from ..core.openclaw_workspace import (
 )
 from ..core.proactive_watch import proactive_watch
 from ..core.scheduler import parse_due_time, split_reminder_input
-from ..integrations.hammerspoon_bridge import HammerspoonBridgeError, hammerspoon
+from ..integrations.hammerspoon_bridge import (  # noqa: F401  # patch surface
+    HammerspoonBridgeError,
+    hammerspoon,
+)
 from ..integrations.macos_automation import macos_automation
 from ..mcp_client import mcp_manager
 from ..memory_engine import memory_manager
@@ -162,7 +165,10 @@ async def _reply_tech(message: Message, bot: "KraabUserbot", text: str, **kwargs
 # Wave 11 убрал прямое использование этого модуля, но тесты в
 # test_system_commands.py (chatban*, stats_panel) патчат его через
 # old namespace. Dual-namespace lookup pattern, см. Session 27 fbf3262.
-from src.core.chat_ban_cache import chat_ban_cache  # noqa: E402, F401
+from src.core.chat_ban_cache import chat_ban_cache  # noqa: E402, F401, I001  # patch surface
+from src.core.cost_analytics import cost_analytics  # noqa: E402, F401  # patch surface
+from src.core.telegram_buttons import build_costs_detail_buttons  # noqa: E402, F401  # patch surface
+from src.core.weekly_digest import weekly_digest  # noqa: E402, F401  # patch surface
 
 # Административные команды и их private helpers:
 #   !config, !set, !acl, !scope, !reasoning, !role, !notify,
@@ -237,6 +243,21 @@ from .commands.ai_commands import (  # noqa: E402, F401
     handle_rewrite,
     handle_search,
     handle_summary,
+)
+
+# ---------------------------------------------------------------------------
+# Phase 2 Wave 12 (Session 27): cli_commands extraction
+# ---------------------------------------------------------------------------
+# hammerspoon / HammerspoonBridgeError уже импортированы на уровне модуля (строка 43) —
+# остаются как patch-surface для тестов.
+from .commands.cli_commands import (  # noqa: E402, F401
+    _cli_keepalive,
+    _run_cli_with_progress,
+    handle_claude_cli,
+    handle_codex,
+    handle_gemini_cli,
+    handle_hs,
+    handle_opencode,
 )
 from .commands.memory_commands import (  # noqa: E402, F401
     _BUILTIN_QUOTES,
@@ -2457,241 +2478,17 @@ async def handle_browser(bot: "KraabUserbot", message: Message) -> None:
     )
 
 
-async def _cli_keepalive(
-    status_msg: Message,
-    tool: str,
-    started_at: float,
-    *,
-    interval: float = 20.0,
-    stop_event: asyncio.Event,
-) -> None:
-    """Фоновая задача: обновляет сообщение с прогрессом пока CLI работает."""
-    step = 0
-    spinners = ["⏳", "⏳⏳", "⏳⏳⏳"]
-    try:
-        while not stop_event.is_set():
-            try:
-                await asyncio.wait_for(
-                    asyncio.shield(stop_event.wait()),
-                    timeout=interval,
-                )
-                break
-            except asyncio.TimeoutError:
-                pass
-            elapsed = int(time.monotonic() - started_at)
-            mins, secs = divmod(elapsed, 60)
-            time_str = f"{mins}м {secs}с" if mins else f"{secs}с"
-            indicator = spinners[step % len(spinners)]
-            try:
-                await status_msg.edit(f"{indicator} `{tool}` работает... {time_str}")
-            except Exception:
-                pass
-            step += 1
-    except asyncio.CancelledError:
-        pass
+# _cli_keepalive — extracted to commands/cli_commands.py (Phase 2 Wave 12, Session 27). Re-exported above.
+# _run_cli_with_progress — extracted to commands/cli_commands.py (Phase 2 Wave 12, Session 27). Re-exported above.
 
 
-async def _run_cli_with_progress(
-    bot: "KraabUserbot",
-    message: Message,
-    tool: str,
-    prompt: str,
-    *,
-    timeout: float = 120.0,
-    tool_label: str | None = None,
-) -> None:
-    """Общая реализация для handle_codex/handle_gemini/handle_claude."""
-    from ..integrations.cli_runner import run_cli
-
-    if not prompt:
-        raise UserInputError(
-            user_message=(
-                f"🤖 Использование: `!{tool} <запрос>`\n"
-                f"Пример: `!{tool} напиши hello world на Python`"
-            )
-        )
-
-    label = tool_label or tool
-    status_msg = await message.reply(f"⏳ Запускаю `{label}`...")
-    started_at = time.monotonic()
-    stop_event = asyncio.Event()
-    keepalive = asyncio.create_task(
-        _cli_keepalive(status_msg, label, started_at, stop_event=stop_event)
-    )
-    try:
-        result = await run_cli(tool, prompt, timeout=timeout)
-    finally:
-        stop_event.set()
-        keepalive.cancel()
-        try:
-            await keepalive
-        except asyncio.CancelledError:
-            pass
-
-    elapsed = int(time.monotonic() - started_at)
-    output = result.output or "(нет вывода)"
-    header = f"🤖 **{label}** (`{elapsed}с`)"
-    if result.exit_code != 0 and not result.timed_out:
-        header += f" — код {result.exit_code}"
-
-    full_text = f"{header}\n\n{output}"
-    chunks = _split_text_for_telegram(full_text)
-    await status_msg.edit(chunks[0])
-    for part in chunks[1:]:
-        await message.reply(part)
+# handle_codex — extracted to commands/cli_commands.py (Phase 2 Wave 12, Session 27). Re-exported above.
+# handle_gemini_cli — extracted to commands/cli_commands.py (Phase 2 Wave 12, Session 27). Re-exported above.
+# handle_claude_cli — extracted to commands/cli_commands.py (Phase 2 Wave 12, Session 27). Re-exported above.
+# handle_opencode — extracted to commands/cli_commands.py (Phase 2 Wave 12, Session 27). Re-exported above.
 
 
-async def handle_codex(bot: "KraabUserbot", message: Message) -> None:
-    """Запустить codex-cli с запросом. Использование: !codex <запрос>"""
-    prompt = bot._get_command_args(message)
-    timeout = float(getattr(config, "CLI_CODEX_TIMEOUT_SEC", 120.0))
-    await _run_cli_with_progress(bot, message, "codex", prompt, timeout=timeout)
-
-
-async def handle_gemini_cli(bot: "KraabUserbot", message: Message) -> None:
-    """Запустить gemini-cli с запросом. Использование: !gemini <запрос>"""
-    prompt = bot._get_command_args(message)
-    timeout = float(getattr(config, "CLI_GEMINI_TIMEOUT_SEC", 120.0))
-    await _run_cli_with_progress(
-        bot, message, "gemini", prompt, timeout=timeout, tool_label="gemini-cli"
-    )
-
-
-async def handle_claude_cli(bot: "KraabUserbot", message: Message) -> None:
-    """Запустить claude code CLI с запросом. Использование: !claude_cli <запрос>"""
-    prompt = bot._get_command_args(message)
-    timeout = float(getattr(config, "CLI_CLAUDE_TIMEOUT_SEC", 120.0))
-    await _run_cli_with_progress(
-        bot, message, "claude", prompt, timeout=timeout, tool_label="claude-code"
-    )
-
-
-async def handle_opencode(bot: "KraabUserbot", message: Message) -> None:
-    """Запустить opencode с запросом. Использование: !opencode <запрос>"""
-    prompt = bot._get_command_args(message)
-    timeout = float(getattr(config, "CLI_OPENCODE_TIMEOUT_SEC", 180.0))
-    await _run_cli_with_progress(
-        bot, message, "opencode", prompt, timeout=timeout, tool_label="opencode"
-    )
-
-
-async def handle_hs(bot: "KraabUserbot", message: Message) -> None:
-    """
-    Управление окнами macOS через Hammerspoon.
-
-    Требует:
-    - Установленного Hammerspoon (https://www.hammerspoon.org/)
-    - ~/.hammerspoon/init.lua из репозитория Краба (hammerspoon/init.lua)
-    - Accessibility permission для Hammerspoon в System Settings
-
-    Использование:
-      !hs               — эта справка
-      !hs status        — версия Hammerspoon, количество экранов
-      !hs windows       — список видимых окон
-      !hs focus <app>   — сфокусировать окно приложения
-      !hs tile <preset> [<app>]  — раскладка: left|right|top|bottom|full
-      !hs move <app> <x> <y> <w> <h>  — переместить/изменить размер окна
-                        (координаты 0..1 = доля экрана, >2 = пиксели)
-    """
-    del bot
-    raw = str(message.text or "").split(maxsplit=1)
-    args_str = raw[1].strip() if len(raw) > 1 else ""
-
-    _HELP = (  # noqa: N806
-        "🔨 **Hammerspoon window control**\n\n"
-        "`!hs status` — версия и статус HS\n"
-        "`!hs windows` — список видимых окон\n"
-        "`!hs focus <app>` — сфокусировать окно\n"
-        "`!hs tile <preset> [<app>]` — раскладка: `left` `right` `top` `bottom` `full`\n"
-        "`!hs move <app> <x> <y> <w> <h>` — переместить окно\n\n"
-        "_Установи Hammerspoon и скопируй `hammerspoon/init.lua` в `~/.hammerspoon/init.lua`_"
-    )
-
-    if not args_str:
-        await message.reply(_HELP)
-        return
-
-    if not hammerspoon.is_available():
-        await message.reply(
-            "🔨 Hammerspoon недоступен.\n\n"
-            "Убедись, что:\n"
-            "1. Hammerspoon установлен и запущен\n"
-            "2. `~/.hammerspoon/init.lua` содержит krab-hs server\n"
-            "3. Выданы разрешения Accessibility в System Settings → Privacy & Security"
-        )
-        return
-
-    parts = args_str.split()
-    sub = parts[0].lower()
-
-    try:
-        if sub == "status":
-            data = await hammerspoon.status()
-            lines = [
-                "🔨 **Hammerspoon**",
-                f"- Версия: `{data.get('version', '?')}`",
-                f"- Build: `{data.get('build', '?')}`",
-                f"- Экранов: `{data.get('screens', '?')}`",
-            ]
-            await message.reply("\n".join(lines))
-
-        elif sub == "windows":
-            windows = await hammerspoon.list_windows()
-            if not windows:
-                await message.reply("🔨 Нет видимых окон.")
-                return
-            lines = ["🔨 **Видимые окна**"]
-            for w in windows[:20]:
-                lines.append(f"- `{w.get('app', '?')}` — {w.get('title', '')}")
-            await message.reply("\n".join(lines))
-
-        elif sub == "focus":
-            app = " ".join(parts[1:]) if len(parts) > 1 else ""
-            if not app:
-                raise UserInputError(user_message="🔨 Формат: `!hs focus <app>`")
-            result = await hammerspoon.focus(app)
-            await message.reply(
-                f"🔨 Сфокусировано: `{result.get('app', app)}`"
-                + (f" — {result.get('title', '')}" if result.get("title") else "")
-            )
-
-        elif sub == "tile":
-            preset = parts[1].lower() if len(parts) > 1 else "left"
-            app = " ".join(parts[2:]) if len(parts) > 2 else ""
-            result = await hammerspoon.tile(preset=preset, app=app)
-            await message.reply(
-                f"🔨 Раскладка `{preset}` применена: `{result.get('app', app or 'активное окно')}`"
-            )
-
-        elif sub == "move":
-            # !hs move <app> <x> <y> <w> <h>   или   !hs move <x> <y> <w> <h>
-            floats: list[float] = []
-            app_parts: list[str] = []
-            for p in parts[1:]:
-                try:
-                    floats.append(float(p))
-                except ValueError:
-                    if not floats:
-                        app_parts.append(p)
-            if len(floats) < 4:
-                raise UserInputError(
-                    user_message="🔨 Формат: `!hs move [<app>] <x> <y> <w> <h>`\n"
-                    "Пример: `!hs move Cursor 0 0 0.5 1` (левая половина экрана)"
-                )
-            x, y, w, h = floats[:4]
-            app = " ".join(app_parts)
-            result = await hammerspoon.move(app=app, x=x, y=y, w=w, h=h)
-            frame = result.get("frame", {})
-            await message.reply(
-                f"🔨 Окно перемещено: x={frame.get('x')} y={frame.get('y')} "
-                f"w={frame.get('w')} h={frame.get('h')}"
-            )
-
-        else:
-            await message.reply(_HELP)
-
-    except HammerspoonBridgeError as exc:
-        await message.reply(f"🔨 Ошибка Hammerspoon: `{exc}`")
+# handle_hs — extracted to commands/cli_commands.py (Phase 2 Wave 12, Session 27). Re-exported above.
 
 
 async def handle_screenshot(bot: "KraabUserbot", message: Message) -> None:
