@@ -52,18 +52,22 @@ AUTO_REACTIONS_ENABLED = os.environ.get("AUTO_REACTIONS_ENABLED", "true").lower(
     "yes",
 )
 
-# Whitelist emoji, гарантированно принимаемых Telegram (избегаем REACTION_INVALID)
+# Whitelist emoji, гарантированно принимаемых Telegram free-tier accounts
+# (избегаем REACTION_INVALID).
+# 27.04.2026 fix: ❌, ⚙️, 🧠 удалены — Telegram возвращает 400 REACTION_INVALID
+# для них на free accounts (только premium может ставить произвольные emoji).
+# FAILED → 👎 (универсально доступная), AGENT/MEMORY → no-reaction (silent skip).
 SAFE_EMOJI_WHITELIST: frozenset[str] = frozenset(
-    {"👍", "🙏", "🤔", "😕", "😂", "❤️", "🔥", "🤝", "👀", "❌", "✅", "⚙️", "🧠"}
+    {"👍", "👎", "🙏", "🤔", "😕", "😂", "❤️", "🔥", "🤝", "👀", "✅"}
 )
 
 
 class ReactionState(str, Enum):
     ACCEPTED = "👍"
     COMPLETED = "✅"
-    FAILED = "❌"
-    AGENT_MODE = "⚙️"
-    MEMORY_RECALL = "🧠"
+    FAILED = "👎"  # was ❌, replaced 27.04.2026 — REACTION_INVALID на free accounts
+    AGENT_MODE = "⚙️"  # not whitelisted → silently skipped
+    MEMORY_RECALL = "🧠"  # not whitelisted → silently skipped
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +232,15 @@ async def set_reaction(
         )
         return True
     except Exception as e:  # noqa: BLE001
-        logger.warning("auto_reaction_failed", emoji=emoji, error=str(e))
+        # 27.04.2026: REACTION_INVALID для free-tier accounts — silent debug,
+        # не warning (это persistent behavior, не транзиент). Whitelist выше
+        # должен предотвращать большинство таких случаев, но иногда Telegram
+        # rejects emoji зависимо от chat-level enabled set.
+        _err_str = str(e)
+        if "REACTION_INVALID" in _err_str:
+            logger.debug("auto_reaction_invalid_emoji", emoji=emoji, error=_err_str)
+        else:
+            logger.warning("auto_reaction_failed", emoji=emoji, error=_err_str)
         return False
 
 

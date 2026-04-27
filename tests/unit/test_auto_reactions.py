@@ -92,11 +92,13 @@ async def test_set_reaction_fallback_bot_client():
     """Fallback через bot.client.send_reaction, возвращает True."""
     bot = _make_bot_via_client()
     msg = _make_message()
+    # 27.04.2026: ❌ удалён из SAFE_EMOJI_WHITELIST (REACTION_INVALID на free-tier).
+    # Используем 👎 которая принимается всегда.
     with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "true"}):
-        result = await ar.set_reaction(bot, msg.chat.id, msg.id, "❌")
+        result = await ar.set_reaction(bot, msg.chat.id, msg.id, "👎")
     assert result is True
     bot.client.send_reaction.assert_awaited_once_with(
-        chat_id=msg.chat.id, message_id=msg.id, emoji="❌"
+        chat_id=msg.chat.id, message_id=msg.id, emoji="👎"
     )
 
 
@@ -179,7 +181,11 @@ async def test_mark_explicit_completed_uses_check():
 
 @pytest.mark.asyncio
 async def test_mark_failed_uses_cross_and_truncates_error():
-    """mark_failed передаёт ❌ и обрезает error до 100 символов в log_ctx."""
+    """mark_failed передаёт 👎 (раньше ❌) и обрезает error до 100 символов.
+
+    27.04.2026: ❌ удалён из SAFE_EMOJI_WHITELIST после Sentry incident
+    REACTION_INVALID на free-tier accounts. FAILED state теперь 👎.
+    """
     bot = _make_bot_with_send_reaction()
     msg = _make_message()
     long_error = "E" * 200
@@ -187,18 +193,23 @@ async def test_mark_failed_uses_cross_and_truncates_error():
         result = await ar.mark_failed(bot, msg, error=long_error)
     assert result is True
     _, kwargs = bot.send_reaction.call_args
-    assert kwargs["emoji"] == "❌"
+    assert kwargs["emoji"] == "👎"
 
 
 @pytest.mark.asyncio
 async def test_mark_agent_mode():
+    """mark_agent_mode silently skips because ⚙️ removed from whitelist.
+
+    27.04.2026: ⚙️ — premium-only emoji, REACTION_INVALID на free accounts.
+    AGENT_MODE state существует для logical signalling, но reaction skip'ается.
+    """
     bot = _make_bot_with_send_reaction()
     msg = _make_message()
     with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "true"}):
         result = await ar.mark_agent_mode(bot, msg)
-    assert result is True
-    _, kwargs = bot.send_reaction.call_args
-    assert kwargs["emoji"] == "⚙️"
+    # Silent skip — emoji not in whitelist → return False without API call
+    assert result is False
+    bot.send_reaction.assert_not_awaited()
 
 
 @pytest.mark.asyncio
