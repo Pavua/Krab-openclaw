@@ -157,6 +157,13 @@ async def _reply_tech(message: Message, bot: "KraabUserbot", text: str, **kwargs
 # ---------------------------------------------------------------------------
 # Phase 2 Wave 11 (Session 27): admin_commands extraction
 # ---------------------------------------------------------------------------
+# Re-import патч-surface для тестов которые делают
+# `monkeypatch.setattr(command_handlers.chat_ban_cache, ...)` —
+# Wave 11 убрал прямое использование этого модуля, но тесты в
+# test_system_commands.py (chatban*, stats_panel) патчат его через
+# old namespace. Dual-namespace lookup pattern, см. Session 27 fbf3262.
+from src.core.chat_ban_cache import chat_ban_cache  # noqa: E402, F401
+
 # Административные команды и их private helpers:
 #   !config, !set, !acl, !scope, !reasoning, !role, !notify,
 #   !chatban, !block, !unblock, !blocklist, !cap, !silence (!тишина),
