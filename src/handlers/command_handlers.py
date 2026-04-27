@@ -24,18 +24,8 @@ from pyrogram.types import Message
 
 from ..cache_manager import history_cache, search_cache
 from ..config import config
-from ..core.access_control import (
-    PARTIAL_ACCESS_COMMANDS,
-    AccessLevel,
-    get_effective_owner_label,
-    load_acl_runtime_state,
-    normalize_subject,
-    update_acl_subject,
-)
-from ..core.chat_ban_cache import chat_ban_cache
+from ..core.access_control import AccessLevel
 from ..core.command_aliases import alias_service  # noqa: F401  # re-export
-from ..core.command_blocklist import command_blocklist
-from ..core.cost_analytics import cost_analytics
 from ..core.exceptions import UserInputError
 from ..core.inbox_service import inbox_service
 from ..core.lm_studio_health import is_lm_studio_available
@@ -50,11 +40,6 @@ from ..core.openclaw_workspace import (
 )
 from ..core.proactive_watch import proactive_watch
 from ..core.scheduler import parse_due_time, split_reminder_input
-from ..core.telegram_buttons import (
-    build_costs_detail_buttons,
-)
-from ..core.weekly_digest import weekly_digest
-from ..employee_templates import ROLES, list_roles
 from ..integrations.hammerspoon_bridge import HammerspoonBridgeError, hammerspoon
 from ..integrations.macos_automation import macos_automation
 from ..mcp_client import mcp_manager
@@ -169,6 +154,57 @@ async def _reply_tech(message: Message, bot: "KraabUserbot", text: str, **kwargs
 # !summary, !catchup, !report) и их helpers/constants вынесены в
 # commands/ai_commands.py. Re-exported для обратной совместимости (тесты,
 # любые external imports `from src.handlers.command_handlers import handle_ask`).
+# ---------------------------------------------------------------------------
+# Phase 2 Wave 11 (Session 27): admin_commands extraction
+# ---------------------------------------------------------------------------
+# Административные команды и их private helpers:
+#   !config, !set, !acl, !scope, !reasoning, !role, !notify,
+#   !chatban, !block, !unblock, !blocklist, !cap, !silence (!тишина),
+#   !costs, !models, !budget, !digest, !archive, !unarchive,
+#   !trust, !proactivity, !setpanelauth.
+# Re-exported для обратной совместимости (тесты, external imports).
+from .commands.admin_commands import (  # noqa: E402, F401
+    _CONFIG_GROUPS,
+    _CONFIG_KEY_DESC,
+    _SET_ALIASES,
+    _SET_FRIENDLY,
+    _TRUST_HELP,
+    _costs_aggregate,
+    _costs_ascii_trend,
+    _costs_filter_calls,
+    _get_set_value,
+    _handle_costs_breakdown,
+    _handle_costs_budget,
+    _handle_costs_today,
+    _handle_costs_trend,
+    _handle_costs_week,
+    _render_all_settings,
+    _render_chat_ban_entries,
+    _render_config_all,
+    _render_config_value,
+    handle_acl,
+    handle_archive,
+    handle_blocklist,
+    handle_budget,
+    handle_cap,
+    handle_chatban,
+    handle_cmdblock,
+    handle_cmdunblock,
+    handle_config,
+    handle_costs,
+    handle_digest,
+    handle_models,
+    handle_notify,
+    handle_proactivity,
+    handle_reasoning,
+    handle_role,
+    handle_scope,
+    handle_set,
+    handle_setpanelauth,
+    handle_silence,
+    handle_trust,
+    handle_unarchive,
+)
 from .commands.ai_commands import (  # noqa: E402, F401
     _EXPLAIN_PROMPT,
     _RATE_CRYPTO_ALIASES,
@@ -349,58 +385,6 @@ from .commands.voice_commands import (  # noqa: E402, F401
     handle_audio_message,
     handle_tts,
     handle_voice,
-)
-
-# ---------------------------------------------------------------------------
-# Phase 2 Wave 11 (Session 27): admin_commands extraction
-# ---------------------------------------------------------------------------
-# Административные команды и их private helpers:
-#   !config, !set, !acl, !scope, !reasoning, !role, !notify,
-#   !chatban, !block, !unblock, !blocklist, !cap, !silence (!тишина),
-#   !costs, !models, !budget, !digest, !archive, !unarchive,
-#   !trust, !proactivity, !setpanelauth.
-# Re-exported для обратной совместимости (тесты, external imports).
-from .commands.admin_commands import (  # noqa: E402, F401
-    _CONFIG_GROUPS,
-    _CONFIG_KEY_DESC,
-    _SET_ALIASES,
-    _SET_FRIENDLY,
-    _TRUST_HELP,
-    _costs_aggregate,
-    _costs_ascii_trend,
-    _costs_filter_calls,
-    _get_set_value,
-    _handle_costs_breakdown,
-    _handle_costs_budget,
-    _handle_costs_today,
-    _handle_costs_trend,
-    _handle_costs_week,
-    _render_all_settings,
-    _render_chat_ban_entries,
-    _render_config_all,
-    _render_config_value,
-    handle_acl,
-    handle_archive,
-    handle_blocklist,
-    handle_budget,
-    handle_cap,
-    handle_chatban,
-    handle_cmdblock,
-    handle_cmdunblock,
-    handle_config,
-    handle_costs,
-    handle_digest,
-    handle_models,
-    handle_notify,
-    handle_proactivity,
-    handle_reasoning,
-    handle_role,
-    handle_scope,
-    handle_set,
-    handle_setpanelauth,
-    handle_silence,
-    handle_trust,
-    handle_unarchive,
 )
 
 
@@ -2877,483 +2861,6 @@ async def handle_screenshot(bot: "KraabUserbot", message: Message) -> None:
 # handle_models / handle_budget / handle_digest — same extraction, re-exported above.
 
 
-async def _handle_silence_PLACEHOLDER(bot: "KraabUserbot", message: Message) -> None:  # noqa: E501
-    """Placeholder — не вызывать напрямую. Реальная функция в admin_commands.
-
-    Синтаксис:
-      !тишина               — toggle текущего чата (30 мин)
-      !тишина 15            — mute текущего чата на 15 минут
-      !тишина стоп          — снять mute текущего чата
-      !тишина глобально     — глобальный mute (60 мин)
-      !тишина глобально 30  — глобальный mute на 30 мин
-      !тишина статус        — показать все активные mutes
-      !тишина расписание 23:00-08:00 — ночной режим по расписанию
-      !тишина расписание статус      — статус расписания
-      !тишина расписание выкл        — отключить расписание
-    """
-    from ..core.silence_mode import silence_manager
-    from ..core.silence_schedule import silence_schedule_manager
-
-    chat_id = str(message.chat.id)
-    raw = (message.text or "").strip()
-    # Убираем префикс команды
-    parts = raw.split(maxsplit=1)
-    args = parts[1].strip().lower() if len(parts) > 1 else ""
-
-    # ── Расписание ночного режима ──────────────────────────────
-    if args.startswith("расписание"):
-        sched_arg = args[len("расписание") :].strip()
-        if not sched_arg or sched_arg == "статус":
-            await message.reply(silence_schedule_manager.format_status())
-            return
-        if sched_arg in ("выкл", "off", "стоп"):
-            silence_schedule_manager.disable_schedule()
-            await message.reply("🌙 Расписание тишины **отключено**.")
-            return
-        # Ожидаем формат HH:MM-HH:MM
-        if "-" in sched_arg:
-            time_parts = sched_arg.split("-", 1)
-            if len(time_parts) == 2:
-                start_s, end_s = time_parts[0].strip(), time_parts[1].strip()
-                try:
-                    silence_schedule_manager.set_schedule(start_s, end_s)
-                    active_marker = (
-                        " (сейчас активно ✅)"
-                        if silence_schedule_manager.is_schedule_active()
-                        else ""
-                    )
-                    await message.reply(
-                        f"🌙 Расписание тишины установлено: **{start_s}–{end_s}**{active_marker}\n"
-                        f"Краб будет молчать в эти часы.\n"
-                        f"`!тишина расписание выкл` — отключить"
-                    )
-                    return
-                except ValueError as exc:
-                    await message.reply(f"❌ {exc}")
-                    return
-        await message.reply("❌ Неверный формат. Пример: `!тишина расписание 23:00-08:00`")
-        return
-
-    if args in ("статус", "status"):
-        await message.reply(silence_manager.format_status())
-        return
-
-    if args in ("on", "off"):
-        if args == "off":
-            was_chat = silence_manager.unmute_chat(chat_id)
-            was_global = silence_manager.unmute_global()
-            if was_chat or was_global:
-                await message.reply("🔊 Тишина снята.")
-            else:
-                await message.reply("ℹ️ Тишина не была активна.")
-            return
-        minutes = int(getattr(config, "SILENCE_DEFAULT_MINUTES", 30))
-        silence_manager.mute_chat(chat_id, minutes)
-        await message.reply(f"🤫 Тишина в этом чате на **{minutes}** мин.")
-        return
-
-    if args.startswith("стоп"):
-        was_chat = silence_manager.unmute_chat(chat_id)
-        was_global = silence_manager.unmute_global()
-        if was_chat or was_global:
-            await message.reply("🔊 Тишина снята.")
-        else:
-            await message.reply("ℹ️ Тишина не была активна.")
-        return
-
-    if args.startswith("глобально"):
-        rest = args.replace("глобально", "").strip()
-        minutes = (
-            int(rest) if rest.isdigit() else int(getattr(config, "SILENCE_DEFAULT_MINUTES", 60))
-        )
-        silence_manager.mute_global(minutes)
-        await message.reply(f"🤫 Глобальная тишина на **{minutes}** мин.")
-        return
-
-    # Per-chat: toggle или с указанием минут
-    if silence_manager.is_chat_muted(chat_id):
-        silence_manager.unmute_chat(chat_id)
-        await message.reply("🔊 Тишина в этом чате снята.")
-        return
-
-    minutes = int(args) if args.isdigit() else int(getattr(config, "SILENCE_DEFAULT_MINUTES", 30))
-    silence_manager.mute_chat(chat_id, minutes)
-    await message.reply(f"🤫 Тишина в этом чате на **{minutes}** мин.\n`!тишина стоп` чтобы снять.")
-
-
-def _costs_filter_calls(calls: list, *, days: int | None = None) -> list:
-    """Вернуть вызовы за последние `days` дней (None = все)."""
-    if days is None:
-        return calls
-    import time as _time
-
-    cutoff = _time.time() - days * 86400
-    return [r for r in calls if r.timestamp >= cutoff]
-
-
-def _costs_aggregate(calls: list) -> dict:
-    """Агрегировать список CallRecord в сводку."""
-    from collections import defaultdict as _dd
-
-    by_model: dict = _dd(lambda: {"cost_usd": 0.0, "calls": 0, "tokens": 0})
-    by_provider: dict = _dd(lambda: {"cost_usd": 0.0, "calls": 0})
-    total_cost = 0.0
-    total_tokens = 0
-    for r in calls:
-        total_cost += r.cost_usd
-        total_tokens += r.input_tokens + r.output_tokens
-        by_model[r.model_id]["cost_usd"] += r.cost_usd
-        by_model[r.model_id]["calls"] += 1
-        by_model[r.model_id]["tokens"] += r.input_tokens + r.output_tokens
-        # Провайдер — часть до «/»
-        provider = r.model_id.split("/")[0] if "/" in r.model_id else r.model_id
-        by_provider[provider]["cost_usd"] += r.cost_usd
-        by_provider[provider]["calls"] += 1
-    return {
-        "total_cost": total_cost,
-        "total_tokens": total_tokens,
-        "calls_count": len(calls),
-        "by_model": dict(by_model),
-        "by_provider": dict(by_provider),
-    }
-
-
-def _costs_ascii_trend(calls: list, days: int = 30) -> str:
-    """Построить ASCII-график расходов за последние `days` дней."""
-    import datetime
-
-    now = datetime.date.today()
-    # Сгруппировать вызовы по дате
-    daily: dict[datetime.date, float] = {}
-    for d in range(days):
-        day = now - datetime.timedelta(days=days - 1 - d)
-        daily[day] = 0.0
-    for r in calls:
-        day = datetime.date.fromtimestamp(r.timestamp)
-        if day in daily:
-            daily[day] += r.cost_usd
-
-    values = [daily[d] for d in sorted(daily)]
-    max_v = max(values) if values else 0.0
-    total = sum(values)
-    avg = total / len(values) if values else 0.0
-
-    bars = " ▁▂▃▄▅▆▇█"
-
-    def _bar(v: float) -> str:
-        if max_v == 0:
-            return " "
-        idx = round((v / max_v) * (len(bars) - 1))
-        return bars[idx]
-
-    bar_line = "".join(_bar(v) for v in values)
-
-    lines = [
-        f"📈 **Тренд за {days} дней ($):**",
-        f"`{bar_line}`",
-        f"↑ {days}d ago {'·' * max(0, len(values) - 10)} ↑ today",
-        f"avg=${avg:.2f}/d · total=${total:.4f}",
-    ]
-    return "\n".join(lines)
-
-
-async def _handle_costs_today(bot: "KraabUserbot", message: Message) -> None:
-    """!costs today — расходы за сегодня."""
-    calls = _costs_filter_calls(getattr(cost_analytics, "_calls", []), days=1)
-    agg = _costs_aggregate(calls)
-    lines = [
-        "💰 **Costs: сегодня**",
-        "─────────────────",
-        f"Вызовов: {agg['calls_count']} | Токенов: {agg['total_tokens']}",
-        f"Стоимость: ${agg['total_cost']:.4f}",
-    ]
-    if agg["by_model"]:
-        lines.append("")
-        lines.append("**По моделям:**")
-        for mid, data in sorted(agg["by_model"].items(), key=lambda x: -x[1]["cost_usd"]):
-            lines.append(f"• {mid}: ${data['cost_usd']:.4f} ({data['calls']} calls)")
-    await message.reply("\n".join(lines))
-
-
-async def _handle_costs_week(bot: "KraabUserbot", message: Message) -> None:
-    """!costs week — расходы за 7 дней."""
-    calls = _costs_filter_calls(getattr(cost_analytics, "_calls", []), days=7)
-    agg = _costs_aggregate(calls)
-    lines = [
-        "💰 **Costs: 7 дней**",
-        "─────────────────",
-        f"Вызовов: {agg['calls_count']} | Токенов: {agg['total_tokens']}",
-        f"Стоимость: ${agg['total_cost']:.4f}",
-        f"Средняя в день: ${agg['total_cost'] / 7:.4f}",
-    ]
-    if agg["by_model"]:
-        lines.append("")
-        lines.append("**По моделям:**")
-        for mid, data in sorted(agg["by_model"].items(), key=lambda x: -x[1]["cost_usd"]):
-            lines.append(f"• {mid}: ${data['cost_usd']:.4f} ({data['calls']} calls)")
-    await message.reply("\n".join(lines))
-
-
-async def _handle_costs_breakdown(bot: "KraabUserbot", message: Message) -> None:
-    """!costs breakdown — разбивка по провайдерам."""
-    calls = getattr(cost_analytics, "_calls", [])
-    agg = _costs_aggregate(calls)
-    lines = [
-        "💰 **Costs: по провайдерам**",
-        "─────────────────",
-        f"Всего: ${agg['total_cost']:.4f} | Вызовов: {agg['calls_count']}",
-        "",
-        "**По провайдерам:**",
-    ]
-    total = agg["total_cost"] or 1.0  # защита от деления на 0
-    for provider, data in sorted(agg["by_provider"].items(), key=lambda x: -x[1]["cost_usd"]):
-        pct = round(data["cost_usd"] / total * 100, 1)
-        lines.append(f"• {provider}: ${data['cost_usd']:.4f} ({pct}%, {data['calls']} calls)")
-    if agg["by_model"]:
-        lines.append("")
-        lines.append("**По моделям:**")
-        for mid, data in sorted(agg["by_model"].items(), key=lambda x: -x[1]["cost_usd"])[:8]:
-            lines.append(f"• {mid}: ${data['cost_usd']:.4f} ({data['calls']} calls)")
-    await message.reply("\n".join(lines))
-
-
-async def _handle_costs_budget(bot: "KraabUserbot", message: Message) -> None:
-    """!costs budget — бюджет vs фактические расходы."""
-    budget = cost_analytics.get_monthly_budget_usd()
-    cost_month = cost_analytics.get_monthly_cost_usd()
-    cost_session = cost_analytics.get_cost_so_far_usd()
-    forecast = cost_analytics.monthly_calls_forecast()
-    lines = [
-        "💰 **Costs: бюджет**",
-        "─────────────────",
-        f"Сессия: ${cost_session:.4f}",
-        f"Месяц: ${cost_month:.4f}",
-    ]
-    if budget > 0:
-        pct = min(100, round(cost_month / budget * 100, 1))
-        remaining = max(0.0, budget - cost_month)
-        bar_filled = round(pct / 10)
-        bar = "█" * bar_filled + "░" * (10 - bar_filled)
-        lines += [
-            f"Бюджет: ${budget:.2f}",
-            f"[{bar}] {pct}%",
-            f"Остаток: ${remaining:.4f}",
-        ]
-        if pct >= 90:
-            lines.append("⚠️ Бюджет почти исчерпан!")
-        elif pct >= 75:
-            lines.append("⚡ Более 75% бюджета израсходовано.")
-    else:
-        lines.append("Бюджет: не задан (`!budget 10.00` чтобы задать)")
-    if forecast is not None:
-        lines.append(f"Прогноз вызовов (конец месяца): ~{int(forecast)}")
-    await message.reply("\n".join(lines))
-
-
-async def _handle_costs_trend(bot: "KraabUserbot", message: Message) -> None:
-    """!costs trend — ASCII-тренд за 30 дней."""
-    calls = getattr(cost_analytics, "_calls", [])
-    trend_text = _costs_ascii_trend(calls, days=30)
-    await message.reply(trend_text)
-
-
-async def handle_costs(bot: "KraabUserbot", message: Message) -> None:
-    """!costs [today|week|breakdown|budget|trend] — cost report (owner-only)."""
-    # Проверка: только владелец
-    access_profile = bot._get_access_profile(message.from_user)
-    if access_profile.level != AccessLevel.OWNER:
-        raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
-
-    args = (bot._get_command_args(message) or "").strip().lower()
-    sub = args.split()[0] if args else ""
-
-    if sub == "today":
-        return await _handle_costs_today(bot, message)
-    if sub == "week":
-        return await _handle_costs_week(bot, message)
-    if sub == "breakdown":
-        return await _handle_costs_breakdown(bot, message)
-    if sub == "budget":
-        return await _handle_costs_budget(bot, message)
-    if sub == "trend":
-        return await _handle_costs_trend(bot, message)
-
-    # Default — текущий month summary
-    report = cost_analytics.build_usage_report_dict()
-
-    cost_session = report.get("cost_session_usd", 0.0)
-    budget = report.get("monthly_budget_usd") or 0.0
-    cost_month = report.get("cost_month_usd", 0.0)
-    total_calls = len(getattr(cost_analytics, "_calls", []))
-    total_tokens = report.get("total_tokens", 0)
-    total_fallbacks = report.get("total_fallbacks", 0)
-    total_tool_calls = report.get("total_tool_calls", 0)
-    by_model: dict = report.get("by_model", {})
-    by_channel: dict = report.get("by_channel", {})
-
-    # Процент бюджета
-    if budget > 0:
-        pct = min(100, round(cost_month / budget * 100, 1))
-        budget_line = f"Бюджет: ${budget:.2f} ({pct}% использовано)"
-    else:
-        budget_line = "Бюджет: не задан"
-
-    lines = [
-        "💰 **Cost Report**",
-        "─────────────────",
-        f"Потрачено: ${cost_session:.4f}",
-        budget_line,
-        f"Вызовов: {total_calls} | Токенов: {total_tokens}",
-        f"Fallbacks: {total_fallbacks} | Tool calls: {total_tool_calls}",
-    ]
-
-    if by_model:
-        lines.append("")
-        lines.append("**По моделям:**")
-        for mid, data in sorted(by_model.items(), key=lambda x: -x[1].get("cost_usd", 0)):
-            lines.append(f"• {mid}: ${data.get('cost_usd', 0):.4f} ({data.get('calls', 0)} calls)")
-
-    if by_channel:
-        lines.append("")
-        lines.append("**По каналам:**")
-        ch_parts = [f"{ch}: {cnt}" for ch, cnt in sorted(by_channel.items())]
-        lines.append("• " + " | ".join(ch_parts))
-
-    await message.reply("\n".join(lines), reply_markup=build_costs_detail_buttons())
-
-
-async def handle_models(bot: "KraabUserbot", message: Message) -> None:
-    """!models — распределение вызовов по тирам моделей (owner-only)."""
-    access_profile = bot._get_access_profile(message.from_user)
-    if access_profile.level != AccessLevel.OWNER:
-        raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
-
-    from ..core.model_tier_tracker import format_tier_summary_text, get_tier_summary
-
-    args = (bot._get_command_args(message) or "").strip().lower()
-    # Поддерживаем !models 48 (часов) и !models week
-    hours = 24.0
-    if args == "week":
-        hours = 168.0
-    elif args == "month":
-        hours = 720.0
-    else:
-        try:
-            hours = float(args)
-        except ValueError:
-            pass
-
-    calls = getattr(cost_analytics, "_calls", [])
-    summary = get_tier_summary(calls, since_hours=hours)
-    period_label = {24.0: "24ч", 168.0: "неделя", 720.0: "месяц"}.get(hours, f"{hours:.0f}ч")
-    text = format_tier_summary_text(summary).replace("за 24ч", f"за {period_label}")
-    await message.reply(text)
-
-
-async def handle_budget(bot: "KraabUserbot", message: Message) -> None:
-    """!budget [сумма] — показать или установить месячный бюджет (owner-only)."""
-    # Проверка: только владелец
-    access_profile = bot._get_access_profile(message.from_user)
-    if access_profile.level != AccessLevel.OWNER:
-        raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
-
-    raw_args = bot._get_command_args(message).strip()
-
-    if not raw_args:
-        # Показать текущий бюджет
-        current = cost_analytics.get_monthly_budget_usd()
-        cost_month = cost_analytics.get_monthly_cost_usd()
-        if current > 0:
-            pct = min(100, round(cost_month / current * 100, 1))
-            remaining = max(0.0, current - cost_month)
-            await message.reply(
-                f"💳 **Месячный бюджет:** ${current:.2f}\n"
-                f"Потрачено: ${cost_month:.4f} ({pct}%)\n"
-                f"Осталось: ${remaining:.4f}"
-            )
-        else:
-            await message.reply(
-                f"💳 **Месячный бюджет:** не задан\n"
-                f"Потрачено за месяц: ${cost_month:.4f}\n"
-                f"Чтобы задать: `!budget 10.00`"
-            )
-        return
-
-    # Установить новый бюджет
-    try:
-        new_budget = float(raw_args.replace(",", "."))
-    except ValueError:
-        raise UserInputError(
-            user_message=f"❌ Некорректное значение: `{raw_args}`. Укажи число, например `!budget 15.00`."
-        )
-
-    if new_budget < 0:
-        raise UserInputError(user_message="❌ Бюджет не может быть отрицательным.")
-
-    cost_analytics._monthly_budget_usd = new_budget
-
-    if new_budget == 0:
-        await message.reply("✅ Месячный бюджет сброшен (без ограничений).")
-    else:
-        await message.reply(f"✅ Месячный бюджет установлен: **${new_budget:.2f}**")
-
-
-async def handle_digest(bot: "KraabUserbot", message: Message) -> None:
-    """
-    !digest — немедленно сгенерировать и отправить daily + weekly digest (owner-only).
-
-    Отправляет:
-    1. Nightly Summary (daily) — данные за сегодня.
-    2. Weekly Digest — данные за 7 дней (swarm/cost/inbox сводка).
-    """
-    # Проверка: только владелец
-    access_profile = bot._get_access_profile(message.from_user)
-    if access_profile.level != AccessLevel.OWNER:
-        raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
-
-    await message.reply("⏳ Генерирую digest...")
-
-    # --- Nightly (daily) summary ---
-    try:
-        from ..core.nightly_summary import generate_summary  # noqa: PLC0415
-
-        daily_text = await generate_summary()
-        await message.reply(daily_text, parse_mode="markdown")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("handle_digest_nightly_failed", error=str(exc))
-        await message.reply(f"⚠️ Daily summary не удался: {exc}")
-
-    # --- Weekly digest ---
-    try:
-        result = await weekly_digest.generate_digest()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("handle_digest_weekly_failed", error=str(exc))
-        await message.reply(f"❌ Weekly digest не удался: {exc}")
-        return
-
-    if not result.get("ok"):
-        err = result.get("error", "неизвестная ошибка")
-        await message.reply(f"❌ Weekly digest не удался: {err}")
-        return
-
-    rounds = result.get("total_rounds", 0)
-    cost = result.get("cost_week_usd", 0.0)
-    attention = result.get("attention_count", 0)
-
-    if not weekly_digest._telegram_callback:
-        await message.reply(
-            f"✅ **Weekly Digest**\n"
-            f"Swarm rounds (7д): {rounds}\n"
-            f"Cost (7д): ${cost:.4f}\n"
-            f"Attention items: {attention}"
-        )
-    else:
-        await message.reply(
-            f"✅ Weekly digest отправлен.\n"
-            f"Rounds: {rounds} | Cost 7д: ${cost:.4f} | Attention: {attention}"
-        )
-
-
 # ---------------------------------------------------------------------------
 # !bench — запуск бенчмарков производительности через subprocess
 # ---------------------------------------------------------------------------
@@ -3721,147 +3228,6 @@ async def handle_context(bot: "KraabUserbot", message: Message) -> None:
 
 # !pin / !unpin — extracted to commands/social_commands.py (Phase 2 Wave 6, Session 27).
 # Re-exported above (handle_pin, handle_unpin).
-
-
-async def handle_archive(bot: "KraabUserbot", message: Message) -> None:
-    """
-    Архивация и разархивация чатов. Owner-only.
-
-    Форматы:
-      !archive          — архивировать текущий чат
-      !unarchive        — разархивировать текущий чат
-      !archive list     — показать список архивированных чатов (до 20)
-      !archive stats    — статистика archive.db (размер, кол-во, чанки)
-      !archive growth   — рост archive.db за период
-    """
-    access_profile = bot._get_access_profile(message.from_user)
-    if access_profile.level != AccessLevel.OWNER:
-        raise UserInputError(user_message="🔒 `!archive` доступен только владельцу.")
-
-    args = bot._get_command_args(message).strip().lower()
-
-    if args == "list":
-        # Получаем список архивированных диалогов
-        try:
-            archived = []
-            async for dialog in bot.client.get_dialogs(folder_id=1):
-                chat = dialog.chat
-                title = (
-                    getattr(chat, "title", None)
-                    or getattr(chat, "first_name", None)
-                    or str(chat.id)
-                )
-                archived.append(f"• `{chat.id}` — {title}")
-                if len(archived) >= 20:
-                    break
-        except Exception as exc:
-            reply = f"❌ Не удалось получить архив: `{exc}`"
-        else:
-            if archived:
-                lines = ["📦 **Архивированные чаты** (до 20):"] + archived
-                reply = "\n".join(lines)
-            else:
-                reply = "📦 Архив пуст."
-
-    elif args == "stats":
-        # Статистика archive.db: размер, кол-во сообщений, чанков, последняя запись
-        import sqlite3
-
-        from src.core.archive_growth_monitor import ARCHIVE_DB
-
-        if not ARCHIVE_DB.exists():
-            reply = "📊 archive.db не найден — Memory Layer не инициализирован."
-        else:
-            size_mb = ARCHIVE_DB.stat().st_size / 1024 / 1024
-            try:
-                conn = sqlite3.connect(f"file:{ARCHIVE_DB}?mode=ro", uri=True)
-                msg_count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-                # chunks могут отсутствовать если индексация не запускалась
-                try:
-                    chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-                except sqlite3.OperationalError:
-                    chunk_count = 0
-                # последняя запись по полю date
-                try:
-                    last_row = conn.execute("SELECT MAX(date) FROM messages").fetchone()[0]
-                    last_write = last_row if last_row else "—"
-                except sqlite3.OperationalError:
-                    last_write = "—"
-                conn.close()
-                reply = (
-                    f"📊 **Archive.db stats**\n"
-                    f"• Размер: `{size_mb:.2f} MB`\n"
-                    f"• Сообщений: `{msg_count:,}`\n"
-                    f"• Чанков: `{chunk_count:,}`\n"
-                    f"• Последнее сообщение: `{last_write}`"
-                )
-            except Exception as exc:
-                reply = f"❌ Ошибка чтения archive.db: `{exc}`"
-
-    elif args == "growth":
-        # Динамика роста archive.db из истории снапшотов
-        from src.core.archive_growth_monitor import growth_summary, take_snapshot
-
-        snap = take_snapshot()
-        summary = growth_summary()
-        if snap is None:
-            reply = "📈 archive.db не найден — данные недоступны."
-        elif isinstance(summary.get("summary"), str):
-            # Недостаточно данных
-            reply = (
-                f"📈 **Archive.db growth**\n"
-                f"• Снапшотов: `{summary['snapshots']}`\n"
-                f"• Текущий размер: `{snap.size_mb:.2f} MB`\n"
-                f"• Сообщений сейчас: `{snap.message_count:,}`\n"
-                f"• {summary['summary']}"
-            )
-        else:
-            reply = (
-                f"📈 **Archive.db growth** (за {summary['days_tracked']:.1f} дн.)\n"
-                f"• Снапшотов: `{summary['snapshots']}`\n"
-                f"• Размер: `{summary['first_size_mb']:.2f}` → `{summary['latest_size_mb']:.2f} MB`\n"
-                f"• Рост: `+{summary['growth_mb_per_day']:.2f} MB/день`\n"
-                f"• Сообщений: `{summary['latest_messages']:,}` "
-                f"(+{summary['growth_messages_per_day']:.0f}/день)"
-            )
-
-    else:
-        # Архивируем текущий чат
-        chat_id = message.chat.id
-        try:
-            await bot.client.archive_chats(chat_id)
-            reply = "📦 Чат добавлен в архив."
-        except Exception as exc:
-            reply = f"❌ Не удалось архивировать: `{exc}`"
-
-    if message.from_user and message.from_user.id == bot.me.id:
-        await message.edit(reply)
-    else:
-        await message.reply(reply)
-
-
-async def handle_unarchive(bot: "KraabUserbot", message: Message) -> None:
-    """
-    Разархивирует текущий чат. Owner-only.
-
-    Формат:
-      !unarchive        — разархивировать текущий чат
-    """
-    access_profile = bot._get_access_profile(message.from_user)
-    if access_profile.level != AccessLevel.OWNER:
-        raise UserInputError(user_message="🔒 `!unarchive` доступен только владельцу.")
-
-    chat_id = message.chat.id
-    try:
-        await bot.client.unarchive_chats(chat_id)
-        reply = "📤 Чат извлечён из архива."
-    except Exception as exc:
-        reply = f"❌ Не удалось разархивировать: `{exc}`"
-
-    if message.from_user and message.from_user.id == bot.me.id:
-        await message.edit(reply)
-    else:
-        await message.reply(reply)
 
 
 async def handle_memo(bot: "KraabUserbot", message: Message) -> None:
@@ -9867,194 +9233,6 @@ async def _handle_chado_digest(message: Message) -> None:
 # ---------------------------------------------------------------------------
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# !trust — управление trusted guests allowlist (W10.1 bypass)
-# ──────────────────────────────────────────────────────────────────────────────
-
-_TRUST_HELP = """\
-🔐 **!trust** — управление allowlist доверенных гостей (W10.1 bypass)
-
-Команды (owner-only):
-  `!trust add @username [user_id]` — добавить в текущем чате
-  `!trust remove @username`        — удалить из текущего чата
-  `!trust list`                    — список для текущего чата
-  `!trust list all`                — список всех чатов
-
-По умолчанию: `@dodik_ggt` разрешена в YMB FAMILY FOREVER и How2AI.
-Trusted guest получает LLM-ответ даже без @mention Краба в группе.
-"""
-
-
-async def handle_trust(bot: "KraabUserbot", message: Message) -> None:
-    """
-    !trust add|remove|list — управление trusted_guests allowlist.
-
-    Owner-only. Позволяет legit friends (Дашка @dodik_ggt и др.) получать
-    LLM-ответы в группах, минуя W10.1 guest XOR gate.
-    """
-    from ..core.trusted_guests import trusted_guests  # noqa: PLC0415
-
-    access_profile = bot._get_access_profile(message.from_user)
-    if access_profile.level != AccessLevel.OWNER:
-        await message.reply("🔒 `!trust` доступен только владельцу.")
-        return
-
-    raw = str(message.text or "").strip()
-    parts = raw.split(maxsplit=3)
-    # parts[0] = "!trust", parts[1] = subcommand, parts[2] = @username, parts[3] = user_id
-    sub = parts[1].strip().lower() if len(parts) > 1 else ""
-
-    if not sub or sub == "help":
-        await message.reply(_TRUST_HELP)
-        return
-
-    chat_id = message.chat.id
-
-    # ── !trust list [all] ──────────────────────────────────────────────
-    if sub == "list":
-        scope = parts[2].strip().lower() if len(parts) > 2 else ""
-        if scope == "all":
-            all_data = trusted_guests.all_chats()
-            if not all_data:
-                await message.reply("📋 Trusted guests: пусто.")
-                return
-            lines = ["📋 **Trusted guests (все чаты):**", ""]
-            for cid, entry in all_data.items():
-                uids = entry.get("user_ids", [])
-                unames = entry.get("usernames", [])
-                lines.append(f"**Chat** `{cid}`:")
-                for uid in uids:
-                    lines.append(f"  • user_id={uid}")
-                for uname in unames:
-                    lines.append(f"  • {uname}")
-                lines.append("")
-            await message.reply("\n".join(lines).rstrip())
-            return
-
-        entries = trusted_guests.list_trusted(chat_id)
-        if not entries:
-            await message.reply(f"📋 Trusted guests в `{chat_id}`: пусто.")
-            return
-        lines = [f"📋 **Trusted guests в чате `{chat_id}`:**", ""]
-        for e in entries:
-            uid = e.get("user_id")
-            uname = e.get("username") or "—"
-            uid_str = f"user_id={uid}" if uid else "user_id=?"
-            lines.append(f"  • {uname} ({uid_str})")
-        await message.reply("\n".join(lines))
-        return
-
-    # ── !trust add @username [user_id] ────────────────────────────────
-    if sub == "add":
-        username_arg = parts[2].strip() if len(parts) > 2 else ""
-        if not username_arg:
-            await message.reply("❌ Формат: `!trust add @username [user_id]`")
-            return
-        user_id_arg = 0
-        if len(parts) > 3:
-            try:
-                user_id_arg = int(parts[3].strip())
-            except ValueError:
-                await message.reply("❌ user_id должен быть числом.")
-                return
-        norm_uname = username_arg.lstrip("@").strip()
-        trusted_guests.add_trusted(chat_id, user_id_arg, f"@{norm_uname}")
-        uid_info = f", user_id={user_id_arg}" if user_id_arg else ""
-        await message.reply(
-            f"✅ `@{norm_uname}`{uid_info} добавлен в trusted guests чата `{chat_id}`.\n"
-            f"Теперь получает LLM-ответы без @mention Краба."
-        )
-        return
-
-    # ── !trust remove @username ────────────────────────────────────────
-    if sub == "remove":
-        username_arg = parts[2].strip() if len(parts) > 2 else ""
-        if not username_arg:
-            await message.reply("❌ Формат: `!trust remove @username`")
-            return
-        norm_uname = username_arg.lstrip("@").strip()
-        trusted_guests.remove_trusted(chat_id, 0, f"@{norm_uname}")
-        await message.reply(f"🗑️ `@{norm_uname}` удалён из trusted guests чата `{chat_id}`.")
-        return
-
-
-async def handle_proactivity(bot: "KraabUserbot", message: Message) -> None:
-    """!proactivity — управление уровнем проактивности Краба.
-
-    Синтаксис:
-      !proactivity                   — показать текущий уровень и настройки
-      !proactivity <level>           — переключить уровень
-      !proactivity help              — справка по уровням
-
-    Уровни:
-      silent    (0) — только explicit @mention; reactions off
-      reactive  (1) — mention + reply-to-krab; contextual reactions
-      attentive (2) — DEFAULT: implicit triggers threshold 0.7, normal autonomy
-      engaged   (3) — threshold 0.5, chatty autonomy, follow-up 5 мин
-      proactive (4) — threshold 0.3, unsolicited thoughts
-    """
-    from ..core.proactivity import (  # noqa: PLC0415
-        ProactivityLevel,
-        allows_unsolicited,
-        get_autonomy_mode,
-        get_level,
-        get_reactions_mode,
-        get_trigger_threshold,
-        set_level,
-    )
-
-    raw = (message.text or "").strip()
-    parts = raw.split(maxsplit=1)
-    arg = parts[1].strip().lower() if len(parts) > 1 else ""
-
-    # Без аргументов — показать статус
-    if not arg or arg == "status" or arg == "статус":
-        lv = get_level()
-        lines = [
-            f"⚡ **Proactivity Level**: `{lv.value}` ({lv.name.lower()})",
-            f"🤖 Autonomy mode: `{get_autonomy_mode()}`",
-            f"📊 Trigger threshold: `{get_trigger_threshold()}`",
-            f"💬 Reactions mode: `{get_reactions_mode()}`",
-            f"💡 Unsolicited thoughts: `{'on' if allows_unsolicited() else 'off'}`",
-            "",
-            "Уровни: `silent` `reactive` `attentive` `engaged` `proactive`",
-        ]
-        await message.reply("\n".join(lines))
-        return
-
-    # Справка
-    if arg in ("help", "помощь", "?"):
-        help_text = (
-            "**!proactivity — уровни активности Краба:**\n\n"
-            "`silent` (0) — только explicit @mention; reactions off\n"
-            "`reactive` (1) — mention + reply-to-krab; contextual reactions\n"
-            "`attentive` (2) — **DEFAULT**: implicit 0.7, normal autonomy\n"
-            "`engaged` (3) — implicit 0.5, chatty autonomy, follow-up 5 мин\n"
-            "`proactive` (4) — implicit 0.3, unsolicited thoughts\n\n"
-            "Пример: `!proactivity engaged`"
-        )
-        await message.reply(help_text)
-        return
-
-    # Переключение уровня
-    valid = {lv.name.lower() for lv in ProactivityLevel} | {
-        str(lv.value) for lv in ProactivityLevel
-    }
-    if arg not in valid:
-        await message.reply(
-            f"❌ Неизвестный уровень `{arg}`.\n"
-            "Доступные: `silent`, `reactive`, `attentive`, `engaged`, `proactive` (или 0–4)"
-        )
-        return
-
-    set_level(arg)
-    lv = get_level()
-    await message.reply(
-        f"✅ Proactivity переключён: **{lv.name.lower()}** ({lv.value})\n"
-        f"Autonomy: `{get_autonomy_mode()}` | Threshold: `{get_trigger_threshold()}`"
-    )
-
-
 async def handle_e2e_smoke(bot: "KraabUserbot", message: Message) -> None:
     """!e2e-smoke — запустить E2E regression smoke tests (owner-only).
 
@@ -10143,76 +9321,6 @@ async def handle_e2e_smoke(bot: "KraabUserbot", message: Message) -> None:
         logger.warning("e2e-smoke: save report failed: %s", exc)
 
     await message.reply("\n".join(lines))
-
-
-async def handle_setpanelauth(bot: "KraabUserbot", message: Message) -> None:
-    """Установить bcrypt-пароль для Krab Panel (owner-only).
-
-    !setpanelauth <user> <pass>  — сгенерировать хэш и вывести env-переменные
-    !setpanelauth status         — текущий статус KRAB_PANEL_AUTH
-    !setpanelauth off            — показать команду для отключения
-
-    Применение: добавить в .env и перезапустить Краба.
-    """
-    from ..core.access_control import is_owner  # noqa: PLC0415
-
-    if not is_owner(message):
-        return
-
-    args = bot._get_command_args(message).strip()
-
-    if args == "status":
-        auth_enabled = os.getenv("KRAB_PANEL_AUTH", "") == "1"
-        username = os.getenv("KRAB_PANEL_USERNAME", "krab")
-        has_hash = bool(os.getenv("KRAB_PANEL_PASSWORD_HASH", ""))
-        status = "включён" if auth_enabled else "выключен"
-        hash_status = "задан" if has_hash else "НЕ задан"
-        await message.reply(
-            f"**Panel bcrypt auth:** {status}\nUsername: `{username}`\nPassword hash: {hash_status}"
-        )
-        return
-
-    if args == "off":
-        await message.reply(
-            "Чтобы выключить auth — удалите из `.env`:\n"
-            "```\nKRAB_PANEL_AUTH=1\n"
-            "KRAB_PANEL_USERNAME=...\n"
-            "KRAB_PANEL_PASSWORD_HASH=...\n```\n"
-            "Затем перезапустите Краба."
-        )
-        return
-
-    parts = args.split(None, 1)
-    if len(parts) < 2:
-        await message.reply(
-            "Использование: `!setpanelauth <username> <password>`\n"
-            "Пример: `!setpanelauth pablito myS3cr3t`"
-        )
-        return
-
-    username, password = parts[0], parts[1]
-
-    try:
-        import bcrypt  # noqa: PLC0415
-
-        hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
-    except ImportError:
-        await message.reply("bcrypt не установлен в окружении Краба")
-        return
-
-    env_block = (
-        f"KRAB_PANEL_AUTH=1\nKRAB_PANEL_USERNAME={username}\nKRAB_PANEL_PASSWORD_HASH={hashed}"
-    )
-    await message.reply(
-        f"Добавьте в `.env` и перезапустите Краба:\n\n```\n{env_block}\n```\n\n"
-        "После перезапуска панель потребует Basic Auth с bcrypt-проверкой.\n"
-        "_Сообщение с паролем будет автоматически удалено..._"
-    )
-    # Удалить исходное сообщение с паролем из истории чата
-    try:
-        await message.delete()
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
