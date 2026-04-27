@@ -3118,7 +3118,12 @@ class KraabUserbot(
         )
 
     @staticmethod
-    def _build_effective_user_query(*, query: str, has_images: bool) -> str:
+    def _build_effective_user_query(
+        *,
+        query: str,
+        has_images: bool,
+        reply_context: str | None = None,
+    ) -> str:
         """
         Нормализует текст пользовательского запроса перед отправкой в модель.
 
@@ -3126,14 +3131,19 @@ class KraabUserbot(
         - раньше фото без подписи уходило как английское `(Image sent)`;
         - маленькие vision-модели цеплялись за этот placeholder и начинали
           описывать картинку по-английски, игнорируя тон чата;
-        - для user-facing канала безопаснее отправить явный русский запрос.
+        - для user-facing канала безопаснее отправить явный русский запрос;
+        - reply_context (если non-None) префиксится к query чтобы модель видела
+          контекст исходного сообщения, на которое user сделал reply (Telegram
+          UI показывает quoted message, но MTProto event delivers только
+          reply_to_message_id — без явной prepend'я модель не видит).
         """
         normalized = str(query or "").strip()
-        if normalized:
-            return normalized
-        if has_images:
-            return "Опиши присланное изображение на русском языке."
-        return ""
+        if not normalized:
+            normalized = "Опиши присланное изображение на русском языке." if has_images else ""
+        ctx = (reply_context or "").strip()
+        if ctx:
+            return f"[В ответ на сообщение: «{ctx}»]\n\n{normalized}".rstrip()
+        return normalized
 
     @staticmethod
     def _should_capture_incoming_owner_item(

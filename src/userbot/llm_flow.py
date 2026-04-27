@@ -518,9 +518,38 @@ class LLMFlowMixin:
             )
             or 0
         )
+        # Bug 3 fix 27.04.2026: extract reply_to_message context чтобы модель
+        # видела на какое сообщение user отвечает (Telegram UI quoted, но MTProto
+        # event передаёт только reply_to_message_id — без prepend'a модель не видит).
+        _reply_context: str | None = None
+        try:
+            _reply_target = getattr(message, "reply_to_message", None)
+            if _reply_target is not None:
+                _reply_text = (
+                    str(getattr(_reply_target, "text", "") or "").strip()
+                    or str(getattr(_reply_target, "caption", "") or "").strip()
+                )
+                if _reply_text:
+                    _reply_from = getattr(_reply_target, "from_user", None)
+                    _reply_author = (
+                        str(getattr(_reply_from, "username", "") or "").strip()
+                        or str(getattr(_reply_from, "first_name", "") or "").strip()
+                        or ""
+                    )
+                    # Обрезаем длинный reply target (>500 символов) чтобы не съедать
+                    # context window — модели хватит первых 500 для понимания о чём речь.
+                    if len(_reply_text) > 500:
+                        _reply_text = _reply_text[:500] + "…"
+                    _reply_context = (
+                        f"@{_reply_author}: {_reply_text}" if _reply_author else _reply_text
+                    )
+        except Exception:  # noqa: BLE001
+            _reply_context = None
+
         effective_query = self._build_effective_user_query(
             query=query,
             has_images=bool(images),
+            reply_context=_reply_context,
         )
 
         # Auto-reaction: если Memory Layer активен — RAG подключён к контексту
