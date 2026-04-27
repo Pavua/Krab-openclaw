@@ -92,6 +92,74 @@ from src.integrations.voice_gateway_subscriber import VoiceGatewayEventSubscribe
 logger = structlog.get_logger("WebApp")
 
 
+# ── Кэш subprocess CLI-вызовов (openclaw models list / status) ────────────────
+# TTL 60s — данные практически статичны между запросами, устраняет hot-path lag.
+
+_SUBPROCESS_CACHE: dict[tuple[str, ...], tuple[float, str | None]] = {}
+_SUBPROCESS_CACHE_TTL_SEC: float = 60.0
+
+
+def _cached_subprocess_run(
+    args: tuple[str, ...],
+    *,
+    cwd: str,
+    timeout: float = 20.0,
+) -> str | None:
+    """Запускает subprocess с TTL-кэшем. None = timeout/error или returncode != 0.
+
+    legacy — async preferred для hot-path (future: _async_subprocess_check)
+    """
+    cache_key = args + (cwd,)
+    now = time.monotonic()
+    cached = _SUBPROCESS_CACHE.get(cache_key)
+    if cached is not None:
+        ts, result = cached
+        if now - ts < _SUBPROCESS_CACHE_TTL_SEC:
+            return result
+    # Результат из кэша истёк или отсутствует — выполняем subprocess
+    try:
+        proc = subprocess.run(
+            list(args),
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+        result = proc.stdout if proc.returncode == 0 else None
+    except Exception:
+        # Fallback: отдать истёкший кэш если есть
+        result = cached[1] if cached is not None else None
+    _SUBPROCESS_CACHE[cache_key] = (now, result)
+    return result
+
+
+async def _async_subprocess_check(
+    *args: str,
+    timeout_sec: float = 20.0,
+) -> str | None:
+    """Async wrapper для openclaw CLI calls. None = timeout/error/returncode!=0.
+
+    Предпочтительный вариант для async callers — не блокирует event loop.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
+            if proc.returncode == 0:
+                return stdout.decode("utf-8", errors="ignore")
+            return None
+        except asyncio.TimeoutError:
+            proc.kill()
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ── Хелперы memory_indexer для health/lite ────────────────────────────────────
 
 
@@ -1469,21 +1537,16 @@ class WebApp:
         Нужен, чтобы owner UI опирался на тот же auth/runtime view,
         который уже считает сам OpenClaw, а не на самодельный разбор текста.
         """
-        try:
-            proc = subprocess.run(
-                ["openclaw", "models", "status", "--json"],
-                cwd=str(cls._project_root()),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=15,
-            )
-        except Exception:
-            return {}
-        if proc.returncode != 0:
+        cwd = str(cls._project_root())
+        raw = _cached_subprocess_run(
+            ("openclaw", "models", "status", "--json"),
+            cwd=cwd,
+            timeout=15.0,
+        )
+        if raw is None:
             return {}
         try:
-            payload = json.loads(str(proc.stdout or "{}"))
+            payload = json.loads(raw or "{}")
         except (TypeError, ValueError):
             return {}
 
@@ -1547,21 +1610,16 @@ class WebApp:
     @classmethod
     def _openclaw_models_full_catalog(cls) -> dict[str, Any]:
         """Читает `openclaw models list --all --json` и группирует модели по provider."""
-        try:
-            proc = subprocess.run(
-                ["openclaw", "models", "list", "--all", "--json"],
-                cwd=str(cls._project_root()),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=20,
-            )
-        except Exception:
-            return {"count": 0, "providers": {}}
-        if proc.returncode != 0:
+        cwd = str(cls._project_root())
+        raw = _cached_subprocess_run(
+            ("openclaw", "models", "list", "--all", "--json"),
+            cwd=cwd,
+            timeout=20.0,
+        )
+        if raw is None:
             return {"count": 0, "providers": {}}
         try:
-            payload = json.loads(str(proc.stdout or "{}"))
+            payload = json.loads(raw or "{}")
         except (TypeError, ValueError):
             return {"count": 0, "providers": {}}
 
