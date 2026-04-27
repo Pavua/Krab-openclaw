@@ -2518,6 +2518,19 @@ class KraabUserbot(
             get_tracker().set_owner_id(int(self.me.id))
         except Exception as exc:  # noqa: BLE001
             logger.warning("feedback_tracker_owner_id_failed", error=str(exc))
+        # Bug fix 27.04.2026: динамически зарегистрировать username userbot
+        # session чтобы @yung_nagato (или любой актуальный username) распознавался
+        # как mention Краба. Раньше hardcoded patterns ловили только @krab.
+        try:
+            from .core.krab_identity import (  # noqa: PLC0415
+                set_krab_user_id,
+                set_krab_username,
+            )
+
+            set_krab_user_id(int(self.me.id))
+            set_krab_username(self.me.username)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("krab_identity_init_failed", error=str(exc))
         try:
             self._sync_scheduler_runtime()
         except Exception as exc:  # noqa: BLE001
