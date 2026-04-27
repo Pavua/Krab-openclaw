@@ -1409,7 +1409,17 @@ class KraabUserbot(
         # Voice/audio проходят в _process_message → _transcribe_audio_message
         # (устаревший wrap_audio с stop_propagation() удалён — он блокировал AI pipeline).
         @self.client.on_message(
-            (filters.text | filters.photo | filters.voice | filters.audio | filters.document)
+            (
+                filters.text
+                | filters.photo
+                | filters.voice
+                | filters.audio
+                | filters.document
+                | filters.video
+                | filters.video_note
+                | filters.animation
+                | filters.sticker
+            )
             & ~filters.bot,
             group=0,
         )
@@ -3886,11 +3896,22 @@ class KraabUserbot(
                 return
 
         has_document = bool(getattr(message, "document", None))
+        # Bug 5 fix 27.04: video / video_note / animation / sticker были silent
+        # drop'ом. Теперь учитываем их в "any-media" guard, чтобы Krab по крайней
+        # мере acknowledge event (vision-обработка сейчас только для photo).
+        has_video = bool(
+            getattr(message, "video", None)
+            or getattr(message, "video_note", None)
+            or getattr(message, "animation", None)
+        )
+        has_sticker = bool(getattr(message, "sticker", None))
         if (
             not text
             and not message.photo
             and not has_audio_message
             and not has_document
+            and not has_video
+            and not has_sticker
             and not _forward_batch_prompt
         ):
             return
