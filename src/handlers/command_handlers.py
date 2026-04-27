@@ -45,7 +45,7 @@ from ..integrations.hammerspoon_bridge import (  # noqa: F401  # patch surface
     hammerspoon,
 )
 from ..integrations.macos_automation import macos_automation
-from ..mcp_client import mcp_manager
+from ..mcp_client import mcp_manager  # noqa: F401  # patch surface (fileio_commands/tests)
 from ..memory_engine import memory_manager
 from ..model_manager import model_manager
 from ..openclaw_client import openclaw_client
@@ -414,6 +414,20 @@ from .commands.voice_commands import (  # noqa: E402, F401
     handle_tts,
     handle_voice,
 )
+from .commands.fileio_commands import (  # noqa: E402, F401  # Phase 2 Wave 13
+    EXPORT_DEFAULT_LIMIT,
+    EXPORT_MAX_LIMIT,
+    EXPORT_VAULT_DIR,
+    _format_sender,
+    _msg_text,
+    _render_export_markdown,
+    _sanitize_filename,
+    handle_export,
+    handle_ls,
+    handle_paste,
+    handle_read,
+    handle_write,
+)
 
 
 def _format_size_gb(size_gb: float) -> str:
@@ -529,99 +543,8 @@ async def handle_confirm(bot: "KraabUserbot", message: Message) -> None:
 # moved to commands/memory_commands.py (Phase 2 Wave 5)
 
 
-async def handle_ls(bot: "KraabUserbot", message: Message) -> None:
-    """Список файлов."""
-    path = bot._get_command_args(message) or str(config.BASE_DIR)
-    if ".." in path and not config.is_valid():
-        pass
-    msg = await message.reply("📂 Scanning...")
-    try:
-        result = await mcp_manager.list_directory(path)
-        await msg.edit(f"📂 **Files in {path}:**\n\n`{result[:3900]}`")
-    except (httpx.HTTPError, OSError, ValueError, KeyError, AttributeError) as e:
-        await msg.edit(f"❌ Error listing: {e}")
-
-
-async def handle_read(bot: "KraabUserbot", message: Message) -> None:
-    """Чтение файла."""
-    path = bot._get_command_args(message)
-    if not path:
-        raise UserInputError(user_message="📂 Какой файл читать? `!read <path>`")
-    if not path.startswith("/"):
-        path = os.path.join(config.BASE_DIR, path)
-    msg = await message.reply("📂 Reading...")
-    try:
-        content = await mcp_manager.read_file(path)
-        if len(content) > 4000:
-            content = content[:1000] + "\n... [truncated]"
-        await msg.edit(f"📂 **Content of {os.path.basename(path)}:**\n\n```\n{content}\n```")
-    except (httpx.HTTPError, OSError, ValueError, KeyError, AttributeError) as e:
-        await msg.edit(f"❌ Reading error: {e}")
-
-
-async def handle_write(bot: "KraabUserbot", message: Message) -> None:
-    """Запись файла (опасно!)."""
-    text = bot._get_command_args(message)
-    if not text:
-        raise UserInputError(user_message="📂 Формат: `!write <filename> <content>`")
-    parts = text.split("\n", 1)
-    if len(parts) < 2:
-        parts = text.split(" ", 1)
-        if len(parts) < 2:
-            raise UserInputError(user_message="📂 Нет контента для записи.")
-    path = parts[0].strip()
-    content = parts[1]
-    if not path.startswith("/"):
-        path = os.path.join(config.BASE_DIR, path)
-    result = await mcp_manager.write_file(path, content)
-    await message.reply(result)
-
-
-async def handle_paste(bot: "KraabUserbot", message: Message) -> None:
-    """Создать текстовый paste-файл и отправить как документ.
-
-    Поддерживает два режима:
-      !paste <текст>   — создаёт файл из аргумента
-      !paste (reply)  — создаёт файл из текста исходного сообщения
-    """
-    args = bot._get_command_args(message)
-    reply = getattr(message, "reply_to_message", None)
-
-    # Определяем текст для paste
-    if args:
-        text = args
-    elif reply and getattr(reply, "text", None):
-        text = reply.text
-    else:
-        raise UserInputError(
-            user_message=(
-                "📋 Формат: `!paste <текст>` или сделай reply на сообщение\n"
-                "Полезно для длинных текстов >4096 символов."
-            )
-        )
-
-    # Формируем имя файла
-    now = datetime.datetime.now()
-    filename = now.strftime("paste_%Y-%m-%d_%H-%M.txt")
-    tmpdir = pathlib.Path(config.BASE_DIR) / ".runtime" / "pastes"
-    tmpdir.mkdir(parents=True, exist_ok=True)
-    filepath = tmpdir / filename
-
-    try:
-        filepath.write_text(text, encoding="utf-8")
-        await bot.client.send_document(
-            message.chat.id,
-            str(filepath),
-            caption="📋 Paste",
-        )
-    except (OSError, IOError) as e:
-        await message.reply(f"❌ Ошибка создания paste: {e}")
-    finally:
-        # Удаляем временный файл после отправки
-        try:
-            filepath.unlink(missing_ok=True)
-        except OSError:
-            pass
+# handle_ls / handle_read / handle_write / handle_paste — extracted to commands/fileio_commands.py (Phase 2 Wave 13).
+# Re-exported above (handle_ls, handle_read, handle_write, handle_paste).
 
 
 # handle_status — extracted to commands/system_commands.py (Phase 2 Wave 10, Session 27).
@@ -3411,167 +3334,10 @@ async def handle_bookmark(bot: "KraabUserbot", message: Message) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# !export — экспорт истории чата в Markdown
-# ---------------------------------------------------------------------------
-
-EXPORT_VAULT_DIR = pathlib.Path("/Users/pablito/Documents/Obsidian Vault/30_Recordings/32_Chats")
-EXPORT_DEFAULT_LIMIT = 100
-EXPORT_MAX_LIMIT = 1000
-
-
-def _sanitize_filename(name: str) -> str:
-    """Убирает символы, запрещённые в именах файлов."""
-    return "".join(c if c.isalnum() or c in " _-" else "_" for c in name).strip()
-
-
-def _format_sender(msg) -> str:
-    """Возвращает отображаемое имя отправителя сообщения."""
-    if msg.from_user:
-        u = msg.from_user
-        parts = [u.first_name or "", u.last_name or ""]
-        full = " ".join(p for p in parts if p).strip()
-        return full or u.username or str(u.id)
-    if msg.sender_chat:
-        return msg.sender_chat.title or str(msg.sender_chat.id)
-    return "Unknown"
-
-
-def _msg_text(msg) -> str:
-    """Возвращает текстовое содержимое сообщения (текст или подпись)."""
-    return (msg.text or msg.caption or "").strip()
-
-
-def _render_export_markdown(
-    chat_title: str,
-    chat_id: int,
-    messages: list,
-    exported_at: datetime.datetime,
-) -> str:
-    """Рендерит список сообщений в Markdown-формат с YAML frontmatter."""
-    header = (
-        "---\n"
-        f"chat_title: {chat_title}\n"
-        f"chat_id: {chat_id}\n"
-        f"exported: {exported_at.strftime('%Y-%m-%dT%H:%M:%S')}\n"
-        f"messages: {len(messages)}\n"
-        "---\n"
-    )
-
-    # Группируем по дате
-    days: dict[str, list] = {}
-    for msg in messages:
-        if msg.date is None:
-            continue
-        day_key = msg.date.strftime("%Y-%m-%d")
-        days.setdefault(day_key, []).append(msg)
-
-    body_parts: list[str] = []
-    for day_key in sorted(days):
-        body_parts.append(f"\n## {day_key}\n")
-        for msg in days[day_key]:
-            time_str = msg.date.strftime("%H:%M")
-            sender = _format_sender(msg)
-            text = _msg_text(msg)
-            # Медиа без подписи
-            if not text:
-                if msg.photo:
-                    text = "_[фото]_"
-                elif msg.video:
-                    text = "_[видео]_"
-                elif msg.audio or msg.voice:
-                    text = "_[аудио]_"
-                elif msg.document:
-                    text = "_[документ]_"
-                elif msg.sticker:
-                    text = f"_[стикер: {msg.sticker.emoji or ''}]_"
-                else:
-                    text = "_[медиа]_"
-            body_parts.append(f"### {time_str} — {sender}\n{text}\n")
-
-    return header + "".join(body_parts)
-
-
-async def handle_export(bot: "KraabUserbot", message: Message) -> None:
-    """
-    !export [N|all] — экспортирует историю чата в Markdown-файл.
-
-    !export        — последние 100 сообщений (default)
-    !export 200    — последние 200 сообщений
-    !export all    — все сообщения (до 1000)
-    """
-    # Парсим аргумент
-    raw_args = (message.text or "").split(maxsplit=1)
-    arg = raw_args[1].strip() if len(raw_args) > 1 else ""
-
-    if arg.lower() == "all":
-        limit = EXPORT_MAX_LIMIT
-    elif arg.isdigit():
-        limit = min(int(arg), EXPORT_MAX_LIMIT)
-    elif arg == "":
-        limit = EXPORT_DEFAULT_LIMIT
-    else:
-        await message.reply(
-            "❌ Неверный аргумент. Примеры:\n`!export` / `!export 200` / `!export all`"
-        )
-        return
-
-    chat = message.chat
-    chat_id = chat.id
-    chat_title = getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(chat_id)
-
-    status_msg = await message.reply(f"⏳ Экспортирую {limit} сообщений из «{chat_title}»…")
-
-    try:
-        # Собираем сообщения через MTProto (get_chat_history — обратный порядок, новые первые)
-        raw_msgs = []
-        async for msg in bot.client.get_chat_history(chat_id, limit=limit):
-            raw_msgs.append(msg)
-        # Разворачиваем в хронологический порядок
-        raw_msgs.reverse()
-    except Exception as exc:
-        logger.exception("handle_export: ошибка получения истории")
-        await status_msg.edit(f"❌ Ошибка получения истории: {str(exc)[:200]}")
-        return
-
-    if not raw_msgs:
-        await status_msg.edit("⚠️ Нет сообщений для экспорта.")
-        return
-
-    exported_at = datetime.datetime.now()
-    md_content = _render_export_markdown(chat_title, chat_id, raw_msgs, exported_at)
-
-    # Формируем имя файла
-    safe_title = _sanitize_filename(chat_title)[:60]
-    date_prefix = exported_at.strftime("%Y-%m-%d")
-    filename = f"{date_prefix}_{safe_title}.md"
-
-    # Создаём директорию если не существует
-    EXPORT_VAULT_DIR.mkdir(parents=True, exist_ok=True)
-    file_path = EXPORT_VAULT_DIR / filename
-
-    try:
-        file_path.write_text(md_content, encoding="utf-8")
-    except OSError as exc:
-        logger.exception("handle_export: ошибка записи файла")
-        await status_msg.edit(f"❌ Ошибка записи файла: {str(exc)[:200]}")
-        return
-
-    # Отправляем файл в чат
-    try:
-        await bot.client.send_document(
-            chat_id=chat_id,
-            document=str(file_path),
-            caption=(
-                f"📄 Экспорт чата «{chat_title}»\nСообщений: {len(raw_msgs)}\nФайл: `{filename}`"
-            ),
-        )
-        await status_msg.delete()
-    except Exception as exc:
-        logger.exception("handle_export: ошибка отправки документа")
-        await status_msg.edit(
-            f"✅ Файл сохранён: `{file_path}`\n⚠️ Не удалось отправить документ: {str(exc)[:200]}"
-        )
+# !export / _sanitize_filename / _format_sender / _msg_text / _render_export_markdown
+# extracted to commands/fileio_commands.py (Phase 2 Wave 13).
+# Re-exported above (handle_export, EXPORT_VAULT_DIR, EXPORT_DEFAULT_LIMIT, EXPORT_MAX_LIMIT,
+# _sanitize_filename, _format_sender, _msg_text, _render_export_markdown).
 
 
 # !react — extracted to commands/social_commands.py (Phase 2 Wave 6, Session 27).
