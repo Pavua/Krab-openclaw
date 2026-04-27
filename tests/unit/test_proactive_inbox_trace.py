@@ -133,6 +133,14 @@ async def test_proactive_watch_trigger_writes_proactive_action_trace(
         "append_workspace_memory_entry",
         lambda text, **kwargs: True,
     )
+    # _fetch_openclaw_cron_jobs → subprocess `openclaw cron list` (до 20s) — мокаем
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    monkeypatch.setattr(
+        proactive_watch_module,
+        "_fetch_openclaw_cron_jobs",
+        _AsyncMock(return_value=[]),
+    )
 
     original_inbox = proactive_watch_module.inbox_service
     proactive_watch_module.inbox_service = inbox

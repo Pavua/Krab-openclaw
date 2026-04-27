@@ -2843,6 +2843,18 @@ def test_model_catalog_uses_runtime_truth_for_loaded_flag(monkeypatch):
         }
 
     monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    # _build_runtime_cloud_presets → subprocess openclaw models list (20s timeout) + auth_recovery
+    monkeypatch.setattr(
+        WebApp,
+        "_build_runtime_cloud_presets",
+        classmethod(lambda cls, current_slots=None: []),
+    )
+    # build_auth_recovery_readiness_snapshot → openclaw models status + plugins list (по 20s)
+    import src.modules.web_app as _web_app_mod
+
+    monkeypatch.setattr(
+        _web_app_mod, "build_auth_recovery_readiness_snapshot", lambda **kw: {}
+    )
     client = _make_client_with_router(_TruthRouter())
 
     resp = client.get("/api/model/catalog")
