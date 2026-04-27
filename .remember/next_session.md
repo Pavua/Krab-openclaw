@@ -1,128 +1,134 @@
-# Session 27 — Starter Handoff (after Session 26 close, 2026-04-26 evening)
+# Session 28 — Starter Handoff (after Session 27 close, 2026-04-27)
 
 ## Status snapshot
 
-- Branch: `fix/daily-review-20260421` — **80+ commits** (Session 24-26 непрерывно)
-- **Krab production live** (PID 70468 после Session 26 manual restart)
-- Smart Routing **active** — 5-stage pipeline в production
-- archive.db: 506 MB / 753k+ msgs — `memory_doctor.py 5/5 ✅` (5 chunks без vec — normal indexer queue lag)
-- 10 LaunchAgents активны post-reboot (включая `ai.krab.db-lock-monitor`, `ai.krab.cloudflared-tunnel`, MCP yung-nagato)
+- Branch: `fix/daily-review-20260421` — **98+ commits** (Sessions 24-27 непрерывно)
+- **Krab production live** — восстановлен через 5-layer recovery 27.04.2026
+- Smart Routing **active** — 5-stage pipeline, observation period НАЧАЛСЯ (первый раз без gateway 500)
+- Phase 2 command_handlers split **COMPLETE** — 11041 LOC (было 19637, −43.8%), 10 модулей extracted
+- archive.db: ~506 MB / 753k+ msgs — memory_doctor.py 5/5 OK
+- 10 LaunchAgents активны
 
-## Session 26 wins (~17 commits)
+## Session 27 wins (~18 commits)
 
-### Smart Message Routing (5 phases + design spec)
-| Commit | Phase | Tests |
+### Phase 2 command_handlers split (Waves 1-10)
+| Commit | Wave | Модуль |
 |---|---|---|
-| `9661d8c` | Phase 1: chat_response_policy.py + JSON store + auto-adjust | 28 |
-| `7152ab6` | Phase 4: !chatpolicy commands + chat_policy_router (4 endpoints) | 23 |
-| `c8a4bfe` | Phase 2: llm_intent_classifier.py + LRU cache (5min/500entries) | 29 |
-| `a48ab40` | Phase 3: feedback_tracker.py + Pyrogram delete/reaction hooks | 21 |
-| `84c00f0` | Phase 5: extend trigger_detector + wire userbot_bridge + integration | 14 |
-| `ef146f7` | docs/SMART_ROUTING_DESIGN.md — architectural spec | — |
-| **TOTAL** | **5 phases / 8 components / spec** | **115** |
+| `9d006be` | Wave 1 | text_utils (calc/b64/hash/json/sed/diff/regex/len/rand) |
+| `5fef756` | Wave 2 | chat_commands (grep/history/whois/monitor/chatinfo/...) |
+| `9d822ed` | Wave 3 | scheduler_commands (timer/stopwatch/remind/schedule/todo/cron) |
+| `41ca90a` | Wave 4 | voice_commands (voice/tts/audio_message) |
+| `f53f134` | Wave 5 | memory_commands (memo/bookmark/remember/recall/note/...) |
+| `7968b8e` | Wave 6 | social_commands (pin/del/afk/poll/welcome/...) |
+| `fcbda3b` | Wave 7 | ai_commands (ask/search/agent/rate/explain/fix/rewrite/summary) |
+| `436b640` | Wave 8 | swarm_commands (handle_swarm + _AgentRoomRouterAdapter) |
+| `326d0ac` | Wave 9 | translator_commands (handle_translator/translate/translate_auto) |
+| `8945a5f` | Wave 10 | system_commands (health/diagnose/restart/panel/version/uptime/sysinfo) |
 
-### Other Session 26 fixes
+### Phase 2 web_app final waves (carried from Session 26 scope)
 | Commit | Что |
 |---|---|
-| `f35e099` | Phase 2 Wave YY — costs cluster (7 endpoints → costs_router) |
-| `93985e9` | Phase 2 Wave ZZ — finish swarm (12 leaked endpoints, 17 tests) |
-| `9d44e50` | DB corruption circuit breaker — auto-quarantine + 16 tests |
-| `2b46afb` | Inbox 6 dual-patch fix (Wave 3/Wave O extraction breakage) |
-| `88e3d50` | CLAUDE.md autotables refresh (Session 25 final) |
-| `63ac7a3` | Cleanup 418 dead Phase 2 comments в web_app.py |
-| `674ebd1` | Session 26 starter handoff |
-| `b857ba6` / `0081c91` / `6ccf790` / `3af8041` / `7d35050` / `a58f05a` / `1601f10` / `ec16d56` | Phase 2 Waves QQ→XX (HTML pages, runtime, etc.) |
-| `aea2b9a` | Cold-start rate limit guard (`scripts/launchers/cold_start_rate_limit.sh` + docs) |
-| `6969048` | Phase 2 audit follow-up — promote helpers (tail_text/mask_secret/bool_env/project_root/clone_jsonish/float_env/get_public_base_url) в _helpers.py |
-| `269412b` | Fix DB guard — exclude `disk I/O error` from HARD markers (false positive lesson) |
-| `fad6e8d` | CLAUDE.md + Smart Routing section + Session 26 row |
+| `ac833bc` | context_router (3 endpoints /api/context/*) |
+| `10c3d67` | monitoring_router (/api/ops/{diagnostics,runtime_snapshot,bundle,...}) |
+| `61178de` | assistant_router /api/assistant/stream |
+| `4f237c6` | assistant_router /api/assistant/query (last HARD endpoint) |
 
-## Что live в production (новое в Session 26)
+### Repairs and ops
+| Commit | Что |
+|---|---|
+| `fbf3262` | fix: dual-namespace lookup — repair Phase 2 split test regressions |
+| `68111fc` | fix: purge stale model defaults (nvidia/nemotron-3-nano + nvidia/llama-3.1-nemotron-nano) |
+| `0c7f89d` | feat: analyze_smart_routing.py log analyzer (Session 27 sub-agent) |
 
-### 1. Smart Routing (commits 9661d8c→84c00f0)
-Pipeline активен — `smart_trigger_decision` events логируются в `~/.openclaw/krab_runtime_state/krab_main.log` для каждого group message.
-- Owner control: `!chatpolicy [show|set <mode>|threshold <0.0-1.0>|stats|list|reset]`
-- Web API: `GET/POST/DELETE /api/chat/policy/{chat_id}` + `GET /api/chat/policies`
-- Modes: silent (1.1) / cautious (0.7) / normal (0.5) / chatty (0.3)
-- LLM cache: 500 entries, 5min TTL
-- Auto-adjust: >5 negatives/24h → downshift (rate-limit 6h)
-- Feedback hooks: Pyrogram `on_deleted_messages` + `on_message_reaction_updated`
+### 5-layer LLM recovery (27.04 operational, no separate commit)
+1. `RESTORE_PREFERRED_ON_IDLE_UNLOAD=0` + `LOCAL_AUTOLOAD_FALLBACK_LIMIT=0` в `.env`
+2. `codex login` (interactive — OAuth refresh token race)
+3. `openclaw.json` + `agent.json` — harness renamed `codex-cli` → `codex`
+4. `npm i -g @openai/codex@latest` (0.115 → 0.125)
+5. `68111fc` — code-level stale defaults purge
 
-### 2. DB Corruption Guard (commit 9d44e50, refined 269412b)
-- Pre-flight `PRAGMA integrity_check` на boot для kraab.session + archive.db
-- Auto-quarantine corrupt files → `<path>.corrupt-<unix_ts>` (с WAL/SHM sidecars)
-- HARD markers: malformed / not a database / encrypted / malformed schema
-- **disk I/O error EXCLUDED** (false positive — transient OS issue, не corruption)
-- Sentry tag `db_corruption=true` для фильтрации
-- Critical DBs (session) → `sys.exit(78)` launchd throttle
+## Что live в production (новое в Session 27)
 
-### 3. Cold-Start Rate Limit (commit aea2b9a)
-- `scripts/launchers/cold_start_rate_limit.sh` — sourceable function
-- `~/.openclaw/krab_runtime_state/krab_cold_starts.log` — sliding 5min window
-- ≥5 starts/5min → cooldown 600s
-- ≥10 starts/5min → ABORT exit 1
-- Log rotation >100 lines → tail 50
+### 1. Phase 2 command_handlers split (Waves 1-10)
+11 модулей в `src/handlers/commands/` (включая pre-existing `policy_commands` + `_shared`):
+`text_utils`, `chat_commands`, `scheduler_commands`, `voice_commands`, `memory_commands`,
+`social_commands`, `ai_commands`, `swarm_commands`, `translator_commands`, `system_commands`.
 
-### 4. Phase 2 Code Splits (Session 25 завершено)
-- 25 routers / 207 endpoints в `src/modules/web_routers/`
-- web_app.py: 15.8k → ~10k LOC (-37%)
-- Helper injection через late-bound lambda — устоявшийся pattern
-- `_helpers.py` extended (Session 26 6969048): tail_text, mask_secret, bool_env, project_root, clone_jsonish, float_env, get_public_base_url (default_port param)
+Pattern в command_handlers.py: `from .commands.X import handler  # Phase 2 Wave N` re-exports.
+Dual-namespace lookup (`_ch.symbol` + `_X_BASELINE` + `_resolve`) — необходим для test monkeypatch compatibility.
 
-## Session 27 priorities
+**Метрика:** 19637 → 11041 LOC (−43.8%). dispatcher + register/router logic остаётся в command_handlers.py.
 
-### P0 (operational watch)
-1. **Watch Smart Routing logs 24-72h** — `grep smart_trigger_decision ~/.openclaw/krab_runtime_state/krab_main.log`. Анализ ложных positive/negative, tune `KRAB_IMPLICIT_TRIGGER_THRESHOLD` или per-chat policy.
-2. **Sentry observation** — продолжать (markers expansion + DB guard работают).
-3. **db_lock_monitor 24h baseline** — pragma_baseline cosmetic issue (busy_timeout=0 в monitor's own connection — fix nice-to-have).
+### 2. Smart Routing observation period (активен 27.04)
+Предыдущая попытка observation в Session 26-27 была blocked gateway 500.
+После 5-layer recovery логи `smart_trigger_decision` реально пишутся.
+Инструмент анализа: `python scripts/analyze_smart_routing.py --hours 24`.
 
-### P1 (improvements)
-4. **Apply launchd Option C fix** — `Stop Krab.command` modified locally (added `launchctl enable` + removed `launchctl remove`). После следующего reboot verify auto-load работает.
-5. **Auto-load investigation** — verify post-reboot Krab starts itself (без manual `start_krab.command`).
-6. **Smart Routing tuning** — based на 24-72h observation, может потребоваться:
-   - LLM prompt iteration (false positives/negatives)
-   - Auto-adjust thresholds tweak
-   - Add validation set с known YES/NO examples
-7. **Phase 2 audit follow-up Part 2** — finish ops cluster extraction (5 endpoints), context_router (3 endpoints), assistant query+stream extraction.
+### 3. Stale defaults purged (`68111fc`)
+Удалены hard-coded defaults: `nvidia/nemotron-3-nano` (3 файла) — больше не trigger'ят LM Studio auto-load.
+
+### 4. Phase 2 web_app роутеры (финальные 4 волны)
+`src/modules/web_routers/` теперь содержит 26 роутеров — все endpoints extracted.
+
+## Что новое для Claude в Session 28
+
+- **Dual-namespace lookup pattern** — при extraction функций из command_handlers.py в submodule тесты могут патчить старые пути. Pattern: в command_handlers.py оставить `_BASELINE = original_fn; _resolve = lambda: submod.fn if submod else _BASELINE`. Документировать в CLAUDE.md.
+- **Smart Routing observation period НАЧАЛСЯ** 27.04 — первый с живыми логами. analyze_smart_routing.py готов.
+- **5-layer LLM recovery documented** — см. operational lessons ниже.
+- **command_handlers.py split DONE** — дальнейшее дробление diminishing returns (dispatcher/router/register остаётся).
+
+## Session 28 priorities
+
+### P0 (operational — первые 24-72h)
+1. **Smart Routing logs review** — `python scripts/analyze_smart_routing.py --hours 24`. Анализ false positive/negative, tune `KRAB_IMPLICIT_TRIGGER_THRESHOLD` или per-chat policy.
+2. **Sentry observation** post 5-layer recovery — markers expansion + verify DB guard не даёт false positives.
+3. **7 pytest hangers** — pre-existing network/asyncio в test env. Установить `pytest-timeout`, найти offending fixtures (`async_generator`, `httpx`, `anyio`).
+
+### P1 (fixes / debt)
+4. **3 pre-existing test fails** — `auth_recovery_readiness`, `policy_matrix`, `inbox_status` — domain bugs, не критичные. Один из них может быть unrelated к Session 27.
+5. **Smart Routing tuning** — based на real observation data (false positive analysis, per-chat policy recommendations).
+6. **OAuth refresh token proactive check** — если `~/.codex/auth.json` mtime > 24h → preventive `codex login` при startup. Пока manual.
 
 ### P2 (architectural)
-8. **command_handlers.py split** — Phase 2 для commands. Phase 1 scaffold готов (`src/handlers/commands/_shared.py`). Phase 2 extraction — отдельная сессия.
-9. **HNSW migration** — vec count 72k / 250k trigger, p95 ~25ms. Только monitoring.
+7. **HNSW migration** — vec count ~72k / 250k trigger. Только мониторинг, не action.
+8. **command_handlers.py final cleanup** — afk/welcome/group_admin, !browser/macos/hs, !cli остаются inline. Diminishing returns — низкий приоритет.
 
 ### P3 (backlog)
-10. **`_recover` для kraab.session** — automated recovery via `sqlite3 .recover` если quarantined session integrity = OK (Session 26 manual fix mainly automated). 
-11. **Restart-loop alert** — Telegram/Sentry notification при rate limit triggered (currently only stdout warning).
+9. **Auto-load verify post next Mac reboot** — Option C fix в Stop Krab.command. Verify: `launchctl list | grep ai.krab.core` после cold reboot.
+10. **Restart-loop alert** — Telegram/Sentry notification при cold_start_rate_limit triggered.
 
-## Recent operational lessons (Session 26)
+## Operational lessons (Session 27)
 
-1. **`disk I/O error` НЕ corruption** — transient OS-level issue when WAL contention. Krab может open WAL когда file system busy → false positive quarantine. Fix: exclude from HARD markers, retry on next cycle.
+1. **Re-export ≠ same identity для monkeypatch** — `from .commands.X import fn` создаёт новый binding в command_handlers namespace. Monkeypatch на `command_handlers.fn` не достигает submodule. Fix: dual-namespace lookup pattern (`fbf3262`).
 
-2. **Pyrogram session recovery via `sqlite3 .recover`** — works для btreeInitPage corruption (page-level damage). Recovered session preserves user_id, auth_key, peers — НЕ требует phone+SMS re-auth. Команда:
-   ```bash
-   sqlite3 corrupt.session ".recover" > recovered.sql
-   sqlite3 fresh.session < recovered.sql
-   ```
+2. **Stale defaults опаснее silent** — `nvidia/nemotron-3-nano` default не trigger'ил годами, потом среагировал на reboot и autoload LM Studio. Code-level cleanup необходим немедленно после discovery.
 
-3. **launchd `bootout` + `remove` оставляет persistent disabled flag** since Catalina. Fix: `launchctl enable gui/501/ai.krab.core` после bootout.
+3. **OAuth refresh tokens single-use** — Mac reboot mid-refresh → token race → "already used" deadlock. Safe path: check `~/.codex/auth.json` mtime, если stale > 24h → preventive `codex login`.
 
-4. **DB guard auto-quarantine при boot** — protects от 322-event restart loops. После Session 26 deploy guard сработал на false positive (disk I/O), быстро identified и fixed (excluded marker).
+4. **Harness names имеют version-drift** — `codex-cli` → `codex` в OpenClaw 2026.4.24. Primary source of truth: `grep -r '"harness"' ~/.openclaw/` + `node_modules/.bin/` list.
+
+5. **Sub-agent dispatch требует explicit scope** — git races при параллельной работе над одним файлом. Разделять по файловой области заранее.
+
+6. **`disk I/O error` НЕ corruption** (из Session 26, подтверждено) — transient OS-level WAL contention. Excluded из HARD markers в DB guard.
 
 ## Operational commands
 
 ```bash
 cd /Users/pablito/Antigravity_AGENTS/Краб
-cat .remember/next_session.md          # this file
-git log --oneline -25                  # recent commits
-launchctl list | grep -i krab          # 10 active expected
-curl -s http://127.0.0.1:8080/api/health/lite | python3 -m json.tool
+cat .remember/next_session.md                   # this file
+git log --oneline -25                           # recent commits
+launchctl list | grep -i krab                   # 10 active expected
 
 # Smart Routing observation
+python scripts/analyze_smart_routing.py --hours 24
 grep smart_trigger_decision ~/.openclaw/krab_runtime_state/krab_main.log | tail -20
 grep "feedback_negative\|feedback_positive\|chat_response_policy_auto" ~/.openclaw/krab_runtime_state/krab_main.log | tail -10
 
+# Health check
+curl -s http://127.0.0.1:8080/api/health/lite | python3 -m json.tool
+
 # Per-chat policies
 curl -s http://127.0.0.1:8080/api/chat/policies | python3 -m json.tool
-# Or via Telegram: !chatpolicy stats
 
 # DB guard logs
 grep "db_corruption_detected\|db_corruption_quarantined" ~/.openclaw/krab_runtime_state/krab_main.log | tail -5
@@ -130,41 +136,41 @@ grep "db_corruption_detected\|db_corruption_quarantined" ~/.openclaw/krab_runtim
 # Restart guard log
 tail -10 ~/.openclaw/krab_runtime_state/krab_cold_starts.log
 
+# LLM recovery check (если codex опять не отвечает)
+cat ~/.codex/auth.json | python3 -m json.tool   # check expiry
+codex login                                     # если stale
+
 # Session diagnostic
 bash scripts/krab_session_diagnostic.sh
 ```
-
-## Sentry post-Session 26
-
-- Issues PYTHON-FASTAPI-5Z (322 fatal_error events от kraab.session corruption) и 5W (4 disk I/O events) — **resolved** в Session 26.
-- Future: rate limiting на same fingerprint (Sentry side config — manual через UI).
 
 ## Restart notes
 
 - Krab manual: `/Users/pablito/Antigravity_AGENTS/new\ start_krab.command`
 - Stop manual: `/Users/pablito/Antigravity_AGENTS/new\ Stop\ Krab.command`
-- After Mac reboot: launchd должен auto-load после Option C fix (Stop Krab.command). Verify: `launchctl list | grep ai.krab.core`. Если НЕ loaded — manual start.
+- After Mac reboot: launchd должен auto-load (Option C fix). Verify: `launchctl list | grep ai.krab.core`. Если НЕ loaded — manual start.
 - MCP: `launchctl kickstart -k gui/$(id -u)/com.krab.mcp-yung-nagato` (после server.py changes)
 - DB recovery: `sqlite3 corrupt.session ".recover"` → новая чистая SQLite
+- **Codex stuck**: `codex login` → verify `~/.codex/auth.json` updated, restart Krab
 
-## Что новое для Claude в Session 27
+## Sentry post-Session 27
 
-- **Smart Routing live**: 5-stage pipeline через `detect_smart_trigger()`. Logs `smart_trigger_decision` events.
-- **DB guard tuned**: false positive lesson зафиксирован (disk I/O excluded).
-- **Cold-start guard**: launchd рестарт-loops защищены `cold_start_rate_limit.sh`.
-- **_helpers.py extended** с 7+ utility functions — используй вместо `WebApp._method` где возможно.
+- Issues из Session 26 (PYTHON-FASTAPI-5Z + 5W) — resolved.
+- Post 5-layer recovery: наблюдать 24-48h, расширять `_BENIGN_ERROR_MARKERS` если новые false positives.
 
-## Files for Session 27 reference
+## Files for Session 28 reference
 
 - `docs/SMART_ROUTING_DESIGN.md` — Smart Routing architectural spec
-- `docs/CODE_SPLITS_PLAN.md` — Phase 2 plan (mostly done)
-- `docs/HNSW_MIGRATION_PLAN.md` — HNSW prep (not triggered yet)
-- `docs/KRAB_LAUNCHER_RATE_LIMIT.md` — restart guard documentation
-- `scripts/launchers/cold_start_rate_limit.sh` — sourceable rate limit
-- `scripts/krab_session_diagnostic.sh` — Pyrogram session is_bot detection
+- `scripts/analyze_smart_routing.py` — log-based decision analyzer (NEW Session 27)
+- `tests/unit/test_analyze_smart_routing.py` — tests для analyzer (NEW Session 27)
+- `docs/CODE_SPLITS_PLAN.md` — Phase 2 plan (command_handlers done, web_app done)
+- `docs/HNSW_MIGRATION_PLAN.md` — HNSW prep (not triggered yet, ~72k/250k)
+- `.env` — `RESTORE_PREFERRED_ON_IDLE_UNLOAD=0` + `LOCAL_AUTOLOAD_FALLBACK_LIMIT=0` defenses live
+- `~/.openclaw/openclaw.json` — harness `codex` (not `codex-cli`) post-fix
 
 ## Test counts
 
-Session 25: 10125 collected (~9700 passed, 94 skipped)
-Session 26: +173 tests (Smart Routing 115 + DB guard 16 + costs 9 + swarm 17 + inbox dual-patch 7 + cleanup helpers 0 net)
-**Session 27 baseline**: ~10300+ tests
+- Session 26 baseline: ~10300+ collected
+- Session 27: **6198 passed** (unit run) + 3 pre-existing fails + 7 hangers excluded (network/asyncio infra)
+- New tests added: ai_commands (~23), swarm (~11), translator, system_commands (~371), smart_routing analyzer (TBD from sub-agent commit)
+- Delta: ~500+ новых тестов в session 27

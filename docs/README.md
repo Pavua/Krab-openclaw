@@ -1,6 +1,6 @@
 # Krab Documentation Index
 
-Auto-generated overview of `docs/` directory — **85 documents**.
+Auto-generated overview of `docs/` directory — **86 documents**.
 
 ## Root-level documentation
 
@@ -49,6 +49,7 @@ Auto-generated overview of `docs/` directory — **85 documents**.
 | [EXTERNAL_PROMPT_AG_R22_FRONTEND_RU.md](EXTERNAL_PROMPT_AG_R22_FRONTEND_RU.md) | AG Prompt R22 Frontend — UX Clarity + RU Localization для OpenClaw Control | Контекст: |
 | [HNSW_MIGRATION_PLAN.md](HNSW_MIGRATION_PLAN.md) | HNSW Migration Plan — Krab Memory Layer | > Подготовлено в Session 24 (2026-04-26). Активация — когда сработают trigger conditions |
 | [KRAB_EAR_TRACE_INTEGRATION.md](KRAB_EAR_TRACE_INTEGRATION.md) | Krab Ear — Cross-Project Distributed Tracing (Sentry) | Этот документ — инструкция для **Krab Ear project** (репо `/Users/pablito/Antigravity_AGENTS/Kr |
+| [KRAB_LAUNCHER_RATE_LIMIT.md](KRAB_LAUNCHER_RATE_LIMIT.md) | Krab Launcher Cold-Start Rate Limit | В Session 26 был зафиксирован инцидент: **322 fatal_error events за 24 часа** |
 | [MCP_SSE_TROUBLESHOOTING.md](MCP_SSE_TROUBLESHOOTING.md) | MCP SSE — Troubleshooting "Transport closed" | **Симптом в логе:** `sqlite3.OperationalError: database is locked` в lifespan |
 | [MEMORY_DOCTOR_POST_SESSION_17.md](MEMORY_DOCTOR_POST_SESSION_17.md) | Memory Doctor — Post-Session 17 Diagnostics | **Timestamp:** 2026-04-21 06:44:59 |
 | [MEMORY_LAYER_GUIDE.md](MEMORY_LAYER_GUIDE.md) | Memory Layer — User Guide | Hybrid retrieval поверх Telegram-архива: FTS5 BM25 + Model2Vec embeddings в SQLite, |
