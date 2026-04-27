@@ -546,10 +546,36 @@ class LLMFlowMixin:
         except Exception:  # noqa: BLE001
             _reply_context = None
 
+        # 27.04.2026 fix: для group chat передаём sender_name → LLM различает
+        # speakers. Без этого префикса все participants становились безымянными
+        # "user" в session history, model сливала разных людей в одного.
+        _sender_name = ""
+        _is_group_chat = False
+        try:
+            _user_obj = getattr(message, "from_user", None)
+            if _user_obj is not None:
+                _sender_name = (
+                    str(getattr(_user_obj, "username", "") or "").strip()
+                    or str(getattr(_user_obj, "first_name", "") or "").strip()
+                    or f"user_{getattr(_user_obj, 'id', '?')}"
+                )
+            _chat_obj = getattr(message, "chat", None)
+            from pyrogram import enums as _pyro_enums  # noqa: PLC0415
+
+            _ct = getattr(_chat_obj, "type", None)
+            _is_group_chat = _ct in (
+                _pyro_enums.ChatType.GROUP,
+                _pyro_enums.ChatType.SUPERGROUP,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
         effective_query = self._build_effective_user_query(
             query=query,
             has_images=bool(images),
             reply_context=_reply_context,
+            sender_name=_sender_name,
+            is_group=_is_group_chat,
         )
 
         # Auto-reaction: если Memory Layer активен — RAG подключён к контексту

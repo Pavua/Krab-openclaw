@@ -23,11 +23,18 @@ IDLE_EVICTION_SEC: int = int(os.environ.get("CHAT_WINDOW_IDLE_SEC", "3600"))
 
 @dataclass
 class ChatMessage:
-    """Одно сообщение в окне."""
+    """Одно сообщение в окне.
+
+    sender_name (27.04.2026 fix): отображаемое имя отправителя в групповом
+    контексте — username / first_name / "user_<id>". Для DM-чатов — "" (None).
+    Используется при serialization для LLM, чтобы model различала speakers
+    в multi-user группе. Без этого Krab "сливал" разных участников в одного.
+    """
 
     role: str
     content: str
     ts: float
+    sender_name: str = ""
 
 
 class ChatWindow:
@@ -44,9 +51,21 @@ class ChatWindow:
         """Обновить метку активности."""
         self.last_activity_at = time.time()
 
-    def append_message(self, role: str, content: str) -> None:
-        """Добавить сообщение в окно; evict старые при переполнении."""
-        self._messages.append(ChatMessage(role=role, content=content, ts=time.time()))
+    def append_message(self, role: str, content: str, sender_name: str = "") -> None:
+        """Добавить сообщение в окно; evict старые при переполнении.
+
+        sender_name (optional, 27.04.2026): для group chat'ов передавай
+        username / first_name / id чтобы LLM различал speakers. Для DM
+        пропусти (default "").
+        """
+        self._messages.append(
+            ChatMessage(
+                role=role,
+                content=content,
+                ts=time.time(),
+                sender_name=str(sender_name or "").strip(),
+            )
+        )
         if len(self._messages) > self._max_messages:
             self._messages.pop(0)
         self.touch()
@@ -62,7 +81,15 @@ class ChatWindow:
 
     def snapshot(self) -> list[dict[str, Any]]:
         """Копия буфера как список dict."""
-        return [{"role": m.role, "content": m.content, "ts": m.ts} for m in self._messages]
+        return [
+            {
+                "role": m.role,
+                "content": m.content,
+                "ts": m.ts,
+                "sender_name": m.sender_name,
+            }
+            for m in self._messages
+        ]
 
     def to_dict(self) -> dict[str, Any]:
         """Сериализация в dict для API/отчётов."""

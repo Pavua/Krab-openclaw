@@ -3133,6 +3133,8 @@ class KraabUserbot(
         query: str,
         has_images: bool,
         reply_context: str | None = None,
+        sender_name: str = "",
+        is_group: bool = False,
     ) -> str:
         """
         Нормализует текст пользовательского запроса перед отправкой в модель.
@@ -3146,14 +3148,22 @@ class KraabUserbot(
           контекст исходного сообщения, на которое user сделал reply (Telegram
           UI показывает quoted message, но MTProto event delivers только
           reply_to_message_id — без явной prepend'я модель не видит).
+        - sender_name + is_group (27.04.2026): для group chat'ов prefix
+          `[username]:` различает speakers (раньше LLM слышал "user / user / user"
+          и сливал participants).
         """
         normalized = str(query or "").strip()
         if not normalized:
             normalized = "Опиши присланное изображение на русском языке." if has_images else ""
         ctx = (reply_context or "").strip()
+        sender_tag = ""
+        if is_group:
+            _sn = str(sender_name or "").strip()
+            if _sn:
+                sender_tag = f"[{_sn}]: "
         if ctx:
-            return f"[В ответ на сообщение: «{ctx}»]\n\n{normalized}".rstrip()
-        return normalized
+            return f"{sender_tag}[В ответ на сообщение: «{ctx}»]\n\n{normalized}".rstrip()
+        return f"{sender_tag}{normalized}".rstrip()
 
     @staticmethod
     def _should_capture_incoming_owner_item(
@@ -3979,17 +3989,20 @@ class KraabUserbot(
                 )
 
                 # Build chat_context — последние сообщения чата (best-effort).
-                # ChatWindowManager хранит role/content, без sender_id — маппим
-                # role="user" → не-Krab, role="assistant" → Krab.
+                # 27.04.2026 fix: ChatWindow теперь хранит sender_name → LLM
+                # видит реальные имена speakers (не "user" / "user" / "user").
+                # role="assistant" → Krab; role="user" → используем sender_name
+                # из window (username / first_name / user_<id>).
                 _chat_context: list = []
                 try:
                     _window = chat_window_manager.get_or_create(chat_id)
                     _now = time.time()
                     for _wm in _window.messages[-7:]:
                         _is_krab = _wm.role == "assistant"
+                        _wm_sender = (getattr(_wm, "sender_name", "") or "").strip()
                         _chat_context.append(
                             _LLMChatMessage(
-                                sender_name="krab" if _is_krab else "user",
+                                sender_name=("krab" if _is_krab else (_wm_sender or "user")),
                                 sender_id=int(self.me.id) if _is_krab and self.me else 0,
                                 text=_wm.content or "",
                                 timestamp=getattr(_wm, "ts", _now),
@@ -4767,10 +4780,20 @@ class KraabUserbot(
                 )
             chat_id = str(message.chat.id)
 
-            # Обновляем sliding window активности чата при каждом сообщении
+            # Обновляем sliding window активности чата при каждом сообщении.
+            # 27.04.2026 fix: передаём sender_name (username / first_name / id),
+            # чтобы LLM различал speakers в group chat. Без этого все participants
+            # сливались в один "user" → Krab путал собеседников.
             if message.text and chat_id:
+                _sender = (
+                    str(getattr(user, "username", "") or "").strip()
+                    or str(getattr(user, "first_name", "") or "").strip()
+                    or f"user_{getattr(user, 'id', '?')}"
+                )
                 chat_window_manager.get_or_create(chat_id).append_message(
-                    "user", (message.text or "")[:500]
+                    "user",
+                    (message.text or "")[:500],
+                    sender_name=_sender,
                 )
 
             # B.8 chat ban cache: если этот чат уже помечен как persistently
