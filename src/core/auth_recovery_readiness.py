@@ -767,8 +767,10 @@ def build_auth_recovery_readiness_snapshot(
 ) -> dict[str, Any]:
     """Строит полный auth recovery snapshot для текущей учётки."""
     resolved_project_root = Path(project_root).resolve()
-    resolved_status = status_payload if isinstance(status_payload, dict) else {}
-    if not resolved_status:
+    # None → пытаемся получить статус у openclaw; явный dict (даже {}) → использовать как есть
+    resolved_status = status_payload if isinstance(status_payload, dict) else None
+    if resolved_status is None:
+        resolved_status = {}
         openclaw_bin = _resolve_openclaw_bin()
         if openclaw_bin:
             resolved_status = _run_json_command(

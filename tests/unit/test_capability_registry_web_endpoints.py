@@ -56,8 +56,10 @@ def test_assistant_capabilities_expose_registry_and_policy_endpoints() -> None:
 
 def test_policy_matrix_endpoint_returns_acl_policy_truth(monkeypatch) -> None:
     """`/api/policy/matrix` должен возвращать unified ACL/policy snapshot."""
+    # policy_router → _helpers.collect_policy_matrix_snapshot делает локальный импорт
+    # из src.core.access_control, поэтому патчим именно там, а не в web_app
     monkeypatch.setattr(
-        "src.modules.web_app.load_acl_runtime_state",
+        "src.core.access_control.load_acl_runtime_state",
         lambda: {"owner": ["pablito"], "full": [], "partial": ["guest"]},
     )
     client = TestClient(_make_app().app)
