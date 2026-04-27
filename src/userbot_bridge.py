@@ -4216,12 +4216,24 @@ class KraabUserbot(
             asyncio.create_task(self._send_message_reaction(message, "👀"))
 
         _ai_request_start_ts = time.time()
+        # Diag 27.04.2026: расширенный photo/media check для тестирования
+        # bug "has_photo=False даже если PHOTO". Снять после resolve.
+        _media_diag = {
+            "photo_attr": bool(getattr(message, "photo", None)),
+            "document_attr": bool(getattr(message, "document", None)),
+            "video_attr": bool(getattr(message, "video", None)),
+            "media_value": str(getattr(message, "media", "") or ""),
+            "caption": bool(getattr(message, "caption", None)),
+            "msg_id": getattr(message, "id", None),
+            "msg_type": type(message).__name__,
+        }
         logger.info(
             "processing_ai_request",
             chat_id=chat_id,
             user=user.username,
             has_photo=bool(message.photo),
             has_audio=bool(has_audio_message),
+            media_diag=_media_diag,
         )
         action = enums.ChatAction.TYPING
         _typing_stop_event = asyncio.Event()
