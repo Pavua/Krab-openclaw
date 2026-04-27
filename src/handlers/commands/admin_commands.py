@@ -30,17 +30,28 @@ from ...core.access_control import (
 )
 from ...core.chat_ban_cache import chat_ban_cache
 from ...core.command_blocklist import command_blocklist
-from ...core.cost_analytics import cost_analytics
+from ...core.cost_analytics import cost_analytics as _COST_ANALYTICS_BASELINE  # noqa: F401,N812
 from ...core.exceptions import UserInputError
 from ...core.logger import get_logger
-from ...core.telegram_buttons import build_costs_detail_buttons
-from ...core.weekly_digest import weekly_digest
+from ...core.telegram_buttons import (
+    build_costs_detail_buttons as _BUILD_COSTS_DETAIL_BUTTONS_BASELINE,  # noqa: F401,N812
+)
+from ...core.weekly_digest import weekly_digest as _WEEKLY_DIGEST_BASELINE  # noqa: F401,N812
 from ...employee_templates import ROLES, list_roles
 
 if TYPE_CHECKING:
     from ...userbot_bridge import KraabUserbot
 
 logger = get_logger(__name__)
+
+
+def _ch_attr(name: str, default: Any) -> Any:
+    """Dual-namespace lookup: command_handlers namespace first (для monkeypatch),
+    fallback к local baseline."""
+    from .. import command_handlers as _ch  # noqa: PLC0415
+
+    return getattr(_ch, name, default)
+
 
 # ---------------------------------------------------------------------------
 # !reasoning использует _split_text_for_telegram из command_handlers
@@ -1174,7 +1185,9 @@ def _costs_ascii_trend(calls: list, days: int = 30) -> str:
 
 async def _handle_costs_today(bot: "KraabUserbot", message: Message) -> None:
     """!costs today — расходы за сегодня."""
-    calls = _costs_filter_calls(getattr(cost_analytics, "_calls", []), days=1)
+    calls = _costs_filter_calls(
+        getattr(_ch_attr("cost_analytics", _COST_ANALYTICS_BASELINE), "_calls", []), days=1
+    )
     agg = _costs_aggregate(calls)
     lines = [
         "💰 **Costs: сегодня**",
@@ -1192,7 +1205,9 @@ async def _handle_costs_today(bot: "KraabUserbot", message: Message) -> None:
 
 async def _handle_costs_week(bot: "KraabUserbot", message: Message) -> None:
     """!costs week — расходы за 7 дней."""
-    calls = _costs_filter_calls(getattr(cost_analytics, "_calls", []), days=7)
+    calls = _costs_filter_calls(
+        getattr(_ch_attr("cost_analytics", _COST_ANALYTICS_BASELINE), "_calls", []), days=7
+    )
     agg = _costs_aggregate(calls)
     lines = [
         "💰 **Costs: 7 дней**",
@@ -1211,7 +1226,7 @@ async def _handle_costs_week(bot: "KraabUserbot", message: Message) -> None:
 
 async def _handle_costs_breakdown(bot: "KraabUserbot", message: Message) -> None:
     """!costs breakdown — разбивка по провайдерам."""
-    calls = getattr(cost_analytics, "_calls", [])
+    calls = getattr(_ch_attr("cost_analytics", _COST_ANALYTICS_BASELINE), "_calls", [])
     agg = _costs_aggregate(calls)
     lines = [
         "💰 **Costs: по провайдерам**",
@@ -1234,10 +1249,11 @@ async def _handle_costs_breakdown(bot: "KraabUserbot", message: Message) -> None
 
 async def _handle_costs_budget(bot: "KraabUserbot", message: Message) -> None:
     """!costs budget — бюджет vs фактические расходы."""
-    budget = cost_analytics.get_monthly_budget_usd()
-    cost_month = cost_analytics.get_monthly_cost_usd()
-    cost_session = cost_analytics.get_cost_so_far_usd()
-    forecast = cost_analytics.monthly_calls_forecast()
+    _ca = _ch_attr("cost_analytics", _COST_ANALYTICS_BASELINE)
+    budget = _ca.get_monthly_budget_usd()
+    cost_month = _ca.get_monthly_cost_usd()
+    cost_session = _ca.get_cost_so_far_usd()
+    forecast = _ca.monthly_calls_forecast()
     lines = [
         "💰 **Costs: бюджет**",
         "─────────────────",
@@ -1267,7 +1283,7 @@ async def _handle_costs_budget(bot: "KraabUserbot", message: Message) -> None:
 
 async def _handle_costs_trend(bot: "KraabUserbot", message: Message) -> None:
     """!costs trend — ASCII-тренд за 30 дней."""
-    calls = getattr(cost_analytics, "_calls", [])
+    calls = getattr(_ch_attr("cost_analytics", _COST_ANALYTICS_BASELINE), "_calls", [])
     trend_text = _costs_ascii_trend(calls, days=30)
     await message.reply(trend_text)
 
@@ -1294,12 +1310,12 @@ async def handle_costs(bot: "KraabUserbot", message: Message) -> None:
         return await _handle_costs_trend(bot, message)
 
     # Default — текущий month summary
-    report = cost_analytics.build_usage_report_dict()
+    report = _ch_attr("cost_analytics", _COST_ANALYTICS_BASELINE).build_usage_report_dict()
 
     cost_session = report.get("cost_session_usd", 0.0)
     budget = report.get("monthly_budget_usd") or 0.0
     cost_month = report.get("cost_month_usd", 0.0)
-    total_calls = len(getattr(cost_analytics, "_calls", []))
+    total_calls = len(getattr(_ch_attr("cost_analytics", _COST_ANALYTICS_BASELINE), "_calls", []))
     total_tokens = report.get("total_tokens", 0)
     total_fallbacks = report.get("total_fallbacks", 0)
     total_tool_calls = report.get("total_tool_calls", 0)
@@ -1334,7 +1350,10 @@ async def handle_costs(bot: "KraabUserbot", message: Message) -> None:
         ch_parts = [f"{ch}: {cnt}" for ch, cnt in sorted(by_channel.items())]
         lines.append("• " + " | ".join(ch_parts))
 
-    await message.reply("\n".join(lines), reply_markup=build_costs_detail_buttons())
+    await message.reply(
+        "\n".join(lines),
+        reply_markup=_ch_attr("build_costs_detail_buttons", _BUILD_COSTS_DETAIL_BUTTONS_BASELINE)(),
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1366,7 +1385,7 @@ async def handle_models(bot: "KraabUserbot", message: Message) -> None:
         except ValueError:
             pass
 
-    calls = getattr(cost_analytics, "_calls", [])
+    calls = getattr(_ch_attr("cost_analytics", _COST_ANALYTICS_BASELINE), "_calls", [])
     summary = get_tier_summary(calls, since_hours=hours)
     period_label = {24.0: "24ч", 168.0: "неделя", 720.0: "месяц"}.get(hours, f"{hours:.0f}ч")
     text = format_tier_summary_text(summary).replace("за 24ч", f"за {period_label}")
@@ -1389,8 +1408,9 @@ async def handle_budget(bot: "KraabUserbot", message: Message) -> None:
 
     if not raw_args:
         # Показать текущий бюджет
-        current = cost_analytics.get_monthly_budget_usd()
-        cost_month = cost_analytics.get_monthly_cost_usd()
+        _ca = _ch_attr("cost_analytics", _COST_ANALYTICS_BASELINE)
+        current = _ca.get_monthly_budget_usd()
+        cost_month = _ca.get_monthly_cost_usd()
         if current > 0:
             pct = min(100, round(cost_month / current * 100, 1))
             remaining = max(0.0, current - cost_month)
@@ -1418,7 +1438,7 @@ async def handle_budget(bot: "KraabUserbot", message: Message) -> None:
     if new_budget < 0:
         raise UserInputError(user_message="❌ Бюджет не может быть отрицательным.")
 
-    cost_analytics._monthly_budget_usd = new_budget
+    _ch_attr("cost_analytics", _COST_ANALYTICS_BASELINE)._monthly_budget_usd = new_budget
 
     if new_budget == 0:
         await message.reply("✅ Месячный бюджет сброшен (без ограничений).")
@@ -1458,7 +1478,8 @@ async def handle_digest(bot: "KraabUserbot", message: Message) -> None:
 
     # --- Weekly digest ---
     try:
-        result = await weekly_digest.generate_digest()
+        _wd = _ch_attr("weekly_digest", _WEEKLY_DIGEST_BASELINE)
+        result = await _wd.generate_digest()
     except Exception as exc:  # noqa: BLE001
         logger.warning("handle_digest_weekly_failed", error=str(exc))
         await message.reply(f"❌ Weekly digest не удался: {exc}")
@@ -1473,7 +1494,7 @@ async def handle_digest(bot: "KraabUserbot", message: Message) -> None:
     cost = result.get("cost_week_usd", 0.0)
     attention = result.get("attention_count", 0)
 
-    if not weekly_digest._telegram_callback:
+    if not _ch_attr("weekly_digest", _WEEKLY_DIGEST_BASELINE)._telegram_callback:
         await message.reply(
             f"✅ **Weekly Digest**\n"
             f"Swarm rounds (7д): {rounds}\n"
