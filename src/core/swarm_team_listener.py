@@ -24,6 +24,7 @@ from pyrogram import filters
 
 from ..config import config as config  # noqa: PLC0414 - re-export для тестов (patch.object)
 from .access_control import is_owner_user_id
+from .swarm_channels import swarm_channels
 from .swarm_team_prompts import get_team_system_prompt
 
 if TYPE_CHECKING:
@@ -221,14 +222,16 @@ async def _handle_team_message(
             )
             return
     else:
-        # В группах отвечаем только на reply/mention
+        # В группах отвечаем на reply/mention. Для additional_response_chats
+        # из swarm_channels.json — реагируем без mention, как в DM owner.
         is_reply_to_me = (
             message.reply_to_message
             and message.reply_to_message.from_user
             and message.reply_to_message.from_user.id == me.id
         )
         is_mention = me.username and f"@{me.username}" in (message.text or "")
-        if not is_reply_to_me and not is_mention:
+        is_additional_chat = swarm_channels.is_additional_response_chat(chat.id)
+        if not is_reply_to_me and not is_mention and not is_additional_chat:
             return
 
     text = (message.text or message.caption or "").strip()
