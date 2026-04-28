@@ -3593,6 +3593,179 @@ class KraabUserbot(
 
         return f"{doc_context}\n\n{query}".strip() if query else doc_context
 
+    async def _describe_video_frame(
+        self,
+        frame_bytes: bytes,
+        idx: int,
+        *,
+        chat_id: str,
+    ) -> str:
+        """Краткое описание одного кадра видео через vision-модель.
+
+        Использует тот же openclaw stream, что и фото-pipeline, но
+        собирает поток в одну строку (короткий prompt + жёсткий timeout).
+        Возвращает пустую строку при любой ошибке — perceptor пропустит кадр.
+        """
+        if not frame_bytes:
+            return ""
+        try:
+            b64 = base64.b64encode(frame_bytes).decode("utf-8")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "video_frame_b64_failed",
+                idx=idx,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return ""
+
+        prompt = (
+            "Опиши кратко (1-2 предложения), что видно на кадре. "
+            "Без вводных, без markdown — только описание."
+        )
+        timeout_sec = float(getattr(config, "VIDEO_FRAME_DESCRIBE_TIMEOUT_SEC", 25.0))
+        chunks: list[str] = []
+        try:
+
+            async def _consume() -> None:
+                async for chunk in openclaw_client.send_message_stream(
+                    message=prompt,
+                    chat_id=f"{chat_id}:video-frame:{idx}",
+                    images=[b64],
+                    force_cloud=True,
+                    disable_tools=True,
+                ):
+                    if chunk:
+                        chunks.append(chunk)
+
+            await asyncio.wait_for(_consume(), timeout=max(5.0, timeout_sec))
+        except asyncio.TimeoutError:
+            logger.warning("video_frame_describe_timeout", idx=idx, timeout_sec=timeout_sec)
+            return ""
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "video_frame_describe_failed",
+                idx=idx,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return ""
+
+        return "".join(chunks).strip()
+
+    async def _process_video_message(
+        self,
+        *,
+        message: "Message",
+        query: str,
+        temp_msg: Any,
+        is_self: bool,
+        chat_id: str,
+    ) -> str:
+        """Скачивает video / video_note / animation и обогащает query содержимым.
+
+        Кадры извлекаются через `perceptor.process_video_message`, описания —
+        через `_describe_video_frame` (vision-модель). При любой ошибке возвращаем
+        исходный query без модификации, чтобы не блокировать LLM-flow.
+        """
+        from .modules.perceptor import process_video_message  # noqa: PLC0415
+
+        media = (
+            getattr(message, "video", None)
+            or getattr(message, "video_note", None)
+            or getattr(message, "animation", None)
+        )
+        if not media:
+            return query
+
+        max_bytes = int(getattr(config, "VIDEO_DOWNLOAD_MAX_BYTES", 50 * 1024 * 1024))
+        file_size = int(getattr(media, "file_size", 0) or 0)
+        if file_size and file_size > max_bytes:
+            logger.info(
+                "video_skipped_too_large",
+                chat_id=chat_id,
+                file_size=file_size,
+                max_bytes=max_bytes,
+            )
+            return query
+
+        notice = "🎞 *Смотрю видео...*"
+        try:
+            if is_self:
+                await self._safe_edit(message, f"🦀 {query or '(видео)'}\n\n{notice}")
+            elif temp_msg is not None and temp_msg is not message:
+                await self._safe_edit(temp_msg, notice)
+        except Exception:  # noqa: BLE001
+            pass  # статусное сообщение — не критично
+
+        video_dir = Path(getattr(config, "VIDEO_DOWNLOAD_DIR", "/tmp/krab_videos"))
+        try:
+            video_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("video_dir_create_failed", error=str(exc))
+            return query
+
+        ts_ms = int(time.time() * 1000)
+        msg_id = int(getattr(message, "id", 0) or 0)
+        video_path = video_dir / f"vid_{ts_ms}_{msg_id}.bin"
+
+        download_timeout = float(getattr(config, "VIDEO_DOWNLOAD_TIMEOUT_SEC", 60.0))
+        try:
+            await asyncio.wait_for(
+                self.client.download_media(message, file_name=str(video_path)),
+                timeout=max(5.0, download_timeout),
+            )
+        except asyncio.TimeoutError:
+            logger.warning("video_download_timeout", chat_id=chat_id)
+            return query
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "video_download_failed",
+                chat_id=chat_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return query
+
+        max_frames = int(getattr(config, "VIDEO_MAX_FRAMES", 3))
+
+        async def _describer(frame: bytes, idx: int) -> str:
+            return await self._describe_video_frame(frame, idx, chat_id=chat_id)
+
+        try:
+            extra_context = await process_video_message(
+                str(video_path),
+                caption=getattr(message, "caption", None) or "",
+                max_frames=max_frames,
+                sample_strategy="uniform",
+                frame_describer=_describer,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "video_perceptor_failed",
+                chat_id=chat_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return query
+        finally:
+            try:
+                if video_path.exists():
+                    video_path.unlink()
+            except Exception:  # noqa: BLE001
+                pass
+
+        if not extra_context:
+            return query
+
+        logger.info(
+            "video_context_attached",
+            chat_id=chat_id,
+            context_len=len(extra_context),
+            max_frames=max_frames,
+        )
+        return f"{extra_context}\n\n{query}".strip() if query else extra_context
+
     @staticmethod
     def _is_message_not_modified_error(exc: Exception) -> bool:
         """Определяет типичную ошибку Telegram при повторном edit того же текста."""
@@ -4622,6 +4795,19 @@ class KraabUserbot(
                 _typing_task.cancel()
                 await asyncio.gather(_typing_task, return_exceptions=True)
                 return
+
+        # VIDEO: video / video_note / animation → frame extraction + per-frame
+        # vision describe (Bug 5 follow-up: Krab отвечает на содержимое видео,
+        # а не только на caption). Sticker остаётся skip — animated stickers
+        # редко information-rich и часто вызывают false positives.
+        if has_video:
+            query = await self._process_video_message(
+                message=message,
+                query=query,
+                temp_msg=temp_msg,
+                is_self=is_self,
+                chat_id=str(chat_id),
+            )
 
         system_prompt = self._build_system_prompt_for_sender(
             is_allowed_sender=is_allowed_sender,
