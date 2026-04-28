@@ -4223,6 +4223,16 @@ class KraabUserbot(
                     pass  # empty context — LLM работает best-effort
 
                 try:
+                    # Bug 11 fix (Session 28): media (photo/video/video_note/animation/sticker)
+                    # без caption должно триггерить ответ — иначе кружочки/фото в группах
+                    # silent игнорируются Smart Routing'ом (regex_low по пустому тексту).
+                    _has_media_for_trigger = bool(
+                        getattr(message, "photo", None)
+                        or getattr(message, "video", None)
+                        or getattr(message, "video_note", None)
+                        or getattr(message, "animation", None)
+                        or getattr(message, "sticker", None)
+                    )
                     smart_trigger_result = await detect_smart_trigger(
                         text=text or "",
                         chat_id=str(chat_id),
@@ -4232,6 +4242,7 @@ class KraabUserbot(
                         chat_context=_chat_context,
                         policy_store=_get_policy_store(),
                         llm_classifier=_get_intent_classifier(),
+                        has_media=_has_media_for_trigger,
                     )
                     has_implicit_trigger = bool(smart_trigger_result.should_respond)
                     logger.info(
