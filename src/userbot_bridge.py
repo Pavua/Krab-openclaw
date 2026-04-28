@@ -2387,6 +2387,59 @@ class KraabUserbot(
                 error_type=type(_exc).__name__,
             )
 
+        # Session 28: bootstrap learning singletons (DH/DI/DJ).
+        # Только persist-пути; sending holdover / REPL invocation —
+        # отдельная задача (требует UI решения).
+        try:
+            _learning_state_dir = Path(
+                os.environ.get("KRAB_RUNTIME_STATE_DIR")
+                or str(Path.home() / ".openclaw" / "krab_runtime_state")
+            ).expanduser()
+            try:
+                from .core.owner_presence import (  # noqa: PLC0415
+                    owner_presence_tracker,
+                )
+
+                owner_presence_tracker.configure_default_path(
+                    _learning_state_dir / "owner_presence.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "owner_presence_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            try:
+                from .core.repl_session import repl_session  # noqa: PLC0415
+
+                repl_session.configure_default_paths(_learning_state_dir / "repl_session_audit.log")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "repl_session_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            try:
+                from .core.proactive_suggestions import (  # noqa: PLC0415
+                    pattern_detector,
+                )
+
+                pattern_detector.configure_default_path(
+                    _learning_state_dir / "proactive_suggestions.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "pattern_detector_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning(
+                "learning_singletons_bootstrap_failed",
+                error=str(_exc),
+                error_type=type(_exc).__name__,
+            )
+
         # B.7: global Telegram API rate limiter. Default 20 req/s, конфигурируется
         # через env TELEGRAM_GLOBAL_RATE_MAX_PER_SEC. Это soft cap — лимитер НЕ
         # отменяет вызовы, а замедляет (await asyncio.sleep). Нужно чтобы не
@@ -4189,6 +4242,18 @@ class KraabUserbot(
             access_level=access_profile.level,
         )
         is_self = user.id == self.me.id
+
+        # Session 28 (DJ/Idea-17): фиксируем активность owner'а для
+        # offline-holdover. Любое исходящее сообщение = owner онлайн.
+        if is_self:
+            try:
+                from .core.owner_presence import (  # noqa: PLC0415
+                    owner_presence_tracker,
+                )
+
+                owner_presence_tracker.record_owner_seen()
+            except Exception:  # noqa: BLE001
+                pass
 
         # Phase 3: capability enforcement — проверяем право на chat
         if not is_self:
