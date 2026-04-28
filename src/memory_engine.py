@@ -22,6 +22,13 @@ from structlog import get_logger
 
 from .config import config
 
+# Запрещаем PostHog telemetry chromadb ДО импорта пакета.
+# ChromaDB при первом импорте запускает consumer thread (queue.get block=True),
+# который может блокировать выход процесса. Переменная должна быть выставлена
+# до `import chromadb` — setdefault не перетирает явно выставленные значения.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+os.environ.setdefault("CHROMA_TELEMETRY", "False")
+
 try:
     import chromadb
     from chromadb.utils import embedding_functions

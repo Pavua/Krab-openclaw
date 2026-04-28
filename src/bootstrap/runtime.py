@@ -11,6 +11,12 @@ import signal
 import sqlite3
 import sys
 
+# Отключаем ChromaDB/PostHog telemetry ДО первого импорта chromadb.
+# Иначе chromadb при импорте поднимает consumer thread (queue.get block=True),
+# который блокирует корректный выход процесса.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+os.environ.setdefault("CHROMA_TELEMETRY", "False")
+
 import structlog
 
 from ..config import config

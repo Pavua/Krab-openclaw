@@ -18,6 +18,15 @@ import sys
 from collections.abc import Iterator
 from typing import Any
 
+# ---------------------------------------------------------------------------
+# КРИТИЧНО: устанавливаем ДО любого импорта chromadb.
+# ChromaDB при импорте поднимает PostHog consumer thread (queue.get block=True),
+# который блокирует выход pytest (waiter.acquire hang). Переменная должна быть
+# выставлена до первого `import chromadb` в любом модуле.
+# ---------------------------------------------------------------------------
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+os.environ.setdefault("CHROMA_TELEMETRY", "False")
+
 import pytest
 import structlog
 
@@ -103,6 +112,12 @@ _ENV_ALWAYS_PRESERVE: set[str] = {
     "TMPDIR",
     "VIRTUAL_ENV",
     "PYTHONPATH",
+    # Запрещаем telemetry chromadb: env выставляется в самом начале conftest
+    # до первого импорта chromadb — snapshot сделан после, поэтому эти ключи
+    # уже в _FULL_ENV_SNAPSHOT и не будут удалены. Но явно защищаем на случай
+    # если какой-то тест попытается удалить их через monkeypatch.
+    "ANONYMIZED_TELEMETRY",
+    "CHROMA_TELEMETRY",
 }
 
 # Префиксы env-ключей, которыми управляет pytest/рантайм — не трогать.
