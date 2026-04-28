@@ -759,10 +759,17 @@ def format_persona_suffix(
     *,
     enabled: bool | None = None,
     store: ChatPersonaStore | None = None,
+    borrowed_template: dict[str, Any] | None = None,
 ) -> str:
     """Возвращает persona-suffix для system prompt или "" если нет данных.
 
     Default-safe: при любой ошибке возвращает "".
+
+    Feature I (Cross-Chat Transfer): если target chat не имеет свежего
+    profile, caller может передать `borrowed_template` (см. модуль
+    `cross_chat_transfer`). В этом случае suffix формируется по
+    borrowed-данным с пометкой «(заимствовано)». Read-only — store не
+    модифицируется.
     """
     if not chat_id:
         return ""
@@ -772,10 +779,11 @@ def format_persona_suffix(
         return ""
 
     store = store or chat_persona_store
+    profile: dict[str, Any] | None = None
+    is_borrowed = False
     try:
-        if not store.is_fresh(chat_id):
-            return ""
-        profile = store.get_profile(chat_id)
+        if store.is_fresh(chat_id):
+            profile = store.get_profile(chat_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "chat_persona_suffix_failed",
@@ -784,6 +792,11 @@ def format_persona_suffix(
             error_type=type(exc).__name__,
         )
         return ""
+
+    # Fallback: нет своего profile — пробуем borrowed template.
+    if not profile and borrowed_template:
+        profile = dict(borrowed_template)
+        is_borrowed = bool(profile.get("borrowed", True))
 
     if not profile:
         return ""
@@ -802,7 +815,17 @@ def format_persona_suffix(
     formality_label = _FORMALITY_LABELS.get(formality, formality)
     length_label = _LENGTH_LABELS.get(length, length)
 
-    lines = ["Контекст этого чата (адаптация persona):"]
+    header = "Контекст этого чата (адаптация persona):"
+    if is_borrowed:
+        borrowed_from = str(profile.get("borrowed_from") or "").strip()
+        if borrowed_from:
+            header = (
+                "Контекст этого чата (адаптация persona, заимствовано из "
+                f"похожего чата {borrowed_from}):"
+            )
+        else:
+            header = "Контекст этого чата (адаптация persona, заимствовано):"
+    lines = [header]
     if title_hint:
         lines.append(f"- название: {title_hint}")
     lines.append(f"- тип: {tone_label}")
