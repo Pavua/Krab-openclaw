@@ -368,13 +368,23 @@ class ProactiveWatchService:
             if last_run_at_ms <= 0 or last_run_at_ms == prev_run_at:
                 continue  # нет нового выполнения
 
-            severity = "warning" if last_status in ("error", "failed", "failure") else "info"
+            _ok_statuses = {"ok", "success", "succeeded", "completed"}
+            is_ok = last_status.lower() in _ok_statuses
+            severity = (
+                "warning" if last_status.lower() in ("error", "failed", "failure") else "info"
+            )
+            # Статус inbox item: успешный запуск → сразу закрываем (done),
+            # ошибка → оставляем open для owner review.
+            item_status = "done" if is_ok else "open"
             run_ts = datetime.fromtimestamp(last_run_at_ms / 1000, tz=timezone.utc).isoformat(
                 timespec="seconds"
             )
+            # dedupe_key без timestamp — один item на job, upsert обновляет его,
+            # а не создаёт дубль при каждом запуске cron.
+            dedupe_key = f"proactive:cron_run:{job_id}"
             try:
                 inbox_service.upsert_item(
-                    dedupe_key=f"proactive:cron_run:{job_id}:{last_run_at_ms}",
+                    dedupe_key=dedupe_key,
                     kind="proactive_action",
                     source="krab-internal",
                     title=f"Cron job выполнен: {job_name}",
@@ -383,7 +393,7 @@ class ProactiveWatchService:
                         f"Статус: `{last_status}`."
                     ),
                     severity=severity,
-                    status="open",
+                    status=item_status,
                     identity=inbox_service.build_identity(
                         channel_id="system",
                         team_id="owner",

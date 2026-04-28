@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.krab.core</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python3</string>
+    <string>-m</string>
+    <string>src.main</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONPATH</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>OPENCLAW_BROWSER_AUTOSTART</key>
+    <string>1</string>
+    <key>DEDICATED_CHROME_ENABLED</key>
+    <string>true</string>
+    <key>DEDICATED_CHROME_PORT</key>
+    <string>9222</string>
+    <key>DEDICATED_CHROME_PROFILE_DIR</key>
+    <string>/tmp/krab-chrome</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>Crashed</key>
+    <true/>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <!-- ThrottleInterval=60: разрывает respawn-storm при corruption loop -->
+  <!-- (incident 26.04.2026 — 338 рестартов / 5.5h). Минимум 1 restart/min. -->
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/krab_launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/krab_launchd.err.log</string>
+</dict>
+</plist>
