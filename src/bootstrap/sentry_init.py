@@ -41,6 +41,12 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     "userbot_not_ready",
     "router_not_configured",
     "Client has not been started yet",
+    # Pyrogram storage race во время shutdown: внутренние Session-task'и
+    # (restart/update_peers/_get) добегают до уже закрытой sqlite-базы.
+    # Корневой race закрыт guard'ом в SessionMixin (см. session.py), а здесь
+    # дропаем оставшийся шум, который генерируется внутри pyrogram-фоновых
+    # задач уже после client.stop() и не подавляется нашим try/except.
+    "Cannot operate on a closed database",
 )
 
 
