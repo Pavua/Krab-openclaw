@@ -256,14 +256,14 @@ async def test_mark_memory_recall_is_noop():
 
 @pytest.mark.asyncio
 async def test_mark_failed_is_explicit_no_rate_limit():
-    """mark_failed ставит ❌ явно, без rate-limit."""
+    """mark_failed ставит 👎 явно, без rate-limit (Bug 8 fix: ❌ premium-only на free)."""
     bot = _make_bot_with_send_reaction()
     msg = _make_group_message(text="что угодно")
     with patch.dict(os.environ, {"AUTO_REACTIONS_ENABLED": "true"}):
         result = await ar.mark_failed(bot, msg, error="test error")
     assert result is True
     _, kwargs = bot.send_reaction.call_args
-    assert kwargs["emoji"] == "❌"
+    assert kwargs["emoji"] == "👎"
 
 
 # ---------------------------------------------------------------------------
