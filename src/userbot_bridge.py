@@ -4902,9 +4902,14 @@ class KraabUserbot(
                 preferred_vision=str(getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or ""),
             )
             force_cloud = True
+        # Bug 12 (Session 28): handoff notice «🦀 Принял запрос... в фоне» допустим
+        # только в DM/self (где владелец ждёт явного ack). В групповых чатах он
+        # выглядит как мусор — Krab должен молча обрабатывать и отдавать финальный
+        # ответ. Пользователь явно просил это поведение (commit `06f7bb4` regression).
         should_defer_background = (
             bool(getattr(config, "USERBOT_BACKGROUND_LLM_HANDOFF", True))
             and not is_self
+            and (_is_private_chat or is_self)
             and not bool(images)
             and not bool(has_audio_message)
             and not bool(message.photo)
