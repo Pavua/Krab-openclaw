@@ -26,6 +26,7 @@ import math
 import os
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -82,6 +83,164 @@ def compute_feedback_multiplier(positive_count: int, negative_count: int) -> flo
         penalty = 1.0 - negative_count * RESPONSE_FEEDBACK_NEGATIVE_COEF
         boost *= max(RESPONSE_FEEDBACK_MIN_MULTIPLIER, penalty)
     return boost
+
+
+# ---------------------------------------------------------------------------
+# Feature D: Memory Decay (gradual weight loss for old chunks).
+# ---------------------------------------------------------------------------
+
+#: Floor для decay multiplier — даже самые старые чанки сохраняют 40% веса,
+#: чтобы хорошо подтверждённая древняя память (важные факты) не вымывалась.
+DECAY_FLOOR = 0.4
+#: Коэффициент скорости угасания: multiplier = max(FLOOR, 1 - COEF * log2(1 + age_days)).
+DECAY_COEF = 0.05
+#: Recent confirm boost — если validator_confirmed_at < N дней назад, ×1.2.
+RECENT_CONFIRM_BOOST = 1.2
+RECENT_CONFIRM_WINDOW_DAYS = 7
+
+
+def _decay_enabled() -> bool:
+    """Config-flag: KRAB_MEMORY_DECAY_ENABLED (default on).
+
+    Off-значения: 0/false/no/off (case-insensitive). Пустая → on.
+    """
+    raw = os.environ.get("KRAB_MEMORY_DECAY_ENABLED", "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return True
+
+
+def compute_decay_multiplier(message_age_days: float) -> float:
+    """Чистая формула decay multiplier'а от возраста сообщения в днях.
+
+    Формула: max(DECAY_FLOOR, 1.0 - DECAY_COEF * log2(1 + age_days)).
+
+    Свойства:
+      * age=0 → 1.0 (no decay для свежих).
+      * монотонна: чем старше, тем меньше (но не ниже DECAY_FLOOR).
+      * gradual: log2 — мягкое угасание (день/неделя ~ небольшой штраф,
+        месяцы — заметный, годы — упор в floor).
+      * negative age (clock skew) трактуется как 0.
+    """
+    if message_age_days <= 0:
+        return 1.0
+    raw = 1.0 - DECAY_COEF * math.log2(1.0 + message_age_days)
+    return max(DECAY_FLOOR, raw)
+
+
+def compute_recent_confirm_boost(confirm_age_days: Optional[float]) -> float:
+    """Boost ×1.2 если chunk был validator-confirmed в последние N дней.
+
+    None / отрицательный возраст → 1.0 (нет boost).
+    """
+    if confirm_age_days is None or confirm_age_days < 0:
+        return 1.0
+    if confirm_age_days <= RECENT_CONFIRM_WINDOW_DAYS:
+        return RECENT_CONFIRM_BOOST
+    return 1.0
+
+
+def _parse_iso_timestamp(ts: str | None) -> Optional[datetime]:
+    """Парсит ISO-8601 (как из archive.db, с/без 'Z'). None при сбое."""
+    if not ts:
+        return None
+    try:
+        s = ts.rstrip("Z")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
+def apply_decay(
+    results: list["SearchResult"],
+    age_map: dict[str, float],
+    confirm_age_map: dict[str, float] | None = None,
+) -> list["SearchResult"]:
+    """Применяет decay multiplier (× recent-confirm boost) и пересортирует.
+
+    Args:
+        results: вход (после RRF + feedback boost).
+        age_map: {chunk_id: age_in_days}.
+        confirm_age_map: optional {chunk_id: validator_confirm_age_days}.
+
+    Чанки без записи в age_map → multiplier=1.0 (no-op).
+    """
+    if not age_map and not confirm_age_map:
+        return results
+    confirm_age_map = confirm_age_map or {}
+    for result in results:
+        age = age_map.get(result.chunk_id)
+        mult = 1.0
+        if age is not None:
+            mult *= compute_decay_multiplier(age)
+        confirm_age = confirm_age_map.get(result.chunk_id)
+        if confirm_age is not None:
+            mult *= compute_recent_confirm_boost(confirm_age)
+        if mult != 1.0:
+            result.rrf_score *= mult
+    return sorted(results, key=lambda r: -r.rrf_score)
+
+
+def _fetch_chunk_ages(
+    conn: sqlite3.Connection, chunk_ids: list[str], now: datetime | None = None
+) -> dict[str, float]:
+    """Возвращает {chunk_id: age_days} по chunks.end_ts.
+
+    end_ts — конец временного окна chunk'а; berём его как proxy "возраста".
+    Graceful: при ошибках / отсутствии строк возвращает {} для unknown ids.
+    """
+    if not chunk_ids:
+        return {}
+    now = now or datetime.now(timezone.utc)
+    placeholders = ",".join("?" * len(chunk_ids))
+    try:
+        cur = conn.execute(
+            f"SELECT chunk_id, end_ts FROM chunks WHERE chunk_id IN ({placeholders});",
+            list(chunk_ids),
+        )
+        out: dict[str, float] = {}
+        for chunk_id, end_ts in cur.fetchall():
+            dt = _parse_iso_timestamp(end_ts)
+            if dt is None:
+                continue
+            age_days = max(0.0, (now - dt).total_seconds() / 86400.0)
+            out[chunk_id] = age_days
+        return out
+    except sqlite3.OperationalError:
+        return {}
+
+
+def _fetch_validator_confirm_ages(
+    conn: sqlite3.Connection, chunk_ids: list[str], now: datetime | None = None
+) -> dict[str, float]:
+    """{chunk_id: confirm_age_days} если column validator_confirmed_at есть.
+
+    Column опционален (добавляется ALTER TABLE отдельно). При отсутствии —
+    возвращает {} silently (graceful — recent-confirm boost просто не применится).
+    """
+    if not chunk_ids:
+        return {}
+    now = now or datetime.now(timezone.utc)
+    placeholders = ",".join("?" * len(chunk_ids))
+    try:
+        cur = conn.execute(
+            f"SELECT chunk_id, validator_confirmed_at FROM chunks "
+            f"WHERE chunk_id IN ({placeholders}) AND validator_confirmed_at IS NOT NULL;",
+            list(chunk_ids),
+        )
+        out: dict[str, float] = {}
+        for chunk_id, confirmed_at in cur.fetchall():
+            dt = _parse_iso_timestamp(confirmed_at)
+            if dt is None:
+                continue
+            out[chunk_id] = max(0.0, (now - dt).total_seconds() / 86400.0)
+        return out
+    except sqlite3.OperationalError:
+        # Column / table отсутствует — нормальная ситуация, тихо отключаем boost.
+        return {}
 
 
 def apply_response_feedback_boost(
@@ -310,6 +469,24 @@ def hybrid_search(query: str, limit: int = 10) -> list[SearchResult]:
             except Exception as exc:  # noqa: BLE001 - boost опционален
                 logger.debug(
                     "hybrid_response_feedback_boost_skipped",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+        # Feature D: Memory Decay — старые chunks теряют вес, недавно
+        # validator-подтверждённые получают boost. Применяется ПОСЛЕ feedback'а,
+        # чтобы decay действовал на уже скорректированный score.
+        if combined and _decay_enabled():
+            try:
+                wider_pool = combined[: max(limit * 3, 30)]
+                ids = [r.chunk_id for r in wider_pool]
+                age_map = _fetch_chunk_ages(conn, ids)
+                confirm_map = _fetch_validator_confirm_ages(conn, ids)
+                if age_map or confirm_map:
+                    combined = apply_decay(combined, age_map, confirm_map)
+            except Exception as exc:  # noqa: BLE001 - decay опционален
+                logger.debug(
+                    "hybrid_decay_skipped",
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
