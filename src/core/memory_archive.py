@@ -175,6 +175,63 @@ _DDL_RESPONSE_FEEDBACK_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_response_feedback_message ON response_feedback(message_id);",
 ]
 
+# Feature G: Topic Clustering.
+# Sidecar-таблица: связывает chunk.chunk_id с cluster_id, полученным k-means
+# по embedding'ам чанков. Используется retrieval'ом для expansion'а top-K
+# результатов поиска чанками того же кластера (broader semantic context).
+_DDL_CHUNK_CLUSTERS = """
+CREATE TABLE IF NOT EXISTS chunk_clusters (
+    chunk_id        TEXT PRIMARY KEY,
+    cluster_id      INTEGER NOT NULL,
+    distance        REAL NOT NULL DEFAULT 0.0,
+    assigned_at     TEXT NOT NULL,
+    FOREIGN KEY (chunk_id) REFERENCES chunks(chunk_id) ON DELETE CASCADE
+) WITHOUT ROWID;
+"""
+
+_DDL_CHUNK_CLUSTERS_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_chunk_clusters_cluster ON chunk_clusters(cluster_id);",
+]
+
+# Метаинфо о последней кластеризации (num_clusters, model, timestamp, etc.).
+_DDL_CLUSTER_META = """
+CREATE TABLE IF NOT EXISTS cluster_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) WITHOUT ROWID;
+"""
+
+# Feature E: Multi-Modal Memory.
+# Sidecar-таблица для vision-summary фото/видео сообщений. Не трогаем
+# `messages` (WITHOUT ROWID + индексы стоят на больших БД), а добавляем
+# отдельную таблицу с FK на (chat_id, message_id). При retrieval'е summary
+# подмешивается к text payload chunk'а — FTS5/embeddings будут это видеть.
+#
+# Поля:
+#   media_type — 'photo' | 'video' | 'animation' | др. (свободный str для
+#                расширяемости). Хранится lower-case.
+#   summary    — vision-описание (уже после PII scrubber на стороне caller'а).
+#   model_name — какой моделью получено (для аудита/повторной генерации).
+#   generated_at — ISO-8601 UTC.
+_DDL_MESSAGE_MEDIA_SUMMARIES = """
+CREATE TABLE IF NOT EXISTS message_media_summaries (
+    chat_id       TEXT NOT NULL,
+    message_id    TEXT NOT NULL,
+    media_type    TEXT NOT NULL,
+    summary       TEXT NOT NULL,
+    model_name    TEXT,
+    generated_at  TEXT NOT NULL,
+    PRIMARY KEY (chat_id, message_id)
+) WITHOUT ROWID;
+"""
+
+_DDL_MESSAGE_MEDIA_SUMMARIES_INDEXES = [
+    # Индекс по message_id ускоряет JOIN c chunk_messages при retrieval'е.
+    "CREATE INDEX IF NOT EXISTS idx_media_summaries_message ON message_media_summaries(message_id);",
+    # Индекс по media_type — для аналитики (сколько фото/видео заиндексировано).
+    "CREATE INDEX IF NOT EXISTS idx_media_summaries_type ON message_media_summaries(media_type);",
+]
+
 
 # ---------------------------------------------------------------------------
 # Публичный API.
@@ -227,6 +284,11 @@ def create_schema(conn: sqlite3.Connection) -> None:
             _DDL_VEC_CHUNKS_META,
             _DDL_RESPONSE_FEEDBACK,
             *_DDL_RESPONSE_FEEDBACK_INDEXES,
+            _DDL_MESSAGE_MEDIA_SUMMARIES,
+            *_DDL_MESSAGE_MEDIA_SUMMARIES_INDEXES,
+            _DDL_CHUNK_CLUSTERS,
+            *_DDL_CHUNK_CLUSTERS_INDEXES,
+            _DDL_CLUSTER_META,
         ):
             cur.execute(stmt)
 
@@ -415,6 +477,179 @@ def fetch_response_feedback_for_chunks(
         return {row[0]: (int(row[1]), int(row[2])) for row in cur.fetchall()}
     except sqlite3.OperationalError:
         return {}
+
+
+def ensure_chunk_clusters_tables(conn: sqlite3.Connection) -> bool:
+    """Lazy CREATE TABLE для chunk_clusters/cluster_meta (Feature G).
+
+    Для БД, созданных до Feature G — позволяет recluster-скрипту вызвать ensure
+    без полного create_schema. Возвращает True при успехе.
+    """
+    try:
+        cur = conn.cursor()
+        cur.execute(_DDL_CHUNK_CLUSTERS)
+        for stmt in _DDL_CHUNK_CLUSTERS_INDEXES:
+            cur.execute(stmt)
+        cur.execute(_DDL_CLUSTER_META)
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Feature E: Multi-Modal Memory — helper API.
+# ---------------------------------------------------------------------------
+
+
+def ensure_message_media_summaries_table(conn: sqlite3.Connection) -> bool:
+    """Lazy CREATE для `message_media_summaries` (Feature E).
+
+    Используется callsite'ами (perceptor hook, backfill script), которые
+    хотят писать summary в БД, не вызывая полный create_schema. Идемпотентна.
+
+    Returns:
+        True при успехе, False при sqlite-ошибке (graceful degradation —
+        caller просто пропустит запись summary без падения).
+    """
+    try:
+        cur = conn.cursor()
+        cur.execute(_DDL_MESSAGE_MEDIA_SUMMARIES)
+        for stmt in _DDL_MESSAGE_MEDIA_SUMMARIES_INDEXES:
+            cur.execute(stmt)
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        return False
+
+
+def record_media_summary(
+    conn: sqlite3.Connection,
+    chat_id: str,
+    message_id: str,
+    media_type: str,
+    summary: str,
+    *,
+    model_name: str | None = None,
+) -> bool:
+    """UPSERT vision-summary для media-сообщения.
+
+    Args:
+        chat_id: id чата (str для совместимости со схемой).
+        message_id: id сообщения (str).
+        media_type: 'photo' | 'video' | 'animation' и т.п. — нормализуется в lower.
+        summary: уже отредактированный (PII-scrubbed) summary. Пустые игнорируются.
+        model_name: имя модели/провайдера (опционально, для аудита).
+
+    Returns:
+        True при успехе, False если summary пуст / sqlite-ошибка.
+    """
+    summary_clean = (summary or "").strip()
+    if not summary_clean:
+        return False
+    media_type_norm = (media_type or "").strip().lower() or "unknown"
+    now_iso = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds") + "Z"
+    try:
+        conn.execute(
+            """
+            INSERT INTO message_media_summaries
+                (chat_id, message_id, media_type, summary, model_name, generated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id, message_id) DO UPDATE SET
+                media_type = excluded.media_type,
+                summary = excluded.summary,
+                model_name = excluded.model_name,
+                generated_at = excluded.generated_at;
+            """,
+            (
+                str(chat_id),
+                str(message_id),
+                media_type_norm,
+                summary_clean,
+                model_name,
+                now_iso,
+            ),
+        )
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        return False
+
+
+def fetch_media_summary(
+    conn: sqlite3.Connection,
+    chat_id: str,
+    message_id: str,
+) -> str | None:
+    """Возвращает summary одного сообщения или None если не найдено / ошибка."""
+    try:
+        row = conn.execute(
+            """
+            SELECT summary FROM message_media_summaries
+            WHERE chat_id = ? AND message_id = ?;
+            """,
+            (str(chat_id), str(message_id)),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if row is None:
+        return None
+    return row[0]
+
+
+def fetch_media_summaries_for_chunks(
+    conn: sqlite3.Connection,
+    chunk_ids: list[str],
+) -> dict[str, list[str]]:
+    """Возвращает {chunk_id: [summary, ...]} для заданных chunks.
+
+    Объединяет media-summaries всех сообщений каждого chunk'а через JOIN
+    chunk_messages → message_media_summaries. Используется retrieval'ом для
+    обогащения text payload chunk'а vision-описаниями фото/видео.
+
+    Graceful: при отсутствии таблицы / ошибке — возвращает {}.
+    """
+    if not chunk_ids:
+        return {}
+    placeholders = ",".join("?" * len(chunk_ids))
+    try:
+        cur = conn.execute(
+            f"""
+            SELECT cm.chunk_id, mms.summary
+            FROM chunk_messages AS cm
+            JOIN message_media_summaries AS mms
+              ON mms.chat_id = cm.chat_id AND mms.message_id = cm.message_id
+            WHERE cm.chunk_id IN ({placeholders})
+            ORDER BY cm.chunk_id, mms.generated_at;
+            """,
+            list(chunk_ids),
+        )
+    except sqlite3.OperationalError:
+        return {}
+    out: dict[str, list[str]] = {}
+    for chunk_id, summary in cur.fetchall():
+        out.setdefault(chunk_id, []).append(summary)
+    return out
+
+
+def augment_chunk_text_with_media(
+    chunk_text: str,
+    summaries: list[str] | None,
+) -> str:
+    """Конкатенирует media-summaries к тексту chunk'а перед FTS/embedding.
+
+    Используется retrieval-слоем: хочется чтобы FTS5/embeddings "видели"
+    vision-описания вместе с текстовым содержимым. Безопасно (не падает при
+    None/пустом списке).
+    """
+    if not summaries:
+        return chunk_text
+    parts = [chunk_text.rstrip()] if chunk_text else []
+    for s in summaries:
+        s_clean = (s or "").strip()
+        if s_clean:
+            parts.append(f"[media] {s_clean}")
+    return "\n".join(parts).strip()
 
 
 def list_tables(conn: sqlite3.Connection) -> list[str]:

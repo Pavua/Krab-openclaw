@@ -517,5 +517,138 @@ async def process_video_message(
     return "\n".join(parts).strip()
 
 
+# ---------------------------------------------------------------------------
+# Feature E: Multi-Modal Memory — image summary + archive sink.
+# ---------------------------------------------------------------------------
+
+# Тип callable для vision-описания одного фото (bytes → описание)
+ImageDescriber = Callable[[bytes], Awaitable[str]]
+
+
+async def _default_image_describer(image_bytes: bytes) -> str:
+    """Заглушка: bridge передаёт реальный vision pipeline.
+
+    Когда `process_image_message` вызывается без describer'а, возвращаем
+    плейсхолдер, чтобы downstream не падал и можно было unit-тестировать.
+    """
+    return f"[фото, {len(image_bytes)} байт]"
+
+
+async def process_image_message(
+    image_bytes: bytes,
+    caption: str | None = None,
+    *,
+    image_describer: ImageDescriber | None = None,
+) -> str:
+    """Возвращает aggregated text описание фото (для feed в LLM / memory).
+
+    Аналог `process_video_message`, но для одного кадра. Bridge может
+    передать реальный vision-провайдер; иначе — плейсхолдер.
+
+    Возвращает пустую строку, если описание провалилось и caption пустой.
+    """
+    describer = image_describer or _default_image_describer
+    caption_clean = (caption or "").strip()
+
+    description = ""
+    try:
+        description = (await describer(image_bytes) or "").strip()
+    except Exception as exc:
+        logger.warning(
+            "perceptor_image_describer_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+
+    parts: list[str] = []
+    if caption_clean:
+        parts.append(f"Подпись к фото: {caption_clean}")
+    if description:
+        parts.append(f"Содержимое фото: {description}")
+    elif not caption_clean:
+        return ""
+    elif not description:
+        parts.append("(визуальное содержимое фото не удалось извлечь)")
+
+    return "\n".join(parts).strip()
+
+
+def save_media_summary_to_archive(
+    chat_id: str | int,
+    message_id: str | int,
+    media_type: str,
+    summary: str,
+    *,
+    model_name: str | None = None,
+    archive_path: str | None = None,
+) -> bool:
+    """Сохраняет vision-summary в archive.db (Feature E).
+
+    Open + ensure-table + record. Тонкая обёртка над `memory_archive`
+    helper'ами: используется как fire-and-forget из bridge'а после
+    `process_video_message` / `process_image_message`.
+
+    Args:
+        chat_id / message_id: Telegram-идентификаторы (int → str автоматически).
+        media_type: 'photo' | 'video' | 'animation' и т.п.
+        summary: уже PII-scrubbed текст.
+        model_name: имя vision-модели для аудита.
+        archive_path: переопределение пути (по умолчанию ArchivePaths.default()).
+
+    Returns:
+        True при успехе, False при ошибке (логируем warning, не падаем).
+    """
+    summary_clean = (summary or "").strip()
+    if not summary_clean:
+        return False
+
+    try:
+        # Импорт здесь, чтобы не тянуть memory_archive при импорте perceptor
+        # (perceptor может грузиться раньше bootstrap memory layer).
+        from ..core.memory_archive import (
+            ArchivePaths,
+            ensure_message_media_summaries_table,
+            open_archive,
+            record_media_summary,
+        )
+
+        paths = (
+            ArchivePaths.under(Path(archive_path).expanduser().parent)
+            if archive_path
+            else ArchivePaths.default()
+        )
+        conn = open_archive(paths)
+        try:
+            if not ensure_message_media_summaries_table(conn):
+                logger.warning("perceptor_media_summary_table_unavailable")
+                return False
+            ok = record_media_summary(
+                conn,
+                str(chat_id),
+                str(message_id),
+                media_type,
+                summary_clean,
+                model_name=model_name,
+            )
+            if ok:
+                logger.info(
+                    "perceptor_media_summary_saved",
+                    chat_id=str(chat_id),
+                    message_id=str(message_id),
+                    media_type=media_type,
+                    summary_len=len(summary_clean),
+                )
+            return ok
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning(
+            "perceptor_media_summary_save_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return False
+
+
 # Глобальный синглтон для импорта в хендлерах
 perceptor = Perceptor()
