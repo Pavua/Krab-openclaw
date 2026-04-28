@@ -39,6 +39,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import src.handlers.command_handlers as cmd_module
+import src.handlers.commands.content_commands as content_cmd_module
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_snippet
 
@@ -90,7 +91,7 @@ async def test_snippet_save_inline_stores_code(tmp_path) -> None:
     """`!snippet save hello print('hello')` — код сохраняется в JSON."""
     path = tmp_path / "code_snippets.json"
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("save hello print('hello')")
         await handle_snippet(bot, msg)
 
@@ -106,7 +107,7 @@ async def test_snippet_save_inline_multiword_code(tmp_path) -> None:
     """`!snippet save foo x = 1 + 2` — код с пробелами сохраняется полностью."""
     path = tmp_path / "code_snippets.json"
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("save foo x = 1 + 2")
         await handle_snippet(bot, msg)
 
@@ -119,7 +120,7 @@ async def test_snippet_save_inline_has_created_at(tmp_path) -> None:
     """`!snippet save` создаёт запись с полем created_at."""
     path = tmp_path / "code_snippets.json"
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("save ts pass")
         await handle_snippet(bot, msg)
 
@@ -134,7 +135,7 @@ async def test_snippet_save_overwrites_existing(tmp_path) -> None:
     path = tmp_path / "code_snippets.json"
     path.write_text(json.dumps({"foo": {"code": "OLD", "created_at": "2024-01-01T00:00:00"}}))
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("save foo NEW_CODE")
         await handle_snippet(bot, msg)
 
@@ -147,7 +148,7 @@ async def test_snippet_save_name_lowercased(tmp_path) -> None:
     """`!snippet save FOO code` — имя приводится к lower."""
     path = tmp_path / "code_snippets.json"
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("save FOO mycode")
         await handle_snippet(bot, msg)
 
@@ -166,7 +167,7 @@ async def test_snippet_save_from_reply(tmp_path) -> None:
     """`!snippet save myname` в reply на сообщение → текст reply сохраняется."""
     path = tmp_path / "code_snippets.json"
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("save myname", reply_text="x = 42\nprint(x)")
         await handle_snippet(bot, msg)
 
@@ -179,7 +180,7 @@ async def test_snippet_save_caption_fallback(tmp_path) -> None:
     """`!snippet save` — если text=None, берём caption из reply."""
     path = tmp_path / "code_snippets.json"
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("save capsnip")
         replied = MagicMock()
         replied.text = None
@@ -201,7 +202,7 @@ async def test_snippet_save_no_name_raises(tmp_path) -> None:
     """`!snippet save` без имени → UserInputError."""
     path = tmp_path / "code_snippets.json"
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("save")
         with pytest.raises(UserInputError):
             await handle_snippet(bot, msg)
@@ -212,7 +213,7 @@ async def test_snippet_save_no_code_no_reply_raises(tmp_path) -> None:
     """`!snippet save foo` без кода и без reply → UserInputError."""
     path = tmp_path / "code_snippets.json"
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("save foo")
         # reply_to_message=None (по умолчанию)
         with pytest.raises(UserInputError):
@@ -224,7 +225,7 @@ async def test_snippet_save_reply_empty_text_raises(tmp_path) -> None:
     """`!snippet save foo` — reply есть, но text=None и caption=None → UserInputError."""
     path = tmp_path / "code_snippets.json"
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("save foo")
         replied = MagicMock()
         replied.text = None
@@ -247,7 +248,7 @@ async def test_snippet_show_existing(tmp_path) -> None:
         json.dumps({"hello": {"code": "print('hello')", "created_at": "2025-01-15T10:00:00+00:00"}})
     )
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("hello")
         await handle_snippet(bot, msg)
 
@@ -264,7 +265,7 @@ async def test_snippet_show_includes_date(tmp_path) -> None:
     path = tmp_path / "code_snippets.json"
     path.write_text(json.dumps({"foo": {"code": "x=1", "created_at": "2025-03-20T12:00:00+00:00"}}))
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("foo")
         await handle_snippet(bot, msg)
 
@@ -278,7 +279,7 @@ async def test_snippet_show_unknown_raises(tmp_path) -> None:
     path = tmp_path / "code_snippets.json"
     path.write_text(json.dumps({}))
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("notexist")
         with pytest.raises(UserInputError):
             await handle_snippet(bot, msg)
@@ -290,7 +291,7 @@ async def test_snippet_show_case_insensitive(tmp_path) -> None:
     path = tmp_path / "code_snippets.json"
     path.write_text(json.dumps({"foo": {"code": "pass", "created_at": ""}}))
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("FOO")
         await handle_snippet(bot, msg)
 
@@ -316,7 +317,7 @@ async def test_snippet_list_shows_names(tmp_path) -> None:
         )
     )
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("list")
         await handle_snippet(bot, msg)
 
@@ -339,7 +340,7 @@ async def test_snippet_list_sorted_alphabetically(tmp_path) -> None:
         )
     )
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("list")
         await handle_snippet(bot, msg)
 
@@ -356,7 +357,7 @@ async def test_snippet_list_empty(tmp_path) -> None:
     path = tmp_path / "code_snippets.json"
     path.write_text(json.dumps({}))
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("list")
         await handle_snippet(bot, msg)
 
@@ -370,7 +371,7 @@ async def test_snippet_no_args_is_list(tmp_path) -> None:
     path = tmp_path / "code_snippets.json"
     path.write_text(json.dumps({"myfunc": {"code": "def f(): pass", "created_at": ""}}))
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("")
         await handle_snippet(bot, msg)
 
@@ -396,7 +397,7 @@ async def test_snippet_del_removes_entry(tmp_path) -> None:
         )
     )
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("del foo")
         await handle_snippet(bot, msg)
 
@@ -412,7 +413,7 @@ async def test_snippet_del_unknown_raises(tmp_path) -> None:
     path = tmp_path / "code_snippets.json"
     path.write_text(json.dumps({"foo": {"code": "x", "created_at": ""}}))
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("del missing")
         with pytest.raises(UserInputError):
             await handle_snippet(bot, msg)
@@ -424,7 +425,7 @@ async def test_snippet_del_without_name_raises(tmp_path) -> None:
     path = tmp_path / "code_snippets.json"
     path.write_text(json.dumps({"foo": {"code": "x", "created_at": ""}}))
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("del")
         with pytest.raises(UserInputError):
             await handle_snippet(bot, msg)
@@ -448,7 +449,7 @@ async def test_snippet_search_by_name(tmp_path) -> None:
         )
     )
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("search fetch")
         await handle_snippet(bot, msg)
 
@@ -470,7 +471,7 @@ async def test_snippet_search_by_code_content(tmp_path) -> None:
         )
     )
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("search requests")
         await handle_snippet(bot, msg)
 
@@ -492,7 +493,7 @@ async def test_snippet_search_case_insensitive(tmp_path) -> None:
         )
     )
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("search IMPORT")
         await handle_snippet(bot, msg)
 
@@ -506,7 +507,7 @@ async def test_snippet_search_not_found(tmp_path) -> None:
     path = tmp_path / "code_snippets.json"
     path.write_text(json.dumps({"foo": {"code": "bar", "created_at": ""}}))
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("search xyz_not_exists")
         await handle_snippet(bot, msg)
 
@@ -519,7 +520,7 @@ async def test_snippet_search_no_query_raises(tmp_path) -> None:
     """`!snippet search` без запроса → UserInputError."""
     path = tmp_path / "code_snippets.json"
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("search")
         with pytest.raises(UserInputError):
             await handle_snippet(bot, msg)
@@ -539,7 +540,7 @@ async def test_snippet_search_shows_count(tmp_path) -> None:
         )
     )
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("search aio")
         await handle_snippet(bot, msg)
 
@@ -558,7 +559,7 @@ async def test_snippet_list_no_file(tmp_path) -> None:
     path = tmp_path / "code_snippets.json"
     # файл не создаём
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("list")
         await handle_snippet(bot, msg)
 
@@ -573,7 +574,7 @@ async def test_snippet_list_corrupted_file(tmp_path) -> None:
     path = tmp_path / "code_snippets.json"
     path.write_text("NOT VALID JSON {{{")
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("list")
         await handle_snippet(bot, msg)
 
@@ -586,7 +587,7 @@ async def test_snippet_save_creates_parent_dir(tmp_path) -> None:
     """`!snippet save` создаёт родительский каталог если его нет."""
     path = tmp_path / "nested" / "deep" / "code_snippets.json"
 
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         bot, msg = _make_message("save mysnip x=1")
         await handle_snippet(bot, msg)
 
@@ -603,7 +604,7 @@ async def test_snippet_save_creates_parent_dir(tmp_path) -> None:
 def test_load_snippets_returns_empty_if_no_file(tmp_path) -> None:
     """_load_snippets возвращает {} если файл не существует."""
     path = tmp_path / "not_exists.json"
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         result = cmd_module._load_snippets()
     assert result == {}
 
@@ -612,7 +613,7 @@ def test_load_snippets_returns_empty_on_corrupt(tmp_path) -> None:
     """_load_snippets возвращает {} при невалидном JSON."""
     path = tmp_path / "bad.json"
     path.write_text("}{BAD")
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         result = cmd_module._load_snippets()
     assert result == {}
 
@@ -621,7 +622,7 @@ def test_save_and_load_roundtrip(tmp_path) -> None:
     """_save_snippets + _load_snippets — данные сохраняются корректно."""
     path = tmp_path / "snippets.json"
     data = {"myfunc": {"code": "def f(): pass", "created_at": "2025-01-01T00:00:00+00:00"}}
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         cmd_module._save_snippets(data)
         loaded = cmd_module._load_snippets()
     assert loaded == data
@@ -631,7 +632,7 @@ def test_save_snippets_uses_ensure_ascii_false(tmp_path) -> None:
     """_save_snippets сохраняет кириллицу без экранирования."""
     path = tmp_path / "snippets.json"
     data = {"ru": {"code": "переменная = 42", "created_at": ""}}
-    with patch.object(cmd_module, "_SNIPPETS_FILE", path):
+    with patch.object(content_cmd_module, "_SNIPPETS_FILE", path):
         cmd_module._save_snippets(data)
     raw = path.read_text(encoding="utf-8")
     assert "переменная" in raw
