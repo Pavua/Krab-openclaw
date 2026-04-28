@@ -287,6 +287,24 @@ class MCPClientManager:
         except ImportError:
             pass  # voice_assistant_tools не установлены — не критично
 
+        # userbot_self_tools: read-only Telegram tools для самого Краба (Feature M)
+        try:
+            from .core.userbot_self_tools import USERBOT_SELF_TOOL_SCHEMAS
+
+            for schema in USERBOT_SELF_TOOL_SCHEMAS:
+                manifest.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": schema["name"],
+                            "description": schema["description"],
+                            "parameters": schema["inputSchema"],
+                        },
+                    }
+                )
+        except ImportError:
+            pass  # graceful: модуль может отсутствовать в редуцированных сборках
+
         return manifest
 
     async def call_tool_unified(self, full_tool_name: str, arguments: Dict[str, Any]) -> str:
@@ -325,6 +343,21 @@ class MCPClientManager:
 
         if full_tool_name.startswith("voice:"):
             return await self._voice_tool_impl(full_tool_name, arguments)
+
+        # Feature M: native userbot read-only tools
+        try:
+            from .core.userbot_self_tools import (
+                dispatch_userbot_self_tool,
+                is_userbot_self_tool,
+            )
+
+            if is_userbot_self_tool(full_tool_name):
+                result = await dispatch_userbot_self_tool(full_tool_name, arguments)
+                import json as _json
+
+                return _json.dumps(result, ensure_ascii=False, default=str)
+        except ImportError:
+            pass
 
         if "__" not in full_tool_name:
             return f"❌ Неизвестный формат инструмента: {full_tool_name}"
