@@ -1,6 +1,6 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-04-18 (session 12)
+> Составлен: 2026-03-23 | Обновлён: 2026-04-28 (session 28)
 > Статус: Активная разработка
 > Владелец: По
 
@@ -1033,3 +1033,30 @@ redact (4/4 пойманы) → chunking (7 chunks) → FTS5 index → Model2Vec
 - Hero (Canva): https://www.canva.com/d/wDX_xg3mClWE0t7
 - Engineering (Claude Design): https://claude.ai/design/p/f8108663-9376-444f-8c2c-1e93302a02d6
 - Ops (Claude Design + Canva mirror): https://www.canva.com/d/3dkWS667S3h08UB
+
+## Cron Jobs — Root Cause Fix (2026-04-28, Session 28)
+
+**Проблема**: 6 cron jobs регулярно фейлились и создавали stale inbox items.
+
+**Классификация и действия**:
+
+| Job | Причина | Классификация | Действие |
+|-----|---------|---------------|---------|
+| Transcription Check: Дашуля.m4a | kind=at (одноразовый), `enabled=false`, delivery без `channel` | **broken — disable** (already disabled) | Не требует действий — уже отключён и никогда не повторится |
+| Daily Morning Report | `enabled=false`, delivery без `to`, модель `gemini-2.5-flash-preview-09-2025` запрещена | **broken — disable** (already disabled) | Не требует действий — уже отключён |
+| news-digest-15 | Transient: `codex-cli` harness не зарегистрирован (временно), rate-limit | **transient** | Последний run=ok, самовосстановился |
+| news-digest-23 | Transient: `codex-cli` harness не зарегистрирован (временно), rate-limit | **transient** | Последний run=ok, самовосстановился |
+| email-monitor | Transient: rate-limit Gemini 3 Pro (все 4 модели), timeout | **transient** | Последний run=ok, самовосстановился |
+| Nightly Self-Diagnostics | `consecutiveErrors=16`, delivery `{"mode":"announce","channel":"telegram"}` без `to` | **broken — fix possible** | **FIXED**: добавлен `"to": "312322764"` в `~/.openclaw/cron/jobs.json` |
+
+**Фикс**: `~/.openclaw/cron/jobs.json` — Nightly Self-Diagnostics delivery теперь содержит `"to": "312322764"` аналогично всем другим активным jobs. Файл не в git (openclaw runtime state).
+
+**Остаточный риск по email-monitor**: регулярные rate-limit ошибки Gemini 3 Pro (все 4 модели в fallback) во время нагрузочных периодов. Рекомендация: добавить в fallback `google/gemini-2.5-flash` или `openai/gpt-4o-mini` у OpenClaw model routing.
+
+## Nightly Self-Diagnostics — 2026-04-27 03:00 CEST
+
+- **попытался сделать:** проверил обязательный runtime-контекст, процессы `ai.krab.core` / `ai.openclaw.gateway`, свежие логи `~/.openclaw/*`, owner panel `:8080`, gateway `:18789`, voice gateway `:8090`, а также поведение живых HTTP endpoint-ов вместо чтения только исторических логов.
+- **Исправлено:** controlled restart `launchctl kickstart -k gui/501/ai.krab.core` после фактической деградации panel backend. До рестарта `http://127.0.0.1:8080/api/health/lite` и рабочие API висели в timeout; после рестарта `:8080/api/health/lite` снова отвечает `200`, `telegram_userbot_state=running`, `telegram_userbot_client_connected=true`, `:18789/health` → `{"ok":true,"status":"live"}`, `:8090/health` → `{"ok":true,"service":"krab-voice-gateway"}`.
+- **Осталось/сомнение:** тяжёлый endpoint `http://127.0.0.1:8080/api/openclaw/cron/status` после восстановления panel по-прежнему стабильно уходит в timeout на серии live-проб. Это подтверждает старый класс проблемы: часть owner-panel API всё ещё блокирует event loop/CLI-обвязку дольше допустимого бюджета и требует отдельного fix-pass с bounded worker/cache fallback.
+- **Осталось/сомнение:** в `logs/krab_launchd.err.log` во время рестарта пойман `sqlite3.OperationalError: disk I/O error` на открытии pyrogram session storage, после чего runtime вышел с `SystemExit: 78`, но KeepAlive поднял его повторно и сервис восстановился. Нужен отдельный разбор целостности/блокировок session sqlite, чтобы рестарт не зависел от повторной удачи.
+- **Осталось/сомнение:** browser runtime в этом канале подтверждён (`browser status`/`start` успешны), но открытие вкладки на `:8080` было заблокировано policy browser-инструмента, поэтому UI smoke этой ночью подтверждён только через live HTTP probe, а не через DOM snapshot.
