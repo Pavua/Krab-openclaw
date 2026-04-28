@@ -2750,8 +2750,16 @@ class KraabUserbot(
         clients = getattr(self, "_swarm_team_clients", None)
         if not clients:
             return
+        # Импорт здесь, чтобы избежать циклической зависимости при загрузке модуля.
+        from .userbot.session import SessionMixin
+
         for team, cl in list(clients.items()):
             try:
+                # Перед stop() ставим storage guard на каждый swarm client —
+                # иначе фоновые pyrogram-задачи (Session.restart / update_peers)
+                # после stop() добегают до закрытой sqlite-базы и спамят Sentry
+                # (~10 events/24h × 4 команды = заметная доля PYTHON-FASTAPI-1).
+                SessionMixin._arm_storage_shutdown_guard_for_client(cl)
                 if cl.is_connected:
                     await cl.stop()
                 logger.info("swarm_team_client_stopped", team=team)

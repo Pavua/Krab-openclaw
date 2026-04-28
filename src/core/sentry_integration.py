@@ -77,8 +77,13 @@ def _is_noise_event(event: dict[str, Any]) -> bool:
             frames = (ex.get("stacktrace") or {}).get("frames") or []
             filenames = " ".join(str(f.get("filename", "")) for f in frames)
 
-            # pyrogram graceful shutdown noise
-            if "Cannot operate on a closed database" in value and "pyrogram/session" in filenames:
+            # pyrogram graceful shutdown noise: исключение всплывает не только
+            # из pyrogram/session.py (Session.restart task), но и из
+            # pyrogram/storage/sqlite_storage.py (storage._get / update_peers),
+            # когда фоновый task добегает до уже закрытой sqlite-базы.
+            if "Cannot operate on a closed database" in value and (
+                "pyrogram/session" in filenames or "pyrogram/storage" in filenames
+            ):
                 return True
             # asyncio CancelledError во время shutdown
             if "CancelledError" in value and "Session.restart" in " ".join(

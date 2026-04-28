@@ -152,3 +152,106 @@ def test_sentry_filter_handles_variations(value: str) -> None:
     """Любая вариация closed-db текста должна дропаться."""
     event = {"exception": {"values": [{"value": value}]}}
     assert _before_send(event, {}) is None
+
+
+# ── Session 28+: статический helper для произвольного pyrogram client ──
+
+
+def _make_fake_client_with_storage() -> MagicMock:
+    """Минимальный fake Pyrogram-client с storage._get / update_peers."""
+    storage = types.SimpleNamespace()
+    storage._get = MagicMock(return_value="real_value")
+
+    async def _real_update_peers(peers):
+        return ("real_update", peers)
+
+    storage.update_peers = _real_update_peers
+    client = MagicMock()
+    client.storage = storage
+    return client
+
+
+def test_static_guard_arms_external_client() -> None:
+    """`_arm_storage_shutdown_guard_for_client` работает на внешнем client."""
+    from src.userbot.session import SessionMixin
+
+    client = _make_fake_client_with_storage()
+    SessionMixin._arm_storage_shutdown_guard_for_client(client)
+
+    storage = client.storage
+    assert getattr(storage, "_krab_storage_closed", False) is True
+    assert getattr(storage, "_krab_storage_guard_installed", False) is True
+    # _get теперь подменён на guarded-версию и возвращает None
+    assert storage._get("peer_id") is None
+
+
+def test_static_guard_double_arm_idempotent_external_client() -> None:
+    """Повторный arm на тот же external client не дублирует и сохраняет ссылку."""
+    from src.userbot.session import SessionMixin
+
+    client = _make_fake_client_with_storage()
+    SessionMixin._arm_storage_shutdown_guard_for_client(client)
+    storage = client.storage
+    first_get = storage._get
+
+    SessionMixin._arm_storage_shutdown_guard_for_client(client)
+    assert storage._get is first_get
+    assert getattr(storage, "_krab_storage_closed", False) is True
+
+
+def test_static_guard_handles_none_client() -> None:
+    """Helper не падает при client=None (early return)."""
+    from src.userbot.session import SessionMixin
+
+    SessionMixin._arm_storage_shutdown_guard_for_client(None)
+
+
+def test_static_guard_handles_storage_none() -> None:
+    """Helper не падает при отсутствующем storage."""
+    from src.userbot.session import SessionMixin
+
+    client = MagicMock()
+    client.storage = None
+    SessionMixin._arm_storage_shutdown_guard_for_client(client)
+
+
+def test_sentry_core_filter_drops_closed_db_in_storage_path() -> None:
+    """`core/sentry_integration._is_noise_event` ловит storage frame, не только session."""
+    from src.core.sentry_integration import _is_noise_event
+
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "value": "sqlite3.ProgrammingError: Cannot operate on a closed database.",
+                    "stacktrace": {
+                        "frames": [
+                            {"filename": "/site-packages/pyrogram/storage/sqlite_storage.py"},
+                        ]
+                    },
+                }
+            ]
+        }
+    }
+    assert _is_noise_event(event) is True
+
+
+def test_sentry_core_filter_keeps_closed_db_outside_pyrogram() -> None:
+    """closed-db из НЕ-pyrogram стека не дропаем — это потенциальный реальный bug."""
+    from src.core.sentry_integration import _is_noise_event
+
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "value": "Cannot operate on a closed database",
+                    "stacktrace": {
+                        "frames": [
+                            {"filename": "/site-packages/some_other_lib/db.py"},
+                        ]
+                    },
+                }
+            ]
+        }
+    }
+    assert _is_noise_event(event) is False

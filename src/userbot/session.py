@@ -269,7 +269,19 @@ class SessionMixin:
 
     def _arm_storage_shutdown_guard(self) -> None:
         """
-        Ставит guard на pyrogram storage (`_get` / `update_peers`).
+        Ставит guard на pyrogram storage основного клиента (`self.client`).
+
+        Тонкая обёртка над статическим helper'ом — он же используется для
+        per-team swarm clients (см. `_arm_storage_shutdown_guard_for_client`).
+        """
+        if not self.client:
+            return
+        SessionMixin._arm_storage_shutdown_guard_for_client(self.client)
+
+    @staticmethod
+    def _arm_storage_shutdown_guard_for_client(client) -> None:
+        """
+        Ставит guard на pyrogram storage произвольного клиента.
 
         Почему это нужно:
         - Pyrogram-задачи Session.restart()/dispatcher могут долететь до
@@ -280,10 +292,14 @@ class SessionMixin:
         - guard помечает storage как closed и подменяет `_get` / `update_peers`
           на безопасные no-op'ы, которые возвращают пустые результаты вместо
           обращения к закрытому sqlite connection.
+
+        Применяется как к основному userbot-клиенту, так и к per-team swarm
+        clients (4× rate ⇒ ~10 events/24h без guard'а).
+        Идемпотентно: повторный вызов только переставляет `_krab_storage_closed`.
         """
-        if not self.client:
+        if client is None:
             return
-        storage = getattr(self.client, "storage", None)
+        storage = getattr(client, "storage", None)
         if storage is None:
             return
         if getattr(storage, "_krab_storage_guard_installed", False):
