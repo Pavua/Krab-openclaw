@@ -518,32 +518,29 @@ class LLMFlowMixin:
             )
             or 0
         )
-        # Bug 3 fix 27.04.2026: extract reply_to_message context чтобы модель
-        # видела на какое сообщение user отвечает (Telegram UI quoted, но MTProto
-        # event передаёт только reply_to_message_id — без prepend'a модель не видит).
+        # Bug 3 (Session 27) + Bug 3-продолжение/Bug 10 (Session 28):
+        # Strict reply preprocessor — формируем сегментированный prompt с
+        # ПОЛНЫМ reply_to (без обрезки) и явной addressee-секцией. Это нужно,
+        # чтобы LLM не реагировал только на начало длинной цитаты и не
+        # пропускал @mention в теле reply_to.
         _reply_context: str | None = None
+        _segmented_prompt: str | None = None
         try:
-            _reply_target = getattr(message, "reply_to_message", None)
-            if _reply_target is not None:
-                _reply_text = (
-                    str(getattr(_reply_target, "text", "") or "").strip()
-                    or str(getattr(_reply_target, "caption", "") or "").strip()
+            from .reply_preprocessor import (
+                build_segmented_prompt,
+                extract_reply_segments,
+            )
+
+            _segments = extract_reply_segments(message)
+            if _segments.has_reply or _segments.mentions:
+                _segmented_prompt = build_segmented_prompt(
+                    segments=_segments,
+                    sender_name="",  # sender prefix добавит _build_effective_user_query
+                    is_group=False,
+                    fallback_query=str(query or ""),
                 )
-                if _reply_text:
-                    _reply_from = getattr(_reply_target, "from_user", None)
-                    _reply_author = (
-                        str(getattr(_reply_from, "username", "") or "").strip()
-                        or str(getattr(_reply_from, "first_name", "") or "").strip()
-                        or ""
-                    )
-                    # Обрезаем длинный reply target (>500 символов) чтобы не съедать
-                    # context window — модели хватит первых 500 для понимания о чём речь.
-                    if len(_reply_text) > 500:
-                        _reply_text = _reply_text[:500] + "…"
-                    _reply_context = (
-                        f"@{_reply_author}: {_reply_text}" if _reply_author else _reply_text
-                    )
         except Exception:  # noqa: BLE001
+            _segmented_prompt = None
             _reply_context = None
 
         # 27.04.2026 fix: для group chat передаём sender_name → LLM различает
@@ -570,13 +567,20 @@ class LLMFlowMixin:
         except Exception:  # noqa: BLE001
             pass
 
-        effective_query = self._build_effective_user_query(
-            query=query,
-            has_images=bool(images),
-            reply_context=_reply_context,
-            sender_name=_sender_name,
-            is_group=_is_group_chat,
-        )
+        if _segmented_prompt:
+            # segmented_prompt уже содержит full reply_to + mentions + current
+            # text — берём его как effective_query, добавив только sender prefix
+            # для group chat (различение speakers).
+            _sender_tag = f"[{_sender_name}]: " if _is_group_chat and _sender_name else ""
+            effective_query = f"{_sender_tag}{_segmented_prompt}".rstrip()
+        else:
+            effective_query = self._build_effective_user_query(
+                query=query,
+                has_images=bool(images),
+                reply_context=_reply_context,
+                sender_name=_sender_name,
+                is_group=_is_group_chat,
+            )
 
         # Auto-reaction: если Memory Layer активен — RAG подключён к контексту
         try:
@@ -1392,6 +1396,9 @@ class LLMFlowMixin:
                 )
 
             full_response = self._apply_deferred_action_guard(full_response)
+            # Bug 9 (Session 28): срезаем паразитные «если хочешь, могу...»
+            # фразы. Идемпотентно, не трогает кавычки/code-block.
+            full_response = self._strip_phrase_parasites(full_response)
             self._remember_hidden_reasoning_trace(
                 chat_id=chat_id,
                 query=query,

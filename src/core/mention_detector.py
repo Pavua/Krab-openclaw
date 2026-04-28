@@ -43,14 +43,17 @@ def detect_mention(
     *,
     own_username: str | None = None,
     own_user_id: int | None = None,
+    scan_reply_to: bool = True,
 ) -> bool:
     """True если сообщение содержит упоминание нашего аккаунта.
 
-    Проверяет три канала:
+    Проверяет четыре канала:
     1. pyrogram-флаг ``message.mentioned``
-    2. Текст содержит ``@<own_username>`` (case-insensitive)
-    3. Entities типа MessageEntityMention или MessageEntityTextUrl
-       с совпадающим user_id
+    2. Текст текущего сообщения содержит ``@<own_username>`` (case-insensitive)
+    3. Entities типа MessageEntityMention/MessageEntityTextUrl с совпадающим user_id
+    4. (Bug 10, Session 28) Текст reply_to.text/caption содержит ``@<own_username>``
+       — пользователь процитировал чужое сообщение, в котором адресовали Краба.
+       Отключается флагом ``scan_reply_to=False`` (для legacy-сценариев).
     """
     if message is None:
         return False
@@ -61,11 +64,20 @@ def detect_mention(
 
     text = _message_text(message)
 
-    # 2. username в тексте
+    # 2. username в текущем тексте
     if own_username and text:
         username_clean = own_username.lstrip("@")
         if f"@{username_clean}".lower() in text.lower():
             return True
+
+    # 4. username в reply_to body
+    if scan_reply_to and own_username:
+        reply = _attr(message, "reply_to_message")
+        reply_text = _message_text(reply) if reply is not None else ""
+        if reply_text:
+            username_clean = own_username.lstrip("@")
+            if f"@{username_clean}".lower() in reply_text.lower():
+                return True
 
     # 3. entities с user_id
     if own_user_id is not None:

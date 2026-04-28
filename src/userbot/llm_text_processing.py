@@ -653,6 +653,135 @@ class LLMTextProcessingMixin:
         result = re.sub(r"\n{3,}", "\n\n", result)
         return result.strip() if result.strip() != text.strip() else result
 
+    # ------------------------------------------------------------------
+    # Phrase-parasite stripper (Bug 9, Session 28)
+    # ------------------------------------------------------------------
+    #
+    # LLM (особенно yung_nagato persona) лепит шаблонные «если хочешь, могу...»,
+    # «готовность блока», «могу дать ещё 3 версии» — без явного запроса.
+    # Anti-parasite rule прописан в AGENTS.md модели, но прокси-postprocessor
+    # нужен как safety net на runtime.
+    #
+    # Правила:
+    # - режем целое предложение (до `.!?` или конца строки),
+    # - не трогаем фразу внутри кавычек («…») и code block (` ` `),
+    # - идемпотентно: повторный вызов = тот же результат.
+
+    _PHRASE_PARASITE_PATTERNS: tuple[re.Pattern[str], ...] = (
+        # «Если хочешь, могу ...» / «Если нужно — подскажу ...» — самый частый
+        re.compile(
+            r"\bесли\s+(?:хочешь|нужно|хочется|надо|интересно)[,—\s-]*"
+            r"(?:могу|давай|подскажу|сделаю|скажу|покажу|предложу|дам)[^.!?\n]*[.!?]?",
+            re.IGNORECASE,
+        ),
+        # «Готовность блока» — техническая болтовня LLM
+        re.compile(r"\bготовность\s+блока\b[^.!?\n]*[.!?]?", re.IGNORECASE),
+        # «Могу дать ещё 3 версии», «могу сделать ещё более хлёсткую»
+        re.compile(
+            r"\bмогу\s+(?:дать|сделать|показать|предложить)\s+ещё[^.!?\n]*[.!?]?",
+            re.IGNORECASE,
+        ),
+        # «Хочешь, могу ...» (без префикса «если»)
+        re.compile(
+            r"(?:^|[\s,—-])хочешь[,]?\s+могу[^.!?\n]*[.!?]?",
+            re.IGNORECASE,
+        ),
+        # «Если нужна / нужен короткая/коротёкий версия — могу/дам»
+        re.compile(
+            r"\bесли\s+нужн[аы]?\s+\w+[\s\w]*[—-]\s*(?:могу|дам|подскажу)[^.!?\n]*[.!?]?",
+            re.IGNORECASE,
+        ),
+    )
+
+    @classmethod
+    def _strip_phrase_parasites(cls, text: str, *, aggressive: bool = False) -> str:
+        """Убирает паразитные «если хочешь, могу …» фразы из ответа LLM.
+
+        aggressive=True зарезервирован под дальнейшее ужесточение (например,
+        авто-обрезка финальных «Готов помочь дальше» — пока не реализовано).
+
+        Особенности:
+        - не трогает фрагмент внутри обычных кавычек/«ёлочек» и backtick code;
+        - идемпотентно: повторный вызов на чистом результате не меняет текст;
+        - после удаления нормализует whitespace (двойные пробелы / пустые строки).
+        """
+        del aggressive  # пока не используется, но API стабилен
+        raw = str(text or "")
+        if not raw.strip():
+            return raw
+
+        # Разрезаем по кодовым блокам (тройной/одинарный backtick) — внутри них
+        # ничего не режем. По кавычкам тоже защищаемся: режем только сегменты
+        # вне «…» и "…".
+        segments = cls._split_protected_segments(raw)
+        out_parts: list[str] = []
+        for segment, protected in segments:
+            if protected or not segment:
+                out_parts.append(segment)
+                continue
+            cleaned = segment
+            for pattern in cls._PHRASE_PARASITE_PATTERNS:
+                cleaned = pattern.sub("", cleaned)
+            out_parts.append(cleaned)
+
+        result = "".join(out_parts)
+        # Финальная нормализация whitespace (только в обычном тексте, не код).
+        result = re.sub(r"[ \t]{2,}", " ", result)
+        result = re.sub(r"\n{3,}", "\n\n", result)
+        # Убираем висячие двойные пунктуации, оставшиеся после среза («,, » → «, »)
+        result = re.sub(r"(?<=\S)\s*,\s*,\s*", ", ", result)
+        return result.strip()
+
+    @staticmethod
+    def _split_protected_segments(text: str) -> list[tuple[str, bool]]:
+        """Делит текст на сегменты ``(chunk, is_protected)``.
+
+        Защищены: тройной backtick code block, одинарный inline-code, кавычки
+        «…», "…" и '…'. Внутри protected сегментов phrase-parasite stripper
+        ничего не режет. Простой автомат: ищем парные маркеры по очереди.
+        """
+        if not text:
+            return []
+        # Защищаемые пары: open → (close, include-bounds)
+        # Порядок важен: сначала тройной backtick, потом одинарный.
+        markers: list[tuple[str, str]] = [
+            ("```", "```"),
+            ("`", "`"),
+            ("«", "»"),
+            ('"', '"'),
+            ("'", "'"),
+        ]
+        result: list[tuple[str, bool]] = []
+        idx = 0
+        n = len(text)
+        while idx < n:
+            # Ищем ближайший открывающий marker.
+            best_pos: int | None = None
+            best_marker: tuple[str, str] | None = None
+            for open_m, close_m in markers:
+                pos = text.find(open_m, idx)
+                if pos == -1:
+                    continue
+                if best_pos is None or pos < best_pos:
+                    best_pos = pos
+                    best_marker = (open_m, close_m)
+            if best_pos is None or best_marker is None:
+                result.append((text[idx:], False))
+                break
+            # До маркера — обычный текст.
+            if best_pos > idx:
+                result.append((text[idx:best_pos], False))
+            open_m, close_m = best_marker
+            close_pos = text.find(close_m, best_pos + len(open_m))
+            if close_pos == -1:
+                # Незакрытый маркер — оставляем хвост обычным текстом.
+                result.append((text[best_pos:], False))
+                break
+            end = close_pos + len(close_m)
+            result.append((text[best_pos:end], True))
+            idx = end
+        return result
+
     @staticmethod
     def _normalize_user_visible_fallback_text(text: str) -> str:
         """
