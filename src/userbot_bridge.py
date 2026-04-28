@@ -2529,6 +2529,15 @@ class KraabUserbot(
             get_tracker().set_owner_id(int(self.me.id))
         except Exception as exc:  # noqa: BLE001
             logger.warning("feedback_tracker_owner_id_failed", error=str(exc))
+
+        # Feature M (Session 28): bind pyrogram client в userbot self-tools
+        # — позволяет LLM вызывать read tools (history/search/etc) через native API.
+        try:
+            from .core.userbot_self_tools import set_userbot_client  # noqa: PLC0415
+
+            set_userbot_client(self.client)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("userbot_self_tools_bind_failed", error=str(exc))
         # Bug fix 27.04.2026: динамически зарегистрировать username userbot
         # session чтобы @yung_nagato (или любой актуальный username) распознавался
         # как mention Краба. Раньше hardcoded patterns ловили только @krab.
@@ -4233,6 +4242,10 @@ class KraabUserbot(
                         or getattr(message, "animation", None)
                         or getattr(message, "sticker", None)
                     )
+                    # Feature B (Session 28): per-user reaction memory threshold modifier.
+                    _trigger_user_id = (
+                        str(message.from_user.id) if getattr(message, "from_user", None) else None
+                    )
                     smart_trigger_result = await detect_smart_trigger(
                         text=text or "",
                         chat_id=str(chat_id),
@@ -4243,6 +4256,7 @@ class KraabUserbot(
                         policy_store=_get_policy_store(),
                         llm_classifier=_get_intent_classifier(),
                         has_media=_has_media_for_trigger,
+                        user_id=_trigger_user_id,
                     )
                     has_implicit_trigger = bool(smart_trigger_result.should_respond)
                     logger.info(
