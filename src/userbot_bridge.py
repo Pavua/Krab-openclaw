@@ -2433,6 +2433,52 @@ class KraabUserbot(
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
+            # Idea 13: Named Entity Memory — persist-путь для упомянутых
+            # имён/мест/проектов. Bootstrap fail-open.
+            try:
+                from .core.named_entity_memory import (  # noqa: PLC0415
+                    named_entity_memory,
+                )
+
+                named_entity_memory.configure_default_path(
+                    _learning_state_dir / "named_entities.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "named_entity_memory_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            # Idea 26: AnomalyDetector — sliding-window z-score baselines.
+            try:
+                from .core.anomaly_detector import (  # noqa: PLC0415
+                    anomaly_detector,
+                )
+
+                anomaly_detector.configure_default_path(
+                    _learning_state_dir / "anomaly_baselines.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "anomaly_detector_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            # Idea 28: SensitiveChatRegistry — privacy-уровни по чатам.
+            try:
+                from .core.chat_sensitivity import (  # noqa: PLC0415
+                    sensitive_chat_registry,
+                )
+
+                sensitive_chat_registry.configure_default_path(
+                    _learning_state_dir / "sensitive_chats.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "sensitive_chat_registry_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
         except Exception as _exc:  # noqa: BLE001
             logger.warning(
                 "learning_singletons_bootstrap_failed",

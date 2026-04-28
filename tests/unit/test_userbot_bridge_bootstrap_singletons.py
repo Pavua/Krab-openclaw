@@ -89,6 +89,9 @@ def test_outgoing_message_hook_records_owner_seen(tmp_path: Path) -> None:
 def test_module_singletons_have_expected_api() -> None:
     """Smoke-test: module-level singletons экспортируются и имеют API,
     которое использует bootstrap в userbot_bridge.start()."""
+    from src.core.anomaly_detector import anomaly_detector  # noqa: PLC0415
+    from src.core.chat_sensitivity import sensitive_chat_registry  # noqa: PLC0415
+    from src.core.named_entity_memory import named_entity_memory  # noqa: PLC0415
     from src.core.owner_presence import owner_presence_tracker  # noqa: PLC0415
     from src.core.proactive_suggestions import pattern_detector  # noqa: PLC0415
     from src.core.repl_session import repl_session  # noqa: PLC0415
@@ -97,6 +100,44 @@ def test_module_singletons_have_expected_api() -> None:
     assert hasattr(owner_presence_tracker, "record_owner_seen")
     assert hasattr(repl_session, "configure_default_paths")
     assert hasattr(pattern_detector, "configure_default_path")
+    # Session 28 part 4: bulk wire-up batch (Idea 13/26/28).
+    assert hasattr(named_entity_memory, "configure_default_path")
+    assert hasattr(anomaly_detector, "configure_default_path")
+    assert hasattr(sensitive_chat_registry, "configure_default_path")
+
+
+def test_named_entity_memory_bootstrap_configures_storage_path(tmp_path: Path) -> None:
+    """Idea 13: bootstrap путь подхватывается без ошибок, повторный configure
+    допустим."""
+    from src.core.named_entity_memory import EntityStore  # noqa: PLC0415
+
+    store = EntityStore()
+    storage = tmp_path / "named_entities.json"
+    store.configure_default_path(storage)
+    storage2 = tmp_path / "named_entities2.json"
+    store.configure_default_path(storage2)
+
+
+def test_anomaly_detector_bootstrap_configures_storage_path(tmp_path: Path) -> None:
+    """Idea 26: bootstrap пути не падает; повторный configure ок."""
+    from src.core.anomaly_detector import AnomalyDetector  # noqa: PLC0415
+
+    detector = AnomalyDetector()
+    storage = tmp_path / "anomaly_baselines.json"
+    detector.configure_default_path(storage)
+    storage2 = tmp_path / "anomaly_baselines2.json"
+    detector.configure_default_path(storage2)
+
+
+def test_sensitive_chat_registry_bootstrap_configures_storage_path(tmp_path: Path) -> None:
+    """Idea 28: bootstrap путь подхватывается, повторный configure не падает."""
+    from src.core.chat_sensitivity import SensitiveChatRegistry  # noqa: PLC0415
+
+    registry = SensitiveChatRegistry()
+    storage = tmp_path / "sensitive_chats.json"
+    registry.configure_default_path(storage)
+    storage2 = tmp_path / "sensitive_chats2.json"
+    registry.configure_default_path(storage2)
 
 
 def test_bootstrap_failure_logged_not_raised(tmp_path: Path) -> None:
