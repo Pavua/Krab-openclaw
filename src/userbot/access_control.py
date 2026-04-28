@@ -250,6 +250,7 @@ class AccessControlMixin:
         prompt: str,
         *,
         chat_id: str | int | None = None,
+        owner_id: str | int | None = None,
     ) -> str:
         """
         Добавляет runtime-ограничения, которые не должны теряться между ролями.
@@ -304,6 +305,31 @@ class AccessControlMixin:
             except Exception:  # noqa: BLE001
                 # Не логируем здесь — внутри format_persona_suffix уже есть
                 # fail-safe c warning, повторно шуметь смысла нет.
+                pass
+
+        # Owner mood suffix (Feature F): подстройка тона под настроение
+        # owner. Идёт ПОСЛЕ persona drift, чтобы mood мог уточнить общий
+        # стиль чата под текущий настрой. Fail-open.
+        if chat_id is not None:
+            try:
+                from ..core.owner_mood import format_mood_suffix  # noqa: PLC0415
+
+                resolved_owner = owner_id
+                if resolved_owner is None:
+                    # Lazy lookup эффективного owner — нужен для ключа кэша.
+                    from ..core.access_control import (  # noqa: PLC0415
+                        get_effective_owner_subjects,
+                    )
+
+                    subjects = get_effective_owner_subjects() or []
+                    resolved_owner = next(iter(subjects), None)
+
+                if resolved_owner:
+                    mood_suffix = format_mood_suffix(chat_id, resolved_owner)
+                    if mood_suffix and mood_suffix not in base:
+                        base = f"{base}\n\n{mood_suffix}".strip()
+            except Exception:  # noqa: BLE001
+                # format_mood_suffix сам логирует, повторно не шумим.
                 pass
 
         return base
