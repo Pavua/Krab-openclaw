@@ -135,7 +135,8 @@ src/
     memory_retrieval_scores.py — скоры поиска памяти (session 17)
     memory_doctor.py    — диагностика и авторемонт индекса памяти (session 17)
   handlers/
-    command_handlers.py — 105+ команд (auto-counted), _AgentRoomRouterAdapter
+    command_handlers.py — 105+ команд (auto-counted), _AgentRoomRouterAdapter; 4430 LOC (Session 28, −77.4% от 19637)
+    commands/           — 22 модуля (Waves 1-18): text_utils/chat/scheduler/voice/memory/social/ai/swarm/translator/system/admin/cli/fileio/group_admin/content/state/observability/memory_admin + policy + _shared
   integrations/
     tor_bridge.py       — Tor SOCKS5 proxy (httpx + Playwright)
     browser_bridge.py   — CDP подключение к Chrome
@@ -255,8 +256,8 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 ## Phase 7 статус (25.04.2026 — Session 22 close)
 
 - **Phase 7: 100%**, Memory Phase 2: **LIVE in production** (`KRAB_RAG_PHASE2_ENABLED=1` + `KRAB_RAG_PHASE2_SHADOW=1` в `.env`)
-- **Sessions 20+21+22**: 88 commits на ветке `fix/daily-review-20260421`
-- **249 API endpoints** (live: `/api/endpoints`), 105+ prod команд, 9991 тестов collected (Wave 11/12 cleanup: 324 → 17 failures, -95%)
+- **Sessions 20+21+22**: 88 commits на ветке `fix/daily-review-20260421`; **Session 27+28**: +46 commits, branch total 130+ commits
+- **250+ API endpoints** (live: `/api/endpoints`), 105+ prod команд, **11212 тестов collected** (Session 28 final)
 
 ### Session 22 highlights
 - **Memory Phase 2 LIVE**: hybrid retrieval (FTS5 + vec_chunks RRF + MMR diversity), recall@5 +37.67 verified, 10× MMR speedup через vec-cache
@@ -297,14 +298,21 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 
 **Spec**: `docs/SMART_ROUTING_DESIGN.md` (319 LOC).
 
-## Phase 2 Code Splits (Session 25 — 26.04.2026 — COMPLETE)
+## Phase 2 Code Splits (Session 25 — 26.04.2026 — COMPLETE; command_handlers split ongoing)
 
-- **Status: COMPLETE** — 50 waves Wave A → Wave XX, ~50 commits (`db6d9fd..674ebd1`)
+- **Status: COMPLETE (web_app)** — 50 waves Wave A → Wave XX, ~50 commits (`db6d9fd..674ebd1`)
 - **25 routers / 207 endpoints** extracted в `src/modules/web_routers/`
 - **web_app.py: 15 822 → ~10k LOC (-37%)**
 - **Pattern**: factory `build_X_router(ctx)` + helper injection через late-bound lambda (zero behavior change)
 - **Foundation**: `src/modules/web_routers/_context.py` (RouterContext) + `src/modules/web_routers/_helpers.py` (shared helpers)
 - **Routers**: admin, assistant, browser, capabilities, commands, extras, health, inbox, memory, meta, misc, model, monitoring, openclaw, pages, policy, runtime_inspect, runtime_status, swarm, system, translator, version, voice, write + один common (см. `src/modules/web_routers/`)
+
+### command_handlers.py split (Session 27–28 — ONGOING)
+
+- **19637 → 4430 LOC (−77.4%)** через **18 waves** (Waves 1-15 в Session 27, Waves 16-18 в Session 28)
+- **Session 27** (Waves 1-15): text_utils / chat / scheduler / voice / memory / social / ai / swarm / translator / system / admin / cli / fileio / group_admin / content
+- **Session 28** (Waves 16-18): **state_commands** (clear/forget/reset/model/web/macos/browser, −1114 LOC) + **observability_commands** (watch/inbox/context/memo/bookmark/note, −711 LOC) + **memory_admin_commands** (memory recent/stats/clear/rebuild)
+- Все модули в `src/handlers/commands/` (22 файла): policy_commands.py + все extracted + `_shared.py`
 
 ### Wave 12 backlog (Session 23)
 - Cron LLM output quality (короткие/обрезанные ответы — нужно поднять reasoning depth)
@@ -718,11 +726,11 @@ Endpoints session 7 (добавлены, ~249 итого после Session 22):
 | Session 25 | **10125 collected** (~9700+ passed), 94 skipped (Phase 2 Code Splits **COMPLETE** — **25 routers extracted, 207 endpoints** через factory `build_X_router(ctx)` pattern за 50 waves Wave A→XX; +tests на routers / RouterContext / MCP userbot capabilities / peer_id_invalid handling / HTML pages router) |
 | Session 26 | **+128 tests** Smart Routing (28 chat_response_policy + 29 llm_intent_classifier + 21 feedback_tracker + 12 chat_policy_router + 11 policy_commands + 14 smart_trigger_integration). +DB corruption circuit breaker (16 tests). +Phase 2 Wave YY/ZZ — costs cluster (7) + swarm leaked (12 endpoints). +inbox dual-patch (6 pre-existing failures fixed). +launchd auto-load fix (Stop Krab.command). +session recovery (kraab.session corrupt → sqlite .recover, 380 peers preserved) |
 | Session 27 | **10561 passed**, 93 skipped, **8 pre-existing fails**, 0 hangers (pytest-timeout=30). Phase 2 command_handlers split: 19637 → 6637 LOC (**−66.2%**) через **15 waves**: text_utils / chat / scheduler / voice / memory / social / ai / swarm / translator / system / **admin** (Wave 11) / **cli** (Wave 12) / **fileio** (Wave 13) / **group_admin** (Wave 14) / **content** (Wave 15). +Dual-namespace lookup pattern (fbf3262 + 847786f). +Bug fixes: mention trigger (e1ac040), reply_to context (5cf00ec), TTS 600→1800 (2e873a9), media filter video (80221b3), sender_name group attribution (28850e4), REACTION_INVALID whitelist (1866376). +Smart Routing analyzer (22 tests, 0c7f89d). +5-layer LLM recovery 27.04. +pytest-timeout 2.4.0 + 7 hangers RCA (3ca34a0). +memory_indexer shutdown race fix (0e6337c). +subprocess hot-path 60s cache (66ae8b8) |
-| Session 28 | Environment bootstrap: multi-account Codex dev-layer для `pablito`/`USER2`/`USER3` без копирования `auth.json`, OAuth/browser profiles, Telegram sessions и `~/.openclaw`. Добавлены `scripts/sync_codex_dev_layer.py`, `/Users/Shared/Antigravity_AGENTS/Install Krab Codex Dev Layer.command`, readiness/runtime/drift `.command` launchers, `docs/MULTI_ACCOUNT_CODEX_SETUP.md`. `pablito` MCP baseline расширен до 18 servers; Sentry MCP OAuth подтверждён через Safari; `krab-telegram` MCP args исправлены после удаления устаревшего `--transport stdio`. P0 focused failures подняты до 0: **55 passed** (document/message batching/buffered/photo/analyzer). Smart Routing analyzer починен под ANSI structlog; observation: 9 decisions / 0 failed / 0 anomalies за 24ч. |
+| Session 28 | **11212 collected** (~10650+ passed), +~651 tests. Phase 2 command_handlers split продолжен: **Wave 16** state_commands (clear/forget/reset/model/web/macos/browser, −1114 LOC) + **Wave 17** observability_commands (watch/inbox/context/memo/bookmark/note, −711 LOC) + **Wave 18** memory_admin_commands (memory recent/stats/clear/rebuild). command_handlers.py **19637 → 4430 LOC (−77.4%)**, 18 waves total. +`POST /api/inbox/bulk-ack-stale` endpoint. +Bug fixes: launchd respawn-storm root cause (KeepAlive Crashed + ThrottleInterval), video media wire-up в bridge, Bug 9 (openclaw model_apply test unhang), !swarm в additional_response_chats (How2AI). Environment bootstrap: multi-account Codex dev-layer, `scripts/sync_codex_dev_layer.py`, `docs/MULTI_ACCOUNT_CODEX_SETUP.md`, pablito MCP baseline 18 servers. P0 failures → 0: 55 passed (document/message batching/buffered/photo/analyzer). Smart Routing analyzer починен под ANSI structlog. 19 commits Session 28. |
 
 <!-- BEGIN:auto-endpoints -->
 
-### Auto-generated endpoints table (253 уникальных paths на Session 25; **207 extracted в `src/modules/web_routers/`** через factory `build_X_router(ctx)` pattern — **25 routers** за 50 waves Phase 2 Wave A→XX)
+### Auto-generated endpoints table (254+ уникальных paths; **207 extracted в `src/modules/web_routers/`** через factory `build_X_router(ctx)` pattern — **25 routers** за 50 waves Phase 2 Wave A→XX; +`/api/inbox/bulk-ack-stale` Session 28)
 
 | Endpoint | Метод |
 |----------|-------|
@@ -775,6 +783,7 @@ Endpoints session 7 (добавлены, ~249 итого после Session 22):
 | `/api/health/lite` | GET |
 | `/api/hooks/sentry` | POST |
 | `/api/hooks/sentry/secret/rotate` | POST |
+| `/api/inbox/bulk-ack-stale` | POST |
 | `/api/inbox/create` | POST |
 | `/api/inbox/events` | GET |
 | `/api/inbox/items` | GET |
@@ -980,7 +989,7 @@ Endpoints session 7 (добавлены, ~249 итого после Session 22):
 
 <!-- BEGIN:auto-commands -->
 
-### Auto-generated handlers (105 команд из userbot_bridge.py; Phase 2 Waves 11-15 добавили модули: admin_commands / cli_commands / fileio_commands / group_admin_commands / content_commands в `src/handlers/commands/`)
+### Auto-generated handlers (105 команд из userbot_bridge.py; Phase 2 Waves 11-18 добавили модули: admin_commands / cli_commands / fileio_commands / group_admin_commands / content_commands / state_commands / observability_commands / memory_admin_commands в `src/handlers/commands/`)
 
 `!access`, `!acl`, `!agent`, `!alias`, `!archive`, `!ask`
 `!autodel`, `!backup`, `!bench`, `!block`, `!blocklist`, `!browser`
