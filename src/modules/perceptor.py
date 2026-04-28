@@ -19,10 +19,17 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import subprocess
+import tempfile
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
 import structlog
+
+from ..core.subprocess_env import clean_subprocess_env
 
 logger = structlog.get_logger(__name__)
 
@@ -229,6 +236,285 @@ class Perceptor:
                 }
         except Exception:
             return False
+
+
+# ---------------------------------------------------------------------------
+# Video frame extraction (Bug 5 follow-up — расширяет vision pipeline на
+# video / video_note / animation / sticker, чтобы не отвечать только по caption).
+# ---------------------------------------------------------------------------
+
+# Тип callable для опциональной vision-обёртки кадра
+FrameDescriber = Callable[[bytes, int], Awaitable[str]]
+
+# Поддерживаемые стратегии семплирования кадров
+_VALID_SAMPLE_STRATEGIES = ("uniform", "key-frames")
+
+
+def _ffmpeg_binary() -> str | None:
+    """Возвращает абсолютный путь до ffmpeg или None, если бинарь недоступен.
+
+    Используем PATH из clean_subprocess_env() — туда уже добавлены homebrew-пути,
+    что важно при запуске Krab под LaunchAgent.
+    """
+    env = clean_subprocess_env()
+    path_value = env.get("PATH", "")
+    found = shutil.which("ffmpeg", path=path_value) or shutil.which("ffmpeg")
+    return found
+
+
+def _probe_video_duration(video_path: str) -> float | None:
+    """Возвращает длительность видео в секундах через ffprobe или None при ошибке."""
+    env = clean_subprocess_env()
+    ffprobe = shutil.which("ffprobe", path=env.get("PATH", "")) or shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        result = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                video_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        raw = (result.stdout or "").strip()
+        return float(raw) if raw else None
+    except (subprocess.TimeoutExpired, ValueError, OSError):
+        return None
+
+
+def extract_video_frames(
+    video_path: str,
+    *,
+    max_frames: int = 3,
+    sample_strategy: str = "uniform",
+) -> list[bytes]:
+    """Извлекает до max_frames кадров из видео.
+
+    Args:
+        video_path: путь к видеофайлу (mp4/webm/gif/etc.)
+        max_frames: максимум кадров (>=1, hard cap)
+        sample_strategy: 'uniform' — равномерно по таймлайну,
+                         'key-frames' — только I-кадры (через select='eq(pict_type,I)')
+
+    Returns:
+        Список JPEG-байт каждого кадра. Пустой список если ffmpeg недоступен,
+        видео не существует, видео битое или strategy unknown — функция НЕ падает,
+        логирует warning и возвращает [].
+    """
+    if max_frames < 1:
+        max_frames = 1
+    if sample_strategy not in _VALID_SAMPLE_STRATEGIES:
+        logger.warning(
+            "perceptor_video_invalid_strategy",
+            strategy=sample_strategy,
+            valid=list(_VALID_SAMPLE_STRATEGIES),
+        )
+        return []
+
+    path = Path(video_path)
+    if not path.exists() or not path.is_file():
+        logger.warning("perceptor_video_file_missing", path=str(path))
+        return []
+
+    ffmpeg = _ffmpeg_binary()
+    if not ffmpeg:
+        logger.warning("perceptor_video_ffmpeg_unavailable", path=str(path))
+        return []
+
+    env = clean_subprocess_env()
+    frames: list[bytes] = []
+
+    with tempfile.TemporaryDirectory(prefix="krab_video_frames_") as tmpdir:
+        out_pattern = str(Path(tmpdir) / "frame_%03d.jpg")
+
+        if sample_strategy == "key-frames":
+            # Берём только I-кадры; ffmpeg сам ограничит выводом -frames:v
+            cmd = [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(path),
+                "-vf",
+                "select='eq(pict_type,I)'",
+                "-vsync",
+                "vfr",
+                "-frames:v",
+                str(max_frames),
+                "-q:v",
+                "3",
+                out_pattern,
+            ]
+        else:
+            # uniform: семплируем равномерно по длительности
+            duration = _probe_video_duration(str(path))
+            if duration and duration > 0.05:
+                # max_frames точек, центрированных по сегментам;
+                # при 1 кадре — берём середину, при N — равномерно с offset
+                if max_frames == 1:
+                    fps_expr = f"1/{duration:.6f}"  # один кадр за всё видео
+                else:
+                    # один кадр на каждый отрезок duration / max_frames
+                    fps_expr = f"{max_frames}/{duration:.6f}"
+                cmd = [
+                    ffmpeg,
+                    "-y",
+                    "-i",
+                    str(path),
+                    "-vf",
+                    f"fps={fps_expr}",
+                    "-frames:v",
+                    str(max_frames),
+                    "-q:v",
+                    "3",
+                    out_pattern,
+                ]
+            else:
+                # Не смогли узнать длительность (single-frame / битое probe) —
+                # просто берём первые max_frames кадра подряд. Edge case: если
+                # видео содержит ровно 1 кадр (gif/sticker), вернётся [frame_001].
+                cmd = [
+                    ffmpeg,
+                    "-y",
+                    "-i",
+                    str(path),
+                    "-frames:v",
+                    str(max_frames),
+                    "-q:v",
+                    "3",
+                    out_pattern,
+                ]
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=60,
+                env=env,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("perceptor_video_ffmpeg_timeout", path=str(path))
+            return []
+        except OSError as exc:
+            logger.warning(
+                "perceptor_video_ffmpeg_oserror",
+                path=str(path),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return []
+
+        if proc.returncode != 0:
+            stderr_tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-400:]
+            logger.warning(
+                "perceptor_video_ffmpeg_failed",
+                path=str(path),
+                rc=proc.returncode,
+                stderr_tail=stderr_tail,
+            )
+            return []
+
+        # Собираем созданные jpg в порядке имён
+        for jpg in sorted(Path(tmpdir).glob("frame_*.jpg")):
+            try:
+                frames.append(jpg.read_bytes())
+            except OSError as exc:
+                logger.warning(
+                    "perceptor_video_frame_read_failed",
+                    file=str(jpg),
+                    error=str(exc),
+                )
+            if len(frames) >= max_frames:
+                break
+
+    logger.info(
+        "perceptor_video_frames_extracted",
+        path=str(path),
+        frames=len(frames),
+        strategy=sample_strategy,
+    )
+    return frames
+
+
+async def _default_frame_describer(frame: bytes, index: int) -> str:
+    """Заглушка: описывает кадр без vision-провайдера.
+
+    Bridge может передать свой `frame_describer`, который вызовет реальный
+    OCR/image_analysis pipeline (через ту же модель что и фото).
+    """
+    return f"[видео-кадр #{index + 1}, {len(frame)} байт]"
+
+
+async def process_video_message(
+    file_path: str,
+    caption: str | None = None,
+    *,
+    max_frames: int = 3,
+    sample_strategy: str = "uniform",
+    frame_describer: FrameDescriber | None = None,
+) -> str:
+    """Возвращает агрегированный текст для feed в LLM.
+
+    Извлекает кадры → каждый прогоняется через `frame_describer`
+    (по умолчанию плейсхолдер). Caption (если есть) приклеивается сверху.
+
+    Возвращает пустую строку, если кадров нет и caption пустой —
+    чтобы вызывающий код мог решить fallback'ить или дропать.
+    """
+    describer = frame_describer or _default_frame_describer
+    caption_clean = (caption or "").strip()
+
+    frames = await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda: extract_video_frames(
+            file_path,
+            max_frames=max_frames,
+            sample_strategy=sample_strategy,
+        ),
+    )
+
+    descriptions: list[str] = []
+    for i, frame in enumerate(frames):
+        try:
+            text = await describer(frame, i)
+        except Exception as exc:
+            logger.warning(
+                "perceptor_video_describer_failed",
+                index=i,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            continue
+        text = (text or "").strip()
+        if text:
+            descriptions.append(text)
+
+    parts: list[str] = []
+    if caption_clean:
+        parts.append(f"Подпись к видео: {caption_clean}")
+    if descriptions:
+        parts.append("Содержимое видео по кадрам:")
+        parts.extend(f"  {i + 1}. {d}" for i, d in enumerate(descriptions))
+    elif not caption_clean:
+        # Видео без caption и кадры не извлеклись — пустой результат
+        return ""
+    elif not descriptions:
+        # Caption есть, но кадры пустые — даём знать LLM
+        parts.append("(визуальное содержимое видео не удалось извлечь)")
+
+    return "\n".join(parts).strip()
 
 
 # Глобальный синглтон для импорта в хендлерах
