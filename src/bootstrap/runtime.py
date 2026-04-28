@@ -19,6 +19,7 @@ from ..model_manager import model_manager
 from ..openclaw_client import openclaw_client
 from ..userbot_bridge import KraabUserbot, _telegram_send_queue
 from .db_corruption_guard import (
+    flush_wal_checkpoints,
     is_corruption_error,
     preflight_known_dbs,
     report_corruption_to_sentry,
@@ -225,11 +226,32 @@ async def run_app() -> None:
     # перед запуском userbot. Если session corrupt — quarantine + exit, чтобы
     # launchd KeepAlive=true НЕ зацикливал нас на битой базе (incident
     # 26.04.2026: 322 fatal_error events за 24h из-за corrupt kraab.session).
-    try:
-        preflight_reports = preflight_known_dbs()
-    except Exception as exc:  # noqa: BLE001 — guard не должен ронять boot
-        logger.warning("db_preflight_failed", error=str(exc))
-        preflight_reports = []
+    #
+    # Retry на transient `disk I/O error` (Sentry PYTHON-FASTAPI-5W, 28.04.2026):
+    # после быстрого restart предыдущий процесс мог не успеть flush WAL,
+    # OS возвращает disk I/O error при первом open. 0.5s sleep + 3 попытки —
+    # достаточно, чтобы кэш FS освободился. См. также `flush_wal_checkpoints()`
+    # в shutdown — он закрывает корневую причину со стороны исходящего процесса.
+    preflight_reports = []
+    for attempt in range(3):
+        try:
+            preflight_reports = preflight_known_dbs()
+            break
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "disk i/o error" in msg and attempt < 2:
+                logger.warning(
+                    "db_preflight_transient_io_error",
+                    attempt=attempt + 1,
+                    error=str(exc),
+                )
+                await asyncio.sleep(0.5)
+                continue
+            logger.warning("db_preflight_failed", error=str(exc))
+            break
+        except Exception as exc:  # noqa: BLE001 — guard не должен ронять boot
+            logger.warning("db_preflight_failed", error=str(exc))
+            break
     critical_quarantined = [
         r for r in preflight_reports if r.get("quarantined") and r.get("critical")
     ]
@@ -362,5 +384,23 @@ async def run_app() -> None:
         except Exception as stop_exc:  # noqa: BLE001
             logger.warning("kraab_stop_failed", error=str(stop_exc))
         logger.info("kraab_stopped")
+        # Принудительно flush WAL → main DB перед exit, чтобы следующий
+        # быстрый restart (launchd KeepAlive) не получил disk I/O error
+        # от не-flush'нутого WAL предыдущего процесса. Sentry incident
+        # PYTHON-FASTAPI-5W, 9 events/24h, регрессия 28.04.2026.
+        try:
+            flush_reports = flush_wal_checkpoints()
+            ok_count = sum(1 for r in flush_reports if r.get("ok"))
+            logger.info(
+                "wal_checkpoint_summary",
+                total=len(flush_reports),
+                ok=ok_count,
+            )
+        except Exception as flush_exc:  # noqa: BLE001 — shutdown не должен падать
+            logger.warning(
+                "wal_checkpoint_summary_failed",
+                error=str(flush_exc),
+                error_type=type(flush_exc).__name__,
+            )
     if network_failure is not None:
         raise network_failure

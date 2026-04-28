@@ -276,6 +276,96 @@ def preflight_known_dbs(
     return reports
 
 
+def known_wal_db_paths() -> list[Path]:
+    """
+    Список SQLite WAL-mode баз, которые надо checkpoint'ить на shutdown.
+
+    Возвращает только пути; вызов идемпотентен и без I/O.
+    Используется в `flush_wal_checkpoints()` и в тестах для верификации
+    набора (archive.db, kraab.session, runs.sqlite).
+    """
+    home = Path.home()
+    base = Path(__file__).resolve().parents[2]
+    sessions_dir = base / "data" / "sessions"
+    session_name = os.getenv("TELEGRAM_SESSION_NAME", "kraab")
+    return [
+        home / ".openclaw" / "krab_memory" / "archive.db",
+        sessions_dir / f"{session_name}.session",
+        home / ".openclaw" / "tasks" / "runs.sqlite",
+    ]
+
+
+def flush_wal_checkpoints(
+    db_paths: Iterable[Path] | None = None,
+    *,
+    timeout_sec: float = 5.0,
+) -> list[dict]:
+    """
+    Принудительно сбрасывает WAL → main DB на shutdown.
+
+    Зачем: после быстрого restart launchd может поднять новый процесс
+    раньше, чем OS успел flush'нуть WAL предыдущего → новый процесс
+    получает `disk I/O error` при попытке открыть базу (Sentry incident
+    PYTHON-FASTAPI-5W, 9 events/24h, 28.04.2026).
+
+    Стратегия:
+    - Для каждой WAL-mode базы: connect + `PRAGMA wal_checkpoint(FULL)`;
+      `FULL` гарантирует, что все committed pages переписаны в main DB,
+      но НЕ требует exclusive lock как `TRUNCATE`.
+    - Missing файл — graceful skip (для archive.db не существует на первом запуске).
+    - Per-db timeout 5s — если SQLite заблокирован, не висим бесконечно.
+    - Любое исключение → логируем и продолжаем со следующей базой.
+
+    Returns:
+        Список report-словарей: {path, ok, detail, skipped}.
+    """
+    if db_paths is None:
+        db_paths = known_wal_db_paths()
+    reports: list[dict] = []
+    for path in db_paths:
+        report: dict = {
+            "path": str(path),
+            "ok": False,
+            "detail": "",
+            "skipped": False,
+        }
+        if not path.exists():
+            report["skipped"] = True
+            report["ok"] = True
+            report["detail"] = "missing"
+            reports.append(report)
+            continue
+        try:
+            # rw-mode: wal_checkpoint требует write-доступа.
+            conn = sqlite3.connect(str(path), timeout=timeout_sec)
+            try:
+                # busy_timeout — на случай, если фоновая операция ещё держит лок.
+                conn.execute(f"PRAGMA busy_timeout = {int(timeout_sec * 1000)};")
+                cur = conn.execute("PRAGMA wal_checkpoint(FULL);")
+                row = cur.fetchone()
+                # row = (busy, log_pages, checkpointed_pages); busy=0 означает успех.
+                report["ok"] = bool(row is not None and row[0] == 0)
+                report["detail"] = str(row) if row is not None else "no_result"
+            finally:
+                conn.close()
+        except Exception as exc:  # noqa: BLE001 — shutdown не должен падать
+            report["detail"] = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "wal_checkpoint_failed",
+                path=str(path),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+        else:
+            logger.info(
+                "wal_checkpoint_ok",
+                path=str(path),
+                detail=report["detail"],
+            )
+        reports.append(report)
+    return reports
+
+
 __all__ = [
     "KnownDb",
     "is_corruption_error",
@@ -283,4 +373,6 @@ __all__ = [
     "integrity_check",
     "preflight_known_dbs",
     "report_corruption_to_sentry",
+    "known_wal_db_paths",
+    "flush_wal_checkpoints",
 ]
