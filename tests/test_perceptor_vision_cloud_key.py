@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """Тесты выбора cloud-ключа для vision и нормализации ошибок."""
 
+import pytest
+
+pytestmark = pytest.mark.live
+
 from src.modules.perceptor import Perceptor
 
 

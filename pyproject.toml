@@ -7,9 +7,11 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 timeout = 30
 timeout_method = "thread"
-addopts = "-v --tb=short --ignore=tests/tools/test_sync_krab_agent_skills.py"
+addopts = "-v --tb=short --ignore=tests/tools/test_sync_krab_agent_skills.py -m 'not live'"
 markers = [
     "wave13_skip: tests skipped в Wave 13 cleanup — pollution-sensitive, требует deeper refactor (см. backlog)",
+    "live: requires running services (LM Studio / live Telegram / Chrome / cloud key) — skipped in default run",
+    "acceptance: full acceptance gate тесты, требуют запущенного Краба",
 ]
 
 [tool.coverage.run]
