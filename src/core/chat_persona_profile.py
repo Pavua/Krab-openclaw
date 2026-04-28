@@ -798,6 +798,31 @@ def format_persona_suffix(
         profile = dict(borrowed_template)
         is_borrowed = bool(profile.get("borrowed", True))
 
+    # Feature I (Cross-Chat Transfer auto-bootstrap): если caller не передал
+    # borrowed_template и у нас нет fresh profile — пробуем подобрать похожий
+    # чат на основе stale/частичного профиля. Read-only, fail-open.
+    if not profile:
+        try:
+            from .cross_chat_transfer import bootstrap_borrowed_profile  # noqa: PLC0415
+
+            partial = store.get_profile(chat_id)
+            if partial:
+                template = bootstrap_borrowed_profile(
+                    chat_id,
+                    partial_target_profile=partial,
+                    store=store,
+                )
+                if template:
+                    profile = template
+                    is_borrowed = True
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "chat_persona_borrow_skipped",
+                chat_id=str(chat_id),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
     if not profile:
         return ""
 

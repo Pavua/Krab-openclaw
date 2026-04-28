@@ -78,6 +78,38 @@ except Exception:  # noqa: BLE001 - prometheus_client optional
     _vec_query_duration_seconds = None  # type: ignore[assignment]
 
 
+# === Feature K: Thread coherence metrics (observability-only). ===
+# Histogram score (-1..1) + counter drift events (с лейблом explicit).
+try:
+    from prometheus_client import Counter as _Counter2  # type: ignore[import-not-found]
+    from prometheus_client import Histogram as _Histogram2  # type: ignore[import-not-found]
+
+    _thread_coherence_score = _Histogram2(
+        "krab_thread_coherence_score",
+        "Thread coherence score (-1..1) — semantic similarity текущего сообщения к предыдущим",
+        buckets=(-1.0, -0.5, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+    )
+    _thread_coherence_drift_total = _Counter2(
+        "krab_thread_coherence_drift_total",
+        "Количество детектированных drift'ов в thread coherence",
+        ["explicit"],
+    )
+except Exception:  # noqa: BLE001 - prometheus_client optional
+    _thread_coherence_score = None  # type: ignore[assignment]
+    _thread_coherence_drift_total = None  # type: ignore[assignment]
+
+
+def observe_thread_coherence(score: float | None, *, drift: bool, explicit: bool) -> None:
+    """Записывает thread coherence в Prometheus (fail-safe, no-op без prom_client)."""
+    try:
+        if _thread_coherence_score is not None and score is not None:
+            _thread_coherence_score.observe(float(score))
+        if drift and _thread_coherence_drift_total is not None:
+            _thread_coherence_drift_total.labels(explicit=str(bool(explicit)).lower()).inc()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _sanitize_label(value: str) -> str:
     """Escape кавычек и переводов строк в значении label."""
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")

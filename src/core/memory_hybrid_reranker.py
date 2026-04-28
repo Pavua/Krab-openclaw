@@ -493,6 +493,36 @@ def hybrid_search(query: str, limit: int = 10) -> list[SearchResult]:
 
         top = combined[:limit]
 
+        # Feature G: расширение топ-K соседями по topic-кластеру.
+        # Берём top-3 chunks, запрашиваем дополнительные chunk_ids из тех же
+        # кластеров (до 5 шт.), создаём для них SearchResult-стабы с пометкой
+        # source='cluster_expand'. Управляется флагом окружения, default off.
+        if top and os.environ.get("KRAB_TOPIC_CLUSTER_EXPAND_ENABLED", "0") == "1":
+            try:
+                from .memory_topic_clusters import topic_cluster_index
+
+                seed_ids = [r.chunk_id for r in top[:3]]
+                extras = topic_cluster_index.expand_with_cluster(seed_ids, max_per_cluster=2)[:5]
+                if extras:
+                    existing_ids = {r.chunk_id for r in top}
+                    for cid in extras:
+                        if cid in existing_ids:
+                            continue
+                        stub = SearchResult(chunk_id=cid, rrf_score=0.0, sources=["cluster_expand"])
+                        top.append(stub)
+                        existing_ids.add(cid)
+                    logger.debug(
+                        "hybrid_cluster_expand_applied",
+                        seeds=len(seed_ids),
+                        added=len(extras),
+                    )
+            except Exception as exc:  # noqa: BLE001 - expand опционален
+                logger.debug(
+                    "hybrid_cluster_expand_skipped",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
         if top:
             placeholders = ",".join("?" * len(top))
             rows = conn.execute(

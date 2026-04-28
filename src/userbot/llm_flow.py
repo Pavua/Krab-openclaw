@@ -471,6 +471,45 @@ class LLMFlowMixin:
         from ..openclaw_client import openclaw_client
 
         _flow_start_ts = time.time()  # Точка отсчёта для auto-inject медиафайлов
+
+        # Feature K: thread coherence (observability-only — только log + metric).
+        # Не модифицируем query/ответ; помогает диагностировать когда тред
+        # «уплыл» и Krab отвечает не на ту тему. Fail-open.
+        try:
+            from ..core.chat_window_manager import chat_window_manager  # noqa: PLC0415
+            from ..core.prometheus_metrics import observe_thread_coherence  # noqa: PLC0415
+            from ..core.thread_coherence import score_thread_coherence  # noqa: PLC0415
+
+            _coh_window = chat_window_manager.get_or_create(chat_id)
+            _coh_msgs = [
+                f"{m.sender_name}: {m.content}" if m.sender_name else m.content
+                for m in _coh_window.messages[-8:]
+            ]
+            if len(_coh_msgs) >= 2 and (query or "").strip():
+                _coh_result = score_thread_coherence(_coh_msgs, query)
+                if not _coh_result.skipped:
+                    _coh_drift = _coh_result.score < 0.4
+                    observe_thread_coherence(
+                        _coh_result.score,
+                        drift=_coh_drift,
+                        explicit=_coh_result.explicit_switch,
+                    )
+                    if _coh_drift:
+                        logger.info(
+                            "thread_coherence_drift_detected",
+                            chat_id=chat_id,
+                            score=round(_coh_result.score, 3),
+                            anchor=round(_coh_result.anchor_similarity, 3),
+                            window=round(_coh_result.window_similarity, 3),
+                            explicit_switch=_coh_result.explicit_switch,
+                        )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "thread_coherence_hook_skipped",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
         full_response = ""
         full_response_raw = ""
         last_edit_time = 0.0

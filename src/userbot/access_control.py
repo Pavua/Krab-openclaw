@@ -332,6 +332,18 @@ class AccessControlMixin:
                 # format_mood_suffix сам логирует, повторно не шумим.
                 pass
 
+        # Session goals suffix (Feature J): активные цели/проекты owner'а
+        # в данном чате. Идёт ПОСЛЕ mood suffix. Fail-open.
+        if chat_id is not None:
+            try:
+                from ..core.session_goals import goal_tracker  # noqa: PLC0415
+
+                goals_suffix = goal_tracker.system_prompt_suffix(str(chat_id))
+                if goals_suffix and goals_suffix.strip() and goals_suffix.strip() not in base:
+                    base = f"{base}\n\n{goals_suffix.strip()}".strip()
+            except Exception:  # noqa: BLE001
+                pass
+
         return base
 
     # ------------------------------------------------------------------

@@ -3773,6 +3773,31 @@ class KraabUserbot(
             context_len=len(extra_context),
             max_frames=max_frames,
         )
+        # Feature E: сохраняем vision-summary в archive.db (multi-modal memory).
+        # fail-open: ошибки лишь логируются, не ломают LLM-flow.
+        try:
+            from .modules.perceptor import save_media_summary_to_archive  # noqa: PLC0415
+
+            media_type = (
+                "video"
+                if getattr(message, "video", None) is not None
+                else "video_note"
+                if getattr(message, "video_note", None) is not None
+                else "animation"
+            )
+            save_media_summary_to_archive(
+                chat_id,
+                getattr(message, "id", 0) or 0,
+                media_type,
+                extra_context,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "media_summary_archive_failed",
+                chat_id=chat_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
         return f"{extra_context}\n\n{query}".strip() if query else extra_context
 
     @staticmethod
