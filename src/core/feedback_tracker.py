@@ -22,8 +22,59 @@ import structlog
 
 from .chat_response_policy import ChatResponsePolicyStore
 from .chat_response_policy import get_store as get_policy_store
+from .user_reaction_memory import UserReactionStore
+from .user_reaction_memory import get_store as get_user_reaction_store
 
 logger = structlog.get_logger(__name__)
+
+
+def _write_response_feedback(
+    chat_id: str | int,
+    message_id: int,
+    *,
+    positive_delta: int = 0,
+    negative_delta: int = 0,
+) -> None:
+    """Зеркалит positive/negative сигнал в archive.db response_feedback (Feature A).
+
+    Best-effort: любая ошибка → debug-лог, исключений не пробрасываем
+    (feedback tracker не critical path). Импорты внутри функции, чтобы
+    не тянуть sqlite3/archive paths при инициализации модуля.
+    """
+    if positive_delta == 0 and negative_delta == 0:
+        return
+    try:
+        from .memory_archive import (
+            ArchivePaths,
+            ensure_response_feedback_table,
+            open_archive,
+            record_response_feedback,
+        )
+
+        paths = ArchivePaths.default()
+        if not paths.db.exists():
+            return
+        conn = open_archive(paths=paths, create_if_missing=False)
+        try:
+            ensure_response_feedback_table(conn)
+            record_response_feedback(
+                conn,
+                str(chat_id),
+                str(message_id),
+                positive_delta=positive_delta,
+                negative_delta=negative_delta,
+            )
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 - feedback не должен ронять userbot
+        logger.debug(
+            "response_feedback_write_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            chat_id=str(chat_id),
+            message_id=message_id,
+        )
+
 
 # Реакция/delete считается feedback'ом если within 30 min after Krab response
 FEEDBACK_WINDOW_SEC = 30 * 60
@@ -36,13 +87,20 @@ POSITIVE_REACTIONS = frozenset({"👍", "❤️", "🔥", "🎉", "👏", "💯"
 
 @dataclass
 class KrabResponse:
-    """Метаданные о Krab-ответе для последующего feedback tracking."""
+    """Метаданные о Krab-ответе для последующего feedback tracking.
+
+    target_user_id (Feature B): user_id автора сообщения, на которое Краб
+    отвечал. Используется для per-user reaction memory: реакция/удаление
+    Krab-ответа атрибутируется этому пользователю (его контекст спровоцировал
+    Краба → если ответ сочли плохим, это сигнал по нему).
+    """
 
     chat_id: str
     message_id: int
     sent_at: float
     decision_path: str  # "hard_gate" | "regex_high" | "llm_yes" | etc.
     confidence: float = 1.0
+    target_user_id: str | None = None
 
 
 class FeedbackTracker:
@@ -60,11 +118,15 @@ class FeedbackTracker:
         *,
         policy_store: ChatResponsePolicyStore | None = None,
         owner_user_id: int | None = None,
+        user_reaction_store: UserReactionStore | None = None,
     ) -> None:
         self._recent: OrderedDict[tuple[str, int], KrabResponse] = OrderedDict()
         self._lock = threading.RLock()
         self._policy_store = policy_store or get_policy_store()
         self._owner_user_id = owner_user_id
+        # Per-user reaction memory (Feature B). Опциональный — может быть
+        # подменён в тестах; в проде — singleton store.
+        self._user_reaction_store = user_reaction_store or get_user_reaction_store()
 
     def set_owner_id(self, owner_user_id: int) -> None:
         """Lazy setter — owner_id известен только после Pyrogram start()."""
@@ -117,11 +179,25 @@ class FeedbackTracker:
             chat_id=str(chat_id),
             reason=f"owner_deleted_krab_reply (decision_path={response.decision_path})",
         )
+        # Feature B: per-user reaction memory
+        if response.target_user_id:
+            try:
+                self._user_reaction_store.record_negative(response.target_user_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "feedback_user_reaction_record_failed",
+                    user_id=response.target_user_id,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+        # Feature A: per-message archive feedback
+        _write_response_feedback(chat_id, message_id, negative_delta=1)
         logger.info(
             "feedback_negative_delete",
             chat_id=str(chat_id),
             message_id=message_id,
             decision_path=response.decision_path,
+            target_user_id=response.target_user_id,
         )
         return True
 
@@ -147,11 +223,25 @@ class FeedbackTracker:
                 chat_id=str(chat_id),
                 reason=f"owner_reaction_negative_{reaction}",
             )
+            # Feature B: per-user reaction memory
+            if response.target_user_id:
+                try:
+                    self._user_reaction_store.record_negative(response.target_user_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "feedback_user_reaction_record_failed",
+                        user_id=response.target_user_id,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+            # Feature A: per-message archive feedback
+            _write_response_feedback(chat_id, message_id, negative_delta=1)
             logger.info(
                 "feedback_negative_reaction",
                 chat_id=str(chat_id),
                 message_id=message_id,
                 reaction=reaction,
+                target_user_id=response.target_user_id,
             )
             return True
         if reaction in POSITIVE_REACTIONS:
@@ -159,11 +249,25 @@ class FeedbackTracker:
                 chat_id=str(chat_id),
                 reason=f"owner_reaction_positive_{reaction}",
             )
+            # Feature B: per-user reaction memory
+            if response.target_user_id:
+                try:
+                    self._user_reaction_store.record_positive(response.target_user_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "feedback_user_reaction_record_failed",
+                        user_id=response.target_user_id,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+            # Feature A: per-message archive feedback
+            _write_response_feedback(chat_id, message_id, positive_delta=1)
             logger.info(
                 "feedback_positive_reaction",
                 chat_id=str(chat_id),
                 message_id=message_id,
                 reaction=reaction,
+                target_user_id=response.target_user_id,
             )
             return True
         return False  # neutral / unknown reaction

@@ -239,6 +239,7 @@ async def detect_smart_trigger(
     policy_store: "ChatResponsePolicyStore",
     llm_classifier: "LLMIntentClassifier | None" = None,
     has_media: bool = False,
+    user_id: str | int | None = None,
 ) -> SmartTriggerResult:
     """5-stage smart routing pipeline (Session 26 Smart Routing).
 
@@ -284,7 +285,25 @@ async def detect_smart_trigger(
         is_reply_to_explicit_msg=False,
     )
 
+    # Feature B: per-user threshold modifier из user_reaction_memory
     threshold = policy.effective_threshold()
+    user_modifier = 0.0
+    if user_id is not None:
+        try:
+            from .user_reaction_memory import get_store as _get_user_store
+
+            user_modifier = _get_user_store().get_threshold_modifier(user_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "user_reaction_modifier_failed",
+                user_id=str(user_id),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            user_modifier = 0.0
+    if user_modifier:
+        # Clamp в [0.0, 1.1] — 1.1 это эффективно «никогда» (как SILENT mode).
+        threshold = max(0.0, min(1.1, threshold + user_modifier))
 
     # High confidence regex score → respond
     if legacy.score >= 0.6 and legacy.trigger_type != TriggerType.NONE:
