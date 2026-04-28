@@ -47,6 +47,20 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     # дропаем оставшийся шум, который генерируется внутри pyrogram-фоновых
     # задач уже после client.stop() и не подавляется нашим try/except.
     "Cannot operate on a closed database",
+    # Session 28: chat-level баны и slowmode-ограничения. Это ожидаемые
+    # ответы Telegram, а не runtime-баги — chat_ban_cache их уже обрабатывает
+    # (mark_banned + silent skip incoming). Не нужно слать в Sentry повторно.
+    # См. src/core/chat_ban_cache.py + Sentry issues PYTHON-FASTAPI-6J/6H.
+    "USER_BANNED_IN_CHANNEL",
+    "UserBannedInChannel",
+    "ChatWriteForbidden",
+    "You are limited from sending messages",
+    # Pyrogram storage race на client.start() / restart_userbot: внутренний
+    # Session-task возвращает None где ожидается int, и AttributeError
+    # 'NoneType' object has no attribute 'to_bytes' всплывает из глубин
+    # pyrogram. Это race между peer DC resolve и storage close — runtime
+    # сам recovery'ится через retry. См. Sentry PYTHON-FASTAPI-6G.
+    "'NoneType' object has no attribute 'to_bytes'",
 )
 
 

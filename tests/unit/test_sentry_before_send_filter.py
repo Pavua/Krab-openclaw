@@ -93,3 +93,88 @@ def test_before_send_router_not_configured_via_extra_error_code() -> None:
     """extra.error_code='router_not_configured' → drop."""
     event = {"extra": {"error_code": "router_not_configured"}}
     assert _before_send(event, {}) is None
+
+
+# ── Session 28: USER_BANNED + slowmode + pyrogram NoneType.to_bytes race ──
+
+
+def test_before_send_drops_user_banned_in_channel_exception() -> None:
+    """Pyrogram UserBannedInChannel — chat_ban_cache уже обрабатывает, Sentry не нужен."""
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "UserBannedInChannel",
+                    "value": "Telegram says: [400 USER_BANNED_IN_CHANNEL]",
+                },
+            ]
+        }
+    }
+    assert _before_send(event, {}) is None
+
+
+def test_before_send_drops_user_banned_message_marker() -> None:
+    """logger.error со строкой USER_BANNED_IN_CHANNEL → drop."""
+    event = {"message": "background_ai_request_failed: USER_BANNED_IN_CHANNEL"}
+    assert _before_send(event, {}) is None
+
+
+def test_before_send_drops_chat_write_forbidden() -> None:
+    """ChatWriteForbidden — slowmode/permissions, не runtime bug."""
+    event = {
+        "exception": {
+            "values": [
+                {"type": "ChatWriteForbidden", "value": "ChatWriteForbidden"},
+            ]
+        }
+    }
+    assert _before_send(event, {}) is None
+
+
+def test_before_send_drops_slowmode_limited_message() -> None:
+    """SlowmodeWait / 'You are limited from sending messages' — temporary, drop."""
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "BadRequest",
+                    "value": "You are limited from sending messages for 30 seconds",
+                },
+            ]
+        }
+    }
+    assert _before_send(event, {}) is None
+
+
+def test_before_send_drops_pyrogram_nonetype_to_bytes_race() -> None:
+    """Pyrogram race: AttributeError 'NoneType' object has no attribute 'to_bytes'.
+
+    Происходит при rapid restart_userbot когда внутренний Session-task возвращает
+    None в storage layer. Не runtime bug — pyrogram recovery'ится через retry.
+    """
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "AttributeError",
+                    "value": "'NoneType' object has no attribute 'to_bytes'",
+                },
+            ]
+        }
+    }
+    assert _before_send(event, {}) is None
+
+
+def test_before_send_keeps_real_attribute_error() -> None:
+    """Обычный AttributeError (не to_bytes race) должен проходить."""
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "AttributeError",
+                    "value": "'NoneType' object has no attribute 'username'",
+                },
+            ]
+        }
+    }
+    assert _before_send(event, {}) is event
