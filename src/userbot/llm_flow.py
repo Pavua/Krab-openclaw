@@ -1399,6 +1399,44 @@ class LLMFlowMixin:
             # Bug 9 (Session 28): срезаем паразитные «если хочешь, могу...»
             # фразы. Идемпотентно, не трогает кавычки/code-block.
             full_response = self._strip_phrase_parasites(full_response)
+
+            # Feature H (Session 28): Self-Correction Loop. Cheap-model
+            # проверяет ответ на галлюцинации/противоречия. Default OFF
+            # (lenient mode логирует issues и пропускает дальше). Strict mode
+            # подменяет ответ на suggested_fix если cheap-model его дал.
+            try:
+                from ..core import self_correction as _sc
+
+                if _sc.is_enabled() and full_response:
+                    _corrector = _sc.get_self_corrector()
+                    _correction = await _corrector.check_response(
+                        question=query, answer=full_response
+                    )
+                    if not _correction.skipped and not _correction.ok:
+                        logger.warning(
+                            "self_correction_issue",
+                            chat_id=chat_id,
+                            issues=_correction.issues,
+                            latency_ms=_correction.latency_ms,
+                            strict=_sc.is_strict(),
+                            applied_fix=False,
+                        )
+                        if _sc.is_strict() and _correction.suggested_fix:
+                            logger.info(
+                                "self_correction_fix_applied",
+                                chat_id=chat_id,
+                                old_len=len(full_response),
+                                new_len=len(_correction.suggested_fix),
+                            )
+                            full_response = _correction.suggested_fix
+            except Exception as _sc_exc:  # noqa: BLE001
+                logger.warning(
+                    "self_correction_hook_failed",
+                    chat_id=chat_id,
+                    error=str(_sc_exc),
+                    error_type=type(_sc_exc).__name__,
+                )
+
             self._remember_hidden_reasoning_trace(
                 chat_id=chat_id,
                 query=query,
