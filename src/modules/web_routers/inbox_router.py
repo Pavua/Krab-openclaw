@@ -228,6 +228,44 @@ def build_inbox_router(ctx: RouterContext) -> APIRouter:
             "summary": workflow.get("summary") or {},
         }
 
+    @router.post("/api/inbox/bulk-ack-stale")
+    async def inbox_bulk_ack_stale(
+        payload: dict[str, Any] = Body(default_factory=dict),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """
+        Массово ack-ает stale `open` items по фильтрам kind/severity/age.
+
+        Создан как ответ на ситуацию: Agent S починил dedupe для новых cron
+        events, но старые `proactive_action` продолжают висеть. Endpoint
+        даёт безопасный bulk-cleanup без поштучного `set_item_status`.
+        """
+        ctx.assert_write_access(x_krab_web_key, token)
+        kind = payload.get("kind")
+        severity = payload.get("severity")
+        try:
+            age_threshold_hours = int(payload.get("age_threshold_hours") or 12)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="inbox_invalid_age_threshold") from exc
+        dry_run = bool(payload.get("dry_run", False))
+        actor = str(payload.get("actor") or "owner-ui").strip().lower() or "owner-ui"
+        note = str(payload.get("note") or "").strip()
+        target_status = str(payload.get("target_status") or "acked").strip().lower() or "acked"
+        try:
+            result = inbox_service.bulk_acknowledge_stale(
+                kind=str(kind).strip() if kind else None,
+                severity=str(severity).strip() if severity else None,
+                age_threshold_hours=age_threshold_hours,
+                dry_run=dry_run,
+                actor=actor,
+                note=note,
+                target_status=target_status,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "result": result}
+
     @router.post("/api/inbox/create")
     async def inbox_create(
         payload: dict[str, Any] = Body(default_factory=dict),

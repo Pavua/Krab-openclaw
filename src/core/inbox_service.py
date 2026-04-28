@@ -605,6 +605,130 @@ class InboxService:
             "details": details,
         }
 
+    def bulk_acknowledge_stale(
+        self,
+        *,
+        kind: str | None = None,
+        severity: str | None = None,
+        age_threshold_hours: int = 12,
+        dry_run: bool = False,
+        actor: str = "system-cleanup",
+        note: str = "",
+        target_status: str = "acked",
+    ) -> dict[str, Any]:
+        """
+        Массово подтверждает (или закрывает) stale `open` items по фильтрам.
+
+        Зачем: Agent S исправил dedupe для **новых** cron events, но старые
+        stale_open items (например, 27 `proactive_action`) продолжают висеть в
+        owner inbox. Этот helper даёт безопасный bulk-ack, чтобы не закрывать
+        каждый item вручную через `set_item_status`.
+
+        Args:
+            kind: Опциональный фильтр по `kind` (например, `proactive_action`).
+            severity: Опциональный фильтр по severity (`info`/`warning`/`error`).
+            age_threshold_hours: Минимальный возраст (по `created_at_utc`).
+            dry_run: Если True — только возвращает кандидатов, без изменений.
+            actor: Актор для workflow event.
+            note: Заметка для workflow event.
+            target_status: Финальный статус (`acked` для подтверждения,
+                либо `done`/`cancelled`).
+
+        Returns:
+            ``{"matched": N, "acked": M, "items": [...], "dry_run": bool}``
+        """
+        normalized_target = self._normalize_status(target_status)
+        if normalized_target not in {"acked", "done", "cancelled"}:
+            raise ValueError("inbox_invalid_bulk_ack_target")
+
+        normalized_kind = (str(kind).strip().lower() or None) if kind else None
+        normalized_severity = (str(severity).strip().lower() or None) if severity else None
+        if normalized_severity and normalized_severity not in self._allowed_severities:
+            raise ValueError("inbox_invalid_severity")
+
+        threshold_hours = max(0, int(age_threshold_hours or 0))
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=threshold_hours)
+
+        items = self._load_items()
+        matched: list[InboxItem] = []
+        for item in items:
+            if item.status != "open":
+                continue
+            if normalized_kind and item.kind != normalized_kind:
+                continue
+            if normalized_severity and item.severity != normalized_severity:
+                continue
+            activity_at = self._parse_item_activity_at(item)
+            if activity_at is None:
+                continue
+            if activity_at > cutoff:
+                continue
+            matched.append(item)
+
+        if dry_run:
+            return {
+                "matched": len(matched),
+                "acked": 0,
+                "items": [item.to_dict() for item in matched],
+                "dry_run": True,
+                "target_status": normalized_target,
+            }
+
+        if not matched:
+            return {
+                "matched": 0,
+                "acked": 0,
+                "items": [],
+                "dry_run": False,
+                "target_status": normalized_target,
+            }
+
+        normalized_actor = str(actor or "system-cleanup").strip().lower() or "system-cleanup"
+        now_iso = _now_utc_iso()
+        normalized_note = str(note or "").strip() or f"bulk_ack_stale_{normalized_target}"
+        acked_payloads: list[dict[str, Any]] = []
+        matched_ids = {item.item_id for item in matched}
+        for item in items:
+            if item.item_id not in matched_ids:
+                continue
+            item.status = normalized_target
+            item.updated_at_utc = now_iso
+            metadata = self._normalize_metadata(item.metadata)
+            metadata["last_action_actor"] = normalized_actor
+            metadata["last_action_status"] = normalized_target
+            metadata["last_action_at_utc"] = now_iso
+            metadata["last_action_note"] = normalized_note
+            if normalized_target in self._closed_statuses:
+                metadata["resolved_at_utc"] = now_iso
+                metadata["resolved_by"] = normalized_actor
+                metadata["resolution_note"] = normalized_note
+            item.metadata = self._append_workflow_event(
+                metadata,
+                action="bulk_ack_stale",
+                actor=normalized_actor,
+                status=normalized_target,
+                note=normalized_note,
+            )
+            acked_payloads.append(item.to_dict())
+
+        self._save_items(items)
+        logger.info(
+            "inbox_bulk_ack_stale",
+            matched=len(matched),
+            acked=len(acked_payloads),
+            kind=normalized_kind or "",
+            severity=normalized_severity or "",
+            age_threshold_hours=threshold_hours,
+            target_status=normalized_target,
+        )
+        return {
+            "matched": len(matched),
+            "acked": len(acked_payloads),
+            "items": acked_payloads,
+            "dry_run": False,
+            "target_status": normalized_target,
+        }
+
     def _build_summary(self, items: list[InboxItem]) -> dict[str, Any]:
         """Собирает owner-facing summary из уже загруженного набора item-ов."""
         open_items = [item for item in items if item.status in self._open_statuses]
