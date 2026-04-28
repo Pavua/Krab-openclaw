@@ -46,6 +46,7 @@ from .core.operator_identity import build_trace_id
 from .core.proactive_watch import proactive_watch
 from .core.routing_errors import RouterError, user_message_for_surface
 from .core.scheduler import krab_scheduler
+from .core.sender_context import _extract_forward_origin_parts
 from .core.silence_mode import silence_manager
 from .core.silence_schedule import silence_schedule_manager
 from .core.spam_filter import is_bulk_sender as _is_bulk_sender_ext
@@ -2950,7 +2951,13 @@ class KraabUserbot(
                     else [],
                     "parts_count": 1,
                 }
-            updated = await self._safe_edit(temp_message, placeholder)
+            # Bug 4 guard: temp_message может совпадать с входящим чужим сообщением
+            # (в группах при is_self=False и _show_progress_notices=False). Edit чужого
+            # сообщения вернёт 403 MESSAGE_AUTHOR_REQUIRED, поэтому отвечаем reply'ем.
+            if temp_message is source_message:
+                updated = await self._safe_reply_or_send_new(source_message, placeholder)
+            else:
+                updated = await self._safe_edit(temp_message, placeholder)
             return {
                 "delivery_mode": "placeholder_only",
                 "text_message_ids": [str(getattr(updated, "id", "") or "")]
@@ -3010,7 +3017,13 @@ class KraabUserbot(
                 "parts_count": len(parts),
             }
 
-        temp_message = await self._safe_edit(temp_message, parts[0])
+        # Bug 4 guard: тот же случай для основного пути доставки — edit чужого
+        # сообщения недопустим, fallback на reply вместо edit.
+        if temp_message is source_message:
+            first_msg = await self._safe_reply_or_send_new(source_message, parts[0])
+        else:
+            first_msg = await self._safe_edit(temp_message, parts[0])
+        temp_message = first_msg
         if getattr(temp_message, "id", None):
             delivered_ids.append(str(temp_message.id))
         for part in parts[1:]:
@@ -3592,6 +3605,11 @@ class KraabUserbot(
         return "MESSAGE_ID_INVALID" in str(exc).upper()
 
     @staticmethod
+    def _is_message_author_required_error(exc: Exception) -> bool:
+        """Определяет 403 MESSAGE_AUTHOR_REQUIRED при попытке edit чужого сообщения."""
+        return "MESSAGE_AUTHOR_REQUIRED" in str(exc).upper()
+
+    @staticmethod
     def _is_message_empty_error(exc: Exception) -> bool:
         """Определяет ошибку Telegram при попытке отправить/отредактировать пустой текст."""
         return "MESSAGE_EMPTY" in str(exc).upper()
@@ -3760,6 +3778,25 @@ class KraabUserbot(
                 return msg
             if self._is_message_id_invalid_error(exc) or self._is_message_empty_error(exc):
                 logger.warning("telegram_edit_fallback_send_new", error=str(exc))
+                return await _telegram_send_queue.run(
+                    chat_id, lambda: self.client.send_message(chat_id, _text)
+                )
+            if self._is_message_author_required_error(exc):
+                # Bug 4 defense-in-depth: на случай, если guard в _deliver_response_parts
+                # был обойдён — отправляем как reply на исходное сообщение.
+                logger.warning(
+                    "telegram_edit_author_required_fallback_reply",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                msg_id = getattr(msg, "id", None)
+                if msg_id:
+                    return await _telegram_send_queue.run(
+                        chat_id,
+                        lambda: self.client.send_message(
+                            chat_id, _text, reply_to_message_id=msg_id
+                        ),
+                    )
                 return await _telegram_send_queue.run(
                     chat_id, lambda: self.client.send_message(chat_id, _text)
                 )
@@ -4981,22 +5018,14 @@ class KraabUserbot(
             # буферизуем в ForwardBatchBuffer — дожидаемся конца пачки (5s окно)
             # и обрабатываем всё одним LLM-запросом с per-sender attribution.
             # Команды (!) и self-сообщения не буферизуем.
+            _fwd_from, _fwd_name, _fwd_from_chat = _extract_forward_origin_parts(message)
             _is_fwd_message = bool(
-                not is_command
-                and not is_self
-                and (
-                    getattr(message, "forward_from", None) is not None
-                    or getattr(message, "forward_sender_name", None) is not None
-                    or getattr(message, "forward_from_chat", None) is not None
-                )
+                not is_command and not is_self and any([_fwd_from, _fwd_name, _fwd_from_chat])
             )
             if _is_fwd_message and message.text:
                 from .core.message_batcher import PendingMessage, message_batcher  # noqa: PLC0415
 
-                # Извлекаем данные об оригинальном отправителе
-                _fwd_from = getattr(message, "forward_from", None)
-                _fwd_name = getattr(message, "forward_sender_name", None) or ""
-                _fwd_from_chat = getattr(message, "forward_from_chat", None)
+                # Извлекаем данные об оригинальном отправителе через единый compat-layer.
                 if _fwd_from is not None:
                     _fwd_uname = str(getattr(_fwd_from, "username", "") or "")
                     _fwd_display = (
