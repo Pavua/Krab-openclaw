@@ -134,7 +134,9 @@ class ToolPattern:
                 avg_cost_usd=float(raw.get("avg_cost_usd") or 0.0),
                 last_used_at=str(raw.get("last_used_at") or ""),
                 recent_latencies_ms=[
-                    float(x) for x in (raw.get("recent_latencies_ms") or []) if isinstance(x, (int, float))
+                    float(x)
+                    for x in (raw.get("recent_latencies_ms") or [])
+                    if isinstance(x, (int, float))
                 ],
             )
         except (TypeError, ValueError):
@@ -227,7 +229,9 @@ class ToolCompositionMemory:
                 pattern.fail_count += 1
             n_new = n_prev + 1
             if latency_ms > 0:
-                pattern.avg_latency_ms = (pattern.avg_latency_ms * n_prev + float(latency_ms)) / n_new
+                pattern.avg_latency_ms = (
+                    pattern.avg_latency_ms * n_prev + float(latency_ms)
+                ) / n_new
                 pattern.recent_latencies_ms.append(float(latency_ms))
                 if len(pattern.recent_latencies_ms) > 20:
                     pattern.recent_latencies_ms = pattern.recent_latencies_ms[-20:]
@@ -413,5 +417,3 @@ __all__ = [
     "ToolPattern",
     "tool_composition_memory",
 ]
-
-
