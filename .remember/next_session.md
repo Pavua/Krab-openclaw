@@ -2,13 +2,14 @@
 
 ## Status snapshot
 
-- Branch: `fix/daily-review-20260421` — **571 commits ahead of main** (Sessions 24-28 непрерывно), branch behind 1 (merge-base `6cba5b6`)
-- **Krab production live** — restart выполнен с новой launchd policy, plist sync'нут в repo
-- Phase 2 command_handlers split: 19637 → **5523 LOC** (−71.9%) через **16 waves** (Wave 16 в Session 28: state_commands, −1114 LOC)
+- Branch: `fix/daily-review-20260421` — **575+ commits ahead of main** (Sessions 24-28 непрерывно), branch behind 1 (merge-base `6cba5b6`)
+- **Krab production live** — два рестарта выполнены (17:52 + 18:09), новая launchd policy применена, plist sync'нут в repo
+- Phase 2 command_handlers split: 19637 → **4824 LOC** (**−75.5%**) через **17 waves** (Session 28: Wave 16 state_commands −1114, Wave 17 observability_commands −711)
 - Sentry root-cause фиксы deployed (PYTHON-FASTAPI-Z/1/5W/5X/6E)
-- 14 коммитов Session 28 + 3 carry-over (multi-account Codex / docs / focused regressions)
+- Inbox cleanup: stale 31 → 4, attention 10 → 1
+- **19 коммитов Session 28** + 3 carry-over
 
-## Session 28 wins (15 коммитов)
+## Session 28 wins (Part 1 — 15 commits до restart 1)
 
 | Commit | Tag | Что |
 |---|---|---|
@@ -25,9 +26,27 @@
 | `4b916b8` | feat | swarm wire-up: !swarm в additional_response_chats отвечает в тот же чат |
 | `0bb8318` | refactor | Phase 2 Wave 16 — state_commands (clear/forget/reset/model/web/macos/browser) −1114 LOC |
 
+## Session 28 wins (Part 2 — 4 commits после restart 1, до restart 2)
+
+| Commit | Tag | Что |
+|---|---|---|
+| `f1ea08e` | feat | inbox bulk-ack helper + endpoint `/api/inbox/bulk-ack-stale` + CLI `scripts/inbox_bulk_ack.py` (Agent U) |
+| `29527c3` | feat | bridge: wire `process_video_message` для video/video_note/animation (Agent T, +165 LOC) |
+| `02929a2` | fix | tests: unhang openclaw model_apply (8s→0.01s) + align mark_failed emoji 👎 (Bug 8 fixture) |
+| `aa34885` | refactor | Phase 2 Wave 17 — observability_commands (watch/inbox/context/memo/bookmark/note) −711 LOC |
+
+Inbox cleanup execution:
+```bash
+venv/bin/python scripts/inbox_bulk_ack.py --age-hours 24 --kind proactive_action --severity warning --target done --note "Session 28 stale cleanup"
+venv/bin/python scripts/inbox_bulk_ack.py --age-hours 24 --kind proactive_action --severity info --target acked --note "Session 28 stale cleanup"
+```
+Result: stale 31 → 4, attention 10 → 1, остались только 2 actionable (owner_task + approval).
+
 Manual ops:
 - `~/Library/LaunchAgents/ai.krab.signal-ops-guard.plist` → `.disabled.session28` (broken: запускал несуществующий script, 28МБ stderr/3 weeks)
 - launchctl bootout/bootstrap `ai.krab.core` для активации новой KeepAlive policy
+- Restart 1 (17:52): применил коммиты ed35081..0bb8318
+- Restart 2 (18:09): применил коммиты f1ea08e..aa34885
 
 ## Sentry root-cause map
 
@@ -52,6 +71,16 @@ Manual ops:
 - **memory_doctor** покрывает 12 db (session/cache/tasks/archive)
 - **swarm-в-группу** infra ready, How2AI требует только entry в `swarm_channels.json`
 - **state_commands** module extracted (16 modules now в `src/handlers/commands/`)
+
+## Wave 18+ backlog (из Wave 17 отчёта)
+
+`command_handlers.py` ~4824 LOC осталось:
+- **Wave 18** — memory_admin_commands (~400 LOC): handle_memory + 4 private subhandlers + 4 collect helpers + format_memory_stats
+- **Wave 19** — crypto_commands (~150 LOC): encrypt/decrypt + _derive_key + _xor_crypt
+- **Wave 20** — knowledge_commands (~700 LOC): weather/define/urban/news/currency/convert/color/emoji/qr
+- **Wave 21** — diagnostic_commands (~остальное): bench/screenshot/eval/run/time/typing/link/say/listen/filter/chado/e2e_smoke
+
+Также остались: handle_shop, handle_confirm, handle_help, _swarm_status_deep_report (multi-use), _reply_tech.
 
 ## Session 29 priorities
 
