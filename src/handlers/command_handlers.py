@@ -16,7 +16,6 @@ import pathlib
 import re
 import subprocess
 import sys
-import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -46,7 +45,7 @@ from ..core.openclaw_runtime_models import (
 )
 from ..core.openclaw_workspace import (
     append_workspace_memory_entry,
-    list_workspace_memory_entries,
+    list_workspace_memory_entries,  # noqa: F401  # patch surface (memory_admin_commands tests)
     recall_workspace_memory,  # noqa: F401  # re-export для тестов (Phase 2)
 )
 from ..core.proactive_watch import (
@@ -491,6 +490,18 @@ from .commands.observability_commands import (  # noqa: E402, F401  # Phase 2 Wa
     handle_note,
     handle_watch,
 )
+from .commands.memory_admin_commands import (  # noqa: E402, F401  # Phase 2 Wave 18
+    _ARCHIVE_DB_PATH_FOR_CLEAR,
+    _collect_memory_archive_stats,
+    _collect_memory_indexer_stats,
+    _collect_memory_validator_stats,
+    _fmt_int_ru,
+    _handle_memory_clear,
+    _handle_memory_rebuild,
+    _handle_memory_stats,
+    format_memory_stats,
+    handle_memory,
+)
 from .commands.content_commands import (  # noqa: E402, F401  # Phase 2 Wave 15
     _BACKUP_FILES,
     _SNIPPETS_FILE,
@@ -720,412 +731,8 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 # Re-exported below.
 
 
-async def handle_memory(bot: "KraabUserbot", message: Message) -> None:
-    """
-    Команды работы с общей памятью и Memory Layer архивом.
-
-    Поддерживаемые субкоманды:
-    - `!memory recent [source_filter]` — последние записи workspace-памяти;
-    - `!memory stats` — агрегированная статистика по archive.db / indexer / validator;
-    - `!memory clear` — preview чатов в archive.db;
-    - `!memory clear --chat=<id> [--confirm]` — selective delete по чату;
-    - `!memory clear --before=YYYY-MM-DD [--confirm]` — delete old messages;
-    - `!memory rebuild` — запуск repair_sqlite_vec.py для починки FTS5 + vec_chunks.
-    """
-    raw_args = str(message.text or "").split(maxsplit=2)
-    action = raw_args[1].strip().lower() if len(raw_args) > 1 else "recent"
-    rest = raw_args[2].strip() if len(raw_args) > 2 else ""
-
-    if action == "stats":
-        del bot
-        await _handle_memory_stats(message)
-        return
-
-    if action == "clear":
-        # Owner-only: деструктивная операция
-        me_id = getattr(getattr(bot, "me", None), "id", None)
-        sender_id = getattr(getattr(message, "from_user", None), "id", None)
-        if me_id is None or sender_id != me_id:
-            await message.reply("🚫 `!memory clear` доступен только владельцу.")
-            return
-        await _handle_memory_clear(message, rest)
-        return
-
-    if action == "rebuild":
-        # Owner-only: запускает repair_sqlite_vec.py
-        me_id = getattr(getattr(bot, "me", None), "id", None)
-        sender_id = getattr(getattr(message, "from_user", None), "id", None)
-        if me_id is None or sender_id != me_id:
-            await message.reply("🚫 `!memory rebuild` доступен только владельцу.")
-            return
-        del bot
-        await _handle_memory_rebuild(message)
-        return
-
-    del bot
-    source_filter = rest
-
-    if action != "recent":
-        raise UserInputError(
-            user_message=(
-                "🧠 Формат: `!memory recent [source_filter]` | `!memory stats`"
-                " | `!memory clear` | `!memory rebuild`"
-            )
-        )
-
-    rows = list_workspace_memory_entries(limit=8, source_filter=source_filter)
-    if not rows:
-        await message.reply("🧠 В общей памяти пока нет подходящих записей.")
-        return
-    lines = ["🧠 **Последние записи общей памяти**"]
-    for item in rows:
-        author_suffix = f":{item['author']}" if item.get("author") else ""
-        lines.append(
-            f"- `{item['date']} {item['time']}` [{item['source']}{author_suffix}] {item['text']}"
-        )
-    await message.reply("\n".join(lines))
-
-
-async def _handle_memory_stats(message: Message) -> None:
-    """Собирает архив/индексер/валидатор статистику и отправляет reply."""
-    archive_stats = _collect_memory_archive_stats()
-    indexer_stats = _collect_memory_indexer_stats()
-    validator_stats = _collect_memory_validator_stats()
-    reply = format_memory_stats(archive_stats, indexer_stats, validator_stats)
-    await message.reply(reply)
-
-
-async def _handle_memory_clear(message: Message, args_str: str) -> None:
-    """Selective cleanup archive.db — по чату или по дате.
-
-    Форматы:
-        !memory clear                              — preview чатов (топ 20)
-        !memory clear --chat=<id>                  — показать сколько удалится
-        !memory clear --chat=<id> --confirm        — удалить
-        !memory clear --before=YYYY-MM-DD          — показать сколько удалится
-        !memory clear --before=YYYY-MM-DD --confirm — удалить
-    """
-    import re
-    from datetime import datetime
-
-    from ..core.reset_helpers import (
-        clear_archive_db_for_chat,
-        delete_archive_messages_before,
-        list_archive_chats,
-    )
-
-    db_path = _ARCHIVE_DB_PATH_FOR_CLEAR
-    if not db_path.exists():
-        await message.reply("📭 Archive не существует — нечего удалять.")
-        return
-
-    chat_match = re.search(r"--chat=(\S+)", args_str)
-    before_match = re.search(r"--before=(\d{4}-\d{2}-\d{2})", args_str)
-    confirm = "--confirm" in args_str
-
-    # --- Preview mode: список чатов ---
-    if not chat_match and not before_match:
-        chats = list_archive_chats(db_path=db_path, limit=20)
-        try:
-            import sqlite3 as _sq3
-
-            with _sq3.connect(f"file:{db_path}?mode=ro", uri=True) as _c:
-                total = _c.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-        except Exception:  # noqa: BLE001
-            total = sum(r["message_count"] for r in chats)
-
-        lines = [f"🧠 **Archive preview** — {_fmt_int_ru(total)} total messages\n"]
-        if chats:
-            lines.append("**Топ чатов:**")
-            for row in chats:
-                title_s = (row["title"] or f"chat_{row['chat_id']}")[:40]
-                lines.append(
-                    f"• `{row['chat_id']}` → {title_s}: {_fmt_int_ru(row['message_count'])} msgs"
-                )
-        else:
-            lines.append("_(чаты не найдены)_")
-        lines.append("\n**Использование:**")
-        lines.append("• `!memory clear --chat=<id> --confirm`")
-        lines.append("• `!memory clear --before=YYYY-MM-DD --confirm`")
-        await message.reply("\n".join(lines))
-        return
-
-    # --- Dry-run: предупреждение без --confirm ---
-    if not confirm:
-        if chat_match:
-            chat_id = chat_match.group(1)
-            from ..core.reset_helpers import count_archive_messages_for_chat
-
-            count = count_archive_messages_for_chat(chat_id, db_path=db_path)
-            await message.reply(
-                f"⚠️ Будет удалено **{_fmt_int_ru(count)}** сообщений для чата `{chat_id}`.\n"
-                f"Добавьте `--confirm` для подтверждения."
-            )
-        else:
-            date_str = before_match.group(1)  # type: ignore[union-attr]
-            try:
-                cutoff_ts = int(datetime.strptime(date_str, "%Y-%m-%d").timestamp())
-            except ValueError:
-                await message.reply(f"❌ Неверный формат даты: `{date_str}`. Ожидается YYYY-MM-DD.")
-                return
-            import sqlite3 as _sq3
-
-            try:
-                with _sq3.connect(f"file:{db_path}?mode=ro", uri=True) as _c:
-                    count = _c.execute(
-                        "SELECT COUNT(*) FROM messages WHERE date < ?", (cutoff_ts,)
-                    ).fetchone()[0]
-            except Exception:  # noqa: BLE001
-                count = 0
-            await message.reply(
-                f"⚠️ Будет удалено **{_fmt_int_ru(count)}** сообщений старше `{date_str}`.\n"
-                f"Добавьте `--confirm` для подтверждения."
-            )
-        return
-
-    # --- Confirmed delete ---
-    try:
-        if chat_match:
-            chat_id = chat_match.group(1)
-            deleted = clear_archive_db_for_chat(chat_id, db_path=db_path)
-            await message.reply(
-                f"🗑️ Удалено **{_fmt_int_ru(deleted)}** сообщений чата `{chat_id}` из archive.db.\n"
-                f"_(chunks + chunk_messages тоже очищены)_"
-            )
-        else:
-            date_str = before_match.group(1)  # type: ignore[union-attr]
-            try:
-                cutoff_ts = int(datetime.strptime(date_str, "%Y-%m-%d").timestamp())
-            except ValueError:
-                await message.reply(f"❌ Неверный формат даты: `{date_str}`. Ожидается YYYY-MM-DD.")
-                return
-            deleted = delete_archive_messages_before(cutoff_ts, db_path=db_path)
-            await message.reply(
-                f"🗑️ Удалено **{_fmt_int_ru(deleted)}** сообщений старше `{date_str}` из archive.db.\n"
-                f"_(осиротевшие chunks тоже очищены)_"
-            )
-    except Exception as exc:  # noqa: BLE001
-        await message.reply(f"❌ Ошибка при очистке archive: {exc}")
-
-
-_REPAIR_SCRIPT_RELPATH = pathlib.Path("scripts") / "repair_sqlite_vec.py"
-_MEMORY_REBUILD_TIMEOUT = 60.0  # секунд
-
-
-async def _handle_memory_rebuild(message: Message) -> None:
-    """Запускает repair_sqlite_vec.py в фоне и возвращает результат в reply.
-
-    Предупреждает: во время repair FTS/vec retrieval может быть нестабилен ~20s.
-    """
-    from ..core.subprocess_env import clean_subprocess_env  # noqa: PLC0415
-
-    krab_root = pathlib.Path.home() / "Antigravity_AGENTS" / "Краб"
-    script_path = krab_root / _REPAIR_SCRIPT_RELPATH
-
-    if not script_path.exists():
-        await message.reply(f"❌ Script not found: {_REPAIR_SCRIPT_RELPATH}")
-        return
-
-    await message.reply(
-        "🔄 Запускаю repair sqlite-vec... (~20s)\n"
-        "⚠️ На время repair retrieval memory может быть нестабилен."
-    )
-
-    t0 = time.monotonic()
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            str(script_path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=str(krab_root),
-            env=clean_subprocess_env(),
-        )
-        try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_MEMORY_REBUILD_TIMEOUT)
-        except asyncio.TimeoutError:
-            if proc.returncode is None:
-                try:
-                    proc.terminate()
-                except ProcessLookupError:
-                    pass
-                else:
-                    # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
-                    try:
-                        await asyncio.wait_for(proc.wait(), timeout=2.0)
-                    except asyncio.TimeoutError:
-                        try:
-                            proc.kill()
-                        except ProcessLookupError:
-                            pass
-                        try:
-                            await asyncio.wait_for(proc.wait(), timeout=1.0)
-                        except asyncio.TimeoutError:
-                            logger.warning(
-                                "openclaw_cli_force_killed_but_no_reap",
-                                pid=proc.pid,
-                            )
-            elapsed = time.monotonic() - t0
-            await message.reply(f"⚠️ Repair timeout после {elapsed:.0f}s. Проверь лог вручную.")
-            logger.warning("memory_rebuild_timeout", elapsed=elapsed)
-            return
-    except Exception as exc:  # noqa: BLE001
-        import traceback as _tb
-
-        logger.error(
-            "memory_rebuild_launch_error",
-            error=str(exc),
-            error_type=type(exc).__name__,
-            traceback=_tb.format_exc(),
-        )
-        await message.reply(f"❌ Ошибка запуска repair: {exc}")
-        return
-
-    elapsed = time.monotonic() - t0
-    output = stdout.decode("utf-8", errors="replace").strip()
-    if len(output) > 2000:
-        output = "..." + output[-2000:]
-
-    if proc.returncode == 0:
-        summary_line = ""
-        for line in output.splitlines():
-            if "[DONE]" in line or "[OK]" in line:
-                summary_line = line.strip()
-                break
-        tail = f"\n`{summary_line}`" if summary_line else ""
-        snippet = output[-800:]
-        await message.reply(f"✅ Repair done за {elapsed:.1f}s.{tail}\n\n```\n{snippet}\n```")
-        logger.info("memory_rebuild_done", elapsed=elapsed, returncode=0)
-    else:
-        snippet = output[-800:]
-        await message.reply(
-            f"❌ Repair завершился с кодом {proc.returncode} за {elapsed:.1f}s.\n"
-            f"```\n{snippet}\n```"
-        )
-        logger.error(
-            "memory_rebuild_failed",
-            returncode=proc.returncode,
-            elapsed=elapsed,
-        )
-
-
-def _collect_memory_archive_stats() -> dict[str, Any]:
-    """Read-only снимок archive.db: counts + size. Graceful fallback."""
-    import sqlite3 as _sqlite3
-    from pathlib import Path as _Path
-
-    db_path = _Path("~/.openclaw/krab_memory/archive.db").expanduser()
-    stats: dict[str, Any] = {"exists": db_path.exists()}
-    if not stats["exists"]:
-        return stats
-    try:
-        conn = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        try:
-            stats["messages"] = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-            stats["chats"] = conn.execute("SELECT COUNT(*) FROM chats").fetchone()[0]
-            stats["chunks"] = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        finally:
-            conn.close()
-        stats["size_mb"] = db_path.stat().st_size / 1024 / 1024
-    except Exception as exc:  # noqa: BLE001 — stats команда не должна падать
-        stats["error"] = str(exc)
-    return stats
-
-
-def _collect_memory_indexer_stats() -> dict[str, Any]:
-    """Снимок состояния real-time индексера; при недоступности — заглушка."""
-    try:
-        from ..core.memory_indexer_worker import get_indexer  # noqa: PLC0415
-
-        snap = get_indexer().get_stats()
-        return {
-            "state": "running" if getattr(snap, "is_running", False) else "stopped",
-            "queue_size": getattr(snap, "queue_size", 0),
-            "queue_maxsize": getattr(snap, "queue_maxsize", 0),
-            "processed_total": getattr(snap, "processed_total", 0),
-            "failed": dict(getattr(snap, "failed", {}) or {}),
-        }
-    except Exception:  # noqa: BLE001 — индексер опционален
-        return {"state": "unavailable"}
-
-
-def _collect_memory_validator_stats() -> dict[str, Any]:
-    """Снимок счётчиков memory_validator; при отсутствии модуля — заглушка."""
-    try:
-        from ..core.memory_validator import memory_validator  # noqa: PLC0415
-
-        stats = dict(getattr(memory_validator, "stats", {}) or {})
-        try:
-            stats["pending_count"] = len(memory_validator.list_pending())
-        except Exception:  # noqa: BLE001
-            stats.setdefault("pending_count", 0)
-        return stats
-    except Exception:  # noqa: BLE001 — модуля может не быть
-        return {"error": "not loaded"}
-
-
-def _fmt_int_ru(value: int) -> str:
-    """Целое с пробелом-разделителем тысяч (RU-стиль)."""
-    return f"{int(value):,}".replace(",", " ")
-
-
-def format_memory_stats(
-    archive: dict[str, Any],
-    indexer: dict[str, Any],
-    validator: dict[str, Any],
-) -> str:
-    """Формирует Markdown-сообщение с агрегатом статистики Memory Layer."""
-    lines: list[str] = ["🧠 **Memory Layer Stats**", ""]
-
-    # Archive block
-    lines.append("**Archive.db:**")
-    if archive.get("exists"):
-        if "error" in archive:
-            lines.append(f"• Error: {archive['error']}")
-        else:
-            lines.append(f"• Messages: **{_fmt_int_ru(archive.get('messages', 0))}**")
-            lines.append(f"• Chats: {archive.get('chats', 0)}")
-            lines.append(f"• Chunks: {_fmt_int_ru(archive.get('chunks', 0))}")
-            size_mb = archive.get("size_mb", 0)
-            lines.append(f"• Size: {size_mb:.1f} MB")
-    else:
-        lines.append("• Not initialized")
-
-    # Indexer block
-    lines.append("")
-    lines.append("**Indexer:**")
-    state = indexer.get("state", "unknown")
-    lines.append(f"• State: `{state}`")
-    if state != "unavailable":
-        q_size = indexer.get("queue_size", 0)
-        q_max = indexer.get("queue_maxsize") or 0
-        if q_max:
-            lines.append(f"• Queue: {q_size} / {q_max}")
-        else:
-            lines.append(f"• Queue: {q_size}")
-        lines.append(f"• Processed: {_fmt_int_ru(indexer.get('processed_total', 0))}")
-        failed = indexer.get("failed") or {}
-        if failed:
-            parts = ", ".join(f"{k}={v}" for k, v in failed.items())
-            lines.append(f"• Failed: {parts}")
-
-    # Validator block
-    lines.append("")
-    lines.append("**Validator:**")
-    if "error" in validator:
-        lines.append(f"• {validator['error']}")
-    else:
-        lines.append(f"• Safe: {_fmt_int_ru(validator.get('safe_total', 0))}")
-        lines.append(f"• Blocked: {validator.get('injection_blocked_total', 0)}")
-        lines.append(f"• Confirmed: {validator.get('confirmed_total', 0)}")
-        lines.append(f"• Pending: {validator.get('pending_count', 0)}")
-
-    # Timestamp
-    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines.append("")
-    lines.append(f"_Последнее обновление: {ts}_")
-
-    return "\n".join(lines)
+# handle_memory — extracted to commands/memory_admin_commands.py (Phase 2 Wave 18, Session 28).
+# Re-exported below (incl. _handle_memory_stats/clear/rebuild, _collect_memory_*, _fmt_int_ru, format_memory_stats, _ARCHIVE_DB_PATH_FOR_CLEAR).
 
 
 # handle_inbox — extracted to commands/observability_commands.py (Phase 2 Wave 17, Session 28).
@@ -1795,8 +1402,7 @@ async def handle_decrypt(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 
 # _BUILTIN_QUOTES / _SAVED_QUOTES_PATH moved to commands/memory_commands.py
-# Путь к archive.db для команды !memory clear (тот же что в reset_helpers)
-_ARCHIVE_DB_PATH_FOR_CLEAR = pathlib.Path.home() / ".openclaw" / "krab_memory" / "archive.db"
+# _ARCHIVE_DB_PATH_FOR_CLEAR moved to commands/memory_admin_commands.py (Wave 18) — re-exported below.
 
 
 # _load_saved_quotes / _save_quotes / handle_quote moved to commands/memory_commands.py
