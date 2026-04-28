@@ -99,6 +99,95 @@ except Exception:  # noqa: BLE001 - prometheus_client optional
     _thread_coherence_drift_total = None  # type: ignore[assignment]
 
 
+# === Idea 23: Per-handler latency dashboard. ===
+# Histogram + Counter для каждого handler (`!ask`, `!search`, ...).
+# Pure module — wire-up через декораторы/context manager в Wave 11-21 handlers
+# (см. backlog). Buckets настроены под p50≈0.3s / p99≈10s типичных handler'ов.
+try:
+    from prometheus_client import Counter as _Counter3  # type: ignore[import-not-found]
+    from prometheus_client import Histogram as _Histogram3  # type: ignore[import-not-found]
+
+    _handler_latency_seconds = _Histogram3(
+        "krab_handler_latency_seconds",
+        "Per-handler latency (seconds) — измерение времени выполнения userbot-команд",
+        ["handler"],
+        buckets=(0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0),
+    )
+    _handler_invocations_total = _Counter3(
+        "krab_handler_invocations_total",
+        "Per-handler invocations counter — статусы success/error/timeout",
+        ["handler", "status"],
+    )
+except Exception:  # noqa: BLE001 - prometheus_client optional
+    _handler_latency_seconds = None  # type: ignore[assignment]
+    _handler_invocations_total = None  # type: ignore[assignment]
+
+
+def observe_handler_latency(
+    handler_name: str,
+    latency_sec: float,
+    *,
+    status: str = "success",
+) -> None:
+    """Записывает latency и инкрементирует счётчик для handler.
+
+    Безопасно вызывать из любого места — fail-safe без prometheus_client.
+    `status` ∈ {success, error, timeout}; произвольные значения тоже принимаются,
+    но рекомендуется придерживаться enum'а для согласованности дашборда.
+    """
+    name = (handler_name or "unknown")[:60]
+    st = (status or "success")[:20]
+    try:
+        if _handler_latency_seconds is not None:
+            _handler_latency_seconds.labels(handler=name).observe(max(0.0, float(latency_sec)))
+        if _handler_invocations_total is not None:
+            _handler_invocations_total.labels(handler=name, status=st).inc()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+class _HandlerLatencyTimer:
+    """Async context manager, замеряющий latency handler.
+
+    При выходе через исключение — status="error"; иначе "success".
+    Можно вручную выставить статус через `.set_status('timeout')`.
+    """
+
+    __slots__ = ("_handler", "_start", "_status")
+
+    def __init__(self, handler_name: str) -> None:
+        self._handler = handler_name
+        self._start: float = 0.0
+        self._status: str = "success"
+
+    def set_status(self, status: str) -> None:
+        """Принудительно установить статус (например, 'timeout')."""
+        self._status = status
+
+    async def __aenter__(self) -> _HandlerLatencyTimer:
+        self._start = time.monotonic()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+        latency = max(0.0, time.monotonic() - self._start)
+        status = self._status
+        if exc_type is not None and status == "success":
+            status = "error"
+        observe_handler_latency(self._handler, latency, status=status)
+        # Не глотаем исключение — context manager только наблюдает.
+        return None
+
+
+def time_handler(handler_name: str) -> _HandlerLatencyTimer:
+    """Async context manager для замера handler latency.
+
+    Пример:
+        async with time_handler('ask'):
+            await do_ask()
+    """
+    return _HandlerLatencyTimer(handler_name)
+
+
 def observe_thread_coherence(score: float | None, *, drift: bool, explicit: bool) -> None:
     """Записывает thread coherence в Prometheus (fail-safe, no-op без prom_client)."""
     try:
