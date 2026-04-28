@@ -107,3 +107,147 @@ def _reset_for_tests() -> None:
     """Только для тестов: сбрасывает флаг, чтобы можно было re-apply в фикстуре."""
     global _PATCH_APPLIED
     _PATCH_APPLIED = False
+    global _SESSION_GUARD_APPLIED
+    _SESSION_GUARD_APPLIED = False
+
+
+# ---------------------------------------------------------------------------
+# Session.start guard против "NoneType.to_bytes" race (Sentry PYTHON-FASTAPI-6G)
+# ---------------------------------------------------------------------------
+#
+# Симптом: AttributeError "'NoneType' object has no attribute 'to_bytes'" при
+# !restart / restart_userbot. Pyrofork вызывает storage.api_id() / dc_id() и
+# packs значения через ``Int(value)`` → ``value.to_bytes(...)``. Если в момент
+# рестарта parallel-клиент (swarm) уже закрыл/переоткрыл sqlite-storage,
+# подзапрос ``SELECT api_id FROM sessions`` возвращает NULL → None → crash.
+#
+# Защита двухслойная:
+#   1) ``_safe_get`` подменяет SQLiteStorage._get так, что None заменяется
+#      на cached last-good значение (per-storage-instance LRU).
+#   2) ``_safe_session_start`` оборачивает Session.start в retry-loop
+#      (до 3 попыток с экспоненциальной паузой) — ловим AttributeError, в
+#      сообщении которого есть "to_bytes".
+
+_SESSION_GUARD_APPLIED = False
+_MAX_START_RETRIES = 3
+_START_RETRY_BASE_DELAY = 0.4  # сек; реальные паузы 0.4 / 0.8 / 1.6
+
+
+def _is_to_bytes_race(exc: BaseException) -> bool:
+    """Признак характерной AttributeError из pyrogram pack-pipeline."""
+    if not isinstance(exc, AttributeError):
+        return False
+    msg = str(exc)
+    return "to_bytes" in msg and "NoneType" in msg
+
+
+def apply_pyrogram_session_guard() -> bool:
+    """
+    Monkey-patch Session.start + SQLiteStorage._get для защиты от
+    NoneType.to_bytes race в restart_userbot path.
+
+    Идемпотентен. Возвращает True если patched (или уже был).
+    """
+    global _SESSION_GUARD_APPLIED
+    if _SESSION_GUARD_APPLIED:
+        return True
+
+    try:
+        import asyncio
+
+        from pyrogram.session import session as _sess_mod
+        from pyrogram.storage import sqlite_storage as _ss
+    except Exception as exc:  # noqa: BLE001
+        log.warning("pyrogram_session_guard_import_failed", extra={"error": str(exc)})
+        return False
+
+    # ------------------------------------------------------------------
+    # Слой 1: cache last-good для SQLiteStorage._get (api_id/dc_id/auth_key/...)
+    # ------------------------------------------------------------------
+    _orig_get = _ss.SQLiteStorage._get
+
+    def _safe_get(self):
+        # inspect.stack()[2] в _orig_get смотрит на ИМЯ caller'а через 2 фрейма
+        # выше. Когда мы вклиниваемся, добавляем лишний фрейм — поэтому
+        # вызываем оригинал напрямую (он сам разрулит stack), а кэш ведём
+        # по имени accessor-метода, восстанавливаемому из stack здесь.
+        import inspect
+
+        caller = inspect.stack()[2].function if len(inspect.stack()) > 2 else "_unknown"
+        cache = getattr(self, "_krab_last_good", None)
+        if cache is None:
+            cache = {}
+            try:
+                self._krab_last_good = cache
+            except Exception:  # noqa: BLE001 — на случай __slots__
+                pass
+
+        try:
+            value = _orig_get(self)
+        except Exception as exc:  # noqa: BLE001
+            cached = cache.get(caller)
+            if cached is not None:
+                log.warning(
+                    "pyrogram_storage_get_failed_using_cache",
+                    extra={"accessor": caller, "error_type": type(exc).__name__, "error": str(exc)},
+                )
+                return cached
+            raise
+
+        if value is None:
+            cached = cache.get(caller)
+            if cached is not None:
+                log.warning(
+                    "pyrogram_storage_get_none_using_cache",
+                    extra={"accessor": caller},
+                )
+                return cached
+            return value
+
+        cache[caller] = value
+        return value
+
+    _ss.SQLiteStorage._get = _safe_get
+
+    # ------------------------------------------------------------------
+    # Слой 2: retry на Session.start при NoneType.to_bytes race
+    # ------------------------------------------------------------------
+    _orig_start = _sess_mod.Session.start
+
+    async def _safe_session_start(self):
+        last_exc: BaseException | None = None
+        for attempt in range(1, _MAX_START_RETRIES + 1):
+            try:
+                return await _orig_start(self)
+            except AttributeError as exc:
+                if not _is_to_bytes_race(exc):
+                    raise
+                last_exc = exc
+                if attempt >= _MAX_START_RETRIES:
+                    log.error(
+                        "pyrogram_session_start_to_bytes_race_exhausted",
+                        extra={"attempts": attempt, "error": str(exc)},
+                    )
+                    raise
+                delay = _START_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                log.warning(
+                    "pyrogram_session_start_to_bytes_race_retry",
+                    extra={"attempt": attempt, "delay_s": delay, "error": str(exc)},
+                )
+                await asyncio.sleep(delay)
+        # На случай если цикл вышел не через return и не raise (теоретически
+        # недостижимо).
+        if last_exc is not None:
+            raise last_exc
+        return None
+
+    _sess_mod.Session.start = _safe_session_start
+
+    _SESSION_GUARD_APPLIED = True
+    log.info("pyrogram_session_guard_applied")
+    return True
+
+
+def is_session_guard_applied() -> bool:
+    """Тестовый хук."""
+    return _SESSION_GUARD_APPLIED
