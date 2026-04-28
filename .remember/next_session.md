@@ -1,4 +1,48 @@
-# Session 29 — Starter Handoff (after Session 28 close, 2026-04-28)
+# Session 29 — Starter Handoff (after Session 28 close + part 3 learning extension, 2026-04-28)
+
+## Part 3 update (post-19:40 5h reset)
+
+**13 learning features landed** в memory + smart-routing + persona слоях:
+
+| Feature | Commit | Что |
+|---|---|---|
+| A | `d287131` | Successful response retrieval boost (positive/negative feedback в RRF) |
+| B | `2b0aee7` | Per-user reaction memory (threshold modifier) |
+| C | `d287131` | Per-chat persona drift (system prompt suffix) |
+| D | `51254b8` | Memory decay (age-based RRF multiplier) |
+| E | `a2aae5b` | Multi-modal memory (vision summaries в archive) |
+| F | `eea64ac` | Owner mood detection (annoyed/playful/business/focused) |
+| G | `517ac23` | Topic clustering (k-means без sklearn) |
+| H | `7641624` | Self-correction loop (cheap model fact-check) |
+| I | `fb2ecef` | Cross-chat learning transfer (cold-start bootstrap) |
+| J | `517ac23` | Session goal tracking (active projects in suffix) |
+| K | `7e1952b` | Thread coherence detector (drift detection) |
+| L | `51254b8` | Memory consolidation (script + soft-delete) |
+| M | `25cd31c` | Native userbot read tools для LLM (6 tools) |
+
+**Wire-ups landed**:
+- `c6d7896` Bug 11 (media silent skip) — `has_media` в smart trigger
+- `13b10c8` Features B (user_id) + M (set_userbot_client) в bridge
+- `c8fc9cf` sender_context shim (unblock test collect)
+
+**Backlog wire-ups (для Session 29)**:
+- Feature E: `save_media_summary_to_archive` hook в bridge после `process_video_message`
+- Feature G: `expand_with_cluster()` в retrieval flow (memory_engine.py)
+- Feature J: `system_prompt_suffix()` из session_goals в access_control.py
+- Feature I: profile.py auto-call `bootstrap_borrowed_profile` в format_persona_suffix path
+- Feature K: observability hook (Prometheus metrics) — собрать данные для калибровки threshold
+
+## Session 28 stats (final)
+
+- **Total commits part 1+2+3**: ~45
+- **Phase 2 Code Splits**: 19637 → 4430 LOC (−77.4%) через **18 waves**
+- **3 Krab restarts** applied, KeepAlive policy works (only manual SIGTERM observed)
+- **All Sentry top-5 fixes** verified zero events post-restart
+- **Inbox cleanup**: stale 31 → 4
+- **Smart Routing media-aware**: photo/video_note в группах теперь reaches AI pipeline
+- **Tests**: 134 default + 121 live skipped, ~10889 collected post-shim
+
+
 
 ## Status snapshot
 
