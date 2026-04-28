@@ -450,6 +450,34 @@ from .commands.group_admin_commands import (  # noqa: E402, F401  # Phase 2 Wave
     handle_welcome,
 )
 
+from .commands.content_commands import (  # noqa: E402, F401  # Phase 2 Wave 15
+    _BACKUP_FILES,
+    _SNIPPETS_FILE,
+    _TEMPLATES_FILE,
+    _apply_template_vars,
+    _extract_yt_url,
+    _load_snippets,
+    _load_templates,
+    _plural_messages,
+    _save_snippets,
+    _save_templates,
+    _YT_PROMPT_TEMPLATE,
+    _YT_URL_RE,
+    handle_backup,
+    handle_collect,
+    handle_fwd,
+    handle_grep,
+    handle_id,
+    handle_img,
+    handle_media,
+    handle_ocr,
+    handle_snippet,
+    handle_spam,
+    handle_template,
+    handle_top,
+    handle_yt,
+)
+
 
 def _format_size_gb(size_gb: float) -> str:
     """Форматирует размер модели для человекочитаемого вывода."""
@@ -3048,169 +3076,12 @@ async def handle_memo(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(f"❌ {result.message}")
 
 
-async def handle_fwd(bot: "KraabUserbot", message: Message) -> None:
-    """
-    Пересылка сообщений без метки «Forwarded» (copy_message).
-
-    Синтаксис:
-      !fwd <chat_id>          — в ответ на сообщение: скопировать его в chat_id
-      !fwd <chat_id> last N   — скопировать последние N сообщений из текущего чата
-
-    Owner-only.
-    """
-    access_profile = bot._get_access_profile(message.from_user)
-    if access_profile.level != AccessLevel.OWNER:
-        raise UserInputError(user_message="🔒 `!fwd` доступен только владельцу.")
-
-    args = bot._get_command_args(message).strip()
-    if not args:
-        raise UserInputError(
-            user_message=(
-                "📤 **Форвард без метки**\n\n"
-                "`!fwd <chat_id>` — скопировать сообщение (в ответ)\n"
-                "`!fwd <chat_id> last N` — скопировать последние N сообщений"
-            )
-        )
-
-    parts = args.split()
-    try:
-        to_chat_id = int(parts[0])
-    except ValueError:
-        raise UserInputError(user_message=f"❌ Неверный chat_id: `{parts[0]}`")
-
-    from_chat_id = message.chat.id
-
-    # Режим: last N
-    if len(parts) >= 3 and parts[1].lower() == "last":
-        try:
-            n = int(parts[2])
-        except ValueError:
-            raise UserInputError(user_message=f"❌ N должно быть числом, получено: `{parts[2]}`")
-        if n < 1 or n > 200:
-            raise UserInputError(user_message="❌ N должно быть от 1 до 200.")
-
-        try:
-            # Собираем сообщения (get_chat_history возвращает newest-first)
-            msgs = []
-            async for msg in bot.client.get_chat_history(from_chat_id, limit=n):
-                msgs.append(msg)
-            # Пересылаем в хронологическом порядке (oldest first)
-            msgs.reverse()
-            copied = 0
-            for msg in msgs:
-                try:
-                    await bot.client.copy_message(to_chat_id, from_chat_id, msg.id)
-                    copied += 1
-                except Exception:
-                    pass  # пропускаем сервисные/недоступные сообщения
-            reply = f"📤 Скопировано {copied}/{len(msgs)} сообщений → `{to_chat_id}`"
-        except Exception as exc:
-            reply = f"❌ Ошибка при копировании: `{exc}`"
-
-    # Режим: reply на конкретное сообщение
-    else:
-        target = message.reply_to_message
-        if target is None:
-            raise UserInputError(
-                user_message=(
-                    "📤 Ответь на сообщение, которое хочешь переслать, "
-                    "или используй `!fwd <chat_id> last N`."
-                )
-            )
-        try:
-            await bot.client.copy_message(to_chat_id, from_chat_id, target.id)
-            reply = f"📤 Сообщение скопировано → `{to_chat_id}`"
-        except Exception as exc:
-            reply = f"❌ Не удалось скопировать: `{exc}`"
-
-    if message.from_user and message.from_user.id == bot.me.id:
-        await message.edit(reply)
-    else:
-        await message.reply(reply)
+# handle_fwd — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above: handle_fwd.
 
 
-async def handle_collect(bot: "KraabUserbot", message: Message) -> None:
-    """
-    Собирает последние N сообщений из указанного чата и выводит в текущий.
-
-    Синтаксис:
-      !collect <chat_id> <N>
-
-    Полезно для мониторинга: позволяет просмотреть историю любого чата,
-    к которому юзербот имеет доступ.
-
-    Owner-only.
-    """
-    access_profile = bot._get_access_profile(message.from_user)
-    if access_profile.level != AccessLevel.OWNER:
-        raise UserInputError(user_message="🔒 `!collect` доступен только владельцу.")
-
-    args = bot._get_command_args(message).strip()
-    parts = args.split()
-    if len(parts) < 2:
-        raise UserInputError(
-            user_message=(
-                "📥 **Collect — просмотр истории чата**\n\n"
-                "`!collect <chat_id> <N>` — вывести последние N сообщений из чата"
-            )
-        )
-
-    try:
-        src_chat_id = int(parts[0])
-    except ValueError:
-        raise UserInputError(user_message=f"❌ Неверный chat_id: `{parts[0]}`")
-
-    try:
-        n = int(parts[1])
-    except ValueError:
-        raise UserInputError(user_message=f"❌ N должно быть числом, получено: `{parts[1]}`")
-
-    if n < 1 or n > 100:
-        raise UserInputError(user_message="❌ N должно быть от 1 до 100.")
-
-    to_chat_id = message.chat.id
-
-    try:
-        msgs = []
-        async for msg in bot.client.get_chat_history(src_chat_id, limit=n):
-            msgs.append(msg)
-        msgs.reverse()  # хронологический порядок
-
-        if not msgs:
-            reply = f"📭 Чат `{src_chat_id}` пуст или недоступен."
-            if message.from_user and message.from_user.id == bot.me.id:
-                await message.edit(reply)
-            else:
-                await message.reply(reply)
-            return
-
-        # Шапка с количеством
-        header = f"📥 **Collect** из `{src_chat_id}` — последние {len(msgs)} сообщений:"
-        if message.from_user and message.from_user.id == bot.me.id:
-            await message.edit(header)
-        else:
-            await message.reply(header)
-
-        # Копируем сообщения по одному
-        copied = 0
-        for msg in msgs:
-            try:
-                await bot.client.copy_message(to_chat_id, src_chat_id, msg.id)
-                copied += 1
-            except Exception:
-                pass  # сервисные сообщения могут не копироваться
-
-        if copied < len(msgs):
-            await message.reply(
-                f"⚠️ Скопировано {copied}/{len(msgs)} (часть сообщений недоступна для копирования)"
-            )
-
-    except Exception as exc:
-        reply = f"❌ Ошибка при сборе: `{exc}`"
-        if message.from_user and message.from_user.id == bot.me.id:
-            await message.edit(reply)
-        else:
-            await message.reply(reply)
+# handle_collect — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above: handle_collect.
 
 
 # ---------------------------------------------------------------------------
@@ -3476,165 +3347,8 @@ async def handle_note(bot: "KraabUserbot", message: Message) -> None:
 # !poll / !quiz / !dice — extracted to commands/social_commands.py (Phase 2 Wave 6).
 
 
-async def handle_grep(bot: "KraabUserbot", message: Message) -> None:
-    """
-    !grep <query> [@chat] [N] — поиск по истории чата.
-
-    Форматы:
-      !grep биткоин              — ищет в текущем чате (последние 200 сообщений)
-      !grep биткоин 500          — ищет в последних 500 сообщениях
-      !grep биткоин @durov 100   — ищет в чате @durov (последние 100 сообщений)
-      !grep /pattern/            — regex-поиск (case-insensitive)
-    """
-    import re
-
-    raw = bot._get_command_args(message)
-    if not raw:
-        raise UserInputError(
-            user_message=(
-                "🔍 Использование:\n"
-                "`!grep <запрос> [@чат] [N]`\n\n"
-                "Примеры:\n"
-                "`!grep биткоин` — ищет в этом чате (200 последних сообщений)\n"
-                "`!grep биткоин 500` — ищет в 500 последних сообщениях\n"
-                "`!grep биткоин @durov 100` — ищет в другом чате\n"
-                "`!grep /паттерн/` — regex-поиск"
-            )
-        )
-
-    parts = raw.split()
-
-    # --- Парсим аргументы ---
-    query_parts: list[str] = []
-    target_chat: int | str = message.chat.id
-    limit: int = 200
-
-    i = 0
-    while i < len(parts):
-        part = parts[i]
-        # @chat — указание альтернативного чата
-        if part.startswith("@") and len(part) > 1:
-            target_chat = part  # pyrogram принимает username
-        # Числовой лимит (только если выглядит как standalone число)
-        elif part.isdigit():
-            limit = min(int(part), 2000)  # защита от очень больших лимитов
-        else:
-            query_parts.append(part)
-        i += 1
-
-    query_str = " ".join(query_parts).strip()
-    if not query_str:
-        raise UserInputError(user_message="🔍 Укажи поисковый запрос после `!grep`")
-
-    # --- Определяем тип поиска: regex или plain ---
-    use_regex = False
-    pattern: re.Pattern | None = None
-
-    if query_str.startswith("/") and query_str.endswith("/") and len(query_str) > 2:
-        # /pattern/ — regex-режим
-        regex_src = query_str[1:-1]
-        try:
-            pattern = re.compile(regex_src, re.IGNORECASE)
-            use_regex = True
-            display_query = f"/{regex_src}/"
-        except re.error as exc:
-            raise UserInputError(user_message=f"❌ Невалидный regex: `{exc}`") from exc
-    else:
-        display_query = query_str
-
-    status_msg = await message.reply(
-        f"🔍 Ищу `{display_query}` в последних **{limit}** сообщениях..."
-    )
-
-    matches: list[str] = []
-    scanned = 0
-
-    try:
-        async for msg in bot.client.get_chat_history(target_chat, limit=limit):
-            scanned += 1
-            text = msg.text or msg.caption or ""
-            if not text:
-                continue
-
-            # Фильтрация: regex или plain case-insensitive
-            if use_regex and pattern is not None:
-                found = bool(pattern.search(text))
-            else:
-                found = query_str.lower() in text.lower()
-
-            if not found:
-                continue
-
-            # Форматируем метаданные
-            dt = msg.date
-            time_str = dt.strftime("%d.%m %H:%M") if dt else "??:??"
-
-            sender = ""
-            if msg.from_user:
-                sender = (
-                    f"@{msg.from_user.username}"
-                    if msg.from_user.username
-                    else msg.from_user.first_name or "Unknown"
-                )
-            elif msg.sender_chat:
-                sender = msg.sender_chat.title or "Channel"
-
-            # Обрезаем длинный текст, показываем контекст вокруг совпадения
-            preview = text.replace("\n", " ")
-            if len(preview) > 200:
-                if use_regex and pattern is not None:
-                    m = pattern.search(preview)
-                    if m:
-                        start = max(0, m.start() - 60)
-                        end = min(len(preview), m.end() + 60)
-                        prefix = "..." if start > 0 else ""
-                        suffix = "..." if end < len(preview) else ""
-                        preview = prefix + preview[start:end] + suffix
-                    else:
-                        preview = preview[:200] + "..."
-                else:
-                    idx = preview.lower().find(query_str.lower())
-                    if idx >= 0:
-                        start = max(0, idx - 60)
-                        end = min(len(preview), idx + len(query_str) + 60)
-                        prefix = "..." if start > 0 else ""
-                        suffix = "..." if end < len(preview) else ""
-                        preview = prefix + preview[start:end] + suffix
-                    else:
-                        preview = preview[:200] + "..."
-
-            matches.append(f"[{time_str}] {sender}: {preview}")
-
-            # Не более 20 совпадений в ответе
-            if len(matches) >= 20:
-                break
-
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("handle_grep_error", error=str(exc))
-        await status_msg.edit(f"❌ Ошибка при поиске: {exc}")
-        return
-
-    if not matches:
-        await status_msg.edit(
-            f"🔍 Ничего не найдено для `{display_query}` в последних {scanned} сообщениях."
-        )
-        return
-
-    # --- Форматируем результат ---
-    header = f"🔍 Найдено **{len(matches)}** совпадений для `{display_query}`"
-    if len(matches) >= 20:
-        header += " (показаны первые 20)"
-    header += ":\n\n"
-
-    lines = [f"{i + 1}. {m}" for i, m in enumerate(matches)]
-    body = "\n".join(lines)
-
-    # Telegram limit 4096 символов
-    full = header + body
-    if len(full) > 4000:
-        full = full[:3950] + "\n...(обрезано)"
-
-    await status_msg.edit(full)
+# handle_grep — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above: handle_grep.
 
 
 # ---------------------------------------------------------------------------
@@ -4237,107 +3951,8 @@ def _fmt_currency(val: float) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def handle_img(bot: "KraabUserbot", message: Message) -> None:
-    """
-    Описывает фото через AI vision (multimodal).
-
-    Использование:
-      !img                — reply на фото → краткое описание
-      !img <вопрос>       — reply на фото → ответ на вопрос о фото
-
-    Требуется reply на сообщение с фото или документом-изображением.
-    Сессия изолирована: img_{chat_id} (не засоряет основной контекст).
-    Всегда force_cloud=True — vision требует облачной модели.
-    """
-    import base64
-    import io
-
-    question = bot._get_command_args(message).strip()
-
-    # Проверяем, что есть reply на сообщение
-    replied = message.reply_to_message
-    if replied is None:
-        raise UserInputError(
-            user_message=(
-                "🖼 **!img** — описание фото через AI vision\n\n"
-                "Ответь на сообщение с фото:\n"
-                "`!img` — описание\n"
-                "`!img <вопрос>` — ответ на вопрос о фото"
-            )
-        )
-
-    # Определяем наличие фото в сообщении
-    has_photo = bool(replied.photo)
-    # Документ-изображение (jpg/png/webp отправленные без сжатия)
-    has_doc_image = bool(
-        replied.document
-        and replied.document.mime_type
-        and replied.document.mime_type.startswith("image/")
-    )
-
-    if not has_photo and not has_doc_image:
-        raise UserInputError(
-            user_message=(
-                "🖼 Это сообщение не содержит фото. Ответь командой на сообщение с фотографией."
-            )
-        )
-
-    # Статусное сообщение
-    status_msg = await message.reply("🔍 Анализирую фото...")
-
-    try:
-        # Скачиваем фото в память
-        img_bytes_io = io.BytesIO()
-        await replied.download(in_memory=img_bytes_io)
-        img_bytes_io.seek(0)
-        img_bytes = img_bytes_io.read()
-
-        if not img_bytes:
-            await status_msg.edit("❌ Не удалось скачать фото.")
-            return
-
-        # Base64-кодирование для передачи в API
-        img_b64 = base64.b64encode(img_bytes).decode("ascii")
-
-        # Формируем промпт: вопрос пользователя или дефолтное описание
-        if question:
-            prompt = question
-        else:
-            prompt = (
-                "Опиши это фото подробно. "
-                "Что на нём изображено? Текст, объекты, люди, место — всё что видишь."
-            )
-
-        # Изолированная сессия, чтобы vision-контент не загрязнял основной диалог чата
-        session_id = f"img_{message.chat.id}"
-
-        chunks: list[str] = []
-        async for chunk in openclaw_client.send_message_stream(
-            message=prompt,
-            chat_id=session_id,
-            images=[img_b64],
-            force_cloud=True,
-            disable_tools=True,
-        ):
-            chunks.append(str(chunk))
-
-        result = "".join(chunks).strip()
-
-        if not result:
-            await status_msg.edit("❌ AI не смог проанализировать фото.")
-            return
-
-        # Разбиваем длинный ответ если нужно
-        parts = _split_text_for_telegram(result)
-        await status_msg.edit(parts[0])
-        for part in parts[1:]:
-            await message.reply(part)
-
-    except UserInputError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        logger.error("handle_img_error", error=str(exc))
-        await status_msg.edit(f"❌ Ошибка анализа фото: {exc}")
+# handle_img — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above: handle_img.
 
 
 # ---------------------------------------------------------------------------
@@ -4345,111 +3960,8 @@ async def handle_img(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def handle_ocr(bot: "KraabUserbot", message: Message) -> None:
-    """
-    Извлекает текст из изображения через AI vision (OCR).
-
-    Использование:
-      !ocr                — reply на фото → дословный текст с изображения
-      !ocr <подсказка>    — reply на фото → OCR с доп. контекстом
-
-    Требуется reply на сообщение с фото или документом-изображением.
-    Сессия изолирована: ocr_{chat_id} (не засоряет основной контекст).
-    Всегда force_cloud=True — vision требует облачной модели.
-    """
-    import base64
-    import io
-
-    hint = bot._get_command_args(message).strip()
-
-    # Проверяем наличие reply на сообщение с фото
-    replied = message.reply_to_message
-    if replied is None:
-        raise UserInputError(
-            user_message=(
-                "📄 **!ocr** — извлечение текста из изображения\n\n"
-                "Ответь командой на сообщение с фото:\n"
-                "`!ocr` — извлечь весь текст\n"
-                "`!ocr <подсказка>` — OCR с дополнительным контекстом"
-            )
-        )
-
-    # Определяем тип медиа в сообщении
-    has_photo = bool(replied.photo)
-    has_doc_image = bool(
-        replied.document
-        and replied.document.mime_type
-        and replied.document.mime_type.startswith("image/")
-    )
-
-    if not has_photo and not has_doc_image:
-        raise UserInputError(
-            user_message=(
-                "📄 Это сообщение не содержит фото. Ответь командой на сообщение с изображением."
-            )
-        )
-
-    # Статусное сообщение
-    status_msg = await message.reply("🔍 Извлекаю текст...")
-
-    try:
-        # Скачиваем изображение в память
-        img_bytes_io = io.BytesIO()
-        await replied.download(in_memory=img_bytes_io)
-        img_bytes_io.seek(0)
-        img_bytes = img_bytes_io.read()
-
-        if not img_bytes:
-            await status_msg.edit("❌ Не удалось скачать изображение.")
-            return
-
-        # Base64-кодирование для передачи в API
-        img_b64 = base64.b64encode(img_bytes).decode("ascii")
-
-        # Формируем OCR-промпт
-        if hint:
-            prompt = (
-                f"Извлеки весь текст с этого изображения дословно. "
-                f"Дополнительный контекст: {hint}. "
-                f"Верни только сам текст без пояснений."
-            )
-        else:
-            prompt = (
-                "Извлеки весь текст с этого изображения дословно. "
-                "Сохрани оригинальное форматирование (абзацы, списки, таблицы). "
-                "Верни только текст без пояснений и комментариев."
-            )
-
-        # Изолированная OCR-сессия, чтобы не засорять основной диалог
-        session_id = f"ocr_{message.chat.id}"
-
-        chunks: list[str] = []
-        async for chunk in openclaw_client.send_message_stream(
-            message=prompt,
-            chat_id=session_id,
-            images=[img_b64],
-            force_cloud=True,
-            disable_tools=True,
-        ):
-            chunks.append(str(chunk))
-
-        result = "".join(chunks).strip()
-
-        if not result:
-            await status_msg.edit("❌ Текст на изображении не найден.")
-            return
-
-        # Разбиваем длинный результат если нужно
-        parts = _split_text_for_telegram(result)
-        await status_msg.edit(f"📄 **OCR:**\n{parts[0]}")
-        for part in parts[1:]:
-            await message.reply(part)
-
-    except UserInputError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        logger.error("handle_ocr_error", error=str(exc))
-        await status_msg.edit(f"❌ Ошибка OCR: {exc}")
+# handle_ocr — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above: handle_ocr.
 
 
 # ---------------------------------------------------------------------------
@@ -4457,170 +3969,8 @@ async def handle_ocr(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def handle_media(bot: "KraabUserbot", message: Message) -> None:
-    """
-    Скачивает медиафайлы из Telegram (userbot-only).
-
-    Использование (в reply на фото/видео/документ):
-      !media           — скачать и переслать как файл (документ)
-      !media save      — скачать в ~/Downloads/krab_media/
-      !media info      — показать метаданные (размер, тип, разрешение)
-
-    Поддерживаемые типы: фото, видео, документ, аудио, голосовое, стикер.
-    """
-    import mimetypes
-    import tempfile
-
-    args = bot._get_command_args(message).strip().lower()
-    subcommand = args.split()[0] if args else ""
-
-    replied = message.reply_to_message
-    if replied is None:
-        raise UserInputError(
-            user_message=(
-                "📥 **!media** — скачивание медиафайлов\n\n"
-                "Ответь на сообщение с медиа:\n"
-                "`!media` — скачать и переслать как файл\n"
-                "`!media save` — сохранить в ~/Downloads/krab_media/\n"
-                "`!media info` — метаданные файла"
-            )
-        )
-
-    # Определяем тип медиа и метаданные
-    media_type = None
-    file_name = None
-    file_size = None
-    mime_type = None
-    width = height = duration = None
-
-    if replied.photo:
-        media_type = "photo"
-        mime_type = "image/jpeg"
-        width = replied.photo.width
-        height = replied.photo.height
-        file_size = replied.photo.file_size
-        file_name = f"photo_{replied.photo.file_unique_id}.jpg"
-
-    elif replied.video:
-        media_type = "video"
-        mime_type = replied.video.mime_type or "video/mp4"
-        width = replied.video.width
-        height = replied.video.height
-        duration = replied.video.duration
-        file_size = replied.video.file_size
-        ext = mimetypes.guess_extension(mime_type) or ".mp4"
-        file_name = replied.video.file_name or f"video_{replied.video.file_unique_id}{ext}"
-
-    elif replied.document:
-        media_type = "document"
-        mime_type = replied.document.mime_type or "application/octet-stream"
-        file_size = replied.document.file_size
-        file_name = replied.document.file_name or f"doc_{replied.document.file_unique_id}"
-
-    elif replied.audio:
-        media_type = "audio"
-        mime_type = replied.audio.mime_type or "audio/mpeg"
-        duration = replied.audio.duration
-        file_size = replied.audio.file_size
-        ext = mimetypes.guess_extension(mime_type) or ".mp3"
-        file_name = replied.audio.file_name or f"audio_{replied.audio.file_unique_id}{ext}"
-
-    elif replied.voice:
-        media_type = "voice"
-        mime_type = replied.voice.mime_type or "audio/ogg"
-        duration = replied.voice.duration
-        file_size = replied.voice.file_size
-        ext = mimetypes.guess_extension(mime_type) or ".ogg"
-        file_name = f"voice_{replied.voice.file_unique_id}{ext}"
-
-    elif replied.sticker:
-        media_type = "sticker"
-        mime_type = replied.sticker.mime_type or "image/webp"
-        width = replied.sticker.width
-        height = replied.sticker.height
-        file_size = replied.sticker.file_size
-        ext = ".tgs" if getattr(replied.sticker, "is_animated", False) else ".webp"
-        file_name = f"sticker_{replied.sticker.file_unique_id}{ext}"
-
-    else:
-        raise UserInputError(
-            user_message=(
-                "📥 Это сообщение не содержит медиафайл.\n"
-                "Ответь командой на фото, видео, документ, аудио, голосовое или стикер."
-            )
-        )
-
-    # --- !media info: только метаданные, без скачивания ---
-    if subcommand == "info":
-        lines = [f"📋 **Метаданные медиафайла** (`{media_type}`)"]
-        lines.append(f"• Имя: `{file_name}`")
-        if mime_type:
-            lines.append(f"• MIME: `{mime_type}`")
-        if file_size:
-            size_kb = file_size / 1024
-            if size_kb >= 1024:
-                lines.append(f"• Размер: `{size_kb / 1024:.1f} МБ`")
-            else:
-                lines.append(f"• Размер: `{size_kb:.1f} КБ`")
-        if width and height:
-            lines.append(f"• Разрешение: `{width}×{height}`")
-        if duration is not None:
-            lines.append(f"• Длительность: `{duration} сек`")
-        await message.reply("\n".join(lines))
-        return
-
-    # --- !media save: скачать в ~/Downloads/krab_media/ ---
-    if subcommand == "save":
-        save_dir = pathlib.Path.home() / "Downloads" / "krab_media"
-        save_dir.mkdir(parents=True, exist_ok=True)
-        save_path = save_dir / (file_name or "media_file")
-
-        status_msg = await message.reply(f"⬇️ Сохраняю `{file_name}`...")
-        try:
-            await replied.download(file_name=str(save_path))
-            size_str = ""
-            if save_path.exists():
-                sz = save_path.stat().st_size / 1024
-                size_str = f" ({sz / 1024:.1f} МБ)" if sz >= 1024 else f" ({sz:.1f} КБ)"
-            await status_msg.edit(f"✅ Сохранено: `{save_path}`{size_str}")
-        except Exception as exc:  # noqa: BLE001
-            logger.error("handle_media_save_error", file_name=file_name, error=str(exc))
-            await status_msg.edit(f"❌ Ошибка сохранения: {exc}")
-        return
-
-    # --- !media (по умолчанию): скачать и переслать как документ ---
-    status_msg = await message.reply(f"⬇️ Скачиваю `{file_name}`...")
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = pathlib.Path(tmpdir) / (file_name or "media_file")
-            await replied.download(file_name=str(tmp_path))
-
-            if not tmp_path.exists() or tmp_path.stat().st_size == 0:
-                await status_msg.edit("❌ Не удалось скачать файл (пустой или недоступен).")
-                return
-
-            sz = tmp_path.stat().st_size / 1024
-            size_str = f"{sz / 1024:.1f} МБ" if sz >= 1024 else f"{sz:.1f} КБ"
-            caption = f"📥 `{file_name}` · {size_str}"
-
-            await bot.client.send_document(
-                message.chat.id,
-                str(tmp_path),
-                caption=caption,
-                reply_to_message_id=message.id,
-            )
-            # Статусное сообщение удаляем: документ уже отправлен
-            try:
-                await status_msg.delete()
-            except Exception:  # noqa: BLE001
-                pass
-
-    except Exception as exc:  # noqa: BLE001
-        logger.error("handle_media_error", file_name=file_name, error=str(exc))
-        try:
-            await status_msg.edit(f"❌ Ошибка скачивания: {exc}")
-        except Exception:  # noqa: BLE001
-            pass
+# handle_media — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above: handle_media.
 
 
 # ---------------------------------------------------------------------------
@@ -4628,88 +3978,8 @@ async def handle_media(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def handle_spam(bot: "KraabUserbot", message: Message) -> None:
-    """
-    Управление антиспам фильтром в группе.
-
-    Subcommands:
-      !spam on            — включить в текущем чате
-      !spam off           — выключить в текущем чате
-      !spam status        — показать настройки
-      !spam action ban    — банить нарушителей
-      !spam action mute   — ограничивать (restrict) нарушителей
-      !spam action delete — только удалять сообщения (default)
-
-    Owner-only.
-    """
-    from ..core.spam_guard import (  # noqa: PLC0415
-        VALID_ACTIONS,
-        get_status,
-        set_action,
-        set_enabled,
-    )
-
-    access_profile = bot._get_access_profile(message.from_user)
-    if access_profile.level != AccessLevel.OWNER:
-        raise UserInputError(user_message="🔒 `!spam` доступен только владельцу.")
-
-    chat_id = message.chat.id
-    args = (message.text or "").split()
-    sub = args[1].strip().lower() if len(args) >= 2 else "status"
-
-    # --- !spam on ---
-    if sub == "on":
-        set_enabled(chat_id, True)
-        status = get_status(chat_id)
-        await message.reply(
-            f"✅ Антиспам **включён** в чате `{chat_id}`.\n"
-            f"Действие при детекте: `{status['action']}`"
-        )
-        return
-
-    # --- !spam off ---
-    if sub == "off":
-        set_enabled(chat_id, False)
-        await message.reply(f"🔕 Антиспам **выключен** в чате `{chat_id}`.")
-        return
-
-    # --- !spam status ---
-    if sub in {"status", "show", ""}:
-        status = get_status(chat_id)
-        state_icon = "✅" if status["enabled"] else "❌"
-        await message.reply(
-            f"🛡 **Антиспам** — `{chat_id}`\n\n"
-            f"Статус: {state_icon} {'включён' if status['enabled'] else 'выключен'}\n"
-            f"Действие: `{status['action']}`\n\n"
-            f"Детект срабатывает при:\n"
-            f"• flood: >5 сообщений за 10 сек\n"
-            f"• >3 ссылок в одном сообщении\n"
-            f"• пересланное сообщение со ссылками"
-        )
-        return
-
-    # --- !spam action <ban|mute|delete> ---
-    if sub == "action":
-        action = args[2].strip().lower() if len(args) >= 3 else ""
-        if action not in VALID_ACTIONS:
-            raise UserInputError(
-                user_message=(
-                    f"❌ Неизвестное действие: `{action}`.\nДоступны: `ban`, `mute`, `delete`"
-                )
-            )
-        set_action(chat_id, action)
-        await message.reply(f"⚙️ Действие при спаме установлено: `{action}`")
-        return
-
-    raise UserInputError(
-        user_message=(
-            "🛡 **!spam — антиспам фильтр**\n\n"
-            "`!spam on` — включить\n"
-            "`!spam off` — выключить\n"
-            "`!spam status` — текущие настройки\n"
-            "`!spam action ban|mute|delete` — действие при детекте"
-        )
-    )
+# handle_spam — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above: handle_spam.
 
 
 # ---------------------------------------------------------------------------
@@ -5138,131 +4408,20 @@ async def apply_spam_action(
 # !snippet — хранилище кодовых сниппетов
 # ---------------------------------------------------------------------------
 
-_SNIPPETS_FILE = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "code_snippets.json"
+# _SNIPPETS_FILE — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above.
 
 
-def _load_snippets() -> dict[str, dict]:
-    """Загружает словарь {name: {code, created_at}} из JSON-файла."""
-    try:
-        if _SNIPPETS_FILE.exists():
-            return json.loads(_SNIPPETS_FILE.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        pass
-    return {}
+# _load_snippets — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above.
 
 
-def _save_snippets(data: dict[str, dict]) -> None:
-    """Сохраняет сниппеты в JSON-файл."""
-    _SNIPPETS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _SNIPPETS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+# _save_snippets — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above.
 
 
-async def handle_snippet(bot: "KraabUserbot", message: Message) -> None:
-    """
-    !snippet save <name> <code>  — сохранить сниппет (код после имени)
-    !snippet save <name>          — в reply на сообщение → сохраняет текст reply
-    !snippet <name>               — показать сниппет в code block
-    !snippet list                 — список всех сниппетов
-    !snippet del <name>           — удалить сниппет
-    !snippet search <query>       — поиск по содержимому
-    """
-    import datetime as _dt  # noqa: PLC0415
-
-    raw_args = bot._get_command_args(message).strip()
-    parts = raw_args.split(None, 1)
-
-    # --- !snippet list ---
-    if not parts or parts[0].lower() == "list":
-        snippets = _load_snippets()
-        if not snippets:
-            await message.reply(
-                "📭 Нет сохранённых сниппетов.\n"
-                "Используй `!snippet save <name> <code>` или ответь на сообщение с `!snippet save <name>`"
-            )
-            return
-        lines = [f"• `{name}`" for name in sorted(snippets)]
-        await message.reply("📋 **Сниппеты:**\n" + "\n".join(lines))
-        return
-
-    subcommand = parts[0].lower()
-
-    # --- !snippet save <name> [code] ---
-    if subcommand == "save":
-        rest = parts[1].strip() if len(parts) > 1 else ""
-        # Разбиваем на имя и код
-        name_and_code = rest.split(None, 1)
-        if not name_and_code:
-            raise UserInputError(
-                user_message="❌ Укажи имя: `!snippet save <name> <code>` или ответь на сообщение"
-            )
-        name = name_and_code[0].strip().lower()
-        if not name:
-            raise UserInputError(user_message="❌ Имя сниппета не может быть пустым.")
-
-        # Если код передан inline
-        if len(name_and_code) > 1 and name_and_code[1].strip():
-            code = name_and_code[1].strip()
-        else:
-            # Ищем текст в replied сообщении
-            replied = message.reply_to_message
-            if replied is None or not (replied.text or replied.caption):
-                raise UserInputError(
-                    user_message=(
-                        "❌ Укажи код после имени: `!snippet save <name> <code>`\n"
-                        "Или ответь на сообщение с кодом командой `!snippet save <name>`"
-                    )
-                )
-            code = (replied.text or replied.caption or "").strip()
-
-        snippets = _load_snippets()
-        snippets[name] = {
-            "code": code,
-            "created_at": _dt.datetime.now(tz=_dt.timezone.utc).isoformat(),
-        }
-        _save_snippets(snippets)
-        await message.reply(f"✅ Сниппет `{name}` сохранён ({len(code)} символов).")
-        return
-
-    # --- !snippet del <name> ---
-    if subcommand == "del":
-        if len(parts) < 2 or not parts[1].strip():
-            raise UserInputError(user_message="❌ Укажи имя: `!snippet del <name>`")
-        name = parts[1].strip().lower()
-        snippets = _load_snippets()
-        if name not in snippets:
-            raise UserInputError(user_message=f"❌ Сниппет `{name}` не найден.")
-        del snippets[name]
-        _save_snippets(snippets)
-        await message.reply(f"🗑 Сниппет `{name}` удалён.")
-        return
-
-    # --- !snippet search <query> ---
-    if subcommand == "search":
-        if len(parts) < 2 or not parts[1].strip():
-            raise UserInputError(user_message="❌ Укажи запрос: `!snippet search <query>`")
-        query = parts[1].strip().lower()
-        snippets = _load_snippets()
-        matches = [
-            name
-            for name, data in snippets.items()
-            if query in name or query in data.get("code", "").lower()
-        ]
-        if not matches:
-            await message.reply(f"🔍 Ничего не найдено по запросу `{query}`.")
-            return
-        lines = [f"• `{name}`" for name in sorted(matches)]
-        await message.reply(f"🔍 Найдено ({len(matches)}):\n" + "\n".join(lines))
-        return
-
-    # --- !snippet <name> — показать сниппет ---
-    name = parts[0].lower()
-    snippets = _load_snippets()
-    if name not in snippets:
-        raise UserInputError(user_message=f"❌ Сниппет `{name}` не найден. Список: `!snippet list`")
-    code = snippets[name].get("code", "")
-    created = snippets[name].get("created_at", "")
-    header = f"📄 **{name}**" + (f" _(сохранён {created[:10]})_" if created else "")
-    await message.reply(f"{header}\n```\n{code}\n```")
+# handle_snippet — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above: handle_snippet, _load_snippets, _save_snippets.
 
 
 # ---------------------------------------------------------------------------
@@ -5275,120 +4434,12 @@ async def handle_snippet(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _plural_messages(n: int) -> str:
-    """Возвращает правильную форму слова 'сообщение' для числа n."""
-    if 11 <= n % 100 <= 19:
-        return "сообщений"
-    rem = n % 10
-    if rem == 1:
-        return "сообщение"
-    if 2 <= rem <= 4:
-        return "сообщения"
-    return "сообщений"
+# _plural_messages — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above.
 
 
-async def handle_top(bot: "KraabUserbot", message: Message) -> None:
-    """
-    Лидерборд активности чата на основе истории сообщений.
-
-    Варианты:
-      !top [N]     — топ N самых активных за последние 24 часа (default N=10)
-      !top week    — за последние 7 дней
-      !top all     — за всё время (последние 1000 сообщений)
-    """
-    args = bot._get_command_args(message).strip().lower()
-
-    # Парсим аргументы
-    limit = 1000  # сколько сообщений из истории тянуть
-    top_n = 10  # сколько участников показать
-    period_label = "24ч"
-
-    # Временные рамки фильтрации
-    now = datetime.datetime.now(datetime.timezone.utc)
-    cutoff: datetime.datetime | None = now - datetime.timedelta(hours=24)
-
-    if args == "week":
-        cutoff = now - datetime.timedelta(days=7)
-        period_label = "неделя"
-    elif args == "all":
-        cutoff = None
-        period_label = "всё время"
-    elif args:
-        # Пробуем распарсить число N
-        try:
-            top_n = max(1, min(int(args), 50))
-        except ValueError:
-            raise UserInputError(
-                user_message=(
-                    "❌ Неверный аргумент.\n"
-                    "Использование:\n"
-                    "`!top [N]` — топ за 24ч (N до 50)\n"
-                    "`!top week` — за неделю\n"
-                    "`!top all` — за всё время"
-                )
-            )
-
-    # Статусное сообщение
-    status_msg = await message.reply(f"⏳ Считаю активность за {period_label}...")
-
-    # Собираем историю чата
-    chat_id = message.chat.id
-    counts: dict[int, tuple[str, int]] = {}  # user_id → (display_name, count)
-
-    try:
-        async for msg in bot.client.get_chat_history(chat_id, limit=limit):
-            # Фильтр по дате
-            if cutoff is not None:
-                msg_date = msg.date
-                # Pyrogram возвращает datetime (aware или naive UTC)
-                if msg_date is not None:
-                    if msg_date.tzinfo is None:
-                        msg_date = msg_date.replace(tzinfo=datetime.timezone.utc)
-                    if msg_date < cutoff:
-                        break  # история идёт в обратном порядке — дальше старее
-
-            # Считаем только сообщения с живым отправителем (не каналы/боты/сервисные)
-            user = msg.from_user
-            if user is None:
-                continue
-
-            uid = user.id
-            if uid not in counts:
-                # Формируем отображаемое имя
-                if user.username:
-                    display = f"@{user.username}"
-                elif user.first_name or user.last_name:
-                    parts = filter(None, [user.first_name, user.last_name])
-                    display = " ".join(parts)
-                else:
-                    display = f"user_{uid}"
-                counts[uid] = (display, 0)
-
-            display_name, cnt = counts[uid]
-            counts[uid] = (display_name, cnt + 1)
-
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("handle_top: ошибка при получении истории чата %s: %s", chat_id, exc)
-        await status_msg.edit(f"❌ Не удалось получить историю чата: {exc}")
-        return
-
-    if not counts:
-        await status_msg.edit(f"📭 Нет сообщений за {period_label}.")
-        return
-
-    # Сортируем по убыванию
-    ranking = sorted(counts.values(), key=lambda x: x[1], reverse=True)[:top_n]
-
-    # Формируем текст
-    medals = ["🥇", "🥈", "🥉"]
-    lines = [f"🏆 **Топ чата ({period_label})**", "─────────────"]
-    for i, (name, cnt) in enumerate(ranking, start=1):
-        prefix = medals[i - 1] if i <= 3 else f"{i}."
-        word = _plural_messages(cnt)
-        lines.append(f"{prefix} {name} — {cnt} {word}")
-
-    text = "\n".join(lines)
-    await status_msg.edit(text)
+# handle_top — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above: handle_top, _plural_messages.
 
 
 # ---------------------------------------------------------------------------
@@ -5637,200 +4688,36 @@ async def handle_link(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 
 # Регулярки для извлечения YouTube URL из текста
-_YT_URL_RE = re.compile(
-    r"https?://(?:www\.)?(?:youtube\.com/watch\?[^\s]*v=[\w-]+|youtu\.be/[\w-]+|youtube\.com/shorts/[\w-]+)"
-)
-
-_YT_PROMPT_TEMPLATE = (
-    "Найди информацию об этом YouTube видео: {url}. "
-    "Покажи: название, автор, длительность, дата, описание (кратко)."
-)
+# _YT_URL_RE, _YT_PROMPT_TEMPLATE, _extract_yt_url — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above.
 
 
-def _extract_yt_url(text: str) -> str | None:
-    """Извлекает первый YouTube URL из текста. Возвращает None если не найдено."""
-    m = _YT_URL_RE.search(text or "")
-    return m.group(0) if m else None
-
-
-async def handle_yt(bot: "KraabUserbot", message: Message) -> None:
-    """
-    !yt <URL>       — информация о YouTube видео через AI + web_search.
-    !yt (в reply)   — извлекает URL из цитируемого сообщения.
-
-    Сессия изолирована: yt_{chat_id}.
-    """
-    args = bot._get_command_args(message).strip()
-
-    # Пытаемся найти URL: сначала в аргументах, затем в reply
-    url: str | None = _extract_yt_url(args)
-    if url is None and message.reply_to_message is not None:
-        replied_text = message.reply_to_message.text or message.reply_to_message.caption or ""
-        url = _extract_yt_url(replied_text)
-
-    if url is None:
-        raise UserInputError(
-            user_message=(
-                "🎬 Использование:\n"
-                "`!yt <YouTube URL>` — информация о видео\n"
-                "или ответь командой `!yt` на сообщение с YouTube ссылкой"
-            )
-        )
-
-    prompt = _YT_PROMPT_TEMPLATE.format(url=url)
-    session_id = f"yt_{message.chat.id}"
-
-    msg = await message.reply(f"🎬 Ищу информацию о видео: `{url}`...")
-
-    try:
-        chunks: list[str] = []
-        async for chunk in openclaw_client.send_message_stream(
-            message=prompt,
-            chat_id=session_id,
-            disable_tools=False,  # web_search нужен для поиска инфо о видео
-        ):
-            chunks.append(str(chunk))
-
-        result = "".join(chunks).strip()
-        if not result:
-            await msg.edit("❌ AI вернул пустой ответ.")
-            return
-
-        parts = _split_text_for_telegram(result)
-        await msg.edit(parts[0])
-        for part in parts[1:]:
-            await message.reply(part)
-
-    except Exception as exc:  # noqa: BLE001
-        logger.error("handle_yt_error", error=str(exc))
-        await msg.edit(f"❌ Ошибка: {exc}")
+# handle_yt — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above: handle_yt.
 
 
 # ---------------------------------------------------------------------------
 # !template — шаблоны сообщений с подстановкой переменных
 # ---------------------------------------------------------------------------
 
-_TEMPLATES_FILE = (
-    pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "message_templates.json"
-)
+# _TEMPLATES_FILE — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above.
 
 
-def _load_templates() -> dict[str, str]:
-    """Загружает шаблоны из JSON. Формат: {name: text}."""
-    try:
-        if _TEMPLATES_FILE.exists():
-            return json.loads(_TEMPLATES_FILE.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        pass
-    return {}
+# _load_templates — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above.
 
 
-def _save_templates(data: dict[str, str]) -> None:
-    """Сохраняет шаблоны в JSON-файл."""
-    _TEMPLATES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _TEMPLATES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+# _save_templates — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above.
 
 
-def _apply_template_vars(text: str, positional_args: list[str]) -> str:
-    """
-    Подставляет позиционные переменные {var1}, {var2}, ... в порядке появления.
-    Например: 'Привет, {name}! Ты {age} лет' + ['Павел', '30'] -> 'Привет, Павел! Ты 30 лет'
-    """
-    # Ищем все уникальные плейсхолдеры в порядке появления
-    placeholders = list(dict.fromkeys(re.findall(r"\{(\w+)\}", text)))
-    if not placeholders:
-        return text  # нет переменных — возвращаем как есть
-    result = text
-    for idx, ph in enumerate(placeholders):
-        if idx < len(positional_args):
-            result = result.replace(f"{{{ph}}}", positional_args[idx])
-    return result
+# _apply_template_vars — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above.
 
 
-async def handle_template(bot: "KraabUserbot", message: Message) -> None:
-    """
-    !template save <name> <text>  — сохранить шаблон
-    !template list                — список всех шаблонов
-    !template del <name>          — удалить шаблон
-    !template <name>              — отправить шаблон (без переменных)
-    !template <name> val1 val2 …  — отправить с подстановкой переменных
-    """
-    raw_args = bot._get_command_args(message).strip()
-    parts = raw_args.split(None, 1)
-
-    # --- !template list ---
-    if not parts or parts[0].lower() == "list":
-        templates = _load_templates()
-        if not templates:
-            await message.reply(
-                "📭 Нет сохранённых шаблонов.\n"
-                "Используй `!template save <name> <text>` чтобы создать шаблон."
-            )
-            return
-        lines = []
-        for name, text in sorted(templates.items()):
-            preview = text[:60].replace("\n", " ")
-            if len(text) > 60:
-                preview += "…"
-            lines.append(f"• `{name}` — {preview}")
-        await message.reply("📋 **Шаблоны:**\n" + "\n".join(lines))
-        return
-
-    subcommand = parts[0].lower()
-
-    # --- !template save <name> <text> ---
-    if subcommand == "save":
-        rest = parts[1].strip() if len(parts) > 1 else ""
-        name_and_text = rest.split(None, 1)
-        if not name_and_text:
-            raise UserInputError(
-                user_message="❌ Укажи имя и текст: `!template save <name> <text>`"
-            )
-        name = name_and_text[0].strip().lower()
-        if not name:
-            raise UserInputError(user_message="❌ Имя шаблона не может быть пустым.")
-        if len(name_and_text) < 2 or not name_and_text[1].strip():
-            raise UserInputError(
-                user_message=(
-                    "❌ Укажи текст шаблона: `!template save <name> <text>`\n"
-                    "Переменные задаются как `{var1}`, `{var2}` и т.д."
-                )
-            )
-        text = name_and_text[1].strip()
-        templates = _load_templates()
-        templates[name] = text
-        _save_templates(templates)
-        # Показываем найденные переменные в подсказке
-        vars_found = list(dict.fromkeys(re.findall(r"\{(\w+)\}", text)))
-        var_hint = (
-            f" Переменные: {', '.join(f'`{{{v}}}`' for v in vars_found)}" if vars_found else ""
-        )
-        await message.reply(f"✅ Шаблон `{name}` сохранён.{var_hint}")
-        return
-
-    # --- !template del <name> ---
-    if subcommand == "del":
-        if len(parts) < 2 or not parts[1].strip():
-            raise UserInputError(user_message="❌ Укажи имя: `!template del <name>`")
-        name = parts[1].strip().lower()
-        templates = _load_templates()
-        if name not in templates:
-            raise UserInputError(user_message=f"❌ Шаблон `{name}` не найден.")
-        del templates[name]
-        _save_templates(templates)
-        await message.reply(f"🗑 Шаблон `{name}` удалён.")
-        return
-
-    # --- !template <name> [val1] [val2] ... ---
-    name = subcommand  # уже lower()
-    templates = _load_templates()
-    if name not in templates:
-        raise UserInputError(user_message=f"❌ Шаблон `{name}` не найден. Список: `!template list`")
-    template_text = templates[name]
-    # Позиционные аргументы: всё что после имени шаблона, разбитое по пробелам
-    positional_args: list[str] = parts[1].split() if len(parts) > 1 else []
-    result_text = _apply_template_vars(template_text, positional_args)
-    await message.reply(result_text)
+# handle_template — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above: handle_template, _load_templates, _save_templates, _apply_template_vars.
 
 
 # ---------------------------------------------------------------------------
@@ -7274,107 +6161,12 @@ async def handle_say(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 
 # Файлы для резервной копии (относительно krab_runtime_state/)
-_BACKUP_FILES = [
-    "bookmarks.json",
-    "chat_monitors.json",
-    "command_aliases.json",
-    "saved_stickers.json",
-    "personal_todos.json",
-    "code_snippets.json",
-    "message_templates.json",
-    "saved_quotes.json",
-    "welcome_messages.json",
-    "silence_schedule.json",
-    "spam_filter_config.json",
-    "swarm_memory.json",
-    "swarm_channels.json",
-]
+# _BACKUP_FILES — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above.
 
 
-async def handle_backup(bot: "KraabUserbot", message: Message) -> None:
-    """
-    Экспортирует все persistent данные Краба в ZIP-архив и отправляет в чат.
-
-    !backup        — создать и отправить архив
-    !backup list   — показать список файлов, которые войдут в архив
-    """
-    import tempfile
-    import zipfile as _zipfile
-
-    args = bot._get_command_args(message).strip().lower()
-
-    # Базовая директория runtime state
-    runtime_dir = pathlib.Path.home() / ".openclaw" / "krab_runtime_state"
-
-    if args == "list":
-        # Показываем какие файлы войдут в архив
-        lines = ["📋 **Файлы в резервной копии:**\n"]
-        found_count = 0
-        missing_count = 0
-        for fname in _BACKUP_FILES:
-            fpath = runtime_dir / fname
-            if fpath.exists():
-                size_kb = fpath.stat().st_size / 1024
-                lines.append(f"✅ `{fname}` ({size_kb:.1f} KB)")
-                found_count += 1
-            else:
-                lines.append(f"⬜ `{fname}` _(отсутствует)_")
-                missing_count += 1
-        lines.append(f"\n**Итого:** {found_count} файлов найдено, {missing_count} отсутствуют.")
-        await message.reply("\n".join(lines))
-        return
-
-    # Создаём ZIP-архив во временной директории
-    status_msg = await message.reply("⏳ Создаю резервную копию данных Краба…")
-
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            archive_name = f"krab_backup_{timestamp}.zip"
-            archive_path = pathlib.Path(tmpdir) / archive_name
-
-            included: list[str] = []
-            skipped: list[str] = []
-
-            with _zipfile.ZipFile(archive_path, "w", compression=_zipfile.ZIP_DEFLATED) as zf:
-                for fname in _BACKUP_FILES:
-                    fpath = runtime_dir / fname
-                    if fpath.exists():
-                        zf.write(fpath, arcname=fname)
-                        included.append(fname)
-                    else:
-                        skipped.append(fname)
-
-            if not included:
-                await status_msg.edit(
-                    "⚠️ Нет данных для резервной копии — ни один файл не найден.\n"
-                    "Используй `!backup list` для проверки."
-                )
-                return
-
-            # Размер архива
-            archive_size_kb = archive_path.stat().st_size / 1024
-
-            # Формируем подпись к документу
-            caption_lines = [
-                f"💾 **Krab Backup** `{timestamp}`",
-                f"Файлов: {len(included)} | Размер: {archive_size_kb:.1f} KB",
-            ]
-            if skipped:
-                caption_lines.append(f"Пропущено (нет): {', '.join(skipped)}")
-
-            # Отправляем ZIP как документ
-            await bot.client.send_document(
-                chat_id=message.chat.id,
-                document=str(archive_path),
-                caption="\n".join(caption_lines),
-                reply_to_message_id=message.id,
-            )
-            await status_msg.delete()
-
-    except Exception as exc:  # noqa: BLE001
-        logger.error("handle_backup_error", error=str(exc))
-        await status_msg.edit(f"❌ Ошибка создания резервной копии: {str(exc)[:300]}")
+# handle_backup — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above: handle_backup, _BACKUP_FILES.
 
 
 # !explain — extracted to commands/ai_commands.py (Phase 2 Wave 7, Session 27).
@@ -7386,36 +6178,8 @@ async def handle_backup(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def handle_id(bot: "KraabUserbot", message: Message) -> None:
-    """Показать ID текущего чата, своего аккаунта и (если reply) сообщения и автора.
-
-    Синтаксис:
-      !id         — chat_id + свой user_id
-      !id в reply — chat_id + свой user_id + message_id + user_id автора
-    """
-    # ID текущего чата
-    chat_id = message.chat.id
-
-    # Свой user_id
-    me = await bot.client.get_me()
-    my_user_id = me.id
-
-    lines: list[str] = [
-        "🆔 IDs",
-        f"Chat: `{chat_id}`",
-        f"User: `{my_user_id}`",
-    ]
-
-    # Если команда отправлена в reply — добавляем message_id и user_id автора
-    reply = message.reply_to_message
-    if reply is not None:
-        lines.append(f"Message: `{reply.id}`")
-        # Автор может быть user или анонимный канал/бот
-        reply_from = reply.from_user
-        if reply_from is not None:
-            lines.append(f"Author: `{reply_from.id}`")
-
-    await message.reply("\n".join(lines))
+# handle_id — extracted to commands/content_commands.py (Phase 2 Wave 15).
+# Re-exported above: handle_id.
 
 
 # ---------------------------------------------------------------------------
