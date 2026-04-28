@@ -671,3 +671,138 @@ class TestDedicatedEmbedExecutor:
         await worker.stop(drain=False, timeout=1.0)
 
         fake_embedder.close.assert_called_once()
+
+
+class TestRestartRace:
+    """PYTHON-FASTAPI-5X: race-conditions в restart_userbot pipeline.
+
+    Сценарий: web endpoint /api/krab/restart_userbot вызывает userbot.restart()
+    → indexer.stop() → indexer.start(). Между shutdown executor'а и пересозданием
+    могут произойти три ситуации:
+      1. supervised_loop, выживший после старого start(), пытается _flush;
+      2. _maybe_embed_chunks вызывается на executor с private `_shutdown=True`,
+         но без выставленного `_executor_shutdown` (внешнее закрытие);
+      3. stop() уходит в await _consumer_task без таймаута — может зависнуть.
+    """
+
+    @pytest.mark.asyncio
+    async def test_maybe_embed_skip_when_executor_internally_shutdown(
+        self, worker: MemoryIndexerWorker
+    ) -> None:
+        """Защита #2: executor.shutdown был вызван, но флаг _executor_shutdown=False.
+
+        Должны корректно прочитать private `_shutdown` атрибут и тихо выйти,
+        не доходя до loop.run_in_executor (который бросил бы RuntimeError).
+        """
+        fake_embedder = MagicMock()
+        fake_embedder.embed_specific = MagicMock(return_value=None)
+        worker._embedder = fake_embedder
+        worker._executor_shutdown = False
+
+        # Закрываем executor извне (имитация __del__ старой instance).
+        worker._embed_executor.shutdown(wait=False, cancel_futures=True)
+
+        await worker._maybe_embed_chunks(["chunk_a"])
+
+        fake_embedder.embed_specific.assert_not_called()
+        assert worker.get_stats().failed.get("embed", 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_supervised_loop_exits_pre_loop_when_executor_shutdown(
+        self,
+        temp_archive: ArchivePaths,
+        whitelist_strict: MemoryWhitelist,
+    ) -> None:
+        """Защита #1: supervised_loop НЕ запускает _consumer_loop, если
+        к моменту его старта _executor_shutdown уже True.
+
+        Это закрывает race: stop() выставил флаг и cancel, но coroutine
+        успел начать новый виток while True.
+        """
+        worker = MemoryIndexerWorker(
+            archive_paths=temp_archive,
+            whitelist=whitelist_strict,
+            embedder=None,
+            queue_maxsize=10,
+            batch_size=2,
+            batch_timeout_sec=0.1,
+        )
+        worker._executor_shutdown = True
+
+        consumer_calls = [0]
+        original_consumer = MemoryIndexerWorker._consumer_loop
+
+        async def spy_consumer(self_: MemoryIndexerWorker) -> None:
+            consumer_calls[0] += 1
+            await original_consumer(self_)
+
+        # Прямой вызов supervised_loop — не должен вызвать _consumer_loop.
+        import unittest.mock
+
+        with unittest.mock.patch.object(
+            MemoryIndexerWorker, "_consumer_loop", spy_consumer
+        ):
+            await asyncio.wait_for(worker._supervised_loop(), timeout=2.0)
+
+        assert consumer_calls[0] == 0
+
+    @pytest.mark.asyncio
+    async def test_restart_sequence_recreates_executor(
+        self, worker: MemoryIndexerWorker
+    ) -> None:
+        """Защита: stop() → start() пересоздаёт executor и сбрасывает флаг.
+
+        Без этого все последующие embed после restart были бы no-op'ами.
+        """
+        await worker.start()
+        first_executor = worker._embed_executor
+        await worker.stop(drain=False, timeout=1.0)
+
+        assert worker._executor_shutdown is True
+        assert getattr(first_executor, "_shutdown", False) is True
+
+        await worker.start()
+        try:
+            assert worker._executor_shutdown is False
+            assert worker._embed_executor is not first_executor
+            assert getattr(worker._embed_executor, "_shutdown", False) is False
+        finally:
+            await worker.stop(drain=False, timeout=1.0)
+
+    @pytest.mark.asyncio
+    async def test_stop_consumer_task_cancel_has_timeout(
+        self, worker: MemoryIndexerWorker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Защита #3: stop() не виснет, если supervised_loop игнорирует cancel.
+
+        Поведение проверяем через подмену _supervised_loop на coroutine,
+        которая поглощает CancelledError и зависает; stop() должен выйти
+        по таймауту 5s, не уронив тест.
+        """
+
+        async def hanging_loop(self_: MemoryIndexerWorker) -> None:
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                # Имитируем плохо себя ведущий loop, который проглатывает cancel
+                # и продолжает работу. stop() должен выйти по wait_for-таймауту.
+                await asyncio.sleep(60)
+
+        monkeypatch.setattr(MemoryIndexerWorker, "_supervised_loop", hanging_loop)
+        await worker.start()
+        # Подменяем wait_for таймаут через monkeypatch модуля — не нужно,
+        # реальный таймаут 5s слишком долгий для unit-теста. Используем
+        # asyncio.wait_for на саму stop() с агрессивным внешним таймаутом.
+        # Внутри stop() стоит wait_for(consumer_task, 5.0); проверяем,
+        # что он действительно ловит TimeoutError и не падает.
+        # Укорачиваем внутренний таймаут патчингом asyncio.wait_for? — нельзя
+        # глобально. Вместо этого проверяем, что без явного timeout-хука
+        # stop() укладывается в <6s и возвращается.
+        import time as _time
+
+        t0 = _time.monotonic()
+        await worker.stop(drain=False, timeout=0.1)
+        elapsed = _time.monotonic() - t0
+        # Нижняя граница: 5s wait_for cancel_timeout (минус drain=False).
+        # Верхняя: <7s — guard от регрессии «stop виснет навечно».
+        assert elapsed < 7.0, f"stop() took too long: {elapsed:.2f}s"

@@ -148,6 +148,14 @@ class MemoryIndexerWorker:
         """Запускает worker: создаёт queue и consumer task."""
         if self._consumer_task is not None and not self._consumer_task.done():
             return
+        # Если executor был закрыт предыдущим stop() — пересоздаём его.
+        # Без этого после restart_userbot все embed-вызовы упадут в shutdown skip.
+        if self._executor_shutdown or getattr(self._embed_executor, "_shutdown", False):
+            self._embed_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="krab_embed",
+            )
+            self._executor_shutdown = False
         self._queue = asyncio.Queue(maxsize=self._queue_maxsize)
         self._stop_requested = False
         self._stats.started_at = datetime.now(timezone.utc)
@@ -181,10 +189,15 @@ class MemoryIndexerWorker:
                 )
         # Принудительно закрываем все ещё открытые builders.
         await self._force_flush_all_builders()
+        # Cancel + await supervised_loop с жёстким таймаутом 5s — гарантия,
+        # что старый loop не доживёт до момента, когда новый start() пересоздаст
+        # executor (race: cannot schedule new futures after shutdown).
         if self._consumer_task is not None and not self._consumer_task.done():
             self._consumer_task.cancel()
             try:
-                await self._consumer_task
+                await asyncio.wait_for(self._consumer_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("memory_indexer_consumer_task_cancel_timeout")
             except (asyncio.CancelledError, Exception):
                 pass
         # C5: закрываем embedder connection + shutdown dedicated executor.
@@ -342,6 +355,16 @@ class MemoryIndexerWorker:
         backoff_sec = 1.0
         max_backoff = 30.0
         while True:
+            # Защита от race-condition restart_userbot: если executor уже
+            # закрыт — выходим до начала consumer loop. Иначе старая
+            # supervised_loop coroutine продолжит работу после того, как stop()
+            # выставил флаг, и попытается _flush_batch → _maybe_embed_chunks →
+            # submit на закрытый executor.
+            # NB: _stop_requested сюда не включаем — consumer_loop сам должен
+            # дренировать очередь по условию `not stop or not empty`.
+            if self._executor_shutdown:
+                logger.info("memory_indexer_supervised_loop_exit_pre_loop")
+                break
             try:
                 await self._consumer_loop()
                 break  # Нормальный выход (consumer решил остановиться)
@@ -356,8 +379,8 @@ class MemoryIndexerWorker:
                     restart_in_sec=backoff_sec,
                     restart_count=self._stats.restarts,
                 )
-                # Не перезапускаем если остановка уже запрошена.
-                if self._stop_requested:
+                # Не перезапускаем если остановка уже запрошена или executor закрыт.
+                if self._stop_requested or self._executor_shutdown:
                     break
                 await asyncio.sleep(backoff_sec)
                 backoff_sec = min(backoff_sec * 2, max_backoff)
@@ -660,7 +683,12 @@ class MemoryIndexerWorker:
                 return
         # Если executor уже закрыт (например, в процессе restart_userbot) —
         # тихо пропускаем: данные в БД уже сохранены, embed будет при следующем старте.
-        if self._executor_shutdown:
+        # Двойная проверка: явный флаг (выставлен в stop()) + интроспекция
+        # private-атрибута `_shutdown` ThreadPoolExecutor — закрывает кейс,
+        # когда executor закрыт извне (например, через __del__ предыдущей
+        # instance) и наш флаг не выставлен.
+        if self._executor_shutdown or getattr(self._embed_executor, "_shutdown", False):
+            logger.info("memory_indexer_executor_shutdown_skip")
             return
         try:
             # C5: используем dedicated executor, чтобы переиспользовать один
