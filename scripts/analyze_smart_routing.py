@@ -26,6 +26,7 @@ _POLICY_PATH = _RUNTIME_STATE / "chat_response_policies.json"
 
 # ── Парсинг structlog-строк ─────────────────────────────────────────────────
 # Формат: "2026-04-03 16:02:40 [info     ] event_name   key=value key2='v v'"
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\[(\w+)\s*\]\s+(\S+)\s*(.*)")
 _KV_RE = re.compile(r"(\w+)=(?:'([^']*)'|\"([^\"]*)\"|([\S]*))")
 
@@ -53,7 +54,10 @@ def _parse_kv(kv_str: str) -> dict[str, str]:
 
 def _parse_line(line: str) -> dict[str, Any] | None:
     """Парсит одну log-строку → dict или None если формат не совпал."""
-    m = _LINE_RE.match(line.rstrip())
+    # Runtime-логи пишутся через colorized structlog. Для анализа сохраняем
+    # обычный regex-парсер, но сначала убираем ANSI-коды вокруг timestamp/event/key.
+    clean_line = _ANSI_RE.sub("", line).rstrip()
+    m = _LINE_RE.match(clean_line)
     if not m:
         return None
     ts_str, level, event, kv_str = m.group(1), m.group(2), m.group(3), m.group(4)

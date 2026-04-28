@@ -65,6 +65,24 @@ class TestParseLogLine:
         assert result["decision_path"] == "llm_yes"
         assert float(result["confidence"]) == pytest.approx(0.85)
 
+    def test_colorized_structlog_line(self):
+        line = (
+            "\x1b[2m2026-04-27 20:31:39\x1b[0m "
+            "[\x1b[32m\x1b[1minfo     \x1b[0m] "
+            "\x1b[1msmart_trigger_decision        \x1b[0m "
+            "\x1b[36mchat_id\x1b[0m=\x1b[35m-100123\x1b[0m "
+            "\x1b[36mconfidence\x1b[0m=\x1b[35m0.4\x1b[0m "
+            "\x1b[36mdecision_path\x1b[0m=\x1b[35mregex_low\x1b[0m "
+            "\x1b[36mshould_respond\x1b[0m=\x1b[35mFalse\x1b[0m"
+        )
+        result = _parse_line(line)
+        assert result is not None
+        assert result["event"] == "smart_trigger_decision"
+        assert result["chat_id"] == "-100123"
+        assert result["decision_path"] == "regex_low"
+        assert result["should_respond"] == "False"
+        assert float(result["confidence"]) == pytest.approx(0.4)
+
     def test_garbage_line_returns_none(self):
         assert _parse_line("==== Krab detached start ====") is None
         assert _parse_line("") is None

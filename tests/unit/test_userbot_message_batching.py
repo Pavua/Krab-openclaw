@@ -48,7 +48,7 @@ def _make_batching_bot_stub() -> KraabUserbot:
     bot._looks_like_integrations_question = Mock(return_value=False)
     bot._build_system_prompt_for_sender = Mock(return_value="SYSTEM")
     bot._build_runtime_chat_scope_id = Mock(return_value="runtime-chat-123")
-    bot._build_effective_user_query = Mock(side_effect=lambda *, query, has_images: query)
+    bot._build_effective_user_query = Mock(side_effect=lambda *, query, has_images, **_: query)
     bot._extract_live_stream_text = Mock(side_effect=lambda text, allow_reasoning=False: text)
     bot._strip_transport_markup = Mock(side_effect=lambda text: text)
     bot._apply_deferred_action_guard = Mock(side_effect=lambda text: text)
