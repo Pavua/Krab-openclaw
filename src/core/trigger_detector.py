@@ -211,6 +211,7 @@ class SmartTriggerResult:
       - "regex_threshold_fallback" — LLM unavailable, regex против policy threshold
       - "llm_yes" / "llm_no" — LLM ответил should_respond=true/false
       - "llm_error_fallback" — LLM error → fallback на regex threshold
+      - "media_present"      — фото/видео/video_note/animation/sticker без caption
     """
 
     should_respond: bool
@@ -218,6 +219,13 @@ class SmartTriggerResult:
     confidence: float
     legacy_result: TriggerResult | None = None
     intent_result: "IntentResult | None" = None
+
+
+# Bug 11 (Session 28): media-aware bumps — photo/video/video_note/animation/sticker
+# в group chats без caption и mention silent дропались Stage 3 regex_low (text="").
+# Bump поднимает confidence до floor, чтобы media хотя бы попадало в LLM stage.
+_MEDIA_PRESENT_FLOOR = 0.55  # без caption — выше NORMAL threshold (0.5) → respond
+_MEDIA_WITH_CAPTION_FLOOR = 0.4  # с caption — borderline → LLM решит
 
 
 async def detect_smart_trigger(
@@ -230,6 +238,7 @@ async def detect_smart_trigger(
     chat_context: list,
     policy_store: "ChatResponsePolicyStore",
     llm_classifier: "LLMIntentClassifier | None" = None,
+    has_media: bool = False,
 ) -> SmartTriggerResult:
     """5-stage smart routing pipeline (Session 26 Smart Routing).
 
@@ -238,6 +247,14 @@ async def detect_smart_trigger(
     Stage 3: regex fast filter — score>=0.6 → respond, score<0.2 → drop.
     Stage 4: LLM intent classifier для borderline (0.2-0.6).
     Stage 5: fallback на regex+threshold при отсутствии/ошибке LLM.
+
+    has_media: True если message несёт photo/video/video_note/animation/sticker.
+        Bug 11 fix (Session 28): media без caption ранее silent дропалось на
+        Stage 3 (text="" → score 0.0 → regex_low). Теперь:
+          - has_media=True + пустой/короткий text → confidence floor 0.55,
+            decision_path="media_present" → respond (выше NORMAL threshold);
+          - has_media=True + caption (есть текст) → floor 0.4 (borderline) →
+            обычный pipeline (regex/LLM) с поднятым нижним порогом.
     """
     # Lazy import чтобы избежать circular import (chat_response_policy → нет;
     # llm_intent_classifier тоже не импортит нас).
@@ -278,8 +295,31 @@ async def detect_smart_trigger(
             legacy_result=legacy,
         )
 
+    # Bug 11 (Session 28): media-aware short-circuit для media без caption.
+    # До fix: photo/video в группе без caption → text="" → regex_low → drop.
+    # Логика:
+    #   - media + пустой/короткий caption → floor 0.55, путь "media_present" →
+    #     respond сразу (NORMAL threshold 0.5 < 0.55, CAUTIOUS 0.7 > 0.55 уважаем).
+    #   - media + полноценный caption → floor 0.4, обычный pipeline (LLM/threshold).
+    has_caption_text = bool(text and text.strip())
+    if has_media and not has_caption_text:
+        media_confidence = max(legacy.score, _MEDIA_PRESENT_FLOOR)
+        # Уважаем per-chat threshold: CAUTIOUS (0.7) → media floor 0.55 не пройдёт.
+        return SmartTriggerResult(
+            should_respond=(media_confidence >= threshold),
+            decision_path="media_present",
+            confidence=media_confidence,
+            legacy_result=legacy,
+        )
+
     # Very low score → drop без LLM
-    if legacy.score < 0.2:
+    # Media + caption: поднимаем floor до 0.4, чтобы попасть в LLM stage,
+    # а не упасть в regex_low.
+    effective_low_score = legacy.score
+    if has_media and has_caption_text:
+        effective_low_score = max(effective_low_score, _MEDIA_WITH_CAPTION_FLOOR)
+
+    if effective_low_score < 0.2:
         return SmartTriggerResult(
             should_respond=False,
             decision_path="regex_low",

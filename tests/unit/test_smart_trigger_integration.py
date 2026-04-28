@@ -300,6 +300,151 @@ async def test_no_llm_classifier_uses_regex_threshold_fallback(policy_store):
     assert result.should_respond is False
 
 
+# ---------------------------------------------------------------------------
+# Bug 11 (Session 28): media-aware bumps
+# Photo / video / video_note / animation / sticker без caption ранее silent
+# дропались Stage 3 (text="" → score 0.0 → regex_low). Fix: has_media=True →
+# floor 0.55, decision_path="media_present" → respond.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_media_photo_no_caption_bumps_to_media_present(policy_store):
+    """Photo без caption в group → has_media=True → media_present → respond."""
+    result = await detect_smart_trigger(
+        text="",
+        chat_id="555",
+        is_reply_to_me=False,
+        has_explicit_mention=False,
+        has_command=False,
+        chat_context=[],
+        policy_store=policy_store,
+        has_media=True,
+    )
+    assert result.decision_path == "media_present"
+    assert result.confidence >= 0.55
+    # NORMAL threshold 0.5 — 0.55 >= 0.5 → respond
+    assert result.should_respond is True
+
+
+@pytest.mark.asyncio
+async def test_media_video_note_no_caption_bumps(policy_store):
+    """Video_note без caption → media_present → respond."""
+    result = await detect_smart_trigger(
+        text="",
+        chat_id="556",
+        is_reply_to_me=False,
+        has_explicit_mention=False,
+        has_command=False,
+        chat_context=[],
+        policy_store=policy_store,
+        has_media=True,
+    )
+    assert result.decision_path == "media_present"
+    assert result.should_respond is True
+    assert result.confidence >= 0.55
+
+
+@pytest.mark.asyncio
+async def test_media_sticker_no_caption_bumps(policy_store):
+    """Sticker без caption → media_present → respond."""
+    result = await detect_smart_trigger(
+        text="   ",  # whitespace-only считается «нет caption»
+        chat_id="557",
+        is_reply_to_me=False,
+        has_explicit_mention=False,
+        has_command=False,
+        chat_context=[],
+        policy_store=policy_store,
+        has_media=True,
+    )
+    assert result.decision_path == "media_present"
+    assert result.should_respond is True
+
+
+@pytest.mark.asyncio
+async def test_media_animation_no_caption_bumps(policy_store):
+    """Animation/GIF без caption → media_present → respond."""
+    result = await detect_smart_trigger(
+        text="",
+        chat_id="558",
+        is_reply_to_me=False,
+        has_explicit_mention=False,
+        has_command=False,
+        chat_context=[],
+        policy_store=policy_store,
+        has_media=True,
+    )
+    assert result.decision_path == "media_present"
+    assert result.should_respond is True
+
+
+@pytest.mark.asyncio
+async def test_media_present_respects_cautious_threshold(policy_store):
+    """CAUTIOUS threshold 0.7 → media floor 0.55 < 0.7 → drop."""
+    from src.core.chat_response_policy import ChatMode
+
+    policy_store.update_policy("559", mode=ChatMode.CAUTIOUS)
+    result = await detect_smart_trigger(
+        text="",
+        chat_id="559",
+        is_reply_to_me=False,
+        has_explicit_mention=False,
+        has_command=False,
+        chat_context=[],
+        policy_store=policy_store,
+        has_media=True,
+    )
+    assert result.decision_path == "media_present"
+    # CAUTIOUS 0.7 > media floor 0.55 → drop
+    assert result.should_respond is False
+
+
+@pytest.mark.asyncio
+async def test_media_with_caption_falls_through_to_llm(policy_store, mock_classifier):
+    """Media + caption (без триггеров) → floor 0.4 → LLM stage (не regex_low)."""
+    mock_classifier.classify_intent_for_krab = AsyncMock(
+        return_value=IntentResult(
+            should_respond=True,
+            confidence=0.7,
+            reasoning="user shared media with question-like caption",
+        )
+    )
+    result = await detect_smart_trigger(
+        text="посмотрите что нашёл",  # обычный caption без implicit-question
+        chat_id="560",
+        is_reply_to_me=False,
+        has_explicit_mention=False,
+        has_command=False,
+        chat_context=[],
+        policy_store=policy_store,
+        llm_classifier=mock_classifier,
+        has_media=True,
+    )
+    # Должен попасть в LLM stage, не в regex_low
+    assert result.decision_path == "llm_yes"
+    assert result.should_respond is True
+    mock_classifier.classify_intent_for_krab.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_no_media_default_unchanged_behavior(policy_store, mock_classifier):
+    """has_media=False (default) — старое поведение regex_low не сломано."""
+    result = await detect_smart_trigger(
+        text="просто хорошая погода сегодня",
+        chat_id="561",
+        is_reply_to_me=False,
+        has_explicit_mention=False,
+        has_command=False,
+        chat_context=[],
+        policy_store=policy_store,
+        llm_classifier=mock_classifier,
+    )
+    assert result.decision_path == "regex_low"
+    assert result.should_respond is False
+    mock_classifier.classify_intent_for_krab.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_empty_chat_context_works(policy_store, mock_classifier):
     """Empty chat_context — LLM всё равно вызывается, не падает."""
