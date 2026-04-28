@@ -120,6 +120,18 @@ def _extract_forward_info(message: Any) -> dict[str, Any]:
     return result
 
 
+def _extract_forward_origin_parts(message: Any) -> tuple[Any, Any, Any]:
+    """Backwards-compat shim для userbot_bridge: 3-tuple (forward_from, forward_sender_name, forward_from_chat).
+
+    Краб использует этот helper в early forward detection — нужен сырой доступ
+    к pyrogram-полям для проверки `any([...])` без полной структурированной формы.
+    """
+    forward_from = _attr(message, "forward_from")
+    forward_sender_name = _attr(message, "forward_sender_name")
+    forward_from_chat = _attr(message, "forward_from_chat")
+    return forward_from, forward_sender_name, forward_from_chat
+
+
 _REPLY_TEXT_MAX_LEN = 500
 
 
