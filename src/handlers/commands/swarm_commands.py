@@ -833,6 +833,13 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
         room = AgentRoom(roles=roles)
         router = router_factory(team_key or "default")
 
+        # Round origin override: !swarm в additional_response_chats отвечает в тот же чат,
+        # а не в forum (Session 28, How2AI integration; см. swarm_channels.py).
+        from ...core.swarm_channels import swarm_channels as _swarm_channels_origin
+
+        if _swarm_channels_origin.is_additional_response_chat(message.chat.id):
+            _swarm_channels_origin.set_round_origin(team_key or "default", message.chat.id)
+
         if loop_mode:
             result_text = await room.run_loop(
                 topic,
