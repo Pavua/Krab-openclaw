@@ -22,6 +22,8 @@ Formula: score(chunk) = sum(1 / (k + rank_in_source)) для каждого sour
 
 from __future__ import annotations
 
+import math
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,6 +38,75 @@ ARCHIVE_DB = Path("~/.openclaw/krab_memory/archive.db").expanduser()
 
 #: Classic RRF constant (Cormack et al. 2009) — сглаживает вклад низких рангов.
 RRF_K = 60
+
+# ---------------------------------------------------------------------------
+# Feature A: Successful Response Retrieval Boost.
+# ---------------------------------------------------------------------------
+
+#: Коэффициент при logarithmic positive boost. boost = 1 + log(1+pos) * COEF.
+RESPONSE_FEEDBACK_POSITIVE_COEF = 0.3
+#: Linear штраф за каждый negative_count. penalty = 1 - neg * PENALTY (clamped).
+RESPONSE_FEEDBACK_NEGATIVE_COEF = 0.2
+#: Нижний порог penalty: даже сильно "плохие" чанки не уходят полностью в ноль —
+#: иначе мы перестаём учиться на негативных примерах.
+RESPONSE_FEEDBACK_MIN_MULTIPLIER = 0.1
+
+
+def _response_feedback_enabled() -> bool:
+    """Config-flag: KRAB_RESPONSE_FEEDBACK_BOOST_ENABLED (default on).
+
+    Допустимые off-значения: 0/false/no/off (case-insensitive). Пустая
+    переменная → on. Используется только в hybrid_search() — pure-функции
+    apply_response_feedback_boost() и compute_*_multiplier() не зависят от env.
+    """
+    raw = os.environ.get("KRAB_RESPONSE_FEEDBACK_BOOST_ENABLED", "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return True
+
+
+def compute_feedback_multiplier(positive_count: int, negative_count: int) -> float:
+    """Чистая формула множителя от positive/negative counters.
+
+    Идемпотентна, монотонна по positive (растёт), монотонна по negative (падает).
+    Возвращает 1.0 при отсутствии feedback'а (no-op для не помеченных чанков).
+    """
+    if positive_count < 0:
+        positive_count = 0
+    if negative_count < 0:
+        negative_count = 0
+    boost = 1.0
+    if positive_count > 0:
+        boost *= 1.0 + math.log(1.0 + positive_count) * RESPONSE_FEEDBACK_POSITIVE_COEF
+    if negative_count > 0:
+        penalty = 1.0 - negative_count * RESPONSE_FEEDBACK_NEGATIVE_COEF
+        boost *= max(RESPONSE_FEEDBACK_MIN_MULTIPLIER, penalty)
+    return boost
+
+
+def apply_response_feedback_boost(
+    results: list["SearchResult"],
+    feedback_map: dict[str, tuple[int, int]],
+) -> list["SearchResult"]:
+    """Применяет boost к rrf_score и пересортирует список.
+
+    Args:
+        results: вход RRF-results.
+        feedback_map: {chunk_id: (positive_count, negative_count)}.
+
+    Возвращает новый отсортированный список (in-place мутация полей rrf_score
+    у переданных объектов — это OK, так как они одноразовые view-объекты).
+    Чанки без feedback'а получают multiplier=1.0 (rrf_score не меняется).
+    """
+    if not feedback_map:
+        return results
+    for result in results:
+        pos, neg = feedback_map.get(result.chunk_id, (0, 0))
+        if pos == 0 and neg == 0:
+            continue
+        multiplier = compute_feedback_multiplier(pos, neg)
+        result.rrf_score *= multiplier
+    return sorted(results, key=lambda r: -r.rrf_score)
 
 
 @dataclass
@@ -222,6 +293,27 @@ def hybrid_search(query: str, limit: int = 10) -> list[SearchResult]:
         fts = _fts_search(conn, query, limit=50)
         sem = _semantic_search(conn, query, limit=50)
         combined = rrf_combine(fts, sem)
+
+        # Feature A: Successful Response Retrieval Boost.
+        # Дешёвый JOIN по top-N кандидатам (не все 50 — берём wider top чтобы
+        # boost мог "вытащить" чанк из глубины). Default-safe: при отсутствии
+        # таблицы fetch_response_feedback_for_chunks вернёт {}.
+        if combined and _response_feedback_enabled():
+            try:
+                from .memory_archive import fetch_response_feedback_for_chunks
+
+                # Берём шире чем limit, чтобы boost мог поднять чанк из глубины.
+                wider_pool = combined[: max(limit * 3, 30)]
+                fb_map = fetch_response_feedback_for_chunks(conn, [r.chunk_id for r in wider_pool])
+                if fb_map:
+                    combined = apply_response_feedback_boost(combined, fb_map)
+            except Exception as exc:  # noqa: BLE001 - boost опционален
+                logger.debug(
+                    "hybrid_response_feedback_boost_skipped",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
         top = combined[:limit]
 
         if top:

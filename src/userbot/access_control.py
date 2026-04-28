@@ -186,6 +186,7 @@ class AccessControlMixin:
         *,
         is_allowed_sender: bool,
         access_level: str | "AccessLevel | None" = None,
+        chat_id: str | int | None = None,
     ) -> str:
         """
         Возвращает системный промпт в зависимости от доверия к отправителю.
@@ -242,10 +243,14 @@ class AccessControlMixin:
         )
         base_prompt = base_prompt + injection_defense
 
-        return self._append_runtime_constraints(base_prompt)
+        return self._append_runtime_constraints(base_prompt, chat_id=chat_id)
 
     @staticmethod
-    def _append_runtime_constraints(prompt: str) -> str:
+    def _append_runtime_constraints(
+        prompt: str,
+        *,
+        chat_id: str | int | None = None,
+    ) -> str:
         """
         Добавляет runtime-ограничения, которые не должны теряться между ролями.
         """
@@ -285,6 +290,21 @@ class AccessControlMixin:
         )
         if reply_first not in base:
             base = f"{base}\n\n{reply_first}".strip()
+
+        # Chat persona drift suffix (Feature C, Bug 11 follow-up):
+        # per-chat tone adaptation. Fail-open — любая ошибка не должна
+        # сломать сборку system prompt.
+        if chat_id is not None:
+            try:
+                from ..core.chat_persona_profile import format_persona_suffix  # noqa: PLC0415
+
+                chat_suffix = format_persona_suffix(chat_id)
+                if chat_suffix and chat_suffix not in base:
+                    base = f"{base}\n\n{chat_suffix}".strip()
+            except Exception:  # noqa: BLE001
+                # Не логируем здесь — внутри format_persona_suffix уже есть
+                # fail-safe c warning, повторно шуметь смысла нет.
+                pass
 
         return base
 

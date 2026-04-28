@@ -154,6 +154,27 @@ CREATE TABLE IF NOT EXISTS vec_chunks_meta (
 ) WITHOUT ROWID;
 """
 
+# Feature A: Successful Response Retrieval Boost.
+# Sidecar-таблица учёта positive/negative реакций на конкретные ответы Краба.
+# Ключ — (chat_id, message_id) ответа Краба; positive_count/negative_count
+# обновляются при каждой реакции/ack/удалении. Используется retrieval'ом
+# (memory_hybrid_reranker) для буста чанков, содержащих "удачные" ответы.
+_DDL_RESPONSE_FEEDBACK = """
+CREATE TABLE IF NOT EXISTS response_feedback (
+    chat_id         TEXT NOT NULL,
+    message_id      TEXT NOT NULL,
+    positive_count  INTEGER NOT NULL DEFAULT 0,
+    negative_count  INTEGER NOT NULL DEFAULT 0,
+    last_updated_at TEXT NOT NULL,
+    PRIMARY KEY (chat_id, message_id)
+) WITHOUT ROWID;
+"""
+
+_DDL_RESPONSE_FEEDBACK_INDEXES = [
+    # Индекс по message_id ускоряет lookup при boost-применении (JOIN с chunk_messages).
+    "CREATE INDEX IF NOT EXISTS idx_response_feedback_message ON response_feedback(message_id);",
+]
+
 
 # ---------------------------------------------------------------------------
 # Публичный API.
@@ -204,6 +225,8 @@ def create_schema(conn: sqlite3.Connection) -> None:
             _DDL_MESSAGES_FTS,
             _DDL_INDEXER_STATE,
             _DDL_VEC_CHUNKS_META,
+            _DDL_RESPONSE_FEEDBACK,
+            *_DDL_RESPONSE_FEEDBACK_INDEXES,
         ):
             cur.execute(stmt)
 
@@ -298,6 +321,100 @@ def get_schema_version(conn: sqlite3.Connection) -> int | None:
         return int(row[0])
     except (TypeError, ValueError):
         return None
+
+
+def ensure_response_feedback_table(conn: sqlite3.Connection) -> bool:
+    """Lazy CREATE TABLE для response_feedback (Feature A boost).
+
+    Используется для БД, которые были созданы до добавления feature A —
+    основной create_schema идемпотентен, но эта функция позволяет hook'ам
+    feedback_tracker'а вызывать её самостоятельно без полного create_schema.
+
+    Возвращает True при успехе, False при ошибке (graceful degradation).
+    """
+    try:
+        cur = conn.cursor()
+        cur.execute(_DDL_RESPONSE_FEEDBACK)
+        for stmt in _DDL_RESPONSE_FEEDBACK_INDEXES:
+            cur.execute(stmt)
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        return False
+
+
+def record_response_feedback(
+    conn: sqlite3.Connection,
+    chat_id: str,
+    message_id: str,
+    *,
+    positive_delta: int = 0,
+    negative_delta: int = 0,
+) -> bool:
+    """UPSERT строки feedback'а: increments positive/negative counters.
+
+    Args:
+        chat_id: chat_id Krab-сообщения (str для совместимости со схемой).
+        message_id: message_id Krab-сообщения (str).
+        positive_delta: на сколько увеличить positive_count (>=0).
+        negative_delta: на сколько увеличить negative_count (>=0).
+
+    Returns:
+        True при успехе, False если таблица недоступна / ошибка.
+    """
+    if positive_delta < 0 or negative_delta < 0:
+        return False
+    if positive_delta == 0 and negative_delta == 0:
+        return False
+    now_iso = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds") + "Z"
+    try:
+        conn.execute(
+            """
+            INSERT INTO response_feedback
+                (chat_id, message_id, positive_count, negative_count, last_updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id, message_id) DO UPDATE SET
+                positive_count = positive_count + excluded.positive_count,
+                negative_count = negative_count + excluded.negative_count,
+                last_updated_at = excluded.last_updated_at;
+            """,
+            (str(chat_id), str(message_id), int(positive_delta), int(negative_delta), now_iso),
+        )
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        return False
+
+
+def fetch_response_feedback_for_chunks(
+    conn: sqlite3.Connection,
+    chunk_ids: list[str],
+) -> dict[str, tuple[int, int]]:
+    """Возвращает {chunk_id: (positive_sum, negative_sum)} для заданных chunks.
+
+    Агрегирует через JOIN chunk_messages → response_feedback. Если таблицы
+    response_feedback нет / ошибка / chunks пуст — возвращает {} (graceful).
+    """
+    if not chunk_ids:
+        return {}
+    placeholders = ",".join("?" * len(chunk_ids))
+    try:
+        cur = conn.execute(
+            f"""
+            SELECT cm.chunk_id,
+                   COALESCE(SUM(rf.positive_count), 0) AS pos,
+                   COALESCE(SUM(rf.negative_count), 0) AS neg
+            FROM chunk_messages AS cm
+            JOIN response_feedback AS rf
+              ON rf.chat_id = cm.chat_id AND rf.message_id = cm.message_id
+            WHERE cm.chunk_id IN ({placeholders})
+            GROUP BY cm.chunk_id;
+            """,
+            list(chunk_ids),
+        )
+        return {row[0]: (int(row[1]), int(row[2])) for row in cur.fetchall()}
+    except sqlite3.OperationalError:
+        return {}
 
 
 def list_tables(conn: sqlite3.Connection) -> list[str]:
