@@ -612,6 +612,55 @@ class TestDedicatedEmbedExecutor:
         assert kwargs.get("cancel_futures") is True
 
     @pytest.mark.asyncio
+    async def test_maybe_embed_chunks_silent_on_executor_shutdown(
+        self, worker: MemoryIndexerWorker
+    ) -> None:
+        """PYTHON-FASTAPI-5X: _maybe_embed_chunks молча пропускает embed если executor закрыт.
+
+        Гонка restart_userbot: stop() вызывает executor.shutdown, затем
+        ещё живой consumer loop пытается run_in_executor → RuntimeError.
+        Fix: флаг _executor_shutdown + перехват RuntimeError.
+        """
+        fake_embedder = MagicMock()
+        fake_embedder.embed_specific = MagicMock(return_value=None)
+        worker._embedder = fake_embedder
+
+        # Симулируем что executor уже закрыт
+        worker._executor_shutdown = True
+
+        # Должно завершиться без исключения, embed_specific НЕ вызывается
+        await worker._maybe_embed_chunks(["chunk_x", "chunk_y"])
+        fake_embedder.embed_specific.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_maybe_embed_chunks_swallows_runtime_error_shutdown(
+        self, worker: MemoryIndexerWorker
+    ) -> None:
+        """Гонка: флаг ещё не выставлен но executor.shutdown уже вызван.
+
+        run_in_executor бросает RuntimeError с текстом 'cannot schedule new futures
+        after shutdown' — должен быть проглочен, не logged как ошибка.
+        """
+        import unittest.mock
+
+        fake_embedder = MagicMock()
+        fake_embedder.embed_specific = MagicMock(return_value=None)
+        worker._embedder = fake_embedder
+        worker._executor_shutdown = False  # флаг ещё не выставлен
+
+        loop = asyncio.get_event_loop()
+
+        def _raise_shutdown(executor, func, *args):  # type: ignore[no-untyped-def]
+            raise RuntimeError("cannot schedule new futures after shutdown")
+
+        with unittest.mock.patch.object(loop, "run_in_executor", side_effect=_raise_shutdown):
+            # Не должно пробросить исключение наружу
+            await worker._maybe_embed_chunks(["chunk_x"])
+
+        # Ошибка embed не засчитывается (silent skip)
+        assert worker.get_stats().failed.get("embed", 0) == 0
+
+    @pytest.mark.asyncio
     async def test_embedder_close_called_on_stop(self, worker: MemoryIndexerWorker) -> None:
         """stop() должен вызвать embedder.close() если он есть."""
         fake_embedder = MagicMock()

@@ -127,6 +127,7 @@ class MemoryIndexerWorker:
         self._queue: asyncio.Queue[QueuedMessage] | None = None
         self._consumer_task: asyncio.Task | None = None  # type: ignore[type-arg]
         self._stop_requested: bool = False
+        self._executor_shutdown: bool = False  # флаг: executor уже закрыт
         self._stats = IndexerStats(queue_maxsize=queue_maxsize)
         self._builders: dict[str, ChunkBuilder] = {}
         # Watermark cache: chat_id → last indexed message_id (для idempotency).
@@ -187,6 +188,9 @@ class MemoryIndexerWorker:
             except (asyncio.CancelledError, Exception):
                 pass
         # C5: закрываем embedder connection + shutdown dedicated executor.
+        # Флаг выставляется ДО shutdown чтобы гонка с _maybe_embed_chunks не
+        # приводила к RuntimeError "cannot schedule new futures after shutdown".
+        self._executor_shutdown = True
         if self._embedder is not None:
             close_fn = getattr(self._embedder, "close", None)
             if callable(close_fn):
@@ -654,6 +658,10 @@ class MemoryIndexerWorker:
                     logger.warning("memory_indexer_embed_skipped_no_vec")
                 self._stats.embed_disabled = True
                 return
+        # Если executor уже закрыт (например, в процессе restart_userbot) —
+        # тихо пропускаем: данные в БД уже сохранены, embed будет при следующем старте.
+        if self._executor_shutdown:
+            return
         try:
             # C5: используем dedicated executor, чтобы переиспользовать один
             # и тот же OS thread → persistent sqlite connection + sqlite-vec.
@@ -664,9 +672,24 @@ class MemoryIndexerWorker:
                 chunk_ids,
             )
             self._stats.embeddings_committed += len(chunk_ids)
+        except RuntimeError as exc:
+            # Гонка: executor успел закрыться после нашей проверки флага —
+            # silent skip, не логируем как ошибку (это не data loss).
+            if "cannot schedule new futures after shutdown" in str(exc):
+                return
+            self._stats.bump_failed("embed")
+            logger.error(
+                "memory_indexer_embed_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
         except Exception as exc:
             self._stats.bump_failed("embed")
-            logger.error("memory_indexer_embed_failed", error=str(exc))
+            logger.error(
+                "memory_indexer_embed_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
 
 # ---------------------------------------------------------------------------
