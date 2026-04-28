@@ -121,9 +121,23 @@ def _reset_for_tests() -> None:
 # рестарта parallel-клиент (swarm) уже закрыл/переоткрыл sqlite-storage,
 # подзапрос ``SELECT api_id FROM sessions`` возвращает NULL → None → crash.
 #
+# История: предыдущая версия патчила ``SQLiteStorage._get`` напрямую. Это
+# ломало pyrogram-инспекцию: оригинальный ``_get`` использует
+# ``inspect.stack()[2].function`` чтобы вычислить имя accessor-колонки в SQL
+# (``SELECT api_id FROM sessions``). Любая обёртка над _get добавляет лишний
+# фрейм — stack[2] оказывается ``_accessor`` вместо ``api_id``, и SQL падает с
+# ``no such column: _accessor``.
+#
+# Правильный подход: патчим **сами accessor-методы** (api_id/dc_id/...). Когда
+# обёртка вызывает оригинальный accessor (имя сохраняется!) — chain
+# accessor → _accessor → _get → inspect.stack()[2] видит правильное имя
+# accessor'а, и SQL формируется корректно. Кэш last-good ведём per-storage по
+# имени accessor'а, чтобы на None / OperationalError возвращать предыдущее
+# валидное значение.
+#
 # Защита двухслойная:
-#   1) ``_safe_get`` подменяет SQLiteStorage._get так, что None заменяется
-#      на cached last-good значение (per-storage-instance LRU).
+#   1) Wrap accessors (api_id, dc_id, test_mode, auth_key, date, user_id,
+#      is_bot) — на None / Exception возвращаем cached last-good.
 #   2) ``_safe_session_start`` оборачивает Session.start в retry-loop
 #      (до 3 попыток с экспоненциальной паузой) — ловим AttributeError, в
 #      сообщении которого есть "to_bytes".
@@ -131,6 +145,21 @@ def _reset_for_tests() -> None:
 _SESSION_GUARD_APPLIED = False
 _MAX_START_RETRIES = 3
 _START_RETRY_BASE_DELAY = 0.4  # сек; реальные паузы 0.4 / 0.8 / 1.6
+
+# Accessor-методы SQLiteStorage, которые читают/пишут колонку sessions-таблицы
+# через ``_accessor(value=object)`` → ``_get()`` chain. Pack-pipeline pyrogram
+# вызывает их без аргумента (read-mode), и именно read-mode возвращает None,
+# что ломает Int(value).to_bytes(...). Колонки соответствуют SCHEMA в
+# pyrogram/storage/sqlite_storage.py.
+_ACCESSOR_NAMES = (
+    "dc_id",
+    "api_id",
+    "test_mode",
+    "auth_key",
+    "date",
+    "user_id",
+    "is_bot",
+)
 
 
 def _is_to_bytes_race(exc: BaseException) -> bool:
@@ -141,10 +170,74 @@ def _is_to_bytes_race(exc: BaseException) -> bool:
     return "to_bytes" in msg and "NoneType" in msg
 
 
+def _make_safe_accessor(name: str, original):
+    """
+    Строит async-обёртку над accessor-методом SQLiteStorage.
+
+    Поведение:
+    - read-mode (без value): если оригинал вернул None или поднял исключение —
+      возвращаем cached last-good (если есть). Не-None результат кэшируем.
+    - write-mode (с value): прозрачно делегируем оригиналу, write не кэшируем
+      (новое значение появится в БД и будет прочитано на следующем read).
+
+    Важно: вызываем именно ``original(self, *args, **kwargs)`` — имя функции
+    сохраняется в frame, и ``inspect.stack()[2].function`` внутри pyrogram._get
+    вернёт правильное имя колонки (api_id / dc_id / ...).
+    """
+
+    async def safe_accessor(self, value=object, *args, **kwargs):
+        cache = getattr(self, "_krab_last_good", None)
+        if cache is None:
+            cache = {}
+            try:
+                self._krab_last_good = cache
+            except Exception:  # noqa: BLE001 — на случай __slots__
+                pass
+
+        # write-mode — никаких подмен.
+        if value is not object:
+            return await original(self, value, *args, **kwargs)
+
+        try:
+            result = await original(self)
+        except Exception as exc:  # noqa: BLE001 — sqlite3.OperationalError и др.
+            cached = cache.get(name)
+            if cached is not None:
+                log.warning(
+                    "pyrogram_storage_accessor_failed_using_cache",
+                    extra={
+                        "accessor": name,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    },
+                )
+                return cached
+            raise
+
+        if result is None:
+            cached = cache.get(name)
+            if cached is not None:
+                log.warning(
+                    "pyrogram_storage_accessor_none_using_cache",
+                    extra={"accessor": name},
+                )
+                return cached
+            return result
+
+        cache[name] = result
+        return result
+
+    # Сохраняем имя — чтобы inspect.stack() в pyrogram._get видел правильное
+    # имя колонки, а не "safe_accessor".
+    safe_accessor.__name__ = name
+    safe_accessor.__qualname__ = f"SQLiteStorage.{name}"
+    return safe_accessor
+
+
 def apply_pyrogram_session_guard() -> bool:
     """
-    Monkey-patch Session.start + SQLiteStorage._get для защиты от
-    NoneType.to_bytes race в restart_userbot path.
+    Patch accessor-методов SQLiteStorage + Session.start retry-loop для
+    защиты от NoneType.to_bytes race в restart_userbot path.
 
     Идемпотентен. Возвращает True если patched (или уже был).
     """
@@ -162,52 +255,19 @@ def apply_pyrogram_session_guard() -> bool:
         return False
 
     # ------------------------------------------------------------------
-    # Слой 1: cache last-good для SQLiteStorage._get (api_id/dc_id/auth_key/...)
+    # Слой 1: wrap accessors (api_id/dc_id/test_mode/auth_key/date/...)
     # ------------------------------------------------------------------
-    _orig_get = _ss.SQLiteStorage._get
-
-    def _safe_get(self):
-        # inspect.stack()[2] в _orig_get смотрит на ИМЯ caller'а через 2 фрейма
-        # выше. Когда мы вклиниваемся, добавляем лишний фрейм — поэтому
-        # вызываем оригинал напрямую (он сам разрулит stack), а кэш ведём
-        # по имени accessor-метода, восстанавливаемому из stack здесь.
-        import inspect
-
-        caller = inspect.stack()[2].function if len(inspect.stack()) > 2 else "_unknown"
-        cache = getattr(self, "_krab_last_good", None)
-        if cache is None:
-            cache = {}
-            try:
-                self._krab_last_good = cache
-            except Exception:  # noqa: BLE001 — на случай __slots__
-                pass
-
+    for accessor_name in _ACCESSOR_NAMES:
         try:
-            value = _orig_get(self)
-        except Exception as exc:  # noqa: BLE001
-            cached = cache.get(caller)
-            if cached is not None:
-                log.warning(
-                    "pyrogram_storage_get_failed_using_cache",
-                    extra={"accessor": caller, "error_type": type(exc).__name__, "error": str(exc)},
-                )
-                return cached
-            raise
-
-        if value is None:
-            cached = cache.get(caller)
-            if cached is not None:
-                log.warning(
-                    "pyrogram_storage_get_none_using_cache",
-                    extra={"accessor": caller},
-                )
-                return cached
-            return value
-
-        cache[caller] = value
-        return value
-
-    _ss.SQLiteStorage._get = _safe_get
+            original = getattr(_ss.SQLiteStorage, accessor_name)
+        except AttributeError:
+            log.warning(
+                "pyrogram_storage_accessor_missing",
+                extra={"accessor": accessor_name},
+            )
+            continue
+        wrapped = _make_safe_accessor(accessor_name, original)
+        setattr(_ss.SQLiteStorage, accessor_name, wrapped)
 
     # ------------------------------------------------------------------
     # Слой 2: retry на Session.start при NoneType.to_bytes race
@@ -235,8 +295,7 @@ def apply_pyrogram_session_guard() -> bool:
                     extra={"attempt": attempt, "delay_s": delay, "error": str(exc)},
                 )
                 await asyncio.sleep(delay)
-        # На случай если цикл вышел не через return и не raise (теоретически
-        # недостижимо).
+        # Теоретически недостижимо — но raise страхует от silent return None.
         if last_exc is not None:
             raise last_exc
         return None
@@ -244,7 +303,10 @@ def apply_pyrogram_session_guard() -> bool:
     _sess_mod.Session.start = _safe_session_start
 
     _SESSION_GUARD_APPLIED = True
-    log.info("pyrogram_session_guard_applied")
+    log.info(
+        "pyrogram_session_guard_applied",
+        extra={"accessors_wrapped": list(_ACCESSOR_NAMES)},
+    )
     return True
 
 
