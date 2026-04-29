@@ -90,11 +90,17 @@ def test_module_singletons_have_expected_api() -> None:
     """Smoke-test: module-level singletons экспортируются и имеют API,
     которое использует bootstrap в userbot_bridge.start()."""
     from src.core.anomaly_detector import anomaly_detector  # noqa: PLC0415
+    from src.core.auto_translate_chat import auto_translate_chats  # noqa: PLC0415
     from src.core.chat_sensitivity import sensitive_chat_registry  # noqa: PLC0415
+    from src.core.joke_calibration import joke_calibration_store  # noqa: PLC0415
     from src.core.named_entity_memory import named_entity_memory  # noqa: PLC0415
     from src.core.owner_presence import owner_presence_tracker  # noqa: PLC0415
     from src.core.proactive_suggestions import pattern_detector  # noqa: PLC0415
     from src.core.repl_session import repl_session  # noqa: PLC0415
+    from src.core.reply_scheduler import reply_scheduler  # noqa: PLC0415
+    from src.core.tool_composition_memory import (  # noqa: PLC0415
+        tool_composition_memory,
+    )
 
     assert hasattr(owner_presence_tracker, "configure_default_path")
     assert hasattr(owner_presence_tracker, "record_owner_seen")
@@ -104,6 +110,11 @@ def test_module_singletons_have_expected_api() -> None:
     assert hasattr(named_entity_memory, "configure_default_path")
     assert hasattr(anomaly_detector, "configure_default_path")
     assert hasattr(sensitive_chat_registry, "configure_default_path")
+    # Session 28 final batch (Idea 4/5/7/33).
+    assert hasattr(auto_translate_chats, "configure_default_path")
+    assert hasattr(reply_scheduler, "configure_default_path")
+    assert hasattr(tool_composition_memory, "configure_default_path")
+    assert hasattr(joke_calibration_store, "configure_default_path")
 
 
 def test_named_entity_memory_bootstrap_configures_storage_path(tmp_path: Path) -> None:
@@ -138,6 +149,50 @@ def test_sensitive_chat_registry_bootstrap_configures_storage_path(tmp_path: Pat
     registry.configure_default_path(storage)
     storage2 = tmp_path / "sensitive_chats2.json"
     registry.configure_default_path(storage2)
+
+
+def test_auto_translate_chats_bootstrap_configures_storage_path(tmp_path: Path) -> None:
+    """Idea 4: bootstrap путь подхватывается, повторный configure не падает."""
+    from src.core.auto_translate_chat import ChatTranslateConfig  # noqa: PLC0415
+
+    cfg = ChatTranslateConfig()
+    storage = tmp_path / "auto_translate_chats.json"
+    cfg.configure_default_path(storage)
+    storage2 = tmp_path / "auto_translate_chats2.json"
+    cfg.configure_default_path(storage2)
+
+
+def test_reply_scheduler_bootstrap_configures_storage_path(tmp_path: Path) -> None:
+    """Idea 5: bootstrap путь подхватывается без ошибок."""
+    from src.core.reply_scheduler import ReplyScheduler  # noqa: PLC0415
+
+    scheduler = ReplyScheduler()
+    storage = tmp_path / "scheduled_replies.json"
+    scheduler.configure_default_path(storage)
+    storage2 = tmp_path / "scheduled_replies2.json"
+    scheduler.configure_default_path(storage2)
+
+
+def test_tool_composition_memory_bootstrap_configures_storage_path(tmp_path: Path) -> None:
+    """Idea 7: bootstrap пути подхватывается, повторный configure ок."""
+    from src.core.tool_composition_memory import ToolCompositionMemory  # noqa: PLC0415
+
+    memory = ToolCompositionMemory()
+    storage = tmp_path / "tool_composition.json"
+    memory.configure_default_path(storage)
+    storage2 = tmp_path / "tool_composition2.json"
+    memory.configure_default_path(storage2)
+
+
+def test_joke_calibration_store_bootstrap_configures_storage_path(tmp_path: Path) -> None:
+    """Idea 33: bootstrap путь подхватывается, повторный configure не падает."""
+    from src.core.joke_calibration import JokeCalibrationStore  # noqa: PLC0415
+
+    store = JokeCalibrationStore()
+    storage = tmp_path / "joke_calibration.json"
+    store.configure_default_path(storage)
+    storage2 = tmp_path / "joke_calibration2.json"
+    store.configure_default_path(storage2)
 
 
 def test_bootstrap_failure_logged_not_raised(tmp_path: Path) -> None:

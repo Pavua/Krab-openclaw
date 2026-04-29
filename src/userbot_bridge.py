@@ -2479,6 +2479,66 @@ class KraabUserbot(
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
+            # Idea 4: ChatTranslateConfig — авто-перевод по чатам, persist-путь.
+            try:
+                from .core.auto_translate_chat import (  # noqa: PLC0415
+                    auto_translate_chats,
+                )
+
+                auto_translate_chats.configure_default_path(
+                    _runtime_state_dir / "auto_translate_chats.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "auto_translate_chats_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            # Idea 5: ReplyScheduler — отложенные ответы (persist queue).
+            try:
+                from .core.reply_scheduler import (  # noqa: PLC0415
+                    reply_scheduler,
+                )
+
+                reply_scheduler.configure_default_path(
+                    _runtime_state_dir / "scheduled_replies.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "reply_scheduler_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            # Idea 7: ToolCompositionMemory — паттерны комбинаций tools.
+            try:
+                from .core.tool_composition_memory import (  # noqa: PLC0415
+                    tool_composition_memory,
+                )
+
+                tool_composition_memory.configure_default_path(
+                    _runtime_state_dir / "tool_composition.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "tool_composition_memory_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            # Idea 33: JokeCalibrationStore — per-chat humor scoring.
+            try:
+                from .core.joke_calibration import (  # noqa: PLC0415
+                    joke_calibration_store,
+                )
+
+                joke_calibration_store.configure_default_path(
+                    _runtime_state_dir / "joke_calibration.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "joke_calibration_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
         except Exception as _exc:  # noqa: BLE001
             logger.warning(
                 "learning_singletons_bootstrap_failed",
