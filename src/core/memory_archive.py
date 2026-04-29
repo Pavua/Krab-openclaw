@@ -35,6 +35,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Константы.
@@ -650,6 +651,168 @@ def augment_chunk_text_with_media(
         if s_clean:
             parts.append(f"[media] {s_clean}")
     return "\n".join(parts).strip()
+
+
+# ---------------------------------------------------------------------------
+# Idea 28+29 + Feature G wire: высокоуровневый add_message().
+#
+# Поведение (gated env flag KRAB_SENSITIVE_CHATS_ENABLED, default '1'):
+#   1) Если sensitivity_registry даёт level='no_archive' для chat_id — silent skip.
+#   2) Если level='redact_only' — текст пропускается через redactor.redact().
+#   3) Иначе — обычная вставка.
+#
+# Auto-recluster trigger (Feature G):
+#   - Ведём счётчик в meta.messages_since_last_recluster.
+#   - При достижении RECLUSTER_THRESHOLD (1000) вызываем recluster_callback
+#     (если передан) и сбрасываем счётчик. Любая ошибка callback — swallow
+#     с warn, чтобы не блокировать insert (fail-open).
+# ---------------------------------------------------------------------------
+
+
+# Порог для авто-recluster (1000 новых сообщений между запусками).
+RECLUSTER_THRESHOLD = 1000
+
+# Ключ env-флага для sensitivity wire (default включено для DM-safety).
+_SENSITIVE_FLAG_ENV = "KRAB_SENSITIVE_CHATS_ENABLED"
+
+# Ключ счётчика в meta — сколько сообщений добавлено с момента последнего recluster.
+_META_KEY_MESSAGES_SINCE_RECLUSTER = "messages_since_last_recluster"
+
+
+def _sensitive_enabled() -> bool:
+    """Включена ли защита по чувствительным чатам (env flag, default True)."""
+    val = os.environ.get(_SENSITIVE_FLAG_ENV, "1").strip().lower()
+    return val not in {"0", "false", "no", "off", ""}
+
+
+def _bump_recluster_counter(conn: sqlite3.Connection) -> int:
+    """Инкрементирует счётчик messages_since_last_recluster в meta.
+
+    Возвращает текущее значение после инкремента. На любой sqlite-ошибке
+    возвращает 0 (fail-open — recluster просто не будет триггерится).
+    """
+    try:
+        cur = conn.execute(
+            "SELECT value FROM meta WHERE key = ?;",
+            (_META_KEY_MESSAGES_SINCE_RECLUSTER,),
+        )
+        row = cur.fetchone()
+        current = int(row[0]) if row and row[0] is not None else 0
+        new_val = current + 1
+        conn.execute(
+            """
+            INSERT INTO meta(key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+            """,
+            (_META_KEY_MESSAGES_SINCE_RECLUSTER, str(new_val)),
+        )
+        return new_val
+    except (sqlite3.Error, ValueError, TypeError):
+        return 0
+
+
+def _reset_recluster_counter(conn: sqlite3.Connection) -> None:
+    """Сбрасывает счётчик в 0 (после успешного recluster_callback)."""
+    try:
+        conn.execute(
+            """
+            INSERT INTO meta(key, value) VALUES (?, '0')
+            ON CONFLICT(key) DO UPDATE SET value = '0';
+            """,
+            (_META_KEY_MESSAGES_SINCE_RECLUSTER,),
+        )
+    except sqlite3.Error:
+        pass
+
+
+def add_message(
+    conn: sqlite3.Connection,
+    *,
+    chat_id: str,
+    message_id: str,
+    text: str,
+    timestamp: str | None = None,
+    sender_id: str | None = None,
+    reply_to_id: str | None = None,
+    sensitivity_registry: Any | None = None,  # type: ignore[name-defined]
+    redactor: Any | None = None,  # type: ignore[name-defined]
+    recluster_callback: Any | None = None,  # type: ignore[name-defined]
+) -> str:
+    """Добавляет сообщение в archive с учётом sensitivity и PII.
+
+    Args:
+        conn: открытое соединение со схемой (см. create_schema).
+        chat_id: id чата (str).
+        message_id: id сообщения (str).
+        text: исходный текст (может быть пустым).
+        timestamp: ISO-8601 UTC. None → сейчас.
+        sender_id: id отправителя.
+        reply_to_id: id reply-родителя.
+        sensitivity_registry: объект с методами should_skip_archive(chat_id)
+            и should_redact(chat_id). Обычно chat_sensitivity.sensitive_chat_registry.
+            Если None или env flag выключен — checks не выполняются.
+        redactor: объект с методом redact(text)->text (PIIRedactor). Если None
+            и required для redact_only-чата — будет fallback на исходный text.
+        recluster_callback: callable(conn) -> Any. Вызывается при достижении
+            RECLUSTER_THRESHOLD. Любая ошибка swallow.
+
+    Returns:
+        'skipped_sensitive' если no_archive, 'archived' если записано,
+        'error' если sqlite-ошибка при insert'е.
+    """
+    # 1) Sensitivity gate.
+    if _sensitive_enabled() and sensitivity_registry is not None:
+        try:
+            if sensitivity_registry.should_skip_archive(chat_id):
+                return "skipped_sensitive"
+        except Exception:
+            # fail-open — не блокируем archive, если registry сломан.
+            pass
+
+        # 2) PII redact для redact_only-чатов.
+        try:
+            if sensitivity_registry.should_redact(chat_id) and redactor is not None:
+                text = redactor.redact(text or "")
+        except Exception:
+            # fail-open — оставим текст как есть.
+            pass
+
+    ts = timestamp or (
+        datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds") + "Z"
+    )
+
+    try:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO messages
+                (message_id, chat_id, sender_id, timestamp, text_redacted, reply_to_id)
+            VALUES (?, ?, ?, ?, ?, ?);
+            """,
+            (
+                str(message_id),
+                str(chat_id),
+                sender_id,
+                ts,
+                text or "",
+                reply_to_id,
+            ),
+        )
+        conn.commit()
+    except sqlite3.Error:
+        return "error"
+
+    # 3) Auto-recluster trigger (fail-open, после успешного insert'а).
+    counter = _bump_recluster_counter(conn)
+    if counter >= RECLUSTER_THRESHOLD and recluster_callback is not None:
+        try:
+            recluster_callback(conn)
+            _reset_recluster_counter(conn)
+        except Exception:
+            # Не сбрасываем счётчик — даём шанс при следующем insert'е,
+            # но не блокируем pipeline.
+            pass
+
+    return "archived"
 
 
 def list_tables(conn: sqlite3.Connection) -> list[str]:
