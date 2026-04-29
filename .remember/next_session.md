@@ -1,178 +1,124 @@
-# Session 29 — Starter Handoff (after Session 28 close, 2026-04-29)
+# Session 30 — Starter Handoff (after Session 28+29 close, 2026-04-29)
 
 ## TL;DR
 
-- **607 commits** на ветке `fix/daily-review-20260421` vs origin/main (1 trivial conflict in README.md)
-- **926 files / +171k insertions / −53k deletions / +118k net LOC** за 12 дней
-- **Phase 2 splits complete**: command_handlers.py 19637 → ~1226 LOC (**−93.8%**) через **21 waves** + 22 modules в `src/handlers/commands/`
-- **13 learning features** (A-M) landed
-- **18 idea modules** landed (1, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 17, 18, 19, 21, 22, 23, 24, 25, 26, 28+29, 30, 32, 33, 35, 36, 38)
-- **All Sentry top issues** killed or stable; closed-DB regression deep fix landed
-- **Krab live**: PID up via kickstart, telegram ready, gpt-5.5
-- **kraab.session recovered** через sqlite `.recover` (88 peers preserved) после corruption 17:18
+- **640+ commits** on `fix/daily-review-20260421` vs origin/main (1 trivial README conflict)
+- **Phase 2 splits complete**: command_handlers.py 19637 → ~1226 LOC (−93.8%) через 21 waves
+- **13 learning features** A-M landed
+- **27 idea modules** landed (1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 28+29, 30, 31, 32, 33, 34, 35, 36, 37, 38)
+- **VPN integration LIVE**: Phase A (MCP tools) + B (brain endpoint) + C (alerts bridge) all wired both sides
+- **KRAB_WEB_KEY** sync'нут в Krab `.env` + VPN `alerts.env` (`aQio6Iwr...`)
+- **Bridge tick loop** running (reply_scheduler 30s / daily_brief 8AM / channel_digest 9AM / pattern_detector 6h)
+- **Krab live**: codex-cli/gpt-5.4 fallback active
 
-## Recommended next-steps order
+## VPN integration architecture (final)
 
-1. **Merge to main** — single `git merge --no-ff fix/daily-review-20260421` (KA анализ recommends). Resolve trivial README conflict (additive both sides). См. отчёт KA.
-2. **Sentry observation 24-72h** — после merge стабильность всех fix'ов
-3. **Wire-ups bulk batch** — большая часть idea modules в backlog (pure singletons): vision-aware photo handler, channel digest cron tick, reply_scheduler tick loop, voice fingerprint ML embeddings
-4. **swarm config How2AI** — 3-line JSON edit + invite team accounts (опционально)
+| Component | Where | What |
+|---|---|---|
+| `vpn_list_clients`, `vpn_get_config` | Krab MCP via subprocess | Calls `/Users/pablito/Antigravity_AGENTS/VPN/list_clients.command` and `get_client_config.command --json` |
+| `vpn_panel_health`, `vpn_traffic_stats` | Krab `vpn_tools.py` | HTTP probe + read-only `client_traffics` sqlite |
+| `POST /api/inbox/create-vpn-alert` | Krab inbox bridge | VPN watchdogs (cert_guard, disk_guard, watchdog_vpn_panel, bruteforce_audit, endpoint_failover_check) post via `krab_alert.command` shell wrapper |
+| `POST /api/vpn/help` | Krab brain endpoint | VPN bot freeform messages → friend_id/friend_name/question/context → Krab LLM with persona drift |
 
-## Что landed в Session 28 (по 7 частям)
+**Single source of truth** для `build_vless_link()` — `vpn_bot.py` в VPN repo. Krab MCP tools тонкие subprocess wrappers, no drift риск.
 
-### Part 1 (handoff push 8c9986b → ~30 commits)
-- Bug 9+3+10 (reply preprocessor + parasite stripper + mention в reply_to)
-- Pyrogram closed-DB race fix (`3bcb000`)
-- Bug 4 (MESSAGE_AUTHOR_REQUIRED guard)
-- WAL checkpoint shutdown + retry on disk I/O
-- memory_indexer race fix
-- Launchd respawn-storm root cause: KeepAlive Crashed + ThrottleInterval=60 + btreeinitpage marker
-- Inbox dedupe + bulk-ack
-- Wave 16 state_commands extracted
+## Setup verification (smoke tests passed)
 
-### Part 2 (~30 commits)
-- Wave 17 observability_commands extracted
-- Wave 18 memory_admin_commands extracted
-- Vision/video frame extraction (perceptor)
-- USER_BANNED_IN_CHANNEL + slowmode + NoneType filter
-- Bug 11 (media silent skip in groups)
-- Bug 12 (deferred handoff в группах)
+```bash
+# 1. KRAB_WEB_KEY sync'нут оба:
+grep KRAB_WEB_KEY /Users/pablito/Antigravity_AGENTS/Краб/.env /Users/pablito/Antigravity_AGENTS/VPN/alerts.env
 
-### Part 3 (~14 commits — 13 learning features)
-- A: Response retrieval boost
-- B: Per-user reaction memory
-- C: Per-chat persona drift
-- D: Memory decay
-- E: Multi-modal memory (vision summaries)
-- F: Owner mood detection
-- G: Topic clustering (k-means)
-- H: Self-correction loop
-- I: Cross-chat learning transfer
-- J: Session goal tracking
-- K: Thread coherence detector
-- L: Memory consolidation
-- M: Native userbot read tools
+# 2. VPN helpers работают:
+/Users/pablito/Antigravity_AGENTS/VPN/list_clients.command | python3 -m json.tool | head
+# → 24 clients
 
-### Part 4 (~10 commits — first 5 ideas + bug fixes)
-- DD: Pyrogram NoneType.to_bytes guard
-- DE: 35 test fixes (snippet + landmines)
-- DH: Idea 17 owner offline holdover
-- DI: Idea 22 REPL session
-- DJ: Idea 32 proactive suggestions
-- EC: Idea 21 TODO extractor
+# 3. Inbox alert endpoint:
+KEY=$(grep KRAB_WEB_KEY .env | cut -d= -f2)
+curl -X POST http://127.0.0.1:8080/api/inbox/create-vpn-alert \
+  -H "X-Krab-Web-Key: $KEY" \
+  -d '{"title":"Test","body":"...","severity":"info","source_script":"smoke_test"}'
+# → {"ok":true, "kind":"vpn_alert"}
 
-### Part 5 (~14 commits)
-- Wave 19+20 crypto + info commands
-- closed-DB regression deep fix (swarm guard + sentry filter)
-- audio summarizer (Idea 35)
-- anomaly detector (Idea 26)
-- tool result cache (Idea 10)
-- cost-aware routing (Idea 8)
-- LLM ensemble (Idea 11)
-- tool composition memory (Idea 7)
-- rolling auto-summarization (Idea 14)
-- pyrogram guard rewrite via accessor wrapping
+# 4. Bridge tick:
+grep idea_features_tick_started ~/.openclaw/krab_runtime_state/krab_main.log
+# → события после restart
+```
 
-### Part 6 (~10 commits)
-- Constitutional guardrails (Idea 12)
-- Per-handler latency dashboard (Idea 23)
-- Prompt A/B testing (Idea 24)
-- Joke calibration (Idea 33)
-- Screenshot analyzer (Idea 38)
-- pyrogram patch disable+rewrite
+## Available env flags (для activation в Session 30)
 
-### Part 7 (~12 commits — final batch)
-- Wave 21 diagnostic_commands (−1767 LOC)
-- Source attribution (Idea 16)
-- Named entity memory (Idea 13)
-- Conversation replay (Idea 25)
-- Forget-me tool (Idea 30)
-- Reply scheduling (Idea 5)
-- Calendar integration (Idea 19)
-- Channel digest (Idea 6)
-- Auto-translate per chat (Idea 4)
-- Voice message dispatcher (Idea 1)
-- Voice fingerprinting (Idea 36)
-- Bulk wire-ups for ideas 4/5/7/33
+**Safe to activate** (passive tracking, no behavior change):
+- `KRAB_TODO_EXTRACTION_ENABLED=1` — extract TODO from owner messages, log only
+- `KRAB_JOKE_CALIBRATION_ENABLED=1` — passive joke success tracking
+- `KRAB_MULTI_PERSONA_ENABLED=1` — adds suffix to system prompt (additive)
+- `KRAB_AB_TESTING_ENABLED=1` — A/B variants (default experiment registered)
+- `KRAB_TOPIC_CLUSTER_EXPAND_ENABLED=1` — RRF retrieval cluster expand (observability)
 
-## Technical foundation
+**Needs careful rollout** (can change behavior):
+- `KRAB_GUARDRAILS_ENABLED=1` — pre-send filter (could block responses)
+- `KRAB_DAILY_BRIEF_ENABLED=1` — sends DM at 08:00 daily
+- `KRAB_OFFLINE_HOLDOVER_ENABLED=1` — sends auto-replies to friends
+- `KRAB_CHANNEL_DIGEST_CHAT_ID=<chat>` — daily 09:00 publish
 
-### File ownership matrix (для будущих parallel agents)
-- **command_handlers.py** — слой re-exports + dual-namespace lookup wrappers (ne to extract more than 1226 LOC)
-- **userbot_bridge.py** — message dispatch, smart routing, media handling, swarm bootstrap, learning singletons bootstrap
-- **userbot/llm_flow.py** — LLM stream + reply preprocessor + anti-parasite stripper + self-correction hook + Prometheus coherence hook
-- **bootstrap/pyrogram_patch.py** — apply_pyrogram_session_guard via accessor wrapping (не _get обёртку)
-- **core/memory_archive.py** — schema + 4 sidecar tables: response_feedback, chunk_clusters, cluster_meta, message_media_summaries
-- **core/memory_hybrid_reranker.py** — RRF + MMR + feedback boost + decay multiplier + cluster expand
+**Already ON by default**:
+- `KRAB_VPN_TOOLS_ENABLED`, `KRAB_RECENCY_BOOST_ENABLED`, `KRAB_SENSITIVE_CHATS_ENABLED`, `KRAB_VOICE_DISPATCHER_ENABLED`
 
-### Active learning singletons (state under `~/.openclaw/krab_runtime_state/`)
-- chat_ban_cache.json, chat_response_policy.json, owner_presence.json, repl_session_audit.log
-- proactive_suggestions.json, owner_mood.json (cache TTL 30min)
-- chat_persona_profile.json, swarm_channels.json
-- entities.json (named), anomaly_baselines.json, sensitive_chats.json
-- auto_translate_chats.json, scheduled_replies.json, tool_composition.json, joke_calibration.json
-- voice_fingerprints.json, ab_experiments.json, session_goals.json
+## Backlog для Session 30
 
-## Sentry — current state (Session 28 final, 24h)
+### P0 — Activation
+1. Включить env flags по очереди (todo/joke/multi_persona — safe, потом ab_testing, потом guardrails)
+2. Sentry observation 24-72h после restart
+3. Test VPN integration end-to-end: ты в Krab DM → "дай конфиг для Anya" → должно работать через MCP tool
 
-| Issue | Events | Status |
-|---|---:|---|
-| PYTHON-FASTAPI-Z (CancelledError) | 344 | stable, only restart spam |
-| PYTHON-FASTAPI-1 (closed-DB) | 140 | regression killed via swarm guard `94546da` |
-| PYTHON-FASTAPI-5W (disk I/O) | 11 | +2 — transient on rapid restart, WAL retry helps |
-| PYTHON-FASTAPI-67/66 (Traceback / db late) | 8 / 8 | stable |
-| PYTHON-FASTAPI-6E (db_corruption_runtime) | 7 | +2 — kraab.session btreeinitpage corruption (recovered manually) |
-| PYTHON-FASTAPI-6G (NoneType.to_bytes) | 4 | quiet after disable+rewrite of guard |
-| PYTHON-FASTAPI-6K (no such column: _accessor) | 3 | NEW — broken DD patch artifact, disabled |
-| 6H/6J (USER_BANNED) | 1+1 | filtered out via Sentry markers |
+### P1 — Wire-ups remaining
+- sticker_replies → bridge (decide_replies before send_message)
+- screenshot_analyzer → photo media handler (если photo > 200kb)
+- dynamic_avatar → set_profile_photo via pyrogram
+- inline_query_handler → bot subscription (требует BotFather inline mode)
 
-## Backlog для Session 29
+### P2 — Architecture
+- Final merge to main (`git merge --no-ff fix/daily-review-20260421`, 1 trivial README conflict)
+- WAL flush wait sentinel перед rapid respawn (PYTHON-FASTAPI-5W transient)
+- pyrogram NoneType guard observation 24-48h перед re-enable production
 
-### P0 — Wire-ups для landed ideas (большинство pure singletons)
-- Idea 5 (reply_scheduler) — actual sender tick loop в bridge background tasks
-- Idea 6 (channel_digest) — cron job для daily publish
-- Idea 11 (LLM ensemble) — wire в `llm_flow` для critical queries
-- Idea 12 (guardrails) — pre-send filter в llm_flow после anti-parasite stripper
-- Idea 23 (handler latency) — `time_handler` decorators в Wave 11-21 modules
-- Idea 24 (AB testing) — wire в system prompt builder
-- Idea 26 (anomaly detector) — proactive_watch hook with cooldown
-- Idea 28+29 (privacy) — wire в `memory_archive.add_message`
-- Idea 32 (proactive suggestions) — pattern_detector recording в incoming hook
-- Idea 33 (joke calibration) — record_joke в feedback_tracker (на reactions)
-- Idea 38 (screenshot analyzer) — bridge media handler (если photo > N kb)
-- Feature G (topic clustering) — `expand_with_cluster` в retrieval flow
-- Feature K (thread coherence) — Prometheus metric collection (already ready)
+### P3 — Optional ideas not landed
+- Idea 9 (parallel tool execution) — heavy openclaw_client work
+- Idea 27 (archive.db SQLCipher encryption) — heavy
 
-### P1 — Architecture
-- Merge to main (single `--no-ff`, 607 commits)
-- WAL flush wait sentinel before rapid respawn (5W transient fix)
-- kraab.session backup automation (auto `.recover` script на boot)
-- pyrogram patch — observability за 24-48h before re-enabling
+## Session 28+29 stats
 
-### P2 — Optional ideas not yet landed
-- Idea 2 (sticker replies)
-- Idea 3 (inline mode)
-- Idea 9 (parallel tool execution)
-- Idea 15 (time-aware retrieval boost)
-- Idea 20 (email digest)
-- Idea 27 (archive.db encryption — heavy)
-- Idea 31 (multi-persona switcher)
-- Idea 34 (dynamic avatar)
-- Idea 37 (image generation на запрос)
+- **Commits since session start (origin/main..HEAD): 640+**
+- 21 wave splits, 13 features, 27 idea modules
+- Bug fixes: Bug 1-12 + closed-DB regression + restart-storm root cause
+- Memory: archive.db 753k+ messages / 72k chunks / 50 response_feedback / 1 media_summary
+- Sentry: all top issues stable, USER_BANNED/NoneType filters active
+- Krab restarts: 10+ (all clean)
 
-## Operational notes
+## Operational quick reference
 
-- Krab restart требует launchctl kickstart после первого clean exit (KeepAlive Crashed-only policy)
-- Если disk I/O error — try `scripts/memory_doctor.py --all-db --json` first, then `.recover` для broken db
-- Pyrogram Session.start race для NoneType.to_bytes: guard active via apply_pyrogram_session_guard
-- На rapid restart cycle всегда возможен transient WAL contention — wait 30s между Stop и Start
+```bash
+cd /Users/pablito/Antigravity_AGENTS/Краб
+cat .remember/next_session.md                   # this file
 
-## Files for Session 29 reference
+# Krab control
+"/Users/pablito/Antigravity_AGENTS/new Stop Krab.command"
+"/Users/pablito/Antigravity_AGENTS/new start_krab.command"
 
-- `scripts/memory_doctor.py --all-db --json` — DB integrity sweep
-- `scripts/inbox_bulk_ack.py` — inbox cleanup CLI
-- `scripts/forget_me.py` — privacy compliance scrub
-- `scripts/replay_conversation.py` — dev tool для re-running history
-- `scripts/memory_recluster.py` — Feature G recluster trigger
-- `scripts/memory_consolidate.py` — Feature L compression
-- `scripts/memory_backfill_media.py` — Feature E backfill (if needed)
+# After Stop sometimes need kickstart (KeepAlive Crashed-only doesn't auto-respawn clean exit):
+launchctl kickstart -k gui/$(id -u)/ai.krab.core
+
+# Check
+curl -sS http://127.0.0.1:8080/api/health/lite | python3 -m json.tool
+
+# Memory doctor (если disk I/O error на boot)
+venv/bin/python scripts/memory_doctor.py --all-db --json
+
+# Inbox cleanup
+venv/bin/python scripts/inbox_bulk_ack.py --age-hours 24 --kind proactive_action --severity warning --target done
+
+# VPN helpers (read-only)
+/Users/pablito/Antigravity_AGENTS/VPN/list_clients.command
+/Users/pablito/Antigravity_AGENTS/VPN/get_client_config.command <email> --json
+
+# Tests
+venv/bin/python -m pytest tests/unit/ -q --tb=line --timeout=30
+```
