@@ -275,3 +275,110 @@ def test_multiple_negative_reactions_accumulate(tracker, policy_store):
         tracker.record_krab_response(_resp(chat_id="-100", message_id=hash(emoji) & 0xFFFF))
         run(tracker.on_reaction_added("-100", hash(emoji) & 0xFFFF, emoji, user_id=OWNER_ID))
     assert policy_store.get_policy("-100").negative_signals == 3
+
+
+# ---------- 11: Idea 21 todo extraction ----------
+
+
+def test_todo_extracted_when_env_enabled(tracker, monkeypatch, caplog):
+    """С KRAB_TODO_EXTRACTION_ENABLED=1 todo_extractor вызывается на owner-input."""
+    import logging
+
+    monkeypatch.setenv("KRAB_TODO_EXTRACTION_ENABLED", "1")
+    caplog.set_level(logging.INFO)
+    count = run(tracker.on_owner_message_in("надо купить молоко завтра"))
+    assert count >= 1
+    # Disabled (default) — должно вернуть 0 без вызова экстрактора
+    monkeypatch.setenv("KRAB_TODO_EXTRACTION_ENABLED", "0")
+    assert run(tracker.on_owner_message_in("надо купить молоко завтра")) == 0
+
+
+def test_todo_extraction_fail_open_on_exception(tracker, monkeypatch):
+    """Исключение внутри extract_todos НЕ роняет hot path — вернуть 0."""
+    monkeypatch.setenv("KRAB_TODO_EXTRACTION_ENABLED", "1")
+
+    class _Boom:
+        def extract_todos(self, *a, **kw):
+            raise RuntimeError("boom")
+
+    import src.core.todo_extractor as te_mod
+
+    monkeypatch.setattr(te_mod, "todo_extractor", _Boom())
+    assert run(tracker.on_owner_message_in("надо что-то сделать")) == 0
+
+
+# ---------- 12: Idea 33 joke calibration ----------
+
+
+def _resp_with_text(text: str, chat_id="-100", message_id=1) -> KrabResponse:
+    return KrabResponse(
+        chat_id=str(chat_id),
+        message_id=message_id,
+        sent_at=time.time(),
+        decision_path="hard_gate",
+        confidence=1.0,
+        response_text=text,
+    )
+
+
+def test_joke_recorded_on_positive_reaction_for_humor(tracker, monkeypatch):
+    """Юморной ответ + положительная реакция → joke_calibration_store.record_joke('positive')."""
+    monkeypatch.setenv("KRAB_JOKE_CALIBRATION_ENABLED", "1")
+    captured: list[tuple] = []
+
+    class _Stub:
+        def record_joke(self, *, chat_id, joke_text, reaction):
+            captured.append((str(chat_id), joke_text, reaction))
+
+    import src.core.joke_calibration as jc_mod
+
+    monkeypatch.setattr(jc_mod, "joke_calibration_store", _Stub())
+
+    tracker.record_krab_response(_resp_with_text("ха-ха ну ты дал 😂", chat_id="-100", message_id=7))
+    run(tracker.on_reaction_added("-100", 7, "❤️", user_id=OWNER_ID))
+
+    assert len(captured) == 1
+    assert captured[0][0] == "-100"
+    assert captured[0][2] == "positive"
+
+
+def test_joke_not_recorded_on_serious_response(tracker, monkeypatch):
+    """Серьёзный длинный ответ без юмор-маркеров → record_joke НЕ вызывается."""
+    monkeypatch.setenv("KRAB_JOKE_CALIBRATION_ENABLED", "1")
+    captured: list[tuple] = []
+
+    class _Stub:
+        def record_joke(self, **kw):
+            captured.append(kw)
+
+    import src.core.joke_calibration as jc_mod
+
+    monkeypatch.setattr(jc_mod, "joke_calibration_store", _Stub())
+
+    serious = (
+        "По данным за последние 24 часа было обработано 1200 сообщений, средняя "
+        "латентность ответа составила 1.8 секунды, без аномалий и инцидентов."
+    )
+    tracker.record_krab_response(_resp_with_text(serious, chat_id="-100", message_id=8))
+    run(tracker.on_reaction_added("-100", 8, "❤️", user_id=OWNER_ID))
+
+    assert captured == []
+
+
+def test_joke_calibration_fail_open_on_exception(tracker, monkeypatch):
+    """Исключение в record_joke не должно ронять reaction handler."""
+    monkeypatch.setenv("KRAB_JOKE_CALIBRATION_ENABLED", "1")
+
+    class _Boom:
+        def record_joke(self, **kw):
+            raise RuntimeError("boom")
+
+    import src.core.joke_calibration as jc_mod
+
+    monkeypatch.setattr(jc_mod, "joke_calibration_store", _Boom())
+
+    tracker.record_krab_response(_resp_with_text("лол смешно", chat_id="-100", message_id=9))
+    # Не должно бросать; должно вернуть True (positive reaction зарегистрирована
+    # в policy_store независимо от joke calibration)
+    result = run(tracker.on_reaction_added("-100", 9, "👍", user_id=OWNER_ID))
+    assert result is True
