@@ -390,6 +390,26 @@ class AccessControlMixin:
             except Exception:  # noqa: BLE001
                 pass
 
+        # VPN tools awareness (Bug 15): сообщаем LLM о доступных VPN-инструментах,
+        # чтобы модель использовала function-call вместо ручных инструкций по x-ui.
+        # Управляется через KRAB_VPN_TOOLS_ENABLED (default "1" = включено).
+        import os  # noqa: PLC0415
+
+        if os.environ.get("KRAB_VPN_TOOLS_ENABLED", "1").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+        ):
+            vpn_hint = (
+                "VPN-инструменты: у тебя есть vpn_list_clients, vpn_get_config(client_name), "
+                "vpn_panel_health, vpn_traffic_stats(client_name). "
+                "При вопросах о VPN-клиентах, конфигах или состоянии панели — вызывай эти инструменты "
+                "через function-call. "
+                "Не предлагай ручной вход в панель, не проси пароли, не описывай ручные шаги управления x-ui."
+            )
+            if vpn_hint not in base:
+                base = f"{base}\n\n{vpn_hint}".strip()
+
         return base
 
     @staticmethod

@@ -152,10 +152,10 @@ def _resolve_openclaw_stream_timeouts(*, has_photo: bool) -> tuple[float, float]
     - после старта стрима интервалы между чанками обычно заметно меньше.
     """
     chunk_timeout_sec = float(getattr(config, "OPENCLAW_CHUNK_TIMEOUT_SEC", 180.0))
-    # 1800s (30 мин) для текстовых задач — покрывает агентные loop'ы (Меркадона, VL-турнир),
-    # которые буферизуют все tool-вызовы внутри OpenClaw и шлют первый chunk только по завершении.
-    # До 600s было слишком мало: OpenClaw активно работал в дашборде, но Краб видел "тишину".
-    default_first = 1200.0 if has_photo else 1800.0
+    # 120s для текстовых, 180s для фото — покрывает обычные запросы.
+    # Агентные loop'ы (Меркадона, VL) детектятся через tool_summary и idle-detection,
+    # поэтому гигантский первый таймаут (был 1800s/30мин) больше не нужен.
+    default_first = 180.0 if has_photo else 120.0
     # Для фото-разбора допускаем отдельный override первого чанка:
     # vision-модели/большие контексты стабильно дольше выходят на первый токен.
     if has_photo:
@@ -191,7 +191,7 @@ def _resolve_openclaw_buffered_response_timeout(
       но не должен рубить ещё живую fallback-цепочку OpenClaw раньше gateway timeout;
     - даём разумный запас сверх первого ожидания, чтобы не зависать бесконечно.
     """
-    default_total_timeout_sec = 1020.0 if has_photo else 900.0
+    default_total_timeout_sec = 300.0 if has_photo else 180.0
     return max(default_total_timeout_sec, float(first_chunk_timeout_sec or 0.0) + 60.0)
 
 
@@ -872,11 +872,12 @@ class LLMFlowMixin:
                         _agent_marked = True
                         await _safe_react(mark_agent_mode, self, message)
 
-                    # Idle-detection: нет ни чанков, ни активности инструментов слишком долго
+                    # Idle-detection: нет ни чанков, ни активности инструментов слишком долго.
+                    # Срабатывает и при 0 чанков (gateway down) — раньше guard
+                    # `received_any_chunk` пропускал этот кейс.
                     idle_sec = time.monotonic() - last_tool_activity_ts
                     if (
-                        received_any_chunk  # ответ начался — ждём активности дальше
-                        and not tool_summary  # нет активных tool-вызовов
+                        not tool_summary  # нет активных tool-вызовов
                         and idle_sec >= no_tool_activity_timeout_sec
                     ):
                         logger.error(

@@ -1933,15 +1933,33 @@ class KraabUserbot(
         for part in self._split_message(payload):
             await self.client.send_message(target_chat, part)
 
+    @property
+    def _owner_notify_target(self) -> int | str:
+        """
+        Telegram chat, куда идут уведомления владельцу (незнакомые контакты,
+        proactive alerts, startup, monitor alerts).
+
+        Приоритет:
+          1. OWNER_NOTIFY_CHAT_ID env → int user_id
+          2. Fallback: "me" (Saved Messages userbot-аккаунта — для обратной совместимости)
+        """
+        raw = config.OWNER_NOTIFY_CHAT_ID
+        if raw:
+            try:
+                return int(raw)
+            except ValueError:
+                pass
+        return "me"
+
     async def _send_proactive_watch_alert(self, text: str) -> None:
         """
-        Отправляет watch-alert в Saved Messages владельца через userbot.
+        Отправляет watch-alert владельцу через userbot.
         Fallback: если userbot offline — пробует reserve bot (Phase 2.1).
         """
         clean_text = str(text or "").strip()
         if self.client and self.client.is_connected:
             for part in self._split_message(clean_text):
-                await self.client.send_message("me", part)
+                await self.client.send_message(self._owner_notify_target, part)
             return
         # userbot недоступен — пробуем reserve bot
         if reserve_bot.is_running:
@@ -2057,7 +2075,7 @@ class KraabUserbot(
                         builder = DailyBriefBuilder()
                         text = await builder.build_brief()
                         if text:
-                            await self.client.send_message(self.me.id, text)
+                            await self.client.send_message(self._owner_notify_target, text)
                             logger.info("idea_tick_daily_brief_sent", chars=len(text))
                         else:
                             logger.info("idea_tick_daily_brief_empty")
@@ -2957,7 +2975,7 @@ class KraabUserbot(
             now_ts = time.time()
             if now_ts - last_ts >= 3600:
                 await self.client.send_message(
-                    "me",
+                    self._owner_notify_target,
                     f"🦀 **Krab System Online**\nGateway: {status_emoji} {status_text}\nReady to serve.",
                 )
                 try:
@@ -3782,7 +3800,7 @@ class KraabUserbot(
                 f"Чат: `{chat_id_str}` ({chat_type})\n\n"
                 f"**Сообщение:**\n{excerpt[:800]}"
             )
-            sent_message = await self.client.send_message(me.id, notification)
+            sent_message = await self.client.send_message(self._owner_notify_target, notification)
             try:
                 inbox_service.record_relay_delivery(
                     chat_id=chat_id_str,
@@ -3842,8 +3860,7 @@ class KraabUserbot(
                 f"**Сообщение:**\n{excerpt}\n\n"
                 f"↩️ **Краб ответил:**\n{response_excerpt}"
             )
-            me = await self.client.get_me()
-            await self.client.send_message(me.id, notification)
+            await self.client.send_message(self._owner_notify_target, notification)
             logger.info(
                 "guest_incoming_forwarded_to_owner",
                 sender=sender_name,
@@ -4337,7 +4354,7 @@ class KraabUserbot(
                 f"\u2500\u2500\u2500\u2500\u2500\n"
                 f"{msg_text}"
             )
-            await self.client.send_message(self.me.id, alert)
+            await self.client.send_message(self._owner_notify_target, alert)
             logger.info(
                 "monitor_alert_sent",
                 chat_id=str(message.chat.id),
@@ -5237,6 +5254,37 @@ class KraabUserbot(
             _typing_task.cancel()
             await asyncio.gather(_typing_task, return_exceptions=True)
             return
+
+        # REPLY MEDIA: извлекаем фото/анимацию из reply_to_message
+        reply_msg = getattr(message, "reply_to_message", None)
+        if not images and reply_msg:
+            reply_has_image = (
+                getattr(reply_msg, "photo", None)
+                or getattr(reply_msg, "animation", None)
+                or (
+                    getattr(reply_msg, "document", None)
+                    and getattr(reply_msg.document, "mime_type", "").startswith("image/")
+                )
+            )
+            if reply_has_image:
+                try:
+                    photo_timeout_sec = float(getattr(config, "PHOTO_DOWNLOAD_TIMEOUT_SEC", 40.0))
+                    reply_media_obj = await asyncio.wait_for(
+                        self.client.download_media(reply_msg, in_memory=True),
+                        timeout=max(5.0, photo_timeout_sec),
+                    )
+                    if reply_media_obj:
+                        img_bytes = reply_media_obj.getvalue()
+                        b64_img = base64.b64encode(img_bytes).decode("utf-8")
+                        images.append(b64_img)
+                        # caption из reply добавляем в контекст
+                        reply_caption = getattr(reply_msg, "caption", None) or ""
+                        if reply_caption and reply_caption not in (query or ""):
+                            query = f"[Изображение из reply: {reply_caption}]\n{query or ''}"
+                except asyncio.TimeoutError:
+                    logger.warning("reply_media_download_timeout", chat_id=chat_id)
+                except Exception as e:
+                    logger.warning("reply_media_download_error", chat_id=chat_id, error=str(e))
 
         # DOCUMENT: Скачиваем и встраиваем содержимое файла в запрос
         if has_document:

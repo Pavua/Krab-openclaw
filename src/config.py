@@ -310,6 +310,10 @@ class Config:
     OWNER_USER_IDS: list[str] = [
         u.strip() for u in os.getenv("OWNER_USER_IDS", "").split(",") if u.strip()
     ]
+    # Куда роутить уведомления (незнакомые контакты, proactive alerts, startup).
+    # Если не задан — fallback на "me" (Saved Messages userbot-аккаунта).
+    # Пример: OWNER_NOTIFY_CHAT_ID=<telegram_user_id_владельца>
+    OWNER_NOTIFY_CHAT_ID: str = os.getenv("OWNER_NOTIFY_CHAT_ID", "").strip()
     # Sentry — runtime error tracking.
     # DSN из ~/.env. Если пустой — Sentry не инициализируется, работа продолжается без трекинга.
     # Seer AI analysis доступен через MCP mcp__sentry__analyze_issue_with_seer.
