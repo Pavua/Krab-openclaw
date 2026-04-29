@@ -154,6 +154,82 @@ def _parse_iso_timestamp(ts: str | None) -> Optional[datetime]:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Idea 15: Time-aware retrieval boost (boost recent, в дополнение к Feature D decay).
+# ---------------------------------------------------------------------------
+
+#: Bucket-границы и множители для recency boost. Применяется ПЕРЕД decay:
+#: свежие сообщения получают усиление, а более старые попадают в decay-флоу.
+RECENCY_BOOST_LAST_HOUR = 1.5  # < 1 часа
+RECENCY_BOOST_LAST_DAY = 1.2  # < 24 часов
+RECENCY_BOOST_LAST_WEEK = 1.0  # < 7 дней (no-op, отдаём управление decay)
+RECENCY_BOOST_HOUR_SECONDS = 3600.0
+RECENCY_BOOST_DAY_SECONDS = 86400.0
+RECENCY_BOOST_WEEK_SECONDS = 604800.0
+
+
+def _recency_boost_enabled() -> bool:
+    """Config-flag: KRAB_RECENCY_BOOST_ENABLED (default on).
+
+    Off-значения: 0/false/no/off (case-insensitive). Пустая → on.
+    """
+    raw = os.environ.get("KRAB_RECENCY_BOOST_ENABLED", "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return True
+
+
+def compute_recency_boost(age_seconds: float) -> float:
+    """Чистая формула recency boost'а от возраста сообщения в секундах.
+
+    Buckets:
+      * < 3600s (1 час)  → 1.5
+      * < 86400s (24 ч)  → 1.2
+      * < 604800s (7 дн) → 1.0 (no-op — управление передаётся decay)
+      * else             → 1.0 (старые чанки ослабляет уже Feature D)
+
+    Свойства:
+      * negative age (clock skew) → трактуем как 0 (самый свежий, ×1.5).
+      * монотонно невозрастающая по age (внутри активной зоны).
+      * идемпотентна.
+    """
+    if age_seconds < 0:
+        age_seconds = 0.0
+    if age_seconds < RECENCY_BOOST_HOUR_SECONDS:
+        return RECENCY_BOOST_LAST_HOUR
+    if age_seconds < RECENCY_BOOST_DAY_SECONDS:
+        return RECENCY_BOOST_LAST_DAY
+    if age_seconds < RECENCY_BOOST_WEEK_SECONDS:
+        return RECENCY_BOOST_LAST_WEEK
+    return 1.0
+
+
+def apply_recency_boost(
+    results: list["SearchResult"],
+    age_days_map: dict[str, float],
+) -> list["SearchResult"]:
+    """Применяет recency boost к свежим chunk'ам и пересортирует.
+
+    Args:
+        results: вход (после feedback boost, ПЕРЕД decay).
+        age_days_map: {chunk_id: age_in_days} — тот же формат, что у apply_decay,
+            конвертируется во внутренний секундный масштаб buckets.
+
+    Чанки без записи / с возрастом >= 7д → multiplier=1.0 (no-op, decay сделает
+    своё дело). Идемпотентна: повторный вызов с тем же mapping не накапливает.
+    """
+    if not age_days_map:
+        return results
+    for result in results:
+        age_days = age_days_map.get(result.chunk_id)
+        if age_days is None:
+            continue
+        mult = compute_recency_boost(age_days * 86400.0)
+        if mult != 1.0:
+            result.rrf_score *= mult
+    return sorted(results, key=lambda r: -r.rrf_score)
+
+
 def apply_decay(
     results: list["SearchResult"],
     age_map: dict[str, float],
@@ -473,18 +549,20 @@ def hybrid_search(query: str, limit: int = 10) -> list[SearchResult]:
                     error_type=type(exc).__name__,
                 )
 
-        # Feature D: Memory Decay — старые chunks теряют вес, недавно
-        # validator-подтверждённые получают boost. Применяется ПОСЛЕ feedback'а,
-        # чтобы decay действовал на уже скорректированный score.
-        if combined and _decay_enabled():
+        # Feature D + Idea 15: Memory Decay + Recency Boost.
+        # Idea 15 идёт ПЕРЕД decay: свежие (<7д) получают усиление, старые
+        # отдаются под управление decay'у. age_map переиспользуем — один JOIN.
+        if combined and (_decay_enabled() or _recency_boost_enabled()):
             try:
                 wider_pool = combined[: max(limit * 3, 30)]
                 ids = [r.chunk_id for r in wider_pool]
                 age_map = _fetch_chunk_ages(conn, ids)
                 confirm_map = _fetch_validator_confirm_ages(conn, ids)
-                if age_map or confirm_map:
+                if age_map and _recency_boost_enabled():
+                    combined = apply_recency_boost(combined, age_map)
+                if (age_map or confirm_map) and _decay_enabled():
                     combined = apply_decay(combined, age_map, confirm_map)
-            except Exception as exc:  # noqa: BLE001 - decay опционален
+            except Exception as exc:  # noqa: BLE001 - decay/recency опциональны
                 logger.debug(
                     "hybrid_decay_skipped",
                     error=str(exc),
