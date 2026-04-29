@@ -253,3 +253,64 @@ class TestHandleRandAsync:
         await handle_rand(bot, msg)
         reply = msg.reply.call_args[0][0]
         assert "Орёл" in reply or "Решка" in reply
+
+
+# ---------------------------------------------------------------------------
+# Idea 23: Per-handler latency wire-up (proof of concept)
+# ---------------------------------------------------------------------------
+
+
+class TestHandlerLatencyWireUp:
+    """Проверяет что text_utils handlers wire'аются в time_handler() context manager.
+
+    Перехватываем observe_handler_latency на уровне модуля text_utils и проверяем,
+    что для success-path вызывается status='success', а для UserInputError — 'error'.
+    """
+
+    @pytest.mark.asyncio
+    async def test_handle_calc_observes_success_latency(self, monkeypatch) -> None:
+        from src.handlers.commands import text_utils as tu
+
+        observed: list[tuple[str, float, str]] = []
+
+        def _fake_observe(name: str, latency: float, *, status: str = "success") -> None:
+            observed.append((name, latency, status))
+
+        # Подмена через прокси: time_handler ссылается на observe_handler_latency
+        # из prometheus_metrics; подменяем там же, поскольку class использует
+        # bound import внутри __aexit__.
+        from src.core import prometheus_metrics as pm
+
+        monkeypatch.setattr(pm, "observe_handler_latency", _fake_observe)
+
+        msg = _make_message()
+        bot = _make_bot("2+2")
+        await handle_calc(bot, msg)
+
+        assert len(observed) == 1, f"Ожидался один observe-вызов, получено {len(observed)}"
+        name, latency, status = observed[0]
+        assert name == "calc"
+        assert status == "success"
+        assert latency >= 0.0
+
+    @pytest.mark.asyncio
+    async def test_handle_calc_observes_error_status(self, monkeypatch) -> None:
+        observed: list[tuple[str, float, str]] = []
+
+        def _fake_observe(name: str, latency: float, *, status: str = "success") -> None:
+            observed.append((name, latency, status))
+
+        from src.core import prometheus_metrics as pm
+
+        monkeypatch.setattr(pm, "observe_handler_latency", _fake_observe)
+
+        # Пустое выражение → UserInputError, status='error'
+        msg = _make_message()
+        bot = _make_bot("")
+        with pytest.raises(UserInputError):
+            await handle_calc(bot, msg)
+
+        assert len(observed) == 1
+        name, _latency, status = observed[0]
+        assert name == "calc"
+        assert status == "error"

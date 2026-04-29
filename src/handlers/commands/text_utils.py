@@ -26,6 +26,7 @@ from pyrogram.types import Message
 
 from ...core.exceptions import UserInputError
 from ...core.logger import get_logger
+from ...core.prometheus_metrics import time_handler
 
 if TYPE_CHECKING:
     from ...userbot_bridge import KraabUserbot
@@ -49,52 +50,53 @@ async def handle_hash(bot: "KraabUserbot", message: Message) -> None:
       !hash sha256 <текст>  — только SHA256
       !hash (reply)         — хэши текста из ответного сообщения
     """
-    _known_algos = {"md5", "sha1", "sha256"}
+    async with time_handler("hash"):
+        _known_algos = {"md5", "sha1", "sha256"}
 
-    raw_args = bot._get_command_args(message).strip()
+        raw_args = bot._get_command_args(message).strip()
 
-    algo_filter: str | None = None
-    text: str = ""
+        algo_filter: str | None = None
+        text: str = ""
 
-    if raw_args:
-        parts = raw_args.split(maxsplit=1)
-        if parts[0].lower() in _known_algos:
-            algo_filter = parts[0].lower()
-            text = parts[1].strip() if len(parts) > 1 else ""
-        else:
-            text = raw_args
+        if raw_args:
+            parts = raw_args.split(maxsplit=1)
+            if parts[0].lower() in _known_algos:
+                algo_filter = parts[0].lower()
+                text = parts[1].strip() if len(parts) > 1 else ""
+            else:
+                text = raw_args
 
-    if not text and message.reply_to_message:
-        replied = message.reply_to_message
-        text = (replied.text or replied.caption or "").strip()
+        if not text and message.reply_to_message:
+            replied = message.reply_to_message
+            text = (replied.text or replied.caption or "").strip()
 
-    if not text:
-        raise UserInputError(
-            user_message=(
-                "🔐 Укажи текст: `!hash <текст>`, `!hash md5 <текст>` "
-                "или ответь командой на сообщение."
+        if not text:
+            raise UserInputError(
+                user_message=(
+                    "🔐 Укажи текст: `!hash <текст>`, `!hash md5 <текст>` "
+                    "или ответь командой на сообщение."
+                )
             )
-        )
 
-    encoded = text.encode("utf-8")
-    hashes = {
-        "md5": hashlib.md5(encoded).hexdigest(),
-        "sha1": hashlib.sha1(encoded).hexdigest(),
-        "sha256": hashlib.sha256(encoded).hexdigest(),
-    }
+        encoded = text.encode("utf-8")
+        hashes = {
+            "md5": hashlib.md5(encoded).hexdigest(),
+            "sha1": hashlib.sha1(encoded).hexdigest(),
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+        }
 
-    if algo_filter:
-        result = f"🔐 `{algo_filter.upper()}`\n─────\n`{hashes[algo_filter]}`"
-    else:
-        result = (
-            "🔐 Hash\n"
-            "─────\n"
-            f"MD5:    `{hashes['md5']}`\n"
-            f"SHA1:   `{hashes['sha1']}`\n"
-            f"SHA256: `{hashes['sha256']}`"
-        )
+        if algo_filter:
+            result = f"🔐 `{algo_filter.upper()}`\n─────\n`{hashes[algo_filter]}`"
+        else:
+            result = (
+                "🔐 Hash\n"
+                "─────\n"
+                f"MD5:    `{hashes['md5']}`\n"
+                f"SHA1:   `{hashes['sha1']}`\n"
+                f"SHA256: `{hashes['sha256']}`"
+            )
 
-    await message.reply(result)
+        await message.reply(result)
 
 
 # ---------------------------------------------------------------------------
@@ -197,27 +199,28 @@ def safe_calc(expression: str) -> float | int:
 
 async def handle_calc(bot: "KraabUserbot", message: Message) -> None:
     """!calc <выражение> — безопасный калькулятор."""
-    expr = bot._get_command_args(message).strip()
-    if not expr:
-        raise UserInputError(
-            user_message=(
-                "🧮 **Калькулятор**\n\n"
-                "Использование: `!calc <выражение>`\n\n"
-                "Примеры:\n"
-                "`!calc 2+2*3` → `= 8`\n"
-                "`!calc sqrt(144)` → `= 12.0`\n"
-                "`!calc sin(pi/2)` → `= 1.0`\n\n"
-                "Поддерживаются: `+`, `-`, `*`, `/`, `**`, `%`, `//`\n"
-                "Функции: `sqrt`, `sin`, `cos`, `tan`, `log`, `log2`, `log10`, `abs`, `round`\n"
-                "Константы: `pi`, `e`"
+    async with time_handler("calc"):
+        expr = bot._get_command_args(message).strip()
+        if not expr:
+            raise UserInputError(
+                user_message=(
+                    "🧮 **Калькулятор**\n\n"
+                    "Использование: `!calc <выражение>`\n\n"
+                    "Примеры:\n"
+                    "`!calc 2+2*3` → `= 8`\n"
+                    "`!calc sqrt(144)` → `= 12.0`\n"
+                    "`!calc sin(pi/2)` → `= 1.0`\n\n"
+                    "Поддерживаются: `+`, `-`, `*`, `/`, `**`, `%`, `//`\n"
+                    "Функции: `sqrt`, `sin`, `cos`, `tan`, `log`, `log2`, `log10`, `abs`, `round`\n"
+                    "Константы: `pi`, `e`"
+                )
             )
-        )
-    result = safe_calc(expr)
-    if isinstance(result, float) and result.is_integer() and abs(result) < 1e15:
-        formatted = str(int(result))
-    else:
-        formatted = str(result)
-    await message.reply(f"= {formatted}")
+        result = safe_calc(expr)
+        if isinstance(result, float) and result.is_integer() and abs(result) < 1e15:
+            formatted = str(int(result))
+        else:
+            formatted = str(result)
+        await message.reply(f"= {formatted}")
 
 
 # ---------------------------------------------------------------------------
@@ -252,61 +255,62 @@ def _b64_decode(b64: str) -> str:
 
 async def handle_b64(bot: "KraabUserbot", message: Message) -> None:
     """!b64 — Base64 кодирование и декодирование."""
-    args = bot._get_command_args(message).strip()
+    async with time_handler("b64"):
+        args = bot._get_command_args(message).strip()
 
-    if args.lower().startswith("encode "):
-        payload = args[len("encode ") :].strip()
-        if not payload:
-            raise UserInputError(
-                user_message="❌ Укажи текст для кодирования: `!b64 encode <текст>`"
-            )
-        result = _b64_encode(payload)
-        await message.reply(f"🔐 **Base64 (encode):**\n`{result}`")
-        return
+        if args.lower().startswith("encode "):
+            payload = args[len("encode ") :].strip()
+            if not payload:
+                raise UserInputError(
+                    user_message="❌ Укажи текст для кодирования: `!b64 encode <текст>`"
+                )
+            result = _b64_encode(payload)
+            await message.reply(f"🔐 **Base64 (encode):**\n`{result}`")
+            return
 
-    if args.lower().startswith("decode "):
-        payload = args[len("decode ") :].strip()
-        if not payload:
-            raise UserInputError(
-                user_message="❌ Укажи Base64 для декодирования: `!b64 decode <base64>`"
-            )
-        try:
-            result = _b64_decode(payload)
-        except Exception as exc:  # noqa: BLE001
-            raise UserInputError(user_message=f"❌ Невалидный Base64: {exc}") from exc
-        await message.reply(f"🔓 **Base64 (decode):**\n`{result}`")
-        return
-
-    reply_text: str | None = None
-    if message.reply_to_message and message.reply_to_message.text:
-        reply_text = message.reply_to_message.text
-
-    if not args and reply_text:
-        if _b64_is_valid(reply_text):
+        if args.lower().startswith("decode "):
+            payload = args[len("decode ") :].strip()
+            if not payload:
+                raise UserInputError(
+                    user_message="❌ Укажи Base64 для декодирования: `!b64 decode <base64>`"
+                )
             try:
-                result = _b64_decode(reply_text)
-                await message.reply(f"🔓 **Base64 (decode):**\n`{result}`")
+                result = _b64_decode(payload)
             except Exception as exc:  # noqa: BLE001
                 raise UserInputError(user_message=f"❌ Невалидный Base64: {exc}") from exc
-        else:
-            result = _b64_encode(reply_text)
+            await message.reply(f"🔓 **Base64 (decode):**\n`{result}`")
+            return
+
+        reply_text: str | None = None
+        if message.reply_to_message and message.reply_to_message.text:
+            reply_text = message.reply_to_message.text
+
+        if not args and reply_text:
+            if _b64_is_valid(reply_text):
+                try:
+                    result = _b64_decode(reply_text)
+                    await message.reply(f"🔓 **Base64 (decode):**\n`{result}`")
+                except Exception as exc:  # noqa: BLE001
+                    raise UserInputError(user_message=f"❌ Невалидный Base64: {exc}") from exc
+            else:
+                result = _b64_encode(reply_text)
+                await message.reply(f"🔐 **Base64 (encode):**\n`{result}`")
+            return
+
+        if args:
+            result = _b64_encode(args)
             await message.reply(f"🔐 **Base64 (encode):**\n`{result}`")
-        return
+            return
 
-    if args:
-        result = _b64_encode(args)
-        await message.reply(f"🔐 **Base64 (encode):**\n`{result}`")
-        return
-
-    raise UserInputError(
-        user_message=(
-            "🔐 **Base64 — справка**\n\n"
-            "`!b64 encode <текст>` — закодировать\n"
-            "`!b64 decode <base64>` — декодировать\n"
-            "`!b64 <текст>` — закодировать (короткий вариант)\n"
-            "`!b64` в reply — автоопределение по содержимому"
+        raise UserInputError(
+            user_message=(
+                "🔐 **Base64 — справка**\n\n"
+                "`!b64 encode <текст>` — закодировать\n"
+                "`!b64 decode <base64>` — декодировать\n"
+                "`!b64 <текст>` — закодировать (короткий вариант)\n"
+                "`!b64` в reply — автоопределение по содержимому"
+            )
         )
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -349,32 +353,33 @@ def _plural_lines(n: int) -> str:
 
 async def handle_len(bot: "KraabUserbot", message: Message) -> None:
     """!len <текст> / !count <текст> — подсчёт символов, слов и строк."""
-    raw_args = bot._get_command_args(message).strip()
+    async with time_handler("len"):
+        raw_args = bot._get_command_args(message).strip()
 
-    if not raw_args and message.reply_to_message:
-        replied = message.reply_to_message
-        raw_args = (replied.text or replied.caption or "").strip()
+        if not raw_args and message.reply_to_message:
+            replied = message.reply_to_message
+            raw_args = (replied.text or replied.caption or "").strip()
 
-    if not raw_args:
-        raise UserInputError(
-            user_message=(
-                "📏 **!len — статистика текста**\n\n"
-                "`!len <текст>` — символы, слова, строки\n"
-                "`!count <текст>` — то же самое\n"
-                "_Или ответь командой на любое сообщение._"
+        if not raw_args:
+            raise UserInputError(
+                user_message=(
+                    "📏 **!len — статистика текста**\n\n"
+                    "`!len <текст>` — символы, слова, строки\n"
+                    "`!count <текст>` — то же самое\n"
+                    "_Или ответь командой на любое сообщение._"
+                )
             )
+
+        chars = len(raw_args)
+        words = len(raw_args.split())
+        lines = len(raw_args.splitlines()) or 1
+
+        result = (
+            f"📏 Текст: {chars} {_plural_chars(chars)}, "
+            f"{words} {_plural_words(words)}, "
+            f"{lines} {_plural_lines(lines)}"
         )
-
-    chars = len(raw_args)
-    words = len(raw_args.split())
-    lines = len(raw_args.splitlines()) or 1
-
-    result = (
-        f"📏 Текст: {chars} {_plural_chars(chars)}, "
-        f"{words} {_plural_words(words)}, "
-        f"{lines} {_plural_lines(lines)}"
-    )
-    await message.reply(result)
+        await message.reply(result)
 
 
 # ---------------------------------------------------------------------------
@@ -393,62 +398,63 @@ def _json_extract_text(message: Message, args: str) -> str | None:
 
 async def handle_json(bot: "KraabUserbot", message: Message) -> None:
     """!json — форматирование/валидация/минификация JSON."""
-    raw_args = bot._get_command_args(message).strip()
+    async with time_handler("json"):
+        raw_args = bot._get_command_args(message).strip()
 
-    sub: str | None = None
-    payload: str = raw_args
+        sub: str | None = None
+        payload: str = raw_args
 
-    lower = raw_args.lower()
-    if lower.startswith("validate ") or lower == "validate":
-        sub = "validate"
-        payload = raw_args[len("validate") :].strip()
-    elif lower.startswith("minify ") or lower == "minify":
-        sub = "minify"
-        payload = raw_args[len("minify") :].strip()
+        lower = raw_args.lower()
+        if lower.startswith("validate ") or lower == "validate":
+            sub = "validate"
+            payload = raw_args[len("validate") :].strip()
+        elif lower.startswith("minify ") or lower == "minify":
+            sub = "minify"
+            payload = raw_args[len("minify") :].strip()
 
-    if not payload:
-        payload = _json_extract_text(message, "") or ""
+        if not payload:
+            payload = _json_extract_text(message, "") or ""
 
-    if not payload:
-        raise UserInputError(
-            user_message=(
-                "🔧 **JSON-утилита**\n\n"
-                "`!json <текст>` — форматировать (pretty print)\n"
-                "`!json` в reply — форматировать текст ответа\n"
-                "`!json validate <текст>` — проверить валидность\n"
-                "`!json minify <текст>` — минифицировать"
+        if not payload:
+            raise UserInputError(
+                user_message=(
+                    "🔧 **JSON-утилита**\n\n"
+                    "`!json <текст>` — форматировать (pretty print)\n"
+                    "`!json` в reply — форматировать текст ответа\n"
+                    "`!json validate <текст>` — проверить валидность\n"
+                    "`!json minify <текст>` — минифицировать"
+                )
             )
-        )
 
-    if sub == "validate":
-        try:
-            json.loads(payload)
-            await message.reply("✅ JSON валиден.")
-        except json.JSONDecodeError as exc:
-            await message.reply(
-                f"❌ JSON невалиден: {exc.msg}: line {exc.lineno} column {exc.colno}"
-            )
-        return
+        if sub == "validate":
+            try:
+                json.loads(payload)
+                await message.reply("✅ JSON валиден.")
+            except json.JSONDecodeError as exc:
+                await message.reply(
+                    f"❌ JSON невалиден: {exc.msg}: line {exc.lineno} column {exc.colno}"
+                )
+            return
 
-    if sub == "minify":
+        if sub == "minify":
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                raise UserInputError(
+                    user_message=f"❌ JSON невалиден: {exc.msg}: line {exc.lineno} column {exc.colno}"
+                ) from exc
+            minified = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+            await message.reply(f"```json\n{minified}\n```")
+            return
+
         try:
             parsed = json.loads(payload)
         except json.JSONDecodeError as exc:
             raise UserInputError(
                 user_message=f"❌ JSON невалиден: {exc.msg}: line {exc.lineno} column {exc.colno}"
             ) from exc
-        minified = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
-        await message.reply(f"```json\n{minified}\n```")
-        return
-
-    try:
-        parsed = json.loads(payload)
-    except json.JSONDecodeError as exc:
-        raise UserInputError(
-            user_message=f"❌ JSON невалиден: {exc.msg}: line {exc.lineno} column {exc.colno}"
-        ) from exc
-    pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
-    await message.reply(f"```json\n{pretty}\n```")
+        pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
+        await message.reply(f"```json\n{pretty}\n```")
 
 
 # ---------------------------------------------------------------------------
@@ -499,60 +505,61 @@ def _parse_sed_expr(expr: str):
 
 async def handle_sed(bot: "KraabUserbot", message: Message) -> None:
     """!sed s/old/new/[flags] — IRC-style regex замена."""
-    parts = message.command
-    if not parts or len(parts) < 2:
-        await message.reply(
-            "✏️ **!sed — IRC-style замена**\n\n"
-            "Использование: `!sed s/old/new/[флаги]` в reply на сообщение\n\n"
-            "Флаги:\n"
-            "`g` — заменить все совпадения (глобально)\n"
-            "`i` — без учёта регистра\n\n"
-            "Примеры:\n"
-            "`!sed s/опечатка/слово/` — первое вхождение\n"
-            "`!sed s/foo/bar/g` — все вхождения\n"
-            "`!sed s/Hello/Привет/i` — без учёта регистра"
-        )
-        return
-
-    expr = parts[1]
-
-    try:
-        compiled, replacement, count = _parse_sed_expr(expr)
-    except ValueError as exc:
-        raise UserInputError(user_message=f"❌ {exc}") from exc
-
-    target = message.reply_to_message
-    if target is None:
-        raise UserInputError(user_message="❌ Используй `!sed` в reply на сообщение")
-
-    original_text = target.text or target.caption or ""
-    if not original_text:
-        raise UserInputError(user_message="❌ Целевое сообщение не содержит текста")
-
-    new_text, n_subs = compiled.subn(replacement, original_text, count=count)
-
-    if n_subs == 0:
-        await message.reply("⚠️ Паттерн не найден в тексте")
-        return
-
-    me = await bot.client.get_me()
-    is_own = target.from_user and target.from_user.id == me.id
-
-    if is_own:
-        try:
-            await bot.client.edit_message_text(
-                chat_id=target.chat.id,
-                message_id=target.id,
-                text=new_text,
+    async with time_handler("sed"):
+        parts = message.command
+        if not parts or len(parts) < 2:
+            await message.reply(
+                "✏️ **!sed — IRC-style замена**\n\n"
+                "Использование: `!sed s/old/new/[флаги]` в reply на сообщение\n\n"
+                "Флаги:\n"
+                "`g` — заменить все совпадения (глобально)\n"
+                "`i` — без учёта регистра\n\n"
+                "Примеры:\n"
+                "`!sed s/опечатка/слово/` — первое вхождение\n"
+                "`!sed s/foo/bar/g` — все вхождения\n"
+                "`!sed s/Hello/Привет/i` — без учёта регистра"
             )
+            return
+
+        expr = parts[1]
+
+        try:
+            compiled, replacement, count = _parse_sed_expr(expr)
+        except ValueError as exc:
+            raise UserInputError(user_message=f"❌ {exc}") from exc
+
+        target = message.reply_to_message
+        if target is None:
+            raise UserInputError(user_message="❌ Используй `!sed` в reply на сообщение")
+
+        original_text = target.text or target.caption or ""
+        if not original_text:
+            raise UserInputError(user_message="❌ Целевое сообщение не содержит текста")
+
+        new_text, n_subs = compiled.subn(replacement, original_text, count=count)
+
+        if n_subs == 0:
+            await message.reply("⚠️ Паттерн не найден в тексте")
+            return
+
+        me = await bot.client.get_me()
+        is_own = target.from_user and target.from_user.id == me.id
+
+        if is_own:
             try:
-                await message.delete()
-            except Exception:
-                pass
-        except Exception as exc:
-            await message.reply(f"❌ Не удалось отредактировать: {exc}")
-    else:
-        await message.reply(f"✏️ Исправление:\n{new_text}")
+                await bot.client.edit_message_text(
+                    chat_id=target.chat.id,
+                    message_id=target.id,
+                    text=new_text,
+                )
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+            except Exception as exc:
+                await message.reply(f"❌ Не удалось отредактировать: {exc}")
+        else:
+            await message.reply(f"✏️ Исправление:\n{new_text}")
 
 
 # ---------------------------------------------------------------------------
@@ -582,49 +589,50 @@ def _build_diff_output(old_text: str, new_text: str) -> str:
 
 async def handle_diff(bot: "KraabUserbot", message: Message) -> None:
     """!diff — сравнение двух текстов в unified-формате."""
-    args = bot._get_command_args(message).strip()
+    async with time_handler("diff"):
+        args = bot._get_command_args(message).strip()
 
-    reply = message.reply_to_message
-    reply_text: str | None = None
-    if reply:
-        reply_text = (reply.text or reply.caption or "").strip() or None
+        reply = message.reply_to_message
+        reply_text: str | None = None
+        if reply:
+            reply_text = (reply.text or reply.caption or "").strip() or None
 
-    if reply_text is None:
-        raise UserInputError(
-            user_message=(
-                "📊 **!diff — сравнение текстов**\n\n"
-                "Используй в reply на сообщение:\n"
-                "`!diff <новый текст>` — сравнивает текст reply с твоим текстом\n\n"
-                "_Старый текст — сообщение, на которое отвечаешь._\n"
-                "_Новый текст — аргумент команды._"
+        if reply_text is None:
+            raise UserInputError(
+                user_message=(
+                    "📊 **!diff — сравнение текстов**\n\n"
+                    "Используй в reply на сообщение:\n"
+                    "`!diff <новый текст>` — сравнивает текст reply с твоим текстом\n\n"
+                    "_Старый текст — сообщение, на которое отвечаешь._\n"
+                    "_Новый текст — аргумент команды._"
+                )
             )
-        )
 
-    if not args:
-        raise UserInputError(
-            user_message=(
-                "❌ Укажи новый текст: `!diff <текст>`\n_Старый текст берётся из reply-сообщения._"
+        if not args:
+            raise UserInputError(
+                user_message=(
+                    "❌ Укажи новый текст: `!diff <текст>`\n_Старый текст берётся из reply-сообщения._"
+                )
             )
-        )
 
-    old_text = reply_text
-    new_text = args
+        old_text = reply_text
+        new_text = args
 
-    diff_body = _build_diff_output(old_text, new_text)
+        diff_body = _build_diff_output(old_text, new_text)
 
-    if not diff_body.strip():
-        await message.reply("✅ Тексты идентичны — различий нет.")
-        return
+        if not diff_body.strip():
+            await message.reply("✅ Тексты идентичны — различий нет.")
+            return
 
-    separator = "─" * 5
-    header = f"📊 **Diff**\n{separator}"
-    full_output = f"{header}\n```\n{diff_body}\n```"
+        separator = "─" * 5
+        header = f"📊 **Diff**\n{separator}"
+        full_output = f"{header}\n```\n{diff_body}\n```"
 
-    if len(full_output) > 3900:
-        diff_body_trimmed = diff_body[: 3800 - len(header)]
-        full_output = f"{header}\n```\n{diff_body_trimmed}\n…(обрезано)```"
+        if len(full_output) > 3900:
+            diff_body_trimmed = diff_body[: 3800 - len(header)]
+            full_output = f"{header}\n```\n{diff_body_trimmed}\n…(обрезано)```"
 
-    await message.reply(full_output)
+        await message.reply(full_output)
 
 
 # ---------------------------------------------------------------------------
@@ -672,50 +680,51 @@ def _format_regex_result(pattern_src: str, text: str) -> str:
 
 async def handle_regex(bot: "KraabUserbot", message: Message) -> None:
     """!regex — тестирование регулярных выражений."""
-    raw_args = bot._get_command_args(message).strip()
+    async with time_handler("regex"):
+        raw_args = bot._get_command_args(message).strip()
 
-    pattern_src: str = ""
-    text: str = ""
+        pattern_src: str = ""
+        text: str = ""
 
-    if raw_args:
-        parts = raw_args.split(maxsplit=1)
-        pattern_src = parts[0]
-        if len(parts) > 1:
-            text = parts[1].strip()
+        if raw_args:
+            parts = raw_args.split(maxsplit=1)
+            pattern_src = parts[0]
+            if len(parts) > 1:
+                text = parts[1].strip()
 
-    if not text and message.reply_to_message:
-        reply = message.reply_to_message
-        text = (reply.text or reply.caption or "").strip()
+        if not text and message.reply_to_message:
+            reply = message.reply_to_message
+            text = (reply.text or reply.caption or "").strip()
 
-    if not pattern_src:
-        raise UserInputError(
-            user_message=(
-                "🔍 **!regex — тестирование регулярных выражений**\n\n"
-                "Использование:\n"
-                "`!regex <паттерн> <текст>` — тест на тексте\n"
-                "`!regex <паттерн>` (reply) — паттерн, текст из reply\n\n"
-                "Примеры:\n"
-                r"`!regex \d+ abc123def456`" + " → 2 совпадения\n"
-                r"`!regex (foo|bar) foo baz bar`" + " → 2 совпадения\n"
-                r"`!regex (?P<name>\w+) Hello World`" + " → именованные группы"
+        if not pattern_src:
+            raise UserInputError(
+                user_message=(
+                    "🔍 **!regex — тестирование регулярных выражений**\n\n"
+                    "Использование:\n"
+                    "`!regex <паттерн> <текст>` — тест на тексте\n"
+                    "`!regex <паттерн>` (reply) — паттерн, текст из reply\n\n"
+                    "Примеры:\n"
+                    r"`!regex \d+ abc123def456`" + " → 2 совпадения\n"
+                    r"`!regex (foo|bar) foo baz bar`" + " → 2 совпадения\n"
+                    r"`!regex (?P<name>\w+) Hello World`" + " → именованные группы"
+                )
             )
-        )
 
-    if not text:
-        raise UserInputError(
-            user_message=(
-                "❌ Укажи текст для проверки или ответь командой на сообщение.\n"
-                "Пример: `!regex \\d+ текст 123`"
+        if not text:
+            raise UserInputError(
+                user_message=(
+                    "❌ Укажи текст для проверки или ответь командой на сообщение.\n"
+                    "Пример: `!regex \\d+ текст 123`"
+                )
             )
-        )
 
-    try:
-        re.compile(pattern_src)
-    except re.error as exc:
-        raise UserInputError(user_message=f"❌ Невалидный regex: `{exc}`") from exc
+        try:
+            re.compile(pattern_src)
+        except re.error as exc:
+            raise UserInputError(user_message=f"❌ Невалидный regex: `{exc}`") from exc
 
-    result = _format_regex_result(pattern_src, text)
-    await message.reply(result)
+        result = _format_regex_result(pattern_src, text)
+        await message.reply(result)
 
 
 # ---------------------------------------------------------------------------
@@ -730,88 +739,91 @@ async def handle_rand(bot: "KraabUserbot", message: Message) -> None:
     import string
     import uuid as _uuid_mod
 
-    args = bot._get_command_args(message).strip()
+    async with time_handler("rand"):
+        args = bot._get_command_args(message).strip()
 
-    if not args:
-        n = random.randint(1, 100)
-        await message.reply(f"🎲 {n}")
-        return
+        if not args:
+            n = random.randint(1, 100)
+            await message.reply(f"🎲 {n}")
+            return
 
-    parts = args.split(maxsplit=1)
-    sub = parts[0].lower()
-    rest = parts[1].strip() if len(parts) > 1 else ""
+        parts = args.split(maxsplit=1)
+        sub = parts[0].lower()
+        rest = parts[1].strip() if len(parts) > 1 else ""
 
-    if sub == "coin":
-        result = random.choice(["Орёл 🦅", "Решка 🪙"])
-        await message.reply(result)
-        return
+        if sub == "coin":
+            result = random.choice(["Орёл 🦅", "Решка 🪙"])
+            await message.reply(result)
+            return
 
-    if sub == "dice":
-        n = random.randint(1, 6)
-        await message.reply(f"🎲 {n}")
-        return
+        if sub == "dice":
+            n = random.randint(1, 6)
+            await message.reply(f"🎲 {n}")
+            return
 
-    if sub == "pick":
-        if not rest:
-            raise UserInputError(user_message="🎲 Формат: `!rand pick item1, item2, item3`")
-        items = [item.strip() for item in rest.split(",") if item.strip()]
-        if len(items) < 2:
-            raise UserInputError(user_message="🎲 Нужно минимум 2 варианта, разделённых запятой.")
-        chosen = random.choice(items)
-        await message.reply(f"🎲 Выбрано: **{chosen}**")
-        return
+        if sub == "pick":
+            if not rest:
+                raise UserInputError(user_message="🎲 Формат: `!rand pick item1, item2, item3`")
+            items = [item.strip() for item in rest.split(",") if item.strip()]
+            if len(items) < 2:
+                raise UserInputError(
+                    user_message="🎲 Нужно минимум 2 варианта, разделённых запятой."
+                )
+            chosen = random.choice(items)
+            await message.reply(f"🎲 Выбрано: **{chosen}**")
+            return
 
-    if sub == "pass":
-        length = 16
-        if rest:
-            if not rest.isdigit():
-                raise UserInputError(user_message="🎲 Формат: `!rand pass [длина]`")
-            length = int(rest)
-            if not (4 <= length <= 128):
-                raise UserInputError(user_message="🎲 Длина пароля: от 4 до 128 символов.")
-        alphabet = string.ascii_letters + string.digits + "!@#$%^&*-_=+"
-        password = "".join(secrets.choice(alphabet) for _ in range(length))
-        await message.reply(f"🔑 `{password}`")
-        return
+        if sub == "pass":
+            length = 16
+            if rest:
+                if not rest.isdigit():
+                    raise UserInputError(user_message="🎲 Формат: `!rand pass [длина]`")
+                length = int(rest)
+                if not (4 <= length <= 128):
+                    raise UserInputError(user_message="🎲 Длина пароля: от 4 до 128 символов.")
+            alphabet = string.ascii_letters + string.digits + "!@#$%^&*-_=+"
+            password = "".join(secrets.choice(alphabet) for _ in range(length))
+            await message.reply(f"🔑 `{password}`")
+            return
 
-    if sub == "uuid":
-        uid = str(_uuid_mod.uuid4())
-        await message.reply(f"`{uid}`")
-        return
+        if sub == "uuid":
+            uid = str(_uuid_mod.uuid4())
+            await message.reply(f"`{uid}`")
+            return
 
-    try:
-        first = int(sub)
-    except ValueError:
-        raise UserInputError(
-            user_message=(
-                "🎲 **!rand** — генератор случайных значений\n"
-                "`!rand` — число 1–100\n"
-                "`!rand N` — число 1–N\n"
-                "`!rand N M` — число N–M\n"
-                "`!rand coin` — орёл/решка\n"
-                "`!rand dice` — кубик 1–6\n"
-                "`!rand pick a, b, c` — выбор из списка\n"
-                "`!rand pass [N]` — пароль (default 16 символов)\n"
-                "`!rand uuid` — UUID4"
+        try:
+            first = int(sub)
+        except ValueError:
+            raise UserInputError(
+                user_message=(
+                    "🎲 **!rand** — генератор случайных значений\n"
+                    "`!rand` — число 1–100\n"
+                    "`!rand N` — число 1–N\n"
+                    "`!rand N M` — число N–M\n"
+                    "`!rand coin` — орёл/решка\n"
+                    "`!rand dice` — кубик 1–6\n"
+                    "`!rand pick a, b, c` — выбор из списка\n"
+                    "`!rand pass [N]` — пароль (default 16 символов)\n"
+                    "`!rand uuid` — UUID4"
+                )
             )
-        )
 
-    if not rest:
-        if first < 1:
-            raise UserInputError(user_message="🎲 N должен быть ≥ 1.")
-        n = random.randint(1, first)
+        if not rest:
+            if first < 1:
+                raise UserInputError(user_message="🎲 N должен быть ≥ 1.")
+            n = random.randint(1, first)
+            await message.reply(f"🎲 {n}")
+            return
+
+        try:
+            second = int(rest.split()[0])
+        except ValueError:
+            raise UserInputError(
+                user_message="🎲 Формат: `!rand N M` — оба аргумента должны быть целыми числами."
+            )
+        lo, hi = min(first, second), max(first, second)
+        n = random.randint(lo, hi)
         await message.reply(f"🎲 {n}")
-        return
-
-    try:
-        second = int(rest.split()[0])
-    except ValueError:
-        raise UserInputError(
-            user_message="🎲 Формат: `!rand N M` — оба аргумента должны быть целыми числами."
-        )
-    lo, hi = min(first, second), max(first, second)
-    n = random.randint(lo, hi)
-    await message.reply(f"🎲 {n}")
 
 
 __all__ = [
