@@ -2242,6 +2242,74 @@ class KraabUserbot(
             return False
         return str(chat_id) in [str(c) for c in active_chats]
 
+    async def _apply_voice_dispatcher(self, message: Any, transcript: str) -> str:
+        """Idea 1: подмешать summary/preview к голосовому transcript.
+
+        Принимает решение через VoiceMessageDispatcher.decide_format().
+        Если decision=summary|both — вызывает AudioSummarizer и собирает
+        форматированный prompt-блок. Fail-open: при любой ошибке возвращает
+        исходный transcript.
+        """
+        # Gate: env-флаг для отключения
+        if os.getenv("KRAB_VOICE_DISPATCHER_ENABLED", "1").strip().lower() not in (
+            "1",
+            "true",
+            "yes",
+        ):
+            return transcript
+        text = (transcript or "").strip()
+        if not text:
+            return transcript
+        try:
+            from .core.audio_summarizer import get_summarizer
+            from .core.voice_message_dispatcher import get_dispatcher
+
+            duration: float | None = None
+            voice_obj = getattr(message, "voice", None)
+            audio_obj = getattr(message, "audio", None)
+            for src_obj in (voice_obj, audio_obj):
+                if src_obj is not None:
+                    dur_attr = getattr(src_obj, "duration", None)
+                    if dur_attr is not None:
+                        duration = float(dur_attr)
+                        break
+
+            dispatcher = get_dispatcher()
+            decision = dispatcher.decide_format(text, duration_sec=duration)
+            summary = None
+            if decision.kind in ("summary", "both"):
+                try:
+                    summary = await get_summarizer().summarize(text)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "voice_dispatcher_summary_failed",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                    summary = None
+            formatted = dispatcher.format_response(
+                text,
+                summary=summary,
+                format_kind=decision.kind,
+                duration_sec=duration,
+            )
+            logger.info(
+                "voice_dispatcher_applied",
+                kind=decision.kind,
+                reason=decision.reason,
+                duration_sec=duration,
+                transcript_chars=len(text),
+                has_summary=bool(summary),
+            )
+            return formatted or transcript
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "voice_dispatcher_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return transcript
+
     async def _handle_translator_voice(
         self,
         message: Any,
@@ -4539,6 +4607,10 @@ class KraabUserbot(
                 handled = await self._handle_translator_voice(message, query, chat_id)
                 if handled:
                     return
+            # Idea 1: voice dispatcher решает формат (full/summary/both) и
+            # подмешивает структурированный контекст в LLM prompt. Fail-open:
+            # любая ошибка возвращает raw transcript.
+            query = await self._apply_voice_dispatcher(message, query)
         elif query and not message.photo and not has_audio_message and not _forward_batch_prompt:
             message, query = await self._coalesce_text_burst(
                 message=message,
