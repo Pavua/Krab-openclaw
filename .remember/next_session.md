@@ -1,218 +1,178 @@
-# Session 29 — Starter Handoff (after Session 28 close + part 3 learning extension, 2026-04-28)
+# Session 29 — Starter Handoff (after Session 28 close, 2026-04-29)
 
-## Part 3 update (post-19:40 5h reset)
+## TL;DR
 
-**13 learning features landed** в memory + smart-routing + persona слоях:
+- **607 commits** на ветке `fix/daily-review-20260421` vs origin/main (1 trivial conflict in README.md)
+- **926 files / +171k insertions / −53k deletions / +118k net LOC** за 12 дней
+- **Phase 2 splits complete**: command_handlers.py 19637 → ~1226 LOC (**−93.8%**) через **21 waves** + 22 modules в `src/handlers/commands/`
+- **13 learning features** (A-M) landed
+- **18 idea modules** landed (1, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 17, 18, 19, 21, 22, 23, 24, 25, 26, 28+29, 30, 32, 33, 35, 36, 38)
+- **All Sentry top issues** killed or stable; closed-DB regression deep fix landed
+- **Krab live**: PID up via kickstart, telegram ready, gpt-5.5
+- **kraab.session recovered** через sqlite `.recover` (88 peers preserved) после corruption 17:18
 
-| Feature | Commit | Что |
-|---|---|---|
-| A | `d287131` | Successful response retrieval boost (positive/negative feedback в RRF) |
-| B | `2b0aee7` | Per-user reaction memory (threshold modifier) |
-| C | `d287131` | Per-chat persona drift (system prompt suffix) |
-| D | `51254b8` | Memory decay (age-based RRF multiplier) |
-| E | `a2aae5b` | Multi-modal memory (vision summaries в archive) |
-| F | `eea64ac` | Owner mood detection (annoyed/playful/business/focused) |
-| G | `517ac23` | Topic clustering (k-means без sklearn) |
-| H | `7641624` | Self-correction loop (cheap model fact-check) |
-| I | `fb2ecef` | Cross-chat learning transfer (cold-start bootstrap) |
-| J | `517ac23` | Session goal tracking (active projects in suffix) |
-| K | `7e1952b` | Thread coherence detector (drift detection) |
-| L | `51254b8` | Memory consolidation (script + soft-delete) |
-| M | `25cd31c` | Native userbot read tools для LLM (6 tools) |
+## Recommended next-steps order
 
-**Wire-ups landed**:
-- `c6d7896` Bug 11 (media silent skip) — `has_media` в smart trigger
-- `13b10c8` Features B (user_id) + M (set_userbot_client) в bridge
-- `c8fc9cf` sender_context shim (unblock test collect)
+1. **Merge to main** — single `git merge --no-ff fix/daily-review-20260421` (KA анализ recommends). Resolve trivial README conflict (additive both sides). См. отчёт KA.
+2. **Sentry observation 24-72h** — после merge стабильность всех fix'ов
+3. **Wire-ups bulk batch** — большая часть idea modules в backlog (pure singletons): vision-aware photo handler, channel digest cron tick, reply_scheduler tick loop, voice fingerprint ML embeddings
+4. **swarm config How2AI** — 3-line JSON edit + invite team accounts (опционально)
 
-**Backlog wire-ups (для Session 29)**:
-- Feature E: `save_media_summary_to_archive` hook в bridge после `process_video_message`
-- Feature G: `expand_with_cluster()` в retrieval flow (memory_engine.py)
-- Feature J: `system_prompt_suffix()` из session_goals в access_control.py
-- Feature I: profile.py auto-call `bootstrap_borrowed_profile` в format_persona_suffix path
-- Feature K: observability hook (Prometheus metrics) — собрать данные для калибровки threshold
+## Что landed в Session 28 (по 7 частям)
 
-## Session 28 stats (final)
+### Part 1 (handoff push 8c9986b → ~30 commits)
+- Bug 9+3+10 (reply preprocessor + parasite stripper + mention в reply_to)
+- Pyrogram closed-DB race fix (`3bcb000`)
+- Bug 4 (MESSAGE_AUTHOR_REQUIRED guard)
+- WAL checkpoint shutdown + retry on disk I/O
+- memory_indexer race fix
+- Launchd respawn-storm root cause: KeepAlive Crashed + ThrottleInterval=60 + btreeinitpage marker
+- Inbox dedupe + bulk-ack
+- Wave 16 state_commands extracted
 
-- **Total commits part 1+2+3**: ~45
-- **Phase 2 Code Splits**: 19637 → 4430 LOC (−77.4%) через **18 waves**
-- **3 Krab restarts** applied, KeepAlive policy works (only manual SIGTERM observed)
-- **All Sentry top-5 fixes** verified zero events post-restart
-- **Inbox cleanup**: stale 31 → 4
-- **Smart Routing media-aware**: photo/video_note в группах теперь reaches AI pipeline
-- **Tests**: 134 default + 121 live skipped, ~10889 collected post-shim
+### Part 2 (~30 commits)
+- Wave 17 observability_commands extracted
+- Wave 18 memory_admin_commands extracted
+- Vision/video frame extraction (perceptor)
+- USER_BANNED_IN_CHANNEL + slowmode + NoneType filter
+- Bug 11 (media silent skip in groups)
+- Bug 12 (deferred handoff в группах)
 
+### Part 3 (~14 commits — 13 learning features)
+- A: Response retrieval boost
+- B: Per-user reaction memory
+- C: Per-chat persona drift
+- D: Memory decay
+- E: Multi-modal memory (vision summaries)
+- F: Owner mood detection
+- G: Topic clustering (k-means)
+- H: Self-correction loop
+- I: Cross-chat learning transfer
+- J: Session goal tracking
+- K: Thread coherence detector
+- L: Memory consolidation
+- M: Native userbot read tools
 
+### Part 4 (~10 commits — first 5 ideas + bug fixes)
+- DD: Pyrogram NoneType.to_bytes guard
+- DE: 35 test fixes (snippet + landmines)
+- DH: Idea 17 owner offline holdover
+- DI: Idea 22 REPL session
+- DJ: Idea 32 proactive suggestions
+- EC: Idea 21 TODO extractor
 
-## Status snapshot
+### Part 5 (~14 commits)
+- Wave 19+20 crypto + info commands
+- closed-DB regression deep fix (swarm guard + sentry filter)
+- audio summarizer (Idea 35)
+- anomaly detector (Idea 26)
+- tool result cache (Idea 10)
+- cost-aware routing (Idea 8)
+- LLM ensemble (Idea 11)
+- tool composition memory (Idea 7)
+- rolling auto-summarization (Idea 14)
+- pyrogram guard rewrite via accessor wrapping
 
-- Branch: `fix/daily-review-20260421` — **575+ commits ahead of main** (Sessions 24-28 непрерывно), branch behind 1 (merge-base `6cba5b6`)
-- **Krab production live** — два рестарта выполнены (17:52 + 18:09), новая launchd policy применена, plist sync'нут в repo
-- Phase 2 command_handlers split: 19637 → **4824 LOC** (**−75.5%**) через **17 waves** (Session 28: Wave 16 state_commands −1114, Wave 17 observability_commands −711)
-- Sentry root-cause фиксы deployed (PYTHON-FASTAPI-Z/1/5W/5X/6E)
-- Inbox cleanup: stale 31 → 4, attention 10 → 1
-- **19 коммитов Session 28** + 3 carry-over
+### Part 6 (~10 commits)
+- Constitutional guardrails (Idea 12)
+- Per-handler latency dashboard (Idea 23)
+- Prompt A/B testing (Idea 24)
+- Joke calibration (Idea 33)
+- Screenshot analyzer (Idea 38)
+- pyrogram patch disable+rewrite
 
-## Session 28 wins (Part 1 — 15 commits до restart 1)
+### Part 7 (~12 commits — final batch)
+- Wave 21 diagnostic_commands (−1767 LOC)
+- Source attribution (Idea 16)
+- Named entity memory (Idea 13)
+- Conversation replay (Idea 25)
+- Forget-me tool (Idea 30)
+- Reply scheduling (Idea 5)
+- Calendar integration (Idea 19)
+- Channel digest (Idea 6)
+- Auto-translate per chat (Idea 4)
+- Voice message dispatcher (Idea 1)
+- Voice fingerprinting (Idea 36)
+- Bulk wire-ups for ideas 4/5/7/33
 
-| Commit | Tag | Что |
-|---|---|---|
-| `ed35081` | feat | memory_doctor расширен на 12 runtime sqlite (session/cache/tasks) |
-| `74a7b95` | fix | Bug 9+3+10: reply preprocessor + phrase parasite stripper + mention в reply_to |
-| `3bcb000` | fix | Pyrogram storage closed-DB race (PYTHON-FASTAPI-1, 130/24h) |
-| `c0dba1a` | feat | perceptor: video frame extraction (ffmpeg) + process_video_message aggregator |
-| `f23dcef` | fix | **System prompt** anti-parasite + reply-first rules (root cause Bug 9) |
-| `929d1c7` | feat | swarm-в-группу: additional_response_chats infrastructure |
-| `e7ba873` | fix | Bug 4: `temp_msg is source_msg` guard (MESSAGE_AUTHOR_REQUIRED) + defense-in-depth |
-| `f8294e3` | fix | bootstrap: flush WAL checkpoints on shutdown + retry на disk I/O preflight |
-| `3c08688` | fix | memory_indexer: executor + supervised_loop guard на restart_userbot race |
-| `31594b9` | fix | **launchd respawn-storm root cause**: KeepAlive Crashed + ThrottleInterval=60 + btreeinitpage HARD marker + inbox dedupe (Agent S) |
-| `4b916b8` | feat | swarm wire-up: !swarm в additional_response_chats отвечает в тот же чат |
-| `0bb8318` | refactor | Phase 2 Wave 16 — state_commands (clear/forget/reset/model/web/macos/browser) −1114 LOC |
+## Technical foundation
 
-## Session 28 wins (Part 2 — 4 commits после restart 1, до restart 2)
+### File ownership matrix (для будущих parallel agents)
+- **command_handlers.py** — слой re-exports + dual-namespace lookup wrappers (ne to extract more than 1226 LOC)
+- **userbot_bridge.py** — message dispatch, smart routing, media handling, swarm bootstrap, learning singletons bootstrap
+- **userbot/llm_flow.py** — LLM stream + reply preprocessor + anti-parasite stripper + self-correction hook + Prometheus coherence hook
+- **bootstrap/pyrogram_patch.py** — apply_pyrogram_session_guard via accessor wrapping (не _get обёртку)
+- **core/memory_archive.py** — schema + 4 sidecar tables: response_feedback, chunk_clusters, cluster_meta, message_media_summaries
+- **core/memory_hybrid_reranker.py** — RRF + MMR + feedback boost + decay multiplier + cluster expand
 
-| Commit | Tag | Что |
-|---|---|---|
-| `f1ea08e` | feat | inbox bulk-ack helper + endpoint `/api/inbox/bulk-ack-stale` + CLI `scripts/inbox_bulk_ack.py` (Agent U) |
-| `29527c3` | feat | bridge: wire `process_video_message` для video/video_note/animation (Agent T, +165 LOC) |
-| `02929a2` | fix | tests: unhang openclaw model_apply (8s→0.01s) + align mark_failed emoji 👎 (Bug 8 fixture) |
-| `aa34885` | refactor | Phase 2 Wave 17 — observability_commands (watch/inbox/context/memo/bookmark/note) −711 LOC |
+### Active learning singletons (state under `~/.openclaw/krab_runtime_state/`)
+- chat_ban_cache.json, chat_response_policy.json, owner_presence.json, repl_session_audit.log
+- proactive_suggestions.json, owner_mood.json (cache TTL 30min)
+- chat_persona_profile.json, swarm_channels.json
+- entities.json (named), anomaly_baselines.json, sensitive_chats.json
+- auto_translate_chats.json, scheduled_replies.json, tool_composition.json, joke_calibration.json
+- voice_fingerprints.json, ab_experiments.json, session_goals.json
 
-Inbox cleanup execution:
-```bash
-venv/bin/python scripts/inbox_bulk_ack.py --age-hours 24 --kind proactive_action --severity warning --target done --note "Session 28 stale cleanup"
-venv/bin/python scripts/inbox_bulk_ack.py --age-hours 24 --kind proactive_action --severity info --target acked --note "Session 28 stale cleanup"
-```
-Result: stale 31 → 4, attention 10 → 1, остались только 2 actionable (owner_task + approval).
+## Sentry — current state (Session 28 final, 24h)
 
-Manual ops:
-- `~/Library/LaunchAgents/ai.krab.signal-ops-guard.plist` → `.disabled.session28` (broken: запускал несуществующий script, 28МБ stderr/3 weeks)
-- launchctl bootout/bootstrap `ai.krab.core` для активации новой KeepAlive policy
-- Restart 1 (17:52): применил коммиты ed35081..0bb8318
-- Restart 2 (18:09): применил коммиты f1ea08e..aa34885
+| Issue | Events | Status |
+|---|---:|---|
+| PYTHON-FASTAPI-Z (CancelledError) | 344 | stable, only restart spam |
+| PYTHON-FASTAPI-1 (closed-DB) | 140 | regression killed via swarm guard `94546da` |
+| PYTHON-FASTAPI-5W (disk I/O) | 11 | +2 — transient on rapid restart, WAL retry helps |
+| PYTHON-FASTAPI-67/66 (Traceback / db late) | 8 / 8 | stable |
+| PYTHON-FASTAPI-6E (db_corruption_runtime) | 7 | +2 — kraab.session btreeinitpage corruption (recovered manually) |
+| PYTHON-FASTAPI-6G (NoneType.to_bytes) | 4 | quiet after disable+rewrite of guard |
+| PYTHON-FASTAPI-6K (no such column: _accessor) | 3 | NEW — broken DD patch artifact, disabled |
+| 6H/6J (USER_BANNED) | 1+1 | filtered out via Sentry markers |
 
-## Sentry root-cause map
+## Backlog для Session 29
 
-| ShortId | Events 24h | Root cause | Commit fix | Filter |
-|---|---:|---|---|---|
-| PYTHON-FASTAPI-Z | 337 | Restart-storm 26.04 (DB corruption + KeepAlive=true без throttle) | `31594b9` | btreeinitpage marker + plist policy |
-| PYTHON-FASTAPI-1 | 130 | pyrogram closed-DB race (Session.restart) | `3bcb000` | storage shutdown guard |
-| PYTHON-FASTAPI-5W | 9 | WAL не flush'ился на shutdown → next boot disk I/O | `f8294e3` | wal_checkpoint(FULL) + retry |
-| PYTHON-FASTAPI-5X | 7 | memory_indexer race на restart_userbot | `3c08688` | executor + supervised_loop guards |
-| PYTHON-FASTAPI-6E | 5 | runtime detection of ProgrammingError | `3bcb000`+`ed35081` | downgrade в Sentry filter |
-| PYTHON-FASTAPI-60 | 24 | external openclaw cloud 500 (26.04) — self-recovered | — | можно resolve в Sentry |
-| PYTHON-FASTAPI-67 | 6 | generic Traceback (no culprit) | — | требует custom investigation |
-| PYTHON-FASTAPI-66 | 6 | db_corruption_detected: late marker | `31594b9` | расширенные markers |
+### P0 — Wire-ups для landed ideas (большинство pure singletons)
+- Idea 5 (reply_scheduler) — actual sender tick loop в bridge background tasks
+- Idea 6 (channel_digest) — cron job для daily publish
+- Idea 11 (LLM ensemble) — wire в `llm_flow` для critical queries
+- Idea 12 (guardrails) — pre-send filter в llm_flow после anti-parasite stripper
+- Idea 23 (handler latency) — `time_handler` decorators в Wave 11-21 modules
+- Idea 24 (AB testing) — wire в system prompt builder
+- Idea 26 (anomaly detector) — proactive_watch hook with cooldown
+- Idea 28+29 (privacy) — wire в `memory_archive.add_message`
+- Idea 32 (proactive suggestions) — pattern_detector recording в incoming hook
+- Idea 33 (joke calibration) — record_joke в feedback_tracker (на reactions)
+- Idea 38 (screenshot analyzer) — bridge media handler (если photo > N kb)
+- Feature G (topic clustering) — `expand_with_cluster` в retrieval flow
+- Feature K (thread coherence) — Prometheus metric collection (already ready)
 
-## Что live в production (Session 28)
+### P1 — Architecture
+- Merge to main (single `--no-ff`, 607 commits)
+- WAL flush wait sentinel before rapid respawn (5W transient fix)
+- kraab.session backup automation (auto `.recover` script на boot)
+- pyrogram patch — observability за 24-48h before re-enabling
 
-- **anti-parasite** в system prompt (`access_control.py:_append_runtime_constraints`) + stripper в `llm_text_processing.py` как safety net
-- **reply preprocessor** в `userbot/reply_preprocessor.py` (extract_reply_segments / build_segmented_prompt / has_persona_mention_in_reply_to)
-- **mention_detector(scan_reply_to=True)** — mention в теле reply_to триггерит Krab
-- **launchd KeepAlive** только на crash/non-zero exit + ThrottleInterval=60 (storm proof)
-- **WAL checkpoint** на shutdown + retry на disk I/O при boot
-- **memory_doctor** покрывает 12 db (session/cache/tasks/archive)
-- **swarm-в-группу** infra ready, How2AI требует только entry в `swarm_channels.json`
-- **state_commands** module extracted (16 modules now в `src/handlers/commands/`)
+### P2 — Optional ideas not yet landed
+- Idea 2 (sticker replies)
+- Idea 3 (inline mode)
+- Idea 9 (parallel tool execution)
+- Idea 15 (time-aware retrieval boost)
+- Idea 20 (email digest)
+- Idea 27 (archive.db encryption — heavy)
+- Idea 31 (multi-persona switcher)
+- Idea 34 (dynamic avatar)
+- Idea 37 (image generation на запрос)
 
-## Wave 18+ backlog (из Wave 17 отчёта)
+## Operational notes
 
-`command_handlers.py` ~4824 LOC осталось:
-- **Wave 18** — memory_admin_commands (~400 LOC): handle_memory + 4 private subhandlers + 4 collect helpers + format_memory_stats
-- **Wave 19** — crypto_commands (~150 LOC): encrypt/decrypt + _derive_key + _xor_crypt
-- **Wave 20** — knowledge_commands (~700 LOC): weather/define/urban/news/currency/convert/color/emoji/qr
-- **Wave 21** — diagnostic_commands (~остальное): bench/screenshot/eval/run/time/typing/link/say/listen/filter/chado/e2e_smoke
-
-Также остались: handle_shop, handle_confirm, handle_help, _swarm_status_deep_report (multi-use), _reply_tech.
-
-## Session 29 priorities
-
-### P0 (observation — первые 24-72h)
-1. **Sentry post-restart observation** — после restart 28.04 17:52 проверить через 24h:
-   - PYTHON-FASTAPI-Z: ожидание ~1-2/day (manual restart only) vs 48/day baseline
-   - PYTHON-FASTAPI-1: ожидание ~0/24h (storage guard)
-   - PYTHON-FASTAPI-5W/5X/6E: ожидание ~0
-2. **Мониторинг launchd policy** — что будет при следующем corruption: quarantine→clean exit→**no respawn** ожидается. Если respawn — investigate.
-3. **Verify in How2AI**: длинная цитата с @yung_nagato в теле триггерит Krab; ответы не оканчиваются «если хочешь, могу...».
-
-### P1 (loose ends)
-4. **swarm config** для How2AI: добавить в `~/.openclaw/krab_runtime_state/swarm_channels.json`:
-   ```json
-   "additional_response_chats": [
-     {"chat_id": -1001587432709, "title": "ЧАТ How2AI", "respond_in_same_chat": true}
-   ]
-   ```
-   Потом invite team-аккаунты (`@kraab_traders` etc.) в чат.
-5. **Vision/video bridge wire-up** — `c0dba1a` оставил `process_video_message` готовой; нужен 10-line patch в `src/userbot_bridge.py` media handler (см. example в Agent G отчёте).
-6. **Inbox stale=31 bulk-ack** — старые items до Agent S fix. Можно через `/api/inbox/update` per item или новый endpoint `/api/inbox/bulk-ack-stale`.
-7. **pytest unit hanger** — какой-то тест таймаутит на `waiter.acquire()` — investigate (вероятно asyncio queue lock в одном из новых tests).
-
-### P2 (architectural)
-8. **Wave 17+** — в `command_handlers.py` ~5523 LOC осталось. Кандидаты: status/inbox/memo/bookmark/note/todo + ~20 мелких.
-9. **CLAUDE.md autotables refresh** — нет скрипта, придётся manual update test counts + endpoints.
-10. **Merge consideration** — 571 ahead, main всего 4 ahead. Single big rebase + merge PR с rich description рекомендован (см. Session 28 анализ).
-
-### P3 (backlog)
-11. **VPN migration** по `/Users/pablito/Antigravity_AGENTS/VPN/MIGRATION_PLAN_RU.md` (OrbStack)
-12. **HNSW migration prep** — vec count ~72k / 250k threshold
-13. **Bug 5 video vision integration** — wire-up
-
-## Operational lessons (Session 28)
-
-1. **Root cause vs symptom**: anti-parasite **system prompt** rules — корень; stripper — safety net. Pyrogram storage **guard** — корень; Sentry filter — defense in depth. Не поднимать filter без guard.
-2. **launchd KeepAlive=true опасно** при `sys.exit(non_zero)` — нет throttle = respawn storm. KeepAlive: { Crashed: true } restart только на signal-crash.
-3. **Multi-account contamination**: `signal-ops-guard.err.log` принадлежал USER2 — multi-account setup от Session 28 unintentionally подложил под другую учётку. Verify ownership при подобных issues.
-4. **Massive parallel sub-agent dispatch**: 9 агентов одновременно — 5 sonnet/4 haiku, file-ownership matrix prevented races. Haiku падает при `prompt > N tokens` (CLAUDE.md takes most of context). Sonnet безопаснее для длинных contexts.
-5. **dual-namespace lookup pattern зрелый** — Wave 16 single-commit landing.
-6. **Pre-commit hook auto-stages** related files (proactive_watch.py + test_inbox_dedupe ушли в commit launchd hardening — bundle by accident, не критично).
-
-## Operational commands
-
-```bash
-cd /Users/pablito/Antigravity_AGENTS/Краб
-cat .remember/next_session.md                   # this file
-git log --oneline 8945a5f..HEAD                 # Session 28 commits
-launchctl list ai.krab.core | grep PID          # должен быть PID, exit 0
-curl -s http://127.0.0.1:8080/api/health/lite | python3 -m json.tool
-
-# Sentry observation (24h+ after 2026-04-28 17:52 restart)
-mcp__krab-p0lrd__krab_sentry_status statsPeriod=24h limit=20
-
-# Тесты
-venv/bin/python -m pytest tests/unit/ -q --tb=line --timeout=30 -x
-
-# Memory doctor
-venv/bin/python scripts/memory_doctor.py --all-db
-
-# Verify plist policy active
-plutil -p ~/Library/LaunchAgents/ai.krab.core.plist | grep -E "KeepAlive|ThrottleInterval"
-```
-
-## Restart notes
-
-- **При следующем corruption**: quarantine → exit(78) → **launchd НЕ перезапустит** (KeepAlive: Crashed only) → manual `new start_krab.command` нужен
-- Если нужен auto-recovery — добавить отдельный watchdog script (не KeepAlive=true)
-- ThrottleInterval=60 защищает от любых respawn-loops в будущем
+- Krab restart требует launchctl kickstart после первого clean exit (KeepAlive Crashed-only policy)
+- Если disk I/O error — try `scripts/memory_doctor.py --all-db --json` first, then `.recover` для broken db
+- Pyrogram Session.start race для NoneType.to_bytes: guard active via apply_pyrogram_session_guard
+- На rapid restart cycle всегда возможен transient WAL contention — wait 30s между Stop и Start
 
 ## Files for Session 29 reference
 
-- `scripts/launchagents/ai.krab.core.plist` — committed plist (sync'нут с ~/Library/)
-- `~/Library/LaunchAgents/ai.krab.signal-ops-guard.plist.disabled.session28` — disabled, restore только при необходимости
-- `src/handlers/commands/state_commands.py` — Wave 16 module
-- `src/userbot/reply_preprocessor.py` — Bug 3+10 fix
-- `src/core/memory_indexer_worker.py` — race-proof
-- `src/bootstrap/db_corruption_guard.py` — расширенные markers + WAL flush
-- `tests/unit/test_inbox_dedupe_root_cause.py` — Agent S regression coverage
-
-## Sub-agent dispatch lessons
-
-- ✅ Best results на Sonnet model (general-purpose / krab-code-worker)
-- ❌ Haiku падает с "Prompt is too long" из-за CLAUDE.md context — для read-only research лучше bash + grep напрямую
-- ✅ File-ownership matrix критична: 9 агентов одновременно прошли без git conflict
-- ✅ Pre-commit hook добавляет files в staged — иногда неожиданно (Agent S inbox tests)
-
-## Test counts
-
-- Session 28 final (estimated): **~10650 passed** (новые: state_commands 8 + reply_preprocessor 11 + parasite stripper 11 + session lifecycle 11 + sentry filter coverage + perceptor video 10 + swarm additional 15 + memory_indexer race 4 + inbox dedupe 7 + memory_doctor all-db 8 + author_required 7 + WAL checkpoint 5 + persona anti-parasite 3 = +113 новых)
-- Pytest unit hanger: 1 тест зависает на waiter.acquire (--timeout=30 ловит) — backlog
+- `scripts/memory_doctor.py --all-db --json` — DB integrity sweep
+- `scripts/inbox_bulk_ack.py` — inbox cleanup CLI
+- `scripts/forget_me.py` — privacy compliance scrub
+- `scripts/replay_conversation.py` — dev tool для re-running history
+- `scripts/memory_recluster.py` — Feature G recluster trigger
+- `scripts/memory_consolidate.py` — Feature L compression
+- `scripts/memory_backfill_media.py` — Feature E backfill (if needed)
