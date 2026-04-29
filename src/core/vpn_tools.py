@@ -3,24 +3,29 @@
 vpn_tools.py — read-only инструменты VPN x-ui панели для LLM Krab.
 
 Экспортирует 4 native tools для интеграции с MCP manifest:
-  vpn_list_clients  — все клиенты с vless-ссылкой и трафиком
-  vpn_get_config    — vless-конфиг конкретного клиента
-  vpn_panel_health  — HTTP-health x-ui панели + cert
-  vpn_traffic_stats — статистика трафика клиента (up/down/limit/percent)
+  vpn_list_clients  — все клиенты (через `list_clients.command`)
+  vpn_get_config    — vless-конфиг клиента (через `get_client_config.command`)
+  vpn_panel_health  — HTTP-health x-ui панели + cert (HTTP probe из Krab)
+  vpn_traffic_stats — статистика трафика клиента (read-only sqlite)
 
-Архитектура:
-- `VPNToolsAdapter` открывает SQLite в read-only режиме (`mode=ro`).
-- Singleton `vpn_tools` лениво подбирает путь к БД через
-  `configure_default_path()` или env `KRAB_VPN_DB_PATH`.
-- Все методы возвращают JSON-friendly dict; при отсутствии БД —
-  `{"ok": False, "error": "db_unavailable"}` (graceful for tests).
+Архитектура (после refactor):
+- `vpn_list_clients` и `vpn_get_config` делегируют helper-скриптам в репозитории VPN
+  (`/Users/pablito/Antigravity_AGENTS/VPN/*.command`). Эти скрипты используют
+  `vpn_bot.build_vless_link()` как single source of truth для Reality params,
+  что исключает drift между Krab и VPN-ботом.
+- `vpn_panel_health` остаётся HTTP probe (не VPN-логика, а сетевая проверка
+  со стороны Krab; helper-скрипт для этого не нужен).
+- `vpn_traffic_stats` остаётся read-only sqlite read из `client_traffics`
+  (helper-скрипты не отдают трафик; Reality params здесь не задействованы,
+  поэтому drift-риска нет).
 
-Schema x-ui.db (используется):
-  inbounds(id, enable, remark, port, protocol, settings, stream_settings, listen)
-  client_traffics(email, enable, up, down, total, expiry_time)
+Конфиг через env:
+  KRAB_VPN_HELPERS_DIR  — каталог с .command скриптами (default `/Users/pablito/Antigravity_AGENTS/VPN`)
+  KRAB_VPN_DB_PATH      — путь к x-ui.db для traffic_stats (default `<HELPERS>/config/x-ui.db`)
+  KRAB_VPN_PANEL_URL    — URL панели (default `https://localhost:54321/`)
 
-vless-link собирается из inbounds.settings.clients[].id (uuid)
-+ stream_settings.realitySettings (publicKey, serverNames, shortIds).
+Все методы возвращают JSON-friendly dict; при отсутствии скриптов/БД —
+`{"ok": False, "error": "..."}` (graceful for tests).
 """
 
 from __future__ import annotations
@@ -29,25 +34,31 @@ import json
 import os
 import sqlite3
 import ssl
+import subprocess
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
 
 from structlog import get_logger
 
+from .subprocess_env import clean_subprocess_env
+
 logger = get_logger(__name__)
 
-# Дефолтный путь к x-ui.db (используется fallback'ом при отсутствии env).
-_DEFAULT_DB_PATH = Path("/Users/pablito/Antigravity_AGENTS/VPN/config/x-ui.db")
-
-# Дефолтный публичный хост — берётся из env, иначе placeholder.
-_DEFAULT_PUBLIC_HOST = "vpn.example.com"
+# Дефолтный каталог с helper-скриптами VPN-репозитория.
+_DEFAULT_HELPERS_DIR = Path("/Users/pablito/Antigravity_AGENTS/VPN")
 
 # Дефолтный URL панели для health-check.
 _DEFAULT_PANEL_URL = "https://localhost:54321/"
+
+# Имена helper-скриптов в каталоге KRAB_VPN_HELPERS_DIR.
+_LIST_CLIENTS_SCRIPT = "list_clients.command"
+_GET_CONFIG_SCRIPT = "get_client_config.command"
+
+# Таймаут для subprocess-вызовов (sec).
+_SUBPROCESS_TIMEOUT = 10
 
 
 # ------------------------------------------------------------------
@@ -58,8 +69,8 @@ VPN_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "vpn_list_clients",
         "description": (
-            "List all VPN clients from the x-ui panel database (read-only). "
-            "Returns name, vless link, traffic used (GB), expiry timestamp, enabled flag."
+            "List all VPN clients via the VPN repo helper script. "
+            "Returns email, uuid, inbound, port, enabled flags, and meta (TG/notes) if present."
         ),
         "inputSchema": {
             "type": "object",
@@ -76,8 +87,8 @@ VPN_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "vpn_get_config",
         "description": (
-            "Get the VLESS config link for a specific VPN client by name (email). "
-            "Returns vless:// link, port, traffic stats."
+            "Get the VLESS config link for a specific VPN client by name (email) "
+            "via the VPN repo helper. Returns vless:// link, port, uuid, inbound."
         ),
         "inputSchema": {
             "type": "object",
@@ -130,42 +141,6 @@ VPN_TOOL_SCHEMAS: list[dict[str, Any]] = [
 # ------------------------------------------------------------------
 
 
-def _build_vless_link(inbound_row: dict[str, Any], client: dict[str, Any], public_host: str) -> str:
-    """Собрать vless:// link для Reality-инбаунда (см. vpn_bot.build_vless_link).
-
-    inbound_row: распарсенная строка inbounds (port + распарсенные stream/settings).
-    client: один элемент settings.clients (содержит id, flow, email).
-    """
-    stream = inbound_row.get("stream", {}) or {}
-    rs = stream.get("realitySettings", {}) or {}
-
-    uuid_ = client.get("id", "")
-    flow = client.get("flow", "")
-    sni_list = rs.get("serverNames") or ["localhost"]
-    sni = sni_list[0] if sni_list else "localhost"
-    pubkey = (rs.get("settings", {}) or {}).get("publicKey") or rs.get("publicKey") or ""
-    fp = (rs.get("settings", {}) or {}).get("fingerprint", "chrome") or "chrome"
-    spider = (rs.get("settings", {}) or {}).get("spiderX", "/") or "/"
-    short_ids = client.get("shortIds") or rs.get("shortIds") or [""]
-    sid = short_ids[0] if short_ids else ""
-
-    params = [
-        ("type", stream.get("network", "tcp")),
-        ("security", stream.get("security", "reality")),
-        ("pbk", pubkey),
-        ("fp", fp),
-        ("sni", sni),
-        ("sid", sid),
-        ("spx", spider),
-    ]
-    if flow:
-        params.append(("flow", flow))
-
-    qs = "&".join(f"{k}={urllib.parse.quote(str(v), safe='')}" for k, v in params if v)
-    remark = client.get("email", inbound_row.get("remark", "vpn"))
-    return f"vless://{uuid_}@{public_host}:{inbound_row['port']}?{qs}#{urllib.parse.quote(remark)}"
-
-
 def _bytes_to_gb(n: int | float | None) -> float:
     """Перевод байт → GB с округлением до 3 знаков."""
     if not n:
@@ -179,240 +154,227 @@ def _bytes_to_gb(n: int | float | None) -> float:
 
 
 class VPNToolsAdapter:
-    """Read-only адаптер к x-ui.db + HTTP health-check панели.
+    """Thin адаптер: helper-скрипты + HTTP probe + read-only sqlite для трафика.
 
-    Singleton-pattern (см. `vpn_tools` ниже). storage_path и public_host
+    Singleton-pattern (см. `vpn_tools` ниже). storage_path и helpers_dir
     инжектируются через `configure_default_path()` в bootstrap или
-    автоматически из env (KRAB_VPN_DB_PATH / VPN_PUBLIC_HOST).
+    автоматически из env (KRAB_VPN_HELPERS_DIR / KRAB_VPN_DB_PATH).
     """
 
     def __init__(
         self,
         *,
+        helpers_dir: Path | None = None,
         db_path: Path | None = None,
-        public_host: str | None = None,
         panel_url: str | None = None,
     ) -> None:
+        self._helpers_dir: Path | None = helpers_dir
         self._db_path: Path | None = db_path
-        self._public_host: str = public_host or os.environ.get(
-            "VPN_PUBLIC_HOST", _DEFAULT_PUBLIC_HOST
-        )
         self._panel_url: str = panel_url or os.environ.get("KRAB_VPN_PANEL_URL", _DEFAULT_PANEL_URL)
 
     # ---- Configuration --------------------------------------------------
 
     def configure_default_path(
         self,
-        db_path: Path,
+        helpers_dir: Path,
         *,
-        public_host: str | None = None,
+        db_path: Path | None = None,
         panel_url: str | None = None,
     ) -> None:
-        """Bootstrap-инициализация singleton'а."""
-        self._db_path = db_path
-        if public_host:
-            self._public_host = public_host
+        """Bootstrap-инициализация singleton'а.
+
+        helpers_dir обязателен (каталог с .command скриптами VPN-репо).
+        db_path для traffic_stats; если не передан — `<helpers_dir>/config/x-ui.db`.
+        """
+        self._helpers_dir = helpers_dir
+        if db_path is not None:
+            self._db_path = db_path
         if panel_url:
             self._panel_url = panel_url
         logger.info(
             "vpn_tools_configured",
-            db_path=str(db_path),
-            public_host=self._public_host,
-            db_exists=db_path.exists(),
+            helpers_dir=str(helpers_dir),
+            db_path=str(self._db_path) if self._db_path else None,
+            panel_url=self._panel_url,
+            helpers_exist=helpers_dir.exists(),
         )
 
+    def _resolve_helpers_dir(self) -> Path | None:
+        """Лениво найти helpers_dir: explicit → env → fallback."""
+        if self._helpers_dir is not None:
+            return self._helpers_dir
+        env_dir = os.environ.get("KRAB_VPN_HELPERS_DIR", "").strip()
+        if env_dir:
+            self._helpers_dir = Path(env_dir)
+            return self._helpers_dir
+        if _DEFAULT_HELPERS_DIR.exists():
+            self._helpers_dir = _DEFAULT_HELPERS_DIR
+            return self._helpers_dir
+        return None
+
     def _resolve_db_path(self) -> Path | None:
-        """Лениво найти путь: explicit → env → fallback."""
+        """Лениво найти путь к x-ui.db: explicit → env → <helpers_dir>/config/x-ui.db."""
         if self._db_path is not None:
             return self._db_path
         env_path = os.environ.get("KRAB_VPN_DB_PATH", "").strip()
         if env_path:
             self._db_path = Path(env_path)
             return self._db_path
-        if _DEFAULT_DB_PATH.exists():
-            self._db_path = _DEFAULT_DB_PATH
-            return self._db_path
+        helpers = self._resolve_helpers_dir()
+        if helpers is not None:
+            candidate = helpers / "config" / "x-ui.db"
+            if candidate.exists():
+                self._db_path = candidate
+                return self._db_path
         return None
 
-    def _open_ro(self) -> sqlite3.Connection | None:
-        """Открыть sqlite в read-only режиме. None если файла нет."""
-        path = self._resolve_db_path()
-        if path is None or not path.exists():
-            logger.warning("vpn_tools_db_missing", path=str(path) if path else None)
-            return None
+    # ---- Internal: subprocess runner -----------------------------------
+
+    def _run_helper(self, script_name: str, *args: str) -> dict[str, Any]:
+        """Запустить helper-скрипт VPN-репо и распарсить JSON-stdout.
+
+        Возвращает либо распарсенный dict (если helper отдал JSON), либо
+        `{"ok": False, "error": "..."}` при сбое.
+        """
+        helpers = self._resolve_helpers_dir()
+        if helpers is None:
+            logger.warning("vpn_tools_helpers_dir_missing")
+            return {"ok": False, "error": "helpers_dir_unavailable"}
+        script = helpers / script_name
+        if not script.exists():
+            logger.warning(
+                "vpn_tools_helper_missing",
+                script=script_name,
+                path=str(script),
+            )
+            return {"ok": False, "error": f"helper_missing:{script_name}"}
+
+        cmd = [str(script), *args]
         try:
-            uri = f"file:{path}?mode=ro"
-            return sqlite3.connect(uri, uri=True)
-        except sqlite3.Error as exc:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=_SUBPROCESS_TIMEOUT,
+                env=clean_subprocess_env(),
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
             logger.error(
-                "vpn_tools_db_open_failed",
+                "vpn_tools_helper_timeout",
+                script=script_name,
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
-            return None
+            return {"ok": False, "error": "helper_timeout", "script": script_name}
+        except (OSError, ValueError) as exc:
+            logger.error(
+                "vpn_tools_helper_spawn_failed",
+                script=script_name,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return {
+                "ok": False,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            }
 
-    # ---- Internal: enumerate inbounds + clients -------------------------
-
-    def _enumerate_clients(self, include_disabled: bool = False) -> list[dict[str, Any]]:
-        """Прошерстить inbounds, развернуть все client-объекты с трафиком.
-
-        Возвращает список dict: name, inbound_id, port, protocol, enabled,
-        client (raw json), inbound (parsed row), traffic (row из client_traffics).
-        """
-        conn = self._open_ro()
-        if conn is None:
-            return []
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
+        # Helper'ы при ошибке тоже могут писать JSON в stdout (см. emit_error
+        # в get_client_config.command), поэтому пробуем распарсить даже при rc != 0.
         try:
-            inbounds = conn.execute(
-                "SELECT id, enable, remark, port, protocol, settings, stream_settings, listen "
-                "FROM inbounds"
-            ).fetchall()
-            traffics_raw = conn.execute(
-                "SELECT email, enable, up, down, total, expiry_time FROM client_traffics"
-            ).fetchall()
-        finally:
-            conn.close()
-
-        # Индекс трафика по email — O(1) lookup при сборке.
-        traffics_by_email: dict[str, dict[str, Any]] = {}
-        for email, t_enable, up, down, total, expiry in traffics_raw:
-            traffics_by_email[email] = {
-                "email": email,
-                "enable": bool(t_enable),
-                "up": int(up or 0),
-                "down": int(down or 0),
-                "total": int(total or 0),
-                "expiry_time": int(expiry or 0),
+            parsed = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "vpn_tools_helper_non_json",
+                script=script_name,
+                returncode=proc.returncode,
+                stderr=stderr[:500],
+                stdout_head=stdout[:200],
+                error=str(exc),
+            )
+            return {
+                "ok": False,
+                "error": "helper_non_json",
+                "script": script_name,
+                "returncode": proc.returncode,
+                "stderr": stderr.strip()[:500],
             }
-
-        result: list[dict[str, Any]] = []
-        for inb in inbounds:
-            inb_id, inb_enable, remark, port, protocol, settings_json, stream_json, listen = inb
-            if not include_disabled and not inb_enable:
-                continue
-            try:
-                settings = json.loads(settings_json or "{}")
-                stream = json.loads(stream_json or "{}")
-            except json.JSONDecodeError as exc:
-                logger.warning(
-                    "vpn_tools_inbound_json_invalid",
-                    inbound_id=inb_id,
-                    error=str(exc),
-                )
-                continue
-
-            inbound_row = {
-                "id": inb_id,
-                "enable": bool(inb_enable),
-                "remark": remark,
-                "port": port,
-                "protocol": protocol,
-                "listen": listen,
-                "stream": stream,
+        if not isinstance(parsed, dict):
+            return {
+                "ok": False,
+                "error": "helper_unexpected_payload",
+                "script": script_name,
             }
-            for client in settings.get("clients", []) or []:
-                email = client.get("email", "")
-                traffic = traffics_by_email.get(email, {})
-                if not include_disabled and not traffic.get("enable", True):
-                    continue
-                result.append(
-                    {
-                        "name": email,
-                        "inbound_id": inb_id,
-                        "port": port,
-                        "protocol": protocol,
-                        "enabled": bool(inb_enable) and traffic.get("enable", True),
-                        "client": client,
-                        "inbound": inbound_row,
-                        "traffic": traffic,
-                    }
-                )
-        return result
+        return parsed
 
     # ---- Public tool API ------------------------------------------------
 
     async def list_clients(self, include_disabled: bool = False) -> dict[str, Any]:
-        """vpn_list_clients: все клиенты с vless-ссылкой и трафиком."""
-        path = self._resolve_db_path()
-        if path is None or not path.exists():
-            logger.warning("vpn_list_clients_db_unavailable")
-            return {"ok": False, "error": "db_unavailable", "clients": []}
+        """vpn_list_clients: делегируем list_clients.command, фильтруем enabled."""
+        payload = self._run_helper(_LIST_CLIENTS_SCRIPT)
+        if not payload.get("ok"):
+            # Помимо ошибок прокидываем пустой clients для обратной совместимости.
+            payload.setdefault("clients", [])
+            return payload
 
-        try:
-            entries = self._enumerate_clients(include_disabled=include_disabled)
-        except sqlite3.Error as exc:
-            logger.error(
-                "vpn_list_clients_db_error",
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-            return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
-
-        clients: list[dict[str, Any]] = []
-        for entry in entries:
-            try:
-                vless = _build_vless_link(entry["inbound"], entry["client"], self._public_host)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "vpn_list_clients_link_failed",
-                    name=entry["name"],
-                    error=str(exc),
-                )
-                vless = ""
-            traffic = entry["traffic"]
-            traffic_used = int(traffic.get("up", 0)) + int(traffic.get("down", 0))
-            clients.append(
+        raw_clients = payload.get("clients") or []
+        filtered: list[dict[str, Any]] = []
+        for item in raw_clients:
+            if not isinstance(item, dict):
+                continue
+            inbound_enabled = bool(item.get("inbound_enabled", True))
+            client_enabled = bool(item.get("client_enabled", True))
+            enabled = inbound_enabled and client_enabled
+            if not include_disabled and not enabled:
+                continue
+            filtered.append(
                 {
-                    "name": entry["name"],
-                    "vless_link": vless,
-                    "traffic_used_gb": _bytes_to_gb(traffic_used),
-                    "expires_at": traffic.get("expiry_time", 0),
-                    "enabled": entry["enabled"],
+                    "name": item.get("email", ""),
+                    "email": item.get("email", ""),
+                    "uuid": item.get("uuid", ""),
+                    "inbound": item.get("inbound", ""),
+                    "inbound_id": item.get("inbound_id"),
+                    "port": item.get("port"),
+                    "enabled": enabled,
+                    "meta": item.get("meta"),
                 }
             )
-        return {"ok": True, "count": len(clients), "clients": clients}
+        return {"ok": True, "count": len(filtered), "clients": filtered}
 
     async def get_config(self, client_name: str) -> dict[str, Any]:
-        """vpn_get_config: vless-конфиг по имени клиента."""
+        """vpn_get_config: делегируем get_client_config.command --json."""
         if not client_name or not isinstance(client_name, str):
             return {"ok": False, "error": "empty_client_name"}
 
-        path = self._resolve_db_path()
-        if path is None or not path.exists():
-            return {"ok": False, "error": "db_unavailable"}
-
-        try:
-            entries = self._enumerate_clients(include_disabled=True)
-        except sqlite3.Error as exc:
-            return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
-
-        for entry in entries:
-            if entry["name"] == client_name:
-                try:
-                    vless = _build_vless_link(entry["inbound"], entry["client"], self._public_host)
-                except Exception as exc:  # noqa: BLE001
-                    return {
-                        "ok": False,
-                        "error": f"link_build_failed: {exc}",
-                        "error_type": type(exc).__name__,
-                    }
-                traffic = entry["traffic"]
+        payload = self._run_helper(_GET_CONFIG_SCRIPT, client_name, "--json")
+        if not payload.get("ok"):
+            # Helper отдаёт {"ok": false, "error": "client 'X' not found in x-ui.db"}.
+            err = str(payload.get("error", "")).lower()
+            if "not found" in err:
                 return {
-                    "ok": True,
-                    "name": entry["name"],
-                    "vless_link": vless,
-                    "port": entry["port"],
-                    "protocol": entry["protocol"],
-                    "enabled": entry["enabled"],
-                    "expires_at": traffic.get("expiry_time", 0),
-                    "traffic_used_gb": _bytes_to_gb(
-                        int(traffic.get("up", 0)) + int(traffic.get("down", 0))
-                    ),
+                    "ok": False,
+                    "error": "not_found",
+                    "client_name": client_name,
                 }
-        return {"ok": False, "error": "not_found", "client_name": client_name}
+            return payload
+
+        return {
+            "ok": True,
+            "name": payload.get("email", client_name),
+            "email": payload.get("email", client_name),
+            "vless_link": payload.get("vless_link", ""),
+            "port": payload.get("port"),
+            "inbound": payload.get("inbound", ""),
+            "uuid": payload.get("uuid", ""),
+            "flow": payload.get("flow", ""),
+            "meta": payload.get("meta"),
+        }
 
     async def panel_health(self, url: str | None = None) -> dict[str, Any]:
-        """vpn_panel_health: HTTP-проверка панели + cert valid."""
+        """vpn_panel_health: HTTP-проверка панели + cert valid (без helper'а)."""
         target = url or self._panel_url
         if not target:
             return {"ok": False, "error": "no_panel_url"}
@@ -420,6 +382,7 @@ class VPNToolsAdapter:
         cert_valid = True
         http_status = 0
         last_check = int(time.time())
+        ok = False
         try:
             ctx = ssl.create_default_context()
             req = urllib.request.Request(target, method="HEAD")
@@ -451,7 +414,11 @@ class VPNToolsAdapter:
         }
 
     async def traffic_stats(self, client_name: str) -> dict[str, Any]:
-        """vpn_traffic_stats: трафик клиента + percent от лимита."""
+        """vpn_traffic_stats: трафик клиента + percent от лимита (read-only sqlite).
+
+        Helper-скрипты не отдают трафик, поэтому здесь сохраняем прямой read.
+        Reality params не задействованы → drift-риска нет.
+        """
         if not client_name or not isinstance(client_name, str):
             return {"ok": False, "error": "empty_client_name"}
 
@@ -459,9 +426,17 @@ class VPNToolsAdapter:
         if path is None or not path.exists():
             return {"ok": False, "error": "db_unavailable"}
 
-        conn = self._open_ro()
-        if conn is None:
-            return {"ok": False, "error": "db_unavailable"}
+        try:
+            uri = f"file:{path}?mode=ro"
+            conn = sqlite3.connect(uri, uri=True)
+        except sqlite3.Error as exc:
+            logger.error(
+                "vpn_traffic_stats_db_open_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+
         try:
             row = conn.execute(
                 "SELECT email, up, down, total, enable, expiry_time "
@@ -490,6 +465,7 @@ class VPNToolsAdapter:
             "down_bytes": down_b,
             "limit": limit_b,
             "percent_used": percent,
+            "used_gb": _bytes_to_gb(used_b),
             "enabled": bool(enable),
             "expires_at": int(expiry or 0),
         }
