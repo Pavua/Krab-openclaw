@@ -34,6 +34,7 @@ from ..config import config
 from ..integrations.macos_automation import macos_automation
 from ..memory_engine import memory_manager
 from ..openclaw_client import openclaw_client
+from .anomaly_detector import Anomaly, anomaly_detector
 from .auto_restart_policy import (
     RESTART_COMMANDS,
     auto_restart_manager,
@@ -41,6 +42,7 @@ from .auto_restart_policy import (
 )
 from .inbox_service import inbox_service
 from .logger import get_logger
+from .observability import metrics as _observability_metrics
 from .openclaw_runtime_models import get_runtime_primary_model
 from .openclaw_workspace import append_workspace_memory_entry
 from .scheduler import krab_scheduler
@@ -1151,6 +1153,232 @@ class ProactiveWatchService:
             is_critical=is_critical,
         )
         return True
+
+    # -----------------------------------------------------------------
+    # Anomaly detection wire-up (Idea 26)
+    # -----------------------------------------------------------------
+    # Per-metric cooldown между alert'ами (6 часов) — без этого один и тот же
+    # spike будет триггериться на каждой итерации loop'а до выхода точки из окна.
+    ANOMALY_ALERT_COOLDOWN_SEC: int = 21600
+    # Интервал anomaly-проверок: ~60s, как и заявлено в спеке.
+    ANOMALY_CHECKS_INTERVAL_SEC: int = 60
+
+    @staticmethod
+    def _anomaly_cooldown_path() -> Path:
+        """Путь к persisted-state cooldown'ов anomaly-алёртов."""
+        return Path.home() / ".openclaw" / "krab_runtime_state" / "anomaly_alert_cooldowns.json"
+
+    @staticmethod
+    def _is_anomaly_detection_enabled() -> bool:
+        """Глобальный gate: KRAB_ANOMALY_DETECTION_ENABLED, default off."""
+        raw = os.environ.get("KRAB_ANOMALY_DETECTION_ENABLED", "0").strip().lower()
+        return raw in ("1", "true", "yes", "on")
+
+    def _load_anomaly_cooldowns(self) -> dict[str, float]:
+        """Читает per-metric cooldowns. Падать не должны: corrupt → пустой dict."""
+        path = self._anomaly_cooldown_path()
+        if not path.exists():
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "anomaly_cooldowns_read_failed",
+                path=str(path),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        # Filter обратно к dict[str, float] — corrupt entries молча выкидываем.
+        result: dict[str, float] = {}
+        for k, v in raw.items():
+            try:
+                result[str(k)] = float(v)
+            except (TypeError, ValueError):
+                continue
+        return result
+
+    def _save_anomaly_cooldowns(self, payload: dict[str, float]) -> None:
+        """Persist per-metric cooldowns. Тихо логируем сбой записи."""
+        path = self._anomaly_cooldown_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except (OSError, TypeError) as exc:
+            logger.warning(
+                "anomaly_cooldowns_write_failed",
+                path=str(path),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+    def _collect_anomaly_metrics(self) -> dict[str, float]:
+        """
+        Собирает 5 целевых метрик для anomaly_detector.
+
+        Все источники защищены try/except: если конкретный модуль недоступен,
+        метрика просто пропускается, остальные пишутся.
+        """
+        result: dict[str, float] = {}
+
+        # 1) response_time_p95 — observability latency p95 (ms).
+        try:
+            snap = _observability_metrics.get_snapshot()
+            p95 = float(snap.get("latencies", {}).get("p95_ms") or 0.0)
+            result["response_time_p95"] = p95
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("anomaly_collect_p95_failed", error=str(exc))
+
+        # 2) error_rate — % failed LLM calls / total (0..100).
+        try:
+            counters = _observability_metrics.get_snapshot().get("counters", {})
+            errors = float(counters.get("llm_error", 0))
+            success = float(counters.get("llm_success", 0))
+            total = errors + success
+            if total > 0:
+                result["error_rate"] = (errors / total) * 100.0
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("anomaly_collect_error_rate_failed", error=str(exc))
+
+        # 3) inbox_open_count — текущее число open-items.
+        try:
+            open_items = inbox_service.list_items(status="open", limit=1000)
+            result["inbox_open_count"] = float(len(open_items))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("anomaly_collect_inbox_open_failed", error=str(exc))
+
+        # 4) memory_indexer_queue_size — глубина очереди индексатора.
+        try:
+            from .memory_indexer_worker import (  # noqa: PLC0415
+                _worker_singleton as _indexer_singleton,
+            )
+
+            if _indexer_singleton is not None:
+                stats = _indexer_singleton.get_stats()
+                result["memory_indexer_queue_size"] = float(stats.queue_size)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("anomaly_collect_indexer_failed", error=str(exc))
+
+        # 5) chat_filter_silence_ratio — доля чатов в режиме silence/mute (0..1).
+        try:
+            from .chat_filter_config import chat_filter_config  # noqa: PLC0415
+
+            stats = chat_filter_config.stats()
+            by_mode = stats.get("by_mode") or {}
+            total_chats = sum(int(v) for v in by_mode.values())
+            if total_chats > 0:
+                silenced = int(by_mode.get("mute", 0)) + int(by_mode.get("silence", 0))
+                result["chat_filter_silence_ratio"] = silenced / total_chats
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("anomaly_collect_silence_ratio_failed", error=str(exc))
+
+        return result
+
+    async def run_anomaly_checks(self) -> dict[str, Any]:
+        """
+        Записывает 5 ключевых метрик в anomaly_detector и поднимает alert
+        при detected anomaly (с per-metric cooldown).
+
+        Gate: `KRAB_ANOMALY_DETECTION_ENABLED` (default off).
+        """
+        if not self._is_anomaly_detection_enabled():
+            return {"enabled": False, "recorded": 0, "alerts": []}
+
+        recorded = self._collect_anomaly_metrics()
+        for metric, value in recorded.items():
+            try:
+                anomaly_detector.record_metric(metric, value)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "anomaly_record_failed",
+                    metric=metric,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+        try:
+            anomalies: list[Anomaly] = anomaly_detector.detect_anomalies()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "anomaly_detect_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            anomalies = []
+
+        cooldowns = self._load_anomaly_cooldowns()
+        now_ts = time.time()
+        alerted: list[dict[str, Any]] = []
+        cooldowns_dirty = False
+
+        for anomaly in anomalies:
+            # Записываем alert только для метрик из нашего scope —
+            # detector может содержать данные из других источников.
+            if anomaly.metric not in recorded:
+                continue
+            last_alert = float(cooldowns.get(anomaly.metric, 0.0))
+            if now_ts - last_alert < self.ANOMALY_ALERT_COOLDOWN_SEC:
+                continue
+            logger.warning(
+                "proactive_anomaly_detected",
+                metric=anomaly.metric,
+                severity=anomaly.severity,
+                z_score=round(anomaly.z_score, 3),
+                current_value=anomaly.current_value,
+                baseline_value=round(anomaly.baseline_value, 4),
+                std_dev=round(anomaly.std_dev, 4),
+                sample_count=anomaly.sample_count,
+            )
+            cooldowns[anomaly.metric] = now_ts
+            cooldowns_dirty = True
+            alerted.append(
+                {
+                    "metric": anomaly.metric,
+                    "severity": anomaly.severity,
+                    "z_score": anomaly.z_score,
+                    "current_value": anomaly.current_value,
+                    "baseline_value": anomaly.baseline_value,
+                }
+            )
+
+        if cooldowns_dirty:
+            self._save_anomaly_cooldowns(cooldowns)
+
+        return {
+            "enabled": True,
+            "recorded": len(recorded),
+            "metrics": recorded,
+            "alerts": alerted,
+        }
+
+    async def _anomaly_checks_loop(self) -> None:
+        """Бесконечный цикл: каждые ANOMALY_CHECKS_INTERVAL_SEC прогоняет проверку."""
+        while True:
+            await asyncio.sleep(self.ANOMALY_CHECKS_INTERVAL_SEC)
+            try:
+                await self.run_anomaly_checks()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "anomaly_checks_loop_error",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+    def start_anomaly_checks_loop(self) -> "asyncio.Task[None]":
+        """Запускает фоновую задачу anomaly-проверок и возвращает Task."""
+        loop = asyncio.get_event_loop()
+        task = loop.create_task(self._anomaly_checks_loop(), name="krab_anomaly_checks")
+        logger.info(
+            "anomaly_checks_loop_started",
+            interval_sec=self.ANOMALY_CHECKS_INTERVAL_SEC,
+            enabled=self._is_anomaly_detection_enabled(),
+        )
+        return task
 
     async def _run_alert_checks_loop(self) -> None:
         """Бесконечный цикл: каждые 30 минут запускает run_alert_checks."""
