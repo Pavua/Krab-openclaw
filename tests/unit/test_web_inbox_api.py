@@ -158,7 +158,7 @@ def _client() -> tuple[TestClient, MagicMock]:
 def test_inbox_status_ok() -> None:
     """GET /api/inbox/status возвращает ok=True и поля summary/workflow."""
     client, inbox_mock = _client()
-    with patch("src.modules.web_app.inbox_service", inbox_mock):
+    with patch("src.modules.web_routers.inbox_router.inbox_service", inbox_mock), patch("src.modules.web_app.inbox_service", inbox_mock):
         resp = client.get("/api/inbox/status")
     assert resp.status_code == 200
     data = resp.json()
@@ -170,7 +170,7 @@ def test_inbox_status_ok() -> None:
 def test_inbox_status_summary_fields() -> None:
     """summary в /api/inbox/status содержит ключи total, open, has_pending."""
     client, inbox_mock = _client()
-    with patch("src.modules.web_app.inbox_service", inbox_mock):
+    with patch("src.modules.web_routers.inbox_router.inbox_service", inbox_mock), patch("src.modules.web_app.inbox_service", inbox_mock):
         resp = client.get("/api/inbox/status")
     summary = resp.json()["summary"]
     for key in ("total", "open", "has_pending"):
@@ -185,7 +185,7 @@ def test_inbox_status_summary_fields() -> None:
 def test_inbox_items_default() -> None:
     """GET /api/inbox/items без параметров возвращает ok=True и список items."""
     client, inbox_mock = _client()
-    with patch("src.modules.web_app.inbox_service", inbox_mock):
+    with patch("src.modules.web_routers.inbox_router.inbox_service", inbox_mock), patch("src.modules.web_app.inbox_service", inbox_mock):
         resp = client.get("/api/inbox/items")
     assert resp.status_code == 200
     data = resp.json()
@@ -197,7 +197,7 @@ def test_inbox_items_filter_by_status() -> None:
     """GET /api/inbox/items?status=done вызывает list_items с status=done."""
     client, inbox_mock = _client()
     inbox_mock.list_items.return_value = []
-    with patch("src.modules.web_app.inbox_service", inbox_mock):
+    with patch("src.modules.web_routers.inbox_router.inbox_service", inbox_mock), patch("src.modules.web_app.inbox_service", inbox_mock):
         resp = client.get("/api/inbox/items?status=done")
     assert resp.status_code == 200
     # Проверяем что list_items вызван с нужным статусом
@@ -209,7 +209,7 @@ def test_inbox_items_filter_by_kind() -> None:
     """GET /api/inbox/items?kind=owner_request фильтрует по kind."""
     client, inbox_mock = _client()
     inbox_mock.list_items.return_value = [_FAKE_ITEM]
-    with patch("src.modules.web_app.inbox_service", inbox_mock):
+    with patch("src.modules.web_routers.inbox_router.inbox_service", inbox_mock), patch("src.modules.web_app.inbox_service", inbox_mock):
         resp = client.get("/api/inbox/items?kind=owner_request")
     assert resp.status_code == 200
     call_kwargs = inbox_mock.list_items.call_args
@@ -220,7 +220,7 @@ def test_inbox_items_limit_param() -> None:
     """GET /api/inbox/items?limit=5 передаёт limit=5 в list_items."""
     client, inbox_mock = _client()
     inbox_mock.list_items.return_value = []
-    with patch("src.modules.web_app.inbox_service", inbox_mock):
+    with patch("src.modules.web_routers.inbox_router.inbox_service", inbox_mock), patch("src.modules.web_app.inbox_service", inbox_mock):
         resp = client.get("/api/inbox/items?limit=5")
     assert resp.status_code == 200
     call_kwargs = inbox_mock.list_items.call_args
@@ -239,7 +239,7 @@ def test_inbox_update_ack_item() -> None:
         "ok": True,
         "item": {**_FAKE_ITEM, "status": "acked"},
     }
-    with patch("src.modules.web_app.inbox_service", inbox_mock):
+    with patch("src.modules.web_routers.inbox_router.inbox_service", inbox_mock), patch("src.modules.web_app.inbox_service", inbox_mock):
         resp = client.post(
             "/api/inbox/update",
             json={"item_id": "item-abc-123", "status": "acked"},
@@ -252,7 +252,7 @@ def test_inbox_update_ack_item() -> None:
 def test_inbox_update_missing_item_id() -> None:
     """POST /api/inbox/update без item_id возвращает 400."""
     client, inbox_mock = _client()
-    with patch("src.modules.web_app.inbox_service", inbox_mock):
+    with patch("src.modules.web_routers.inbox_router.inbox_service", inbox_mock), patch("src.modules.web_app.inbox_service", inbox_mock):
         # Пустой item_id — endpoint вернёт 400 до auth-проверки
         resp = client.post(
             "/api/inbox/update",
@@ -272,7 +272,7 @@ def test_inbox_stale_processing_empty() -> None:
     """GET /api/inbox/stale-processing возвращает ok=True и пустой список."""
     client, inbox_mock = _client()
     inbox_mock.list_stale_processing_items.return_value = []
-    with patch("src.modules.web_app.inbox_service", inbox_mock):
+    with patch("src.modules.web_routers.inbox_router.inbox_service", inbox_mock), patch("src.modules.web_app.inbox_service", inbox_mock):
         resp = client.get("/api/inbox/stale-processing")
     assert resp.status_code == 200
     data = resp.json()
@@ -285,7 +285,7 @@ def test_inbox_stale_processing_with_items() -> None:
     """GET /api/inbox/stale-processing возвращает count > 0 если есть stale items."""
     client, inbox_mock = _client()
     inbox_mock.list_stale_processing_items.return_value = [_FAKE_ITEM, _FAKE_ITEM]
-    with patch("src.modules.web_app.inbox_service", inbox_mock):
+    with patch("src.modules.web_routers.inbox_router.inbox_service", inbox_mock), patch("src.modules.web_app.inbox_service", inbox_mock):
         resp = client.get("/api/inbox/stale-processing?kind=owner_request")
     data = resp.json()
     assert data["ok"] is True
@@ -302,7 +302,7 @@ def test_inbox_stale_open_structure() -> None:
     """GET /api/inbox/stale-open возвращает ok, kind, count, items."""
     client, inbox_mock = _client()
     inbox_mock.list_stale_open_items.return_value = [_FAKE_ITEM]
-    with patch("src.modules.web_app.inbox_service", inbox_mock):
+    with patch("src.modules.web_routers.inbox_router.inbox_service", inbox_mock), patch("src.modules.web_app.inbox_service", inbox_mock):
         resp = client.get("/api/inbox/stale-open")
     assert resp.status_code == 200
     data = resp.json()
@@ -321,7 +321,7 @@ def test_inbox_stale_open_structure() -> None:
 def test_inbox_create_invalid_kind() -> None:
     """POST /api/inbox/create с неизвестным kind отдаёт 400 или 403."""
     client, inbox_mock = _client()
-    with patch("src.modules.web_app.inbox_service", inbox_mock):
+    with patch("src.modules.web_routers.inbox_router.inbox_service", inbox_mock), patch("src.modules.web_app.inbox_service", inbox_mock):
         resp = client.post(
             "/api/inbox/create",
             json={"kind": "unknown_kind", "title": "Test", "body": "Body"},
@@ -333,7 +333,7 @@ def test_inbox_create_invalid_kind() -> None:
 def test_inbox_create_missing_title() -> None:
     """POST /api/inbox/create без title отдаёт 400 или 403."""
     client, inbox_mock = _client()
-    with patch("src.modules.web_app.inbox_service", inbox_mock):
+    with patch("src.modules.web_routers.inbox_router.inbox_service", inbox_mock), patch("src.modules.web_app.inbox_service", inbox_mock):
         resp = client.post(
             "/api/inbox/create",
             json={"kind": "owner_task", "body": "Body"},

@@ -25,7 +25,9 @@ Env:
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from .logger import get_logger
@@ -81,6 +83,10 @@ class _Adapted:
     text: str
     chunk_id: str
     sources: list[str]
+    # Атрибуция — для формирования [MEMORY] блока с явным чатом и временем.
+    chat_id: str = ""
+    timestamp: Optional[datetime] = None
+    chat_title: str = ""
 
 
 def _adapt_retrieval_result(r: Any) -> Optional[_Adapted]:
@@ -111,12 +117,78 @@ def _adapt_retrieval_result(r: Any) -> Optional[_Adapted]:
 
     sources = list(getattr(r, "sources", []) or []) or ["hybrid"]
 
+    # Атрибуция: chat_id и timestamp — из SearchResult или совместимого объекта.
+    chat_id = str(getattr(r, "chat_id", "") or "")
+    ts: Optional[datetime] = None
+    raw_ts = getattr(r, "timestamp", None)
+    if isinstance(raw_ts, datetime):
+        ts = raw_ts
+    elif isinstance(raw_ts, str) and raw_ts:
+        try:
+            s = raw_ts.rstrip("Z")
+            parsed = datetime.fromisoformat(s)
+            ts = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+
     return _Adapted(
         rrf_score=float(score),
         text=str(text),
         chunk_id=str(chunk_id),
         sources=sources,
+        chat_id=chat_id,
+        timestamp=ts,
     )
+
+
+def _resolve_chat_titles(chat_ids: list[str]) -> dict[str, str]:
+    """
+    Достаёт title из таблицы chats для списка chat_id.
+    Возвращает {chat_id: title}. Graceful: при любой ошибке возвращает {}.
+    """
+    if not chat_ids:
+        return {}
+    try:
+        from .memory_archive import ArchivePaths, open_archive
+
+        paths = ArchivePaths.default()
+        if not paths.db.exists():
+            return {}
+        conn = open_archive(paths, read_only=True, create_if_missing=False)
+        try:
+            placeholders = ",".join("?" * len(chat_ids))
+            rows = conn.execute(
+                f"SELECT chat_id, title FROM chats WHERE chat_id IN ({placeholders})",
+                chat_ids,
+            ).fetchall()
+            return {r[0]: (r[1] or r[0]) for r in rows}
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("memory_context_chat_title_lookup_failed", error=str(exc))
+        return {}
+
+
+def _format_memory_block(r: "_Adapted", chat_title: str) -> str:
+    """
+    Форматирует один chunk как [MEMORY] блок с явной атрибуцией чат + время.
+    """
+    ts_str = ""
+    if r.timestamp is not None:
+        try:
+            ts_str = r.timestamp.strftime("%d.%m.%Y %H:%M")
+        except Exception:  # noqa: BLE001
+            ts_str = str(r.timestamp)[:16]
+
+    label_parts = []
+    if chat_title:
+        label_parts.append(f'в чате "{chat_title}"')
+    if ts_str:
+        label_parts.append(ts_str)
+
+    label = " ".join(label_parts) if label_parts else r.chunk_id
+    text_preview = _short_preview(r.text, max_len=400)
+    return f"[MEMORY] {label}:\n{text_preview}"
 
 
 def _call_retrieval(query: str, limit: int) -> list[Any]:
@@ -170,7 +242,9 @@ async def augment_query_with_memory(
     top_k = top_k if top_k is not None else _default_top_k()
     min_score = min_score if min_score is not None else _default_min_score()
     if force_enable is None:
-        enabled = _auto_context_enabled()
+        # Auto-enable: если env выключен, но запрос похож на recall — включаем.
+        # Это ловит "о чём я писал с Дашкой..." без явного MEMORY_AUTO_CONTEXT_ENABLED=true.
+        enabled = _auto_context_enabled() or _is_memory_query(query)
     else:
         enabled = force_enable
 
@@ -209,12 +283,33 @@ async def augment_query_with_memory(
             enabled=True,
         )
 
-    # Формируем prefix.
-    lines = ["[Контекст из твоей памяти:]"]
-    for i, r in enumerate(strong_results, 1):
-        text_preview = _short_preview(r.text, max_len=400)
-        sources = "+".join(r.sources) if r.sources else "hybrid"
-        lines.append(f"{i}. [{sources}] {text_preview}")
+    # Резолвим chat_title для всех chunks через chats-таблицу.
+    unique_chat_ids = list({r.chat_id for r in strong_results if r.chat_id})
+    chat_titles = _resolve_chat_titles(unique_chat_ids)
+    for r in strong_results:
+        r.chat_title = chat_titles.get(r.chat_id, r.chat_id)
+
+    # Формируем prefix с явной атрибуцией [MEMORY] блоков.
+    lines = [
+        "[Контекст из твоей памяти:]",
+        "",
+        "🔴 КРИТИЧНО про [MEMORY] блоки:",
+        '- `в чате "<X>"` = это ПОЛНЫЙ собеседник-контекст (с кем вёлся разговор)',
+        '- ИМЕНА В ТЕКСТЕ сообщения (например "Даша", "Алиса") — это люди О КОТОРЫХ user говорил, НЕ собеседники',
+        '- Если запрос "что я писал С Х?", смотри ТОЛЬКО блоки где chat_title содержит X',
+        '- НЕ делай выводы "собеседник был Х" на основании упоминания X в тексте сообщения',
+        "",
+        "Пример атрибуции:",
+        '  [MEMORY] в чате "Анна 🌸" 22.04.2026 15:00:',
+        "  Анна, у меня Даша просит испанский номер для AppStore, как лучше?",
+        "",
+        '  ❌ НЕПРАВИЛЬНО: "Ты писал Даше про AppStore"',
+        '  ✅ ПРАВИЛЬНО: "Ты писал Анне о том, что Даша попросила номер"',
+        "",
+    ]
+    for r in strong_results:
+        lines.append(_format_memory_block(r, r.chat_title))
+        lines.append("")
     lines.append("---")
     lines.append(f"Вопрос: {query}")
 
@@ -224,6 +319,8 @@ async def augment_query_with_memory(
             "chunk_id": r.chunk_id,
             "score": r.rrf_score,
             "sources": list(r.sources),
+            "chat_id": r.chat_id,
+            "chat_title": r.chat_title,
         }
         for r in strong_results
     ]
@@ -252,8 +349,96 @@ def _short_preview(text: str, max_len: int = 400) -> str:
     return t[:max_len] + "..."
 
 
+# Ключевые слова для auto-detect memory/recall запросов.
+_MEMORY_QUERY_KEYWORDS: tuple[str, ...] = (
+    # Русские — действия с прошлым
+    "писал",
+    "писала",
+    "говорил",
+    "говорила",
+    "сказал",
+    "сказала",
+    "обсуждали",
+    "договорились",
+    "упоминал",
+    "упоминала",
+    "напомни",
+    "вспомни",
+    "что было",
+    "о чём",
+    "про что",
+    "история",
+    "переписка",
+    "разговор",
+    "диалог",
+    # English
+    "remember",
+    "recall",
+    "told",
+    "said",
+    "discussed",
+    "mentioned",
+    "conversation",
+    "chat history",
+    "what did",
+)
+
+
+def _is_memory_query(query: str) -> bool:
+    """
+    Эвристика: выглядит ли запрос как recall-запрос по истории чатов?
+    Используется для auto-enable memory augmentation без явного флага env.
+    При совпадении любого ключевого слова возвращает True.
+    """
+    q = query.lower()
+    return any(kw in q for kw in _MEMORY_QUERY_KEYWORDS)
+
+
 # Shim-обёртка: позволяет тестам делать monkeypatch.setattr(m, "hybrid_search", ...)
 # без необходимости патчить _call_retrieval.
 def hybrid_search(query: str, limit: int = 3) -> list[Any]:
     """Shim over retrieval pipeline, патчится в тестах."""
     return _call_retrieval(query, limit=limit)
+
+
+# ---------------------------------------------------------------------------
+# Memory-query detection: эвристика для auto-clear session history
+# ---------------------------------------------------------------------------
+
+# Паттерн запросов об истории/архиве: «что я/он писал», «история», «архив», «recall».
+_MEMORY_QUERY_RE = re.compile(
+    r"(?:что|кто|когда|где|как|сколько)[^.!?]{0,60}писа(?:л|ли|ла|ло)"
+    r"|(?:история|архив|recall|mem(?:ory)?|вспомни|найди в памяти)",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def detect_memory_query(query: str) -> bool:
+    """Возвращает True если query похож на запрос к архиву/истории сообщений.
+
+    Эвристика: маркеры «что писал», «история», «архив», «recall», «memory».
+    Используется для auto-clear накопленной session history перед prompt-сборкой,
+    чтобы предотвратить stale-attribution из предыдущих LLM-ответов.
+    """
+    if not query or not query.strip():
+        return False
+    return bool(_MEMORY_QUERY_RE.search(query))
+
+
+def maybe_flag_memory_query(chat_id: str, query: str) -> bool:
+    """Если query — memory-запрос, ставит флаг в openclaw_client.
+
+    Вызывается из llm_flow / memory_commands перед отправкой в LLM.
+    Возвращает True если флаг был поднят.
+    """
+    if not detect_memory_query(query):
+        return False
+    try:
+        from ..openclaw_client import openclaw_client  # type: ignore[attr-defined]
+
+        openclaw_client.flag_memory_query(chat_id)
+        logger.info("memory_query_auto_flagged", chat_id=chat_id, query_preview=query[:80])
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory_query_flag_failed", error=str(exc))
+        return False

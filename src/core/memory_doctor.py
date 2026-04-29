@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -93,6 +92,36 @@ def _top_chats(db: Path, limit: int = 6) -> list[dict[str, Any]]:
         return [{"chat_id": r[0], "count": r[1]} for r in rows]
     except Exception:  # noqa: BLE001
         return []
+
+
+async def _run_command_capture(
+    argv: list[str],
+    *,
+    timeout_sec: float,
+) -> tuple[int, str, str]:
+    """Запускает внешнюю команду без блокировки async event loop.
+
+    Почему не `subprocess.run`:
+    - Memory Doctor вызывается из web/API async-пути;
+    - долгий backfill embeddings или зависший `launchctl` не должен стопорить
+      весь event loop панели и соседние runtime-запросы.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout_raw, stderr_raw = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
+    except TimeoutError:
+        proc.kill()
+        stdout_raw, stderr_raw = await proc.communicate()
+        raise
+    return (
+        int(proc.returncode or 0),
+        stdout_raw.decode("utf-8", "replace"),
+        stderr_raw.decode("utf-8", "replace"),
+    )
 
 
 async def _panel_indexer_stats() -> dict[str, Any]:
@@ -333,22 +362,21 @@ async def run_repairs(
         if backfill_script.exists():
             python = _find_python()
             try:
-                result = subprocess.run(
+                returncode, stdout, stderr = await _run_command_capture(
                     [python, str(backfill_script), "--limit", "5000"],
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
+                    timeout_sec=300,
                 )
                 repairs.append(
                     {
                         "action": "backfill_embeddings",
-                        "status": "ok" if result.returncode == 0 else "fail",
-                        "returncode": result.returncode,
-                        "stdout_tail": result.stdout[-500:] if result.stdout else "",
+                        "status": "ok" if returncode == 0 else "fail",
+                        "returncode": returncode,
+                        "stdout_tail": stdout[-500:] if stdout else "",
+                        "stderr_tail": stderr[-500:] if stderr else "",
                         "message": "encode_memory_phase2.py --limit 5000 выполнен",
                     }
                 )
-            except subprocess.TimeoutExpired:
+            except TimeoutError:
                 repairs.append(
                     {
                         "action": "backfill_embeddings",
@@ -381,18 +409,26 @@ async def run_repairs(
         uid = os.getuid()
         label = "com.krab.mcp-yung-nagato"
         try:
-            result = subprocess.run(
+            returncode, stdout, stderr = await _run_command_capture(
                 ["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"],
-                capture_output=True,
-                text=True,
-                timeout=15,
+                timeout_sec=15,
             )
             repairs.append(
                 {
                     "action": "restart_mcp_yung_nagato",
-                    "status": "ok" if result.returncode == 0 else "fail",
-                    "returncode": result.returncode,
-                    "message": f"launchctl kickstart {label}: rc={result.returncode}",
+                    "status": "ok" if returncode == 0 else "fail",
+                    "returncode": returncode,
+                    "stdout_tail": stdout[-500:] if stdout else "",
+                    "stderr_tail": stderr[-500:] if stderr else "",
+                    "message": f"launchctl kickstart {label}: rc={returncode}",
+                }
+            )
+        except TimeoutError:
+            repairs.append(
+                {
+                    "action": "restart_mcp_yung_nagato",
+                    "status": "timeout",
+                    "message": f"launchctl kickstart {label} завершён по таймауту (15с)",
                 }
             )
         except Exception as exc:  # noqa: BLE001

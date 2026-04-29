@@ -29,6 +29,8 @@ from typing import Any
 import httpx
 import pytest
 
+pytestmark = pytest.mark.live
+
 # ── Конфигурация ────────────────────────────────────────────────────────────
 
 BASE_URL = os.getenv("KRAB_BASE_URL", "http://127.0.0.1:8080").rstrip("/")

@@ -29,6 +29,10 @@ def configure_default_path(path: Path) -> None:
 
 def _load() -> list[dict]:
     """Читает список jobs из файла, возвращает пустой список при ошибке."""
+    # Missing file — нормальное состояние bootstrap'а, не логируем как warning
+    # (раньше это давало 1230+ warnings/сессию — чистый шум в логах).
+    if not _storage_path.exists():
+        return []
     try:
         data = json.loads(_storage_path.read_text(encoding="utf-8", errors="replace"))
         return list(data.get("jobs", [])) if isinstance(data, dict) else []

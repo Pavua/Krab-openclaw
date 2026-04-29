@@ -54,6 +54,8 @@ class WeeklyDigestService:
 
     # Публичный интервал для удобства подключения в proactive_watch
     INTERVAL_SEC: int = WEEKLY_DIGEST_INTERVAL_SEC
+    # Задержка перед первым fire после старта (5 минут) — идемпотентно по week-dedupe
+    FIRST_RUN_DELAY_SEC: int = 300
 
     # Callback для отправки digest в Telegram (устанавливается из userbot_bridge)
     _telegram_callback: Callable[[str], Awaitable[None]] | None = None
@@ -306,13 +308,21 @@ class WeeklyDigestService:
         return "\n".join(lines)
 
     async def _weekly_digest_loop(self) -> None:
-        """Бесконечный цикл: каждые 7 дней запускает generate_digest."""
+        """
+        Бесконечный цикл: раз в неделю запускает generate_digest.
+
+        ВАЖНО: первый fire — через FIRST_RUN_DELAY_SEC после старта (не через 7 дней),
+        иначе при частых рестартах loop никогда не достигает 7-day sleep.
+        Идемпотентность обеспечивается dedupe_key `weekly_digest:YYYY-WVV` в inbox_service.
+        """
+        # Короткая задержка перед первым fire — даём userbot полностью подняться
+        await asyncio.sleep(self.FIRST_RUN_DELAY_SEC)
         while True:
-            await asyncio.sleep(self.INTERVAL_SEC)
             try:
                 await self.generate_digest()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("weekly_digest_loop_error", error=str(exc))
+            await asyncio.sleep(self.INTERVAL_SEC)
 
     def start_weekly_digest_loop(self) -> "asyncio.Task[None]":
         """Запускает фоновую задачу Weekly Digest и возвращает Task."""

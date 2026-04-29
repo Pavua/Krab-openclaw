@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import src.handlers.command_handlers as command_handlers_module
+import src.handlers.commands.admin_commands as admin_commands_module
 from src.core.access_control import AccessLevel, AccessProfile
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_acl
@@ -36,7 +37,7 @@ async def test_handle_acl_status_renders_runtime_state(monkeypatch: pytest.Monke
     )
     bot = _make_bot("status", access_level=AccessLevel.OWNER)
     monkeypatch.setattr(
-        command_handlers_module,
+        admin_commands_module,
         "load_acl_runtime_state",
         lambda: {"owner": [], "full": ["alpha"], "partial": ["beta"]},
     )
@@ -58,7 +59,7 @@ async def test_handle_acl_grant_updates_runtime_acl(monkeypatch: pytest.MonkeyPa
     )
     bot = _make_bot("grant partial @reader", access_level=AccessLevel.OWNER)
     monkeypatch.setattr(
-        command_handlers_module,
+        admin_commands_module,
         "update_acl_subject",
         lambda level, subject, add: {
             "changed": True,

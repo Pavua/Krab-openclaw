@@ -234,6 +234,35 @@ class TestOpenArchive:
         assert "krab_memory" in str(defaults.dir)
         assert str(defaults.dir).endswith("krab_memory")
 
+    def test_busy_timeout_set_to_30s(self, tmp_path: Path) -> None:
+        """Session 24: PRAGMA busy_timeout=30000ms должен быть установлен.
+
+        Defense in depth поверх WAL — graceful retry на concurrent writers
+        вместо immediate `database is locked` fail. Закрывает finding из
+        db_lock_monitor pragma_baseline (busy_timeout=0).
+        """
+        paths = ArchivePaths.under(tmp_path / "bt")
+        conn = open_archive(paths)
+        try:
+            (timeout_ms,) = conn.execute("PRAGMA busy_timeout").fetchone()
+            assert timeout_ms == 30000, f"busy_timeout={timeout_ms}, ожидалось 30000"
+        finally:
+            conn.close()
+
+    def test_busy_timeout_set_in_read_only_mode(self, tmp_path: Path) -> None:
+        """busy_timeout применяется в обоих режимах (ro и rw)."""
+        paths = ArchivePaths.under(tmp_path / "bt_ro")
+        # Сначала создаём DB rw
+        conn_rw = open_archive(paths)
+        conn_rw.close()
+        # Теперь открываем ro
+        conn_ro = open_archive(paths, read_only=True)
+        try:
+            (timeout_ms,) = conn_ro.execute("PRAGMA busy_timeout").fetchone()
+            assert timeout_ms == 30000
+        finally:
+            conn_ro.close()
+
 
 # ---------------------------------------------------------------------------
 # Permissions.

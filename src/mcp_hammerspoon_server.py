@@ -80,8 +80,18 @@ def _wrap_error(exc: Exception) -> dict[str, Any]:
 
 
 def _run(coro: Any) -> Any:
-    """Запускает async-корутину из синхронного MCP tool."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Запускает async-корутину из синхронного MCP tool.
+
+    Robust к закрытому/отсутствующему event loop (тесты часто закрывают loop).
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("loop closed")
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 # --- Tools ---------------------------------------------------------------
@@ -184,8 +194,22 @@ def hs_tile(preset: str, app: str = "") -> dict[str, Any]:
 
 
 def main() -> None:
-    """MCP server stdio entry point. Запускается Claude Desktop автоматически."""
-    mcp.run()
+    """MCP server entry point.
+
+    Transport выбирается через env:
+      MCP_TRANSPORT=stdio (default) — Claude Desktop spawn
+      MCP_TRANSPORT=sse              — LaunchAgent на :MCP_PORT (default 8013)
+    """
+    transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
+    if transport == "sse":
+        # FastMCP читает host/port из своих settings
+        port = int(os.environ.get("MCP_PORT", "8013"))
+        host = os.environ.get("MCP_HOST", "127.0.0.1")
+        mcp.settings.host = host
+        mcp.settings.port = port
+        mcp.run(transport="sse")
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":

@@ -41,8 +41,16 @@ def _align_config_after_reload(monkeypatch: pytest.MonkeyPatch) -> Iterator[None
     import src.userbot_bridge as _ub
 
     canonical = _ub.config
+    canonical_cls = type(canonical)
     if _config_module.config is not canonical:
         monkeypatch.setattr(_config_module, "config", canonical)
+    # Wave 12: после importlib.reload(src.config) в test_config_voice_settings.py
+    # _config_module.Config — это НОВЫЙ класс, а singleton `canonical` —
+    # экземпляр СТАРОГО класса. Тесты, делающие `from src.config import Config`
+    # и затем `Config.X = ...`, мутируют новый класс, а singleton читает старый.
+    # Восстанавливаем `_config_module.Config` к классу singleton.
+    if _config_module.Config is not canonical_cls:
+        monkeypatch.setattr(_config_module, "Config", canonical_cls)
     yield
 
 

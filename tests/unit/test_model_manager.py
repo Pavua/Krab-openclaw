@@ -734,3 +734,80 @@ def test_get_cloud_runtime_state_export_returns_copy(manager: ModelManager) -> N
     state["injected_key"] = "should_not_appear_inside"
     internal_export = manager.get_cloud_runtime_state_export()
     assert "injected_key" not in internal_export
+
+
+# --- set_provider / set_model (web API contract) ---
+
+
+def test_set_provider_cloud_sets_force_cloud(manager: ModelManager) -> None:
+    """set_provider('cloud') должен переводить конфиг в FORCE_CLOUD=True."""
+    with patch("src.model_manager.config") as cfg:
+        cfg.FORCE_CLOUD = False
+        manager.set_provider("cloud")
+        cfg.update_setting.assert_called_with("FORCE_CLOUD", "1")
+        assert cfg.FORCE_CLOUD is True
+
+
+def test_set_provider_auto_clears_force_cloud(manager: ModelManager) -> None:
+    """set_provider('auto') снимает FORCE_CLOUD."""
+    with patch("src.model_manager.config") as cfg:
+        cfg.FORCE_CLOUD = True
+        manager.set_provider("auto")
+        cfg.update_setting.assert_called_with("FORCE_CLOUD", "0")
+        assert cfg.FORCE_CLOUD is False
+
+
+def test_set_provider_local_clears_force_cloud(manager: ModelManager) -> None:
+    """set_provider('local') тоже снимает FORCE_CLOUD (local — не-cloud режим)."""
+    with patch("src.model_manager.config") as cfg:
+        cfg.FORCE_CLOUD = True
+        manager.set_provider("local")
+        cfg.update_setting.assert_called_with("FORCE_CLOUD", "0")
+        assert cfg.FORCE_CLOUD is False
+
+
+def test_set_provider_invalid_raises(manager: ModelManager) -> None:
+    """Неизвестный режим должен поднять ValueError."""
+    with pytest.raises(ValueError):
+        manager.set_provider("nonsense")
+
+
+def test_set_model_cloud_updates_model_and_force_cloud(manager: ModelManager) -> None:
+    """set_model('google/…') обновляет MODEL и выставляет FORCE_CLOUD=1."""
+    with patch("src.model_manager.config") as cfg:
+        cfg.FORCE_CLOUD = False
+        manager.set_model("google/gemini-3-pro-preview")
+        calls = {c.args[0]: c.args[1] for c in cfg.update_setting.call_args_list}
+        assert calls["MODEL"] == "google/gemini-3-pro-preview"
+        assert calls["FORCE_CLOUD"] == "1"
+        assert cfg.FORCE_CLOUD is True
+
+
+def test_set_model_local_updates_preferred_and_clears_force_cloud(manager: ModelManager) -> None:
+    """Для local-модели set_model сохраняет LOCAL_PREFERRED_MODEL и снимает FORCE_CLOUD."""
+    with patch("src.model_manager.config") as cfg:
+        cfg.FORCE_CLOUD = True
+        manager.set_model("local/qwen3-8b-mlx")
+        calls = {c.args[0]: c.args[1] for c in cfg.update_setting.call_args_list}
+        assert calls["LOCAL_PREFERRED_MODEL"] == "local/qwen3-8b-mlx"
+        assert calls["FORCE_CLOUD"] == "0"
+        assert cfg.FORCE_CLOUD is False
+
+
+def test_set_model_empty_raises(manager: ModelManager) -> None:
+    """Пустой model_id должен поднять ValueError."""
+    with pytest.raises(ValueError):
+        manager.set_model("   ")
+
+
+def test_active_model_id_prefers_current_local(manager: ModelManager) -> None:
+    """Если локальная модель загружена — она и становится active_model_id."""
+    manager._current_model = "local/some-mlx"
+    assert manager.active_model_id == "local/some-mlx"
+
+
+def test_active_model_id_falls_back_to_cloud_config(manager: ModelManager) -> None:
+    """Без loaded local модели — берём cloud-truth из config/openclaw."""
+    manager._current_model = None
+    with patch.object(ModelManager, "_effective_cloud_config_model", return_value="google/x"):
+        assert manager.active_model_id == "google/x"

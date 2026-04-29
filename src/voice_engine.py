@@ -28,9 +28,12 @@ logger = get_logger(__name__)
 VOICE_OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "voice_cache")
 os.makedirs(VOICE_OUTPUT_DIR, exist_ok=True)
 
-# Максимальная длина текста для TTS: edge_tts не справляется с длинными ответами
-# (возможен NoAudioReceived). 600 символов ≈ 20-25 секунд речи — оптимальный размер.
-_TTS_MAX_CHARS = 600
+# Максимальная длина текста для TTS: edge_tts может вернуть NoAudioReceived
+# на очень длинных текстах. По наблюдениям 1500-2000 chars обрабатываются ОК.
+# Bug fix 27.04.2026: было 600 (~31 сек на speed=1.25) — слишком короткое для
+# многоабзацных ответов; user просил весь текст. Поднято до 1800
+# (~60-70 сек на speed=1.25). Override через env TTS_MAX_CHARS.
+_TTS_MAX_CHARS = int(os.getenv("TTS_MAX_CHARS", "1800"))
 
 # Russian voices: ru-RU-DmitryNeural, ru-RU-SvetlanaNeural
 # English: en-US-ChristopherNeural, en-US-JennyNeural
@@ -82,12 +85,19 @@ async def text_to_speech(
             temp_mp3,
             "-c:a",
             "libopus",
+            # 48k vs 32k: ощутимо чище звук на динамике iPhone, разница в размере
+            # для 20-сек voice ≈ +40 КБ — приемлемо для Telegram voice message.
             "-b:a",
-            "32k",
+            "48k",
             "-vbr",
             "on",
             "-compression_level",
             "10",
+            # Моно 24 kHz — оптимум для речи Opus, экономит битрейт без потери ясности.
+            "-ac",
+            "1",
+            "-ar",
+            "24000",
             output_ogg,
         ]
 

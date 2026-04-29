@@ -106,6 +106,30 @@ def test_model_apply_set_runtime_chain_converts_legacy_auto_to_adaptive(
         }
 
     monkeypatch.setattr(WebApp, "_resolve_local_runtime_truth", _fake_local_truth)
+    # _build_runtime_cloud_presets → subprocess openclaw models list (20s) + auth_recovery subprocess
+    monkeypatch.setattr(
+        WebApp,
+        "_build_runtime_cloud_presets",
+        classmethod(lambda cls, current_slots=None: []),
+    )
+    # build_auth_recovery_readiness_snapshot → openclaw models status + plugins list (по 20s каждый)
+    import src.modules.web_app as _web_app_mod
+
+    monkeypatch.setattr(
+        _web_app_mod, "build_auth_recovery_readiness_snapshot", lambda **kw: {}
+    )
+    # build_routing_status() → _build_openclaw_model_routing_status → subprocess openclaw models status (15s)
+    # без заглушки тест становится flaky под --timeout=15 (Session 28 RCA Agent V).
+    monkeypatch.setattr(
+        WebApp,
+        "_build_openclaw_model_routing_status",
+        classmethod(lambda cls: {}),
+    )
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_models_status_snapshot",
+        classmethod(lambda cls: {}),
+    )
 
     class _Router(_DummyRouter):
         def __init__(self) -> None:

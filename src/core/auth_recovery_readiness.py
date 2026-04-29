@@ -28,6 +28,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -40,6 +41,10 @@ RUNTIME_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
 GEMINI_STORE_PATH = Path.home() / ".gemini" / "oauth_creds.json"
 GEMINI_API_KEY_ENV_KEYS = ("GOOGLE_API_KEY", "GEMINI_API_KEY")
 CORE_OAUTH_PROVIDERS = {"openai-codex"}
+
+# Кэш subprocess CLI-вызовов openclaw, TTL 60s
+_CLI_CACHE: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
+_CLI_CACHE_TTL_SEC: float = 60.0
 
 PROVIDER_SPECS: dict[str, dict[str, Any]] = {
     "codex-cli": {
@@ -131,7 +136,19 @@ def _resolve_openclaw_bin() -> str:
 
 
 def _run_json_command(cmd: Sequence[str], *, cwd: Path) -> dict[str, Any]:
-    """Запускает read-only команду и возвращает JSON либо structured error."""
+    """Запускает read-only команду и возвращает JSON либо structured error.
+
+    Результат кэшируется TTL=60s — openclaw models/plugins практически не меняются.
+    legacy — async preferred для hot-path callers (future refactor).
+    """
+    cache_key = tuple(cmd) + (str(cwd),)
+    now = time.monotonic()
+    cached = _CLI_CACHE.get(cache_key)
+    if cached is not None:
+        ts, cached_result = cached
+        if now - ts < _CLI_CACHE_TTL_SEC:
+            return cached_result
+
     try:
         completed = subprocess.run(
             list(cmd),
@@ -142,34 +159,44 @@ def _run_json_command(cmd: Sequence[str], *, cwd: Path) -> dict[str, Any]:
             timeout=20,
         )
     except Exception as exc:
-        return {
+        error_result: dict[str, Any] = {
             "ok": False,
             "command": list(cmd),
             "error": str(exc),
             "payload": {},
         }
+        # Fallback: отдать истёкший кэш если subprocess упал
+        if cached is not None:
+            return cached[1]
+        return error_result
     if completed.returncode != 0:
-        return {
+        result: dict[str, Any] = {
             "ok": False,
             "command": list(cmd),
             "returncode": int(completed.returncode),
             "stderr": str(completed.stderr or "").strip(),
             "payload": {},
         }
+        _CLI_CACHE[cache_key] = (now, result)
+        return result
     try:
         payload = json.loads(str(completed.stdout or "{}"))
     except (TypeError, ValueError) as exc:
-        return {
+        result = {
             "ok": False,
             "command": list(cmd),
             "error": f"json_decode_failed: {exc}",
             "payload": {},
         }
-    return {
+        _CLI_CACHE[cache_key] = (now, result)
+        return result
+    result = {
         "ok": True,
         "command": list(cmd),
         "payload": payload if isinstance(payload, dict) else {},
     }
+    _CLI_CACHE[cache_key] = (now, result)
+    return result
 
 
 def _iter_profile_entries(
@@ -767,8 +794,10 @@ def build_auth_recovery_readiness_snapshot(
 ) -> dict[str, Any]:
     """Строит полный auth recovery snapshot для текущей учётки."""
     resolved_project_root = Path(project_root).resolve()
-    resolved_status = status_payload if isinstance(status_payload, dict) else {}
-    if not resolved_status:
+    # None → пытаемся получить статус у openclaw; явный dict (даже {}) → использовать как есть
+    resolved_status = status_payload if isinstance(status_payload, dict) else None
+    if resolved_status is None:
+        resolved_status = {}
         openclaw_bin = _resolve_openclaw_bin()
         if openclaw_bin:
             resolved_status = _run_json_command(

@@ -8,6 +8,14 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import sqlite3
+import sys
+
+# Отключаем ChromaDB/PostHog telemetry ДО первого импорта chromadb.
+# Иначе chromadb при импорте поднимает consumer thread (queue.get block=True),
+# который блокирует корректный выход процесса.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+os.environ.setdefault("CHROMA_TELEMETRY", "False")
 
 import structlog
 
@@ -15,7 +23,18 @@ from ..config import config
 from ..core.access_control import get_effective_owner_label
 from ..model_manager import model_manager
 from ..openclaw_client import openclaw_client
-from ..userbot_bridge import KraabUserbot
+from ..userbot_bridge import KraabUserbot, _telegram_send_queue
+from .db_corruption_guard import (
+    flush_wal_checkpoints,
+    is_corruption_error,
+    preflight_known_dbs,
+    report_corruption_to_sentry,
+)
+
+# Exit code, который launchd конвенционально считает "не пытайся респавнить
+# немедленно" — даёт человеку шанс заметить и пере-авторизовать сессию.
+# (KeepAlive=true всё равно поднимет процесс, но throttle interval растёт.)
+DB_CORRUPTION_EXIT_CODE = 78
 
 logger = structlog.get_logger(__name__)
 
@@ -96,6 +115,76 @@ async def _start_web_panel(
         return None
 
 
+async def _warmup_memory_embeddings() -> None:
+    """
+    Background embedder warmup: pre-warm Model2Vec + optional ``embed_all_unindexed()``.
+
+    Почему отдельный background-task:
+    - bootstrap не должен блокироваться на тяжёлой операции эмбеддинга;
+    - 72k chunks уже эмбеддены (repaired W20), bootstrap возвращает ~100ms
+      идемпотентно; но новые chunks появляются между рестартами — incremental.
+    - graceful: любое исключение логируется, task никогда не поднимает.
+
+    Две фазы:
+      1. Pre-warm модели (всегда) — mmap StaticModel + dummy encode. Не зависит
+         от ``KRAB_RAG_PHASE2_ENABLED``: модель нужна и для MMR rerank в FTS
+         режиме, а toggle flag=1 должен давать мгновенный hybrid query
+         (<100ms), а не холодные 1.8s из-за lazy mmap.
+      2. Embed unindexed chunks — только если ``KRAB_RAG_PHASE2_ENABLED=1``.
+    """
+    try:
+        # Дать Krab полностью подняться перед heavy operation (userbot+web
+        # уже должны обслуживать трафик, чтобы HF/Model2Vec загрузка не била
+        # по первой волне запросов).
+        await asyncio.sleep(30.0)
+
+        # 1. PRE-WARM (всегда) — mmap модели в RAM.
+        try:
+            from ..core.memory_embedder import MemoryEmbedder  # noqa: PLC0415
+
+            embedder = MemoryEmbedder()
+            # Форсим lazy load модели + dummy encode — прогрев mmap реальный.
+            embedder._ensure_model_loaded()
+            if embedder._model is not None:
+                embedder._model.encode(["warmup"])
+            logger.info(
+                "memory_model_prewarmed",
+                dim=getattr(embedder, "_dim", None),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "memory_model_prewarm_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return
+
+        # 2. EMBED UNINDEXED (только при включённом Phase 2).
+        if os.getenv("KRAB_RAG_PHASE2_ENABLED", "0") != "1":
+            logger.debug("memory_bootstrap_embed_skip", reason="phase2_disabled")
+            return
+
+        # Timeout 10 минут — 72k chunks уже эмбеддены (~1s reality), запас
+        # на случай появления большого incremental после простоя.
+        stats = await asyncio.wait_for(
+            asyncio.to_thread(embedder.embed_all_unindexed),
+            timeout=600.0,
+        )
+        logger.info(
+            "memory_bootstrap_embed_done",
+            processed=getattr(stats, "chunks_processed", None),
+            skipped=getattr(stats, "chunks_skipped", None),
+        )
+    except asyncio.TimeoutError:
+        logger.warning("memory_bootstrap_embed_timeout", timeout_s=600)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "memory_bootstrap_embed_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+
+
 async def _warmup_runtime_route_truth() -> None:
     """
     Подтверждает живой route-truth вскоре после старта runtime.
@@ -139,6 +228,60 @@ async def run_app() -> None:
     RAM Limit: {config.MAX_RAM_GB}GB
     """)
 
+    # DB corruption circuit breaker (Session 26): integrity_check на known DB
+    # перед запуском userbot. Если session corrupt — quarantine + exit, чтобы
+    # launchd KeepAlive=true НЕ зацикливал нас на битой базе (incident
+    # 26.04.2026: 322 fatal_error events за 24h из-за corrupt kraab.session).
+    #
+    # Retry на transient `disk I/O error` (Sentry PYTHON-FASTAPI-5W, 28.04.2026):
+    # после быстрого restart предыдущий процесс мог не успеть flush WAL,
+    # OS возвращает disk I/O error при первом open. 0.5s sleep + 3 попытки —
+    # достаточно, чтобы кэш FS освободился. См. также `flush_wal_checkpoints()`
+    # в shutdown — он закрывает корневую причину со стороны исходящего процесса.
+    preflight_reports = []
+    for attempt in range(3):
+        try:
+            preflight_reports = preflight_known_dbs()
+            break
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "disk i/o error" in msg and attempt < 2:
+                logger.warning(
+                    "db_preflight_transient_io_error",
+                    attempt=attempt + 1,
+                    error=str(exc),
+                )
+                await asyncio.sleep(0.5)
+                continue
+            logger.warning("db_preflight_failed", error=str(exc))
+            break
+        except Exception as exc:  # noqa: BLE001 — guard не должен ронять boot
+            logger.warning("db_preflight_failed", error=str(exc))
+            break
+    critical_quarantined = [
+        r for r in preflight_reports if r.get("quarantined") and r.get("critical")
+    ]
+    for r in preflight_reports:
+        if r.get("quarantined"):
+            logger.error(
+                "db_corruption_detected",
+                path=r["path"],
+                kind=r["kind"],
+                detail=r["detail"],
+                quarantine_path=r["quarantine_path"],
+                critical=r["critical"],
+            )
+    if critical_quarantined:
+        # Critical session corrupt → НЕ продолжаем boot. Owner должен
+        # пере-авторизоваться. Exit graceful — main._run_with_retry поймает
+        # SystemExit как clean exit (не ConnectionError → не retry-loop).
+        logger.error(
+            "boot_aborted_session_corrupt",
+            quarantined=[r["path"] for r in critical_quarantined],
+            exit_code=DB_CORRUPTION_EXIT_CODE,
+        )
+        sys.exit(DB_CORRUPTION_EXIT_CODE)
+
     lm_health = await model_manager.health_check()
     claw_health = await openclaw_client.health_check()
     logger.info("system_check", lm_studio=lm_health, openclaw=claw_health)
@@ -146,11 +289,17 @@ async def run_app() -> None:
     if not claw_health:
         logger.warning("openclaw_unreachable", url=config.OPENCLAW_URL)
 
+    # W32: explicit reset send-queue singleton — защита от foreign-loop state,
+    # оставшегося от предыдущего процесса (например, при рестарте внутри
+    # одного Python-интерпретатора через retry-loop).
+    _telegram_send_queue.reset()
+
     perceptor = _build_perceptor()
     kraab = KraabUserbot(perceptor=perceptor)
     await _start_web_panel(kraab_userbot=kraab, perceptor=perceptor)
     stop_event = asyncio.Event()
     warmup_task: asyncio.Task | None = None
+    embed_bootstrap_task: asyncio.Task | None = None
 
     def _request_stop(reason: str) -> None:
         """Запрашивает штатную остановку приложения без форс-килла."""
@@ -179,6 +328,10 @@ async def run_app() -> None:
         else:
             logger.warning("kraab_degraded_mode", **kraab_state)
         warmup_task = asyncio.create_task(_warmup_runtime_route_truth())
+        # Memory Phase 2 — warmup background task (idempotent, feature-flagged).
+        embed_bootstrap_task = asyncio.create_task(
+            _warmup_memory_embeddings(), name="krab_memory_bootstrap_embed"
+        )
         await stop_event.wait()
     except asyncio.CancelledError:
         if stop_event.is_set():
@@ -193,6 +346,30 @@ async def run_app() -> None:
             error_type=type(exc).__name__,
         )
         network_failure = exc
+    except sqlite3.DatabaseError as exc:
+        # Late corruption detection: PRAGMA integrity_check мог пропустить
+        # повреждение (например, locked во время preflight) — и SQLite
+        # возразил уже при kraab.start(). Reactive quarantine + exit.
+        if is_corruption_error(exc):
+            logger.error(
+                "db_corruption_detected_runtime",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            try:
+                # Heuristic quarantine: попробуем найти path в exception args.
+                # Если не нашли — повторный preflight уже сейчас quarantine`нет.
+                preflight_known_dbs()
+            except Exception:  # noqa: BLE001
+                pass
+            report_corruption_to_sentry(
+                path="runtime",
+                kind="late",
+                detail=str(exc),
+                quarantine_path="",
+            )
+            sys.exit(DB_CORRUPTION_EXIT_CODE)
+        logger.error("fatal_error", error=str(exc), error_type=type(exc).__name__)
     except Exception as e:
         logger.error("fatal_error", error=str(e), error_type=type(e).__name__)
     finally:
@@ -202,10 +379,34 @@ async def run_app() -> None:
                 await warmup_task
             except asyncio.CancelledError:
                 pass
+        if embed_bootstrap_task is not None and not embed_bootstrap_task.done():
+            embed_bootstrap_task.cancel()
+            try:
+                await embed_bootstrap_task
+            except asyncio.CancelledError:
+                pass
         try:
             await kraab.stop()
         except Exception as stop_exc:  # noqa: BLE001
             logger.warning("kraab_stop_failed", error=str(stop_exc))
         logger.info("kraab_stopped")
+        # Принудительно flush WAL → main DB перед exit, чтобы следующий
+        # быстрый restart (launchd KeepAlive) не получил disk I/O error
+        # от не-flush'нутого WAL предыдущего процесса. Sentry incident
+        # PYTHON-FASTAPI-5W, 9 events/24h, регрессия 28.04.2026.
+        try:
+            flush_reports = flush_wal_checkpoints()
+            ok_count = sum(1 for r in flush_reports if r.get("ok"))
+            logger.info(
+                "wal_checkpoint_summary",
+                total=len(flush_reports),
+                ok=ok_count,
+            )
+        except Exception as flush_exc:  # noqa: BLE001 — shutdown не должен падать
+            logger.warning(
+                "wal_checkpoint_summary_failed",
+                error=str(flush_exc),
+                error_type=type(flush_exc).__name__,
+            )
     if network_failure is not None:
         raise network_failure

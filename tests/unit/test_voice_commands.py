@@ -277,3 +277,99 @@ async def test_voice_unknown_subcommand_raises() -> None:
     msg = _make_message("!voice unknowncmd")
     with pytest.raises(UserInputError):
         await handle_voice(bot, msg)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 Wave 4 — voice_commands extraction (Session 27)
+# ---------------------------------------------------------------------------
+
+from src.handlers.commands import voice_commands as vc  # noqa: E402
+
+
+class TestRenderVoiceProfile:
+    """Helpers рендеринга voice-профиля."""
+
+    def test_enabled_profile_contains_fields(self) -> None:
+        out = vc._render_voice_profile(
+            {
+                "enabled": True,
+                "delivery": "voice-only",
+                "speed": 1.25,
+                "voice": "ru-RU-SvetlanaNeural",
+            }
+        )
+        assert "ВКЛ" in out
+        assert "voice-only" in out
+        assert "1.25x" in out
+        assert "ru-RU-SvetlanaNeural" in out
+
+    def test_empty_profile_uses_defaults(self) -> None:
+        out = vc._render_voice_profile({})
+        assert "ВЫКЛ" in out
+        assert "text+voice" in out
+
+    def test_blocked_chats_overflow_shows_plus(self) -> None:
+        out = vc._render_voice_profile({"blocked_chats": [1, 2, 3, 4, 5, 6, 7]})
+        assert "+2" in out
+
+    def test_blocked_chats_empty_shows_dash(self) -> None:
+        out = vc._render_voice_profile({"blocked_chats": []})
+        assert "—" in out
+
+
+class TestTTSConstants:
+    """State extraction (_TTS_VOICES, _TTS_LANG_ALIASES)."""
+
+    def test_voices_keys(self) -> None:
+        assert set(vc._TTS_VOICES.keys()) == {"ru", "en", "es"}
+        assert vc._TTS_VOICES["ru"] == "Milena"
+
+    def test_lang_aliases_normalize(self) -> None:
+        assert vc._TTS_LANG_ALIASES["russian"] == "ru"
+        assert vc._TTS_LANG_ALIASES["english"] == "en"
+        assert vc._TTS_LANG_ALIASES["spanish"] == "es"
+
+
+@pytest.mark.asyncio
+async def test_handle_tts_no_text_raises() -> None:
+    """!tts без текста и без reply → UserInputError с help."""
+    bot = MagicMock()
+    bot._get_command_args = MagicMock(return_value="")
+    msg = SimpleNamespace(text="!tts", reply_to_message=None, reply=AsyncMock())
+    with pytest.raises(UserInputError):
+        await vc.handle_tts(bot, msg)
+
+
+@pytest.mark.asyncio
+async def test_handle_audio_message_download_none() -> None:
+    """handle_audio_message: download() вернул None → reply error и выход."""
+    bot = MagicMock()
+    msg = MagicMock()
+    msg.download = AsyncMock(return_value=None)
+    msg.reply = AsyncMock()
+    await vc.handle_audio_message(bot, msg)
+    msg.reply.assert_awaited_once()
+    body = msg.reply.await_args.args[0]
+    assert "скачать" in body.lower() or "❌" in body
+
+
+class TestReExports:
+    """Re-exports через src.handlers.command_handlers — preserve API."""
+
+    def test_handlers_re_exported(self) -> None:
+        from src.handlers import command_handlers as ch
+
+        assert ch.handle_voice is vc.handle_voice
+        assert ch.handle_tts is vc.handle_tts
+        assert ch.handle_audio_message is vc.handle_audio_message
+
+    def test_helpers_re_exported(self) -> None:
+        from src.handlers import command_handlers as ch
+
+        assert ch._render_voice_profile is vc._render_voice_profile
+
+    def test_state_re_exported(self) -> None:
+        from src.handlers import command_handlers as ch
+
+        assert ch._TTS_VOICES is vc._TTS_VOICES
+        assert ch._TTS_LANG_ALIASES is vc._TTS_LANG_ALIASES

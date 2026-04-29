@@ -240,29 +240,41 @@ def test_build_commands_status_guest_hides_service_commands(monkeypatch) -> None
 
 
 def test_command_access_denied_partial_access() -> None:
-    """Для partial выдаёт текст про режим частичного доступа."""
+    """Для partial выдаёт текст про режим частичного доступа.
+
+    W32: исправление spam loop в группах — text без `!prefix`.
+    """
     bot = _make_bot_stub()
     profile = AccessProfile(level=AccessLevel.PARTIAL, source="test")
     txt = bot._build_command_access_denied_text("status", profile)
     assert "частичного доступа" in txt
-    assert "!status" in txt
+    assert "(status)" in txt
+    assert "!status" not in txt
 
 
 def test_command_access_denied_guest_access() -> None:
-    """Для guest выдаёт текст про доверенный контур."""
+    """Для guest выдаёт текст про доверенный контур.
+
+    W32: исправление spam loop в группах — text без `!prefix`.
+    """
     bot = _make_bot_stub()
     profile = AccessProfile(level=AccessLevel.GUEST, source="test")
     txt = bot._build_command_access_denied_text("ls", profile)
     assert "доверенному контуру" in txt
-    assert "!ls" in txt
+    assert "(ls)" in txt
+    assert "!ls" not in txt
 
 
 def test_command_access_denied_normalizes_command_name() -> None:
-    """Имя команды нормализуется к нижнему регистру."""
+    """Имя команды нормализуется к нижнему регистру.
+
+    W32: исправление spam loop в группах — text без `!prefix`.
+    """
     bot = _make_bot_stub()
     profile = AccessProfile(level=AccessLevel.GUEST, source="test")
     txt = bot._build_command_access_denied_text("STATUS", profile)
-    assert "!status" in txt
+    assert "(status)" in txt
+    assert "!status" not in txt
 
 
 # ---------------------------------------------------------------------------

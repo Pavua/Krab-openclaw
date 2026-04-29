@@ -25,10 +25,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+try:
+    import sentry_sdk as _sentry_sdk
+except ImportError:  # noqa: BLE001
+    _sentry_sdk = None  # type: ignore[assignment]
+
 from ..config import config
 from ..integrations.macos_automation import macos_automation
 from ..memory_engine import memory_manager
 from ..openclaw_client import openclaw_client
+from .anomaly_detector import Anomaly, anomaly_detector
 from .auto_restart_policy import (
     RESTART_COMMANDS,
     auto_restart_manager,
@@ -36,10 +42,24 @@ from .auto_restart_policy import (
 )
 from .inbox_service import inbox_service
 from .logger import get_logger
+from .observability import metrics as _observability_metrics
 from .openclaw_runtime_models import get_runtime_primary_model
 from .openclaw_workspace import append_workspace_memory_entry
 from .scheduler import krab_scheduler
 from .subprocess_env import clean_subprocess_env
+
+# Prometheus metric для error digest — помогает увидеть fire-frequency
+# (важно: audit выявил 0 fires за 49 рестартов, metric даст явную картину).
+try:
+    from prometheus_client import Counter as _Counter  # type: ignore
+
+    _error_digest_fired_total = _Counter(
+        "krab_error_digest_fired_total",
+        "Количество успешных fires Error Digest (proactive_watch)",
+        ["outcome"],  # outcome: ok|empty|failed
+    )
+except Exception:  # noqa: BLE001
+    _error_digest_fired_total = None  # type: ignore[assignment]
 
 # Порог «критических» ошибок для alert inbox_critical
 _INBOX_CRITICAL_ERROR_THRESHOLD: int = 5
@@ -48,9 +68,6 @@ _INBOX_CRITICAL_ERROR_THRESHOLD: int = 5
 _SWARM_STALL_FACTOR: float = 2.0
 
 logger = get_logger(__name__)
-
-# Лимит одного параллельного cron probe — защита от накопления orphan Node.js процессов
-_cron_probe_sem = asyncio.Semaphore(1)
 
 
 def _now_utc_iso() -> str:
@@ -79,9 +96,13 @@ async def _fetch_openclaw_cron_jobs() -> list[dict[str, Any]]:
     Получает список cron jobs из OpenClaw CLI (openclaw cron list --json --all).
 
     Возвращает пустой список при любой ошибке — не должна ронять proactive_watch.
+    Вызов защищён семафором openclaw_cli_budget (budget=3).
     """
-    async with _cron_probe_sem:
-        try:
+    from .openclaw_cli_budget import acquire as _cli_acquire
+    from .openclaw_cli_budget import terminate_and_reap as _reap
+
+    try:
+        async with _cli_acquire():
             proc = await asyncio.create_subprocess_exec(
                 "openclaw",
                 "cron",
@@ -95,34 +116,14 @@ async def _fetch_openclaw_cron_jobs() -> list[dict[str, Any]]:
             try:
                 stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20.0)
             except asyncio.TimeoutError:
-                if proc.returncode is None:
-                    try:
-                        proc.terminate()
-                    except ProcessLookupError:
-                        pass
-                    else:
-                        # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
-                        try:
-                            await asyncio.wait_for(proc.wait(), timeout=2.0)
-                        except asyncio.TimeoutError:
-                            try:
-                                proc.kill()
-                            except ProcessLookupError:
-                                pass
-                            try:
-                                await asyncio.wait_for(proc.wait(), timeout=1.0)
-                            except asyncio.TimeoutError:
-                                logger.warning(
-                                    "openclaw_cli_force_killed_but_no_reap",
-                                    pid=proc.pid,
-                                )
+                await _reap(proc)
                 return []
             raw = stdout.decode("utf-8", errors="replace").strip()
             payload = json.loads(raw)
             jobs = payload.get("jobs") if isinstance(payload.get("jobs"), list) else []
             return [j for j in jobs if isinstance(j, dict)]
-        except Exception:  # noqa: BLE001
-            return []
+    except Exception:  # noqa: BLE001
+        return []
 
 
 @dataclass
@@ -369,13 +370,23 @@ class ProactiveWatchService:
             if last_run_at_ms <= 0 or last_run_at_ms == prev_run_at:
                 continue  # нет нового выполнения
 
-            severity = "warning" if last_status in ("error", "failed", "failure") else "info"
+            _ok_statuses = {"ok", "success", "succeeded", "completed"}
+            is_ok = last_status.lower() in _ok_statuses
+            severity = (
+                "warning" if last_status.lower() in ("error", "failed", "failure") else "info"
+            )
+            # Статус inbox item: успешный запуск → сразу закрываем (done),
+            # ошибка → оставляем open для owner review.
+            item_status = "done" if is_ok else "open"
             run_ts = datetime.fromtimestamp(last_run_at_ms / 1000, tz=timezone.utc).isoformat(
                 timespec="seconds"
             )
+            # dedupe_key без timestamp — один item на job, upsert обновляет его,
+            # а не создаёт дубль при каждом запуске cron.
+            dedupe_key = f"proactive:cron_run:{job_id}"
             try:
                 inbox_service.upsert_item(
-                    dedupe_key=f"proactive:cron_run:{job_id}:{last_run_at_ms}",
+                    dedupe_key=dedupe_key,
                     kind="proactive_action",
                     source="krab-internal",
                     title=f"Cron job выполнен: {job_name}",
@@ -384,7 +395,7 @@ class ProactiveWatchService:
                         f"Статус: `{last_status}`."
                     ),
                     severity=severity,
-                    status="open",
+                    status=item_status,
                     identity=inbox_service.build_identity(
                         channel_id="system",
                         team_id="owner",
@@ -448,13 +459,34 @@ class ProactiveWatchService:
 
         last_alert_ts = str(state.get("last_alert_ts") or "")
         last_alerted_reason = str(state.get("last_alerted_reason") or "")
+        # last_gateway_alert_ts — отдельный cooldown для gateway событий (down+recovered).
+        # Без него down→recovered→down чередование обходит per-reason cooldown и
+        # вызывает 19× DM spam при sleep/wake или нестабильной сети.
+        last_gateway_alert_ts = str(state.get("last_gateway_alert_ts") or "")
         cooldown_ok = True
+        _gateway_reasons = {"gateway_down", "gateway_recovered"}
         if last_alert_ts and last_alerted_reason == reason:
             try:
                 elapsed = datetime.now(timezone.utc) - datetime.fromisoformat(last_alert_ts)
                 cooldown_ok = elapsed.total_seconds() >= self.alert_cooldown_sec
             except ValueError:
                 cooldown_ok = True
+        # Дополнительный глобальный gateway cooldown — независимо от смены reason.
+        if cooldown_ok and reason in _gateway_reasons and last_gateway_alert_ts:
+            try:
+                gw_elapsed = datetime.now(timezone.utc) - datetime.fromisoformat(
+                    last_gateway_alert_ts
+                )
+                if gw_elapsed.total_seconds() < self.alert_cooldown_sec:
+                    cooldown_ok = False
+                    logger.debug(
+                        "proactive_watch_gateway_cooldown_active",
+                        reason=reason,
+                        elapsed_sec=round(gw_elapsed.total_seconds()),
+                        cooldown_sec=self.alert_cooldown_sec,
+                    )
+            except ValueError:
+                pass
 
         if notify and reason and notifier is not None and cooldown_ok:
             try:
@@ -474,6 +506,10 @@ class ProactiveWatchService:
             if alerted
             else str(state.get("last_alerted_reason") or ""),
             "last_cron_runs": updated_cron_runs,
+            # Обновляем gateway cooldown timestamp при любом gateway alert.
+            "last_gateway_alert_ts": snapshot.ts_utc
+            if (alerted and reason in _gateway_reasons)
+            else last_gateway_alert_ts,
         }
         self._save_state(payload)
         if reason:
@@ -541,6 +577,16 @@ class ProactiveWatchService:
                     logger.warning(
                         "proactive_watch_action_trace_close_failed", reason=reason, error=str(exc)
                     )
+                # Gateway вернулся → сбрасываем stale consecutive_failures в failover_policy
+                # чтобы следующий запрос не упирался в порог и шёл напрямую без блокировки.
+                if reason == "gateway_recovered":
+                    try:
+                        from .provider_failover import failover_policy  # noqa: PLC0415
+
+                        failover_policy.reset()
+                        logger.info("failover_policy_reset_on_gateway_recovery")
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("failover_policy_reset_failed", error=str(exc))
         return {
             "snapshot": asdict(snapshot),
             "reason": reason,
@@ -624,6 +670,8 @@ class ProactiveWatchService:
                 await self.run_auto_restart_checks()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("auto_restart_loop_error", error=str(exc))
+                if _sentry_sdk is not None:
+                    _sentry_sdk.capture_exception(exc)
 
     def start_auto_restart_loop(self) -> "asyncio.Task[None]":
         """Запускает фоновую задачу auto-restart и возвращает Task."""
@@ -653,8 +701,15 @@ class ProactiveWatchService:
             "last_snapshot": snapshot,
         }
 
-    # Интервал Error Digest в секундах (6 часов)
-    ERROR_DIGEST_INTERVAL_SEC: int = 21600
+    # Интервал Error Digest в секундах (24 часа — downgrade с 6h после аудита:
+    # 0 fires за 49 рестартов сказали что 6h избыточно; 24h совпадает со scope
+    # weekly_digest и покрывает типичный рабочий цикл).
+    ERROR_DIGEST_INTERVAL_SEC: int = 86400
+    # Первый fire — через короткую задержку после старта (а не через 24h),
+    # чтобы при частых рестартах loop всё равно успевал стрельнуть хотя бы раз.
+    # Аналог FIRST_RUN_DELAY_SEC в weekly_digest. Идемпотентность обеспечивается
+    # dedupe_key `proactive:error_digest:YYYY-MM-DDTHH` в inbox_service.
+    ERROR_DIGEST_FIRST_RUN_DELAY_SEC: int = 300
     # Максимум ошибок в сводке
     ERROR_DIGEST_MAX_ITEMS: int = 10
 
@@ -726,19 +781,39 @@ class ProactiveWatchService:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("error_digest_upsert_failed", error=str(exc))
+            if _error_digest_fired_total is not None:
+                try:
+                    _error_digest_fired_total.labels(outcome="failed").inc()
+                except Exception:  # noqa: BLE001
+                    pass
             return {"ok": False, "error": str(exc)}
 
         logger.info("error_digest_written", total=total, counts=counts)
+        # Prometheus counter — различаем ok/empty/failed outcome для чтения
+        # /metrics и понимания реальной активности.
+        if _error_digest_fired_total is not None:
+            try:
+                outcome = "empty" if total == 0 else "ok"
+                _error_digest_fired_total.labels(outcome=outcome).inc()
+            except Exception:  # noqa: BLE001
+                pass
         return {"ok": True, "total": total, "counts": counts, "digest_ts": ts_now}
 
     async def _error_digest_loop(self) -> None:
-        """Бесконечный цикл: каждые 6 часов запускает run_error_digest."""
+        """Бесконечный цикл: 1 раз в 24 часа (downgrade с 6h после аудита).
+
+        ВАЖНО: первый fire — через ERROR_DIGEST_FIRST_RUN_DELAY_SEC (5 мин) после
+        старта, не через 24h. Иначе при частых рестартах loop никогда не доходит
+        до первого fire. Идемпотентность — через dedupe_key в inbox_service.
+        """
+        # Короткая задержка перед первым fire — даём userbot полностью подняться
+        await asyncio.sleep(self.ERROR_DIGEST_FIRST_RUN_DELAY_SEC)
         while True:
-            await asyncio.sleep(self.ERROR_DIGEST_INTERVAL_SEC)
             try:
                 await self.run_error_digest()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("error_digest_loop_error", error=str(exc))
+            await asyncio.sleep(self.ERROR_DIGEST_INTERVAL_SEC)
 
     def start_error_digest_loop(self) -> "asyncio.Task[None]":
         """Запускает фоновую задачу Error Digest и возвращает Task."""
@@ -1078,6 +1153,232 @@ class ProactiveWatchService:
             is_critical=is_critical,
         )
         return True
+
+    # -----------------------------------------------------------------
+    # Anomaly detection wire-up (Idea 26)
+    # -----------------------------------------------------------------
+    # Per-metric cooldown между alert'ами (6 часов) — без этого один и тот же
+    # spike будет триггериться на каждой итерации loop'а до выхода точки из окна.
+    ANOMALY_ALERT_COOLDOWN_SEC: int = 21600
+    # Интервал anomaly-проверок: ~60s, как и заявлено в спеке.
+    ANOMALY_CHECKS_INTERVAL_SEC: int = 60
+
+    @staticmethod
+    def _anomaly_cooldown_path() -> Path:
+        """Путь к persisted-state cooldown'ов anomaly-алёртов."""
+        return Path.home() / ".openclaw" / "krab_runtime_state" / "anomaly_alert_cooldowns.json"
+
+    @staticmethod
+    def _is_anomaly_detection_enabled() -> bool:
+        """Глобальный gate: KRAB_ANOMALY_DETECTION_ENABLED, default off."""
+        raw = os.environ.get("KRAB_ANOMALY_DETECTION_ENABLED", "0").strip().lower()
+        return raw in ("1", "true", "yes", "on")
+
+    def _load_anomaly_cooldowns(self) -> dict[str, float]:
+        """Читает per-metric cooldowns. Падать не должны: corrupt → пустой dict."""
+        path = self._anomaly_cooldown_path()
+        if not path.exists():
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "anomaly_cooldowns_read_failed",
+                path=str(path),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        # Filter обратно к dict[str, float] — corrupt entries молча выкидываем.
+        result: dict[str, float] = {}
+        for k, v in raw.items():
+            try:
+                result[str(k)] = float(v)
+            except (TypeError, ValueError):
+                continue
+        return result
+
+    def _save_anomaly_cooldowns(self, payload: dict[str, float]) -> None:
+        """Persist per-metric cooldowns. Тихо логируем сбой записи."""
+        path = self._anomaly_cooldown_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except (OSError, TypeError) as exc:
+            logger.warning(
+                "anomaly_cooldowns_write_failed",
+                path=str(path),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+    def _collect_anomaly_metrics(self) -> dict[str, float]:
+        """
+        Собирает 5 целевых метрик для anomaly_detector.
+
+        Все источники защищены try/except: если конкретный модуль недоступен,
+        метрика просто пропускается, остальные пишутся.
+        """
+        result: dict[str, float] = {}
+
+        # 1) response_time_p95 — observability latency p95 (ms).
+        try:
+            snap = _observability_metrics.get_snapshot()
+            p95 = float(snap.get("latencies", {}).get("p95_ms") or 0.0)
+            result["response_time_p95"] = p95
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("anomaly_collect_p95_failed", error=str(exc))
+
+        # 2) error_rate — % failed LLM calls / total (0..100).
+        try:
+            counters = _observability_metrics.get_snapshot().get("counters", {})
+            errors = float(counters.get("llm_error", 0))
+            success = float(counters.get("llm_success", 0))
+            total = errors + success
+            if total > 0:
+                result["error_rate"] = (errors / total) * 100.0
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("anomaly_collect_error_rate_failed", error=str(exc))
+
+        # 3) inbox_open_count — текущее число open-items.
+        try:
+            open_items = inbox_service.list_items(status="open", limit=1000)
+            result["inbox_open_count"] = float(len(open_items))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("anomaly_collect_inbox_open_failed", error=str(exc))
+
+        # 4) memory_indexer_queue_size — глубина очереди индексатора.
+        try:
+            from .memory_indexer_worker import (  # noqa: PLC0415
+                _worker_singleton as _indexer_singleton,
+            )
+
+            if _indexer_singleton is not None:
+                stats = _indexer_singleton.get_stats()
+                result["memory_indexer_queue_size"] = float(stats.queue_size)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("anomaly_collect_indexer_failed", error=str(exc))
+
+        # 5) chat_filter_silence_ratio — доля чатов в режиме silence/mute (0..1).
+        try:
+            from .chat_filter_config import chat_filter_config  # noqa: PLC0415
+
+            stats = chat_filter_config.stats()
+            by_mode = stats.get("by_mode") or {}
+            total_chats = sum(int(v) for v in by_mode.values())
+            if total_chats > 0:
+                silenced = int(by_mode.get("mute", 0)) + int(by_mode.get("silence", 0))
+                result["chat_filter_silence_ratio"] = silenced / total_chats
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("anomaly_collect_silence_ratio_failed", error=str(exc))
+
+        return result
+
+    async def run_anomaly_checks(self) -> dict[str, Any]:
+        """
+        Записывает 5 ключевых метрик в anomaly_detector и поднимает alert
+        при detected anomaly (с per-metric cooldown).
+
+        Gate: `KRAB_ANOMALY_DETECTION_ENABLED` (default off).
+        """
+        if not self._is_anomaly_detection_enabled():
+            return {"enabled": False, "recorded": 0, "alerts": []}
+
+        recorded = self._collect_anomaly_metrics()
+        for metric, value in recorded.items():
+            try:
+                anomaly_detector.record_metric(metric, value)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "anomaly_record_failed",
+                    metric=metric,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+        try:
+            anomalies: list[Anomaly] = anomaly_detector.detect_anomalies()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "anomaly_detect_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            anomalies = []
+
+        cooldowns = self._load_anomaly_cooldowns()
+        now_ts = time.time()
+        alerted: list[dict[str, Any]] = []
+        cooldowns_dirty = False
+
+        for anomaly in anomalies:
+            # Записываем alert только для метрик из нашего scope —
+            # detector может содержать данные из других источников.
+            if anomaly.metric not in recorded:
+                continue
+            last_alert = float(cooldowns.get(anomaly.metric, 0.0))
+            if now_ts - last_alert < self.ANOMALY_ALERT_COOLDOWN_SEC:
+                continue
+            logger.warning(
+                "proactive_anomaly_detected",
+                metric=anomaly.metric,
+                severity=anomaly.severity,
+                z_score=round(anomaly.z_score, 3),
+                current_value=anomaly.current_value,
+                baseline_value=round(anomaly.baseline_value, 4),
+                std_dev=round(anomaly.std_dev, 4),
+                sample_count=anomaly.sample_count,
+            )
+            cooldowns[anomaly.metric] = now_ts
+            cooldowns_dirty = True
+            alerted.append(
+                {
+                    "metric": anomaly.metric,
+                    "severity": anomaly.severity,
+                    "z_score": anomaly.z_score,
+                    "current_value": anomaly.current_value,
+                    "baseline_value": anomaly.baseline_value,
+                }
+            )
+
+        if cooldowns_dirty:
+            self._save_anomaly_cooldowns(cooldowns)
+
+        return {
+            "enabled": True,
+            "recorded": len(recorded),
+            "metrics": recorded,
+            "alerts": alerted,
+        }
+
+    async def _anomaly_checks_loop(self) -> None:
+        """Бесконечный цикл: каждые ANOMALY_CHECKS_INTERVAL_SEC прогоняет проверку."""
+        while True:
+            await asyncio.sleep(self.ANOMALY_CHECKS_INTERVAL_SEC)
+            try:
+                await self.run_anomaly_checks()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "anomaly_checks_loop_error",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+    def start_anomaly_checks_loop(self) -> "asyncio.Task[None]":
+        """Запускает фоновую задачу anomaly-проверок и возвращает Task."""
+        loop = asyncio.get_event_loop()
+        task = loop.create_task(self._anomaly_checks_loop(), name="krab_anomaly_checks")
+        logger.info(
+            "anomaly_checks_loop_started",
+            interval_sec=self.ANOMALY_CHECKS_INTERVAL_SEC,
+            enabled=self._is_anomaly_detection_enabled(),
+        )
+        return task
 
     async def _run_alert_checks_loop(self) -> None:
         """Бесконечный цикл: каждые 30 минут запускает run_alert_checks."""

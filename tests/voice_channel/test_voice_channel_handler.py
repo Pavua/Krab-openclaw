@@ -76,8 +76,19 @@ async def _collect(handler: VoiceChannelHandler, **kwargs) -> List[str]:
 
 
 def run(coro):
-    """Run a coroutine in a fresh event loop (avoids pytest-asyncio loop conflicts)."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Run a coroutine in a fresh event loop (avoids pytest-asyncio loop conflicts).
+
+    Используем `new_event_loop()` вместо `get_event_loop()`: после того как
+    `pytest-asyncio` (mode=auto) закрывает per-test цикл, в MainThread больше нет
+    «текущего» loop — и `get_event_loop()` в full-suite контексте бросает
+    `RuntimeError: There is no current event loop`. Новый цикл — это изоляция на
+    каждый тест без зависимости от глобального состояния.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 # ─── Tests ────────────────────────────────────────────────────────────────────

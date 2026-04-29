@@ -283,6 +283,10 @@ class TestHandleWhois:
             return proc
 
         async def _fake_wait_for(coro, timeout):
+            # Закрываем переданный coroutine, чтобы AsyncMock не ругался
+            # «coroutine was never awaited».
+            if asyncio.iscoroutine(coro):
+                coro.close()
             raise asyncio.TimeoutError
 
         monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)

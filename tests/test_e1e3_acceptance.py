@@ -7,6 +7,10 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.live
+
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace

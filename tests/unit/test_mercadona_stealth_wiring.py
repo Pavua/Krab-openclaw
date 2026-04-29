@@ -6,6 +6,16 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+
+def _run_async(coro):
+    """Wave 11: свежий event loop — старый pattern asyncio.get_event_loop() ломается
+    в full-suite, когда соседний тест закрыл текущий loop."""
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
 # ---------------------------------------------------------------------------
 # Smoke: импорт модуля не падает
 # ---------------------------------------------------------------------------
@@ -47,7 +57,7 @@ def test_ratelimit_detection():
         if response.status == 429:
             stealth_metrics.record_detection("ratelimit")
 
-    asyncio.get_event_loop().run_until_complete(run())
+    _run_async(run())
     counts = stealth_metrics.get_counts()
     assert counts.get("ratelimit", 0) == 1
 
@@ -71,7 +81,7 @@ def test_blocked_403_detection():
         if response.status in (401, 403):
             stealth_metrics.record_detection("blocked")
 
-    asyncio.get_event_loop().run_until_complete(run())
+    _run_async(run())
     assert stealth_metrics.get_counts().get("blocked", 0) == 1
 
 
@@ -94,7 +104,7 @@ def test_blocked_401_detection():
         if response.status in (401, 403):
             stealth_metrics.record_detection("blocked")
 
-    asyncio.get_event_loop().run_until_complete(run())
+    _run_async(run())
     assert stealth_metrics.get_counts().get("blocked", 0) == 1
 
 
@@ -114,7 +124,7 @@ def test_fetch_error_on_goto_exception():
         except Exception:
             stealth_metrics.record_detection("fetch_error")
 
-    asyncio.get_event_loop().run_until_complete(run())
+    _run_async(run())
     assert stealth_metrics.get_counts().get("fetch_error", 0) == 1
 
 
@@ -159,7 +169,7 @@ def test_captcha_detection():
 
         assert captcha_found
 
-    asyncio.get_event_loop().run_until_complete(run())
+    _run_async(run())
     assert stealth_metrics.get_counts().get("captcha", 0) == 1
 
 
@@ -193,7 +203,7 @@ def test_record_detection_called_in_handle_response_ratelimit(monkeypatch):
         if resp.status < 200 or resp.status >= 300:
             return
 
-    asyncio.get_event_loop().run_until_complete(handle_response(response))
+    _run_async(handle_response(response))
     assert calls == ["ratelimit"]
 
 
@@ -217,5 +227,5 @@ def test_record_detection_called_in_handle_response_blocked(monkeypatch):
             merc.record_detection("blocked")
             return
 
-    asyncio.get_event_loop().run_until_complete(handle_response(response))
+    _run_async(handle_response(response))
     assert calls == ["blocked"]

@@ -63,6 +63,8 @@ from __future__ import annotations
 import asyncio
 import os
 import sqlite3
+import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Iterable, Optional
@@ -71,9 +73,57 @@ from structlog import get_logger
 
 from src.core.memory_adaptive_rerank import rerank_adaptive
 from src.core.memory_archive import ArchivePaths, open_archive
+from src.core.memory_mmr import mmr_is_enabled, mmr_rerank, mmr_rerank_texts
 from src.core.memory_retrieval_scores import record_scores
+from src.core.sentry_perf import set_tag as _sentry_tag
+from src.core.sentry_perf import start_span as _sentry_span
+from src.core.sentry_perf import start_transaction as _sentry_txn
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# C6: Prometheus инструментация (module-level хелперы).
+# ---------------------------------------------------------------------------
+
+
+def _inc_mode(mode: str) -> None:
+    """Инкрементирует counter krab_memory_retrieval_mode_total{mode=...}.
+
+    Silent no-op если prometheus_client недоступен или метрика упала на init.
+    """
+    try:
+        from src.core.prometheus_metrics import _memory_retrieval_mode_total
+
+        if _memory_retrieval_mode_total is not None:
+            _memory_retrieval_mode_total.labels(mode=mode).inc()
+    except Exception as exc:  # noqa: BLE001 - инструментация best-effort
+        logger.debug("memory_retrieval_mode_metric_failed", mode=mode, error=str(exc))
+
+
+def _observe_phase(phase: str, seconds: float) -> None:
+    """Observe латентность phase в histogram krab_memory_retrieval_latency_seconds.
+
+    Silent no-op если prometheus_client недоступен.
+    """
+    try:
+        from src.core.prometheus_metrics import _memory_retrieval_latency_seconds
+
+        if _memory_retrieval_latency_seconds is not None:
+            _memory_retrieval_latency_seconds.labels(phase=phase).observe(seconds)
+    except Exception as exc:  # noqa: BLE001 - инструментация best-effort
+        logger.debug("memory_retrieval_latency_metric_failed", phase=phase, error=str(exc))
+
+
+def _compute_mode(vec_hits: int, fts_hits: int) -> str:
+    """vec>0 & fts>0 → hybrid; vec>0 only → vec; fts>0 only → fts; else none."""
+    if vec_hits > 0 and fts_hits > 0:
+        return "hybrid"
+    if vec_hits > 0:
+        return "vec"
+    if fts_hits > 0:
+        return "fts"
+    return "none"
 
 
 # ---------------------------------------------------------------------------
@@ -170,19 +220,37 @@ def detect_decay_mode(query: str) -> str:
 def reciprocal_rank_fusion(
     *ranked_lists: list[str],
     k: int = 60,
+    weights: list[float] | None = None,
 ) -> dict[str, float]:
     """
-    Классический Reciprocal Rank Fusion.
+    Классический Reciprocal Rank Fusion с опциональными per-source весами.
 
     Принимает N списков chunk_id (уже отсортированных от лучшего к худшему)
     и возвращает словарь {chunk_id: fused_score}. Не требует нормализации
     исходных scores — только ранги.
+
+    weights: опциональный список весов по одному на ranked_list. Формула —
+    `fused[chunk_id] += weight / (k + rank)`. None → все веса 1.0
+    (backward-compat). Некорректная длина → игнорируем и считаем по 1.0.
     """
+    if weights is not None and len(weights) != len(ranked_lists):
+        # Silently fall back to equal weights — сохраняем legacy-контракт.
+        weights = None
     fused: dict[str, float] = {}
-    for lst in ranked_lists:
+    for idx, lst in enumerate(ranked_lists):
+        w = weights[idx] if weights is not None else 1.0
         for rank, chunk_id in enumerate(lst, start=1):
-            fused[chunk_id] = fused.get(chunk_id, 0.0) + 1.0 / (k + rank)
+            fused[chunk_id] = fused.get(chunk_id, 0.0) + w / (k + rank)
     return fused
+
+
+def _rrf_vector_weight() -> float:
+    """Env: KRAB_RAG_RRF_VECTOR_WEIGHT (default 1.0, clamp 0.0..5.0)."""
+    try:
+        w = float(os.getenv("KRAB_RAG_RRF_VECTOR_WEIGHT", "1.0"))
+    except ValueError:
+        return 1.0
+    return max(0.0, min(5.0, w))
 
 
 def normalize_scores_0_1(scores: dict[str, float]) -> dict[str, float]:
@@ -220,9 +288,11 @@ class HybridRetriever:
         model_name: str | None = "minishlab/M2V_multilingual_output",
         rrf_k: int = 60,
         now: Optional[callable] = None,  # type: ignore[type-arg]
+        model_dim: int | None = 256,
     ) -> None:
         self._paths = archive_paths or ArchivePaths.default()
         self._model_name = model_name
+        self._model_dim = model_dim
         self._rrf_k = rrf_k
         self._now = now or (lambda: datetime.now(timezone.utc))
 
@@ -230,6 +300,17 @@ class HybridRetriever:
         self._conn: sqlite3.Connection | None = None
         self._model: object | None = None  # Model2Vec.StaticModel, late import
         self._vec_available: bool = False
+        # Последний query — нужен для cosine MMR в _materialize_results().
+        self._last_query: str = ""
+        # LRU-кеш для embed query: same query → same vector без повторного encode.
+        # Model2Vec encode на M4 Max ~0.02ms (warm), но защита от регрессий,
+        # тёплый путь для частых повторных запросов и cold-call mitigation.
+        # Размер 1000 — ~1MB при 256 float32 элементах. Используем OrderedDict
+        # как простой LRU: move_to_end при hit, popitem(last=False) при overflow.
+        self._query_vec_cache: "OrderedDict[str, list[float]]" = OrderedDict()
+        self._query_vec_cache_max: int = 1000
+        self._query_vec_cache_hits: int = 0
+        self._query_vec_cache_misses: int = 0
 
     # ------------------------------------------------------------------
     # Публичный API.
@@ -255,31 +336,107 @@ class HybridRetriever:
         if not query:
             return []
 
+        # Sentry Performance Monitoring: wrap whole retrieval в transaction.
+        # Graceful — если sentry_sdk не установлен, это no-op.
+        with _sentry_txn(op="memory.retrieval", name="hybrid_search"):
+            _sentry_tag("chat_id", str(chat_id) if chat_id else "none")
+            _sentry_tag("decay_mode", decay_mode)
+            return self._search_impl(
+                query=query,
+                chat_id=chat_id,
+                top_k=top_k,
+                with_context=with_context,
+                decay_mode=decay_mode,
+                owner_only=owner_only,
+            )
+
+    def _search_impl(
+        self,
+        query: str,
+        chat_id: Optional[str],
+        top_k: int,
+        with_context: int,
+        decay_mode: str,
+        owner_only: bool,
+    ) -> list[SearchResult]:
+        """Фактическая логика retrieval — вынесена из `search()`, чтобы её
+        можно было обернуть в sentry transaction без inflating indentation.
+        """
+        # C6: инструментация per-phase latency + mode counter.
+        _total_start = time.perf_counter()
+
+        # Сохраняем для cosine MMR в _materialize_results().
+        self._last_query = query
+
         conn = self._ensure_connection()
         if conn is None:
             logger.debug("memory_retrieval_no_db", path=str(self._paths.db))
+            _observe_phase("total", time.perf_counter() - _total_start)
+            _inc_mode("none")
             return []
 
+        # Query expansion (P2 carry-over, opt-in).
+        # Короткие запросы (< N токенов) расширяются через Gemini Flash:
+        # 3 перефразировки, RRF над union. Fallback на [query] при любой ошибке.
+        queries = self._maybe_expand_query(query)
+
         # FTS5 — минимум, который мы обязаны выдать.
-        fts_ids = self._fts_search(conn, query, chat_id, limit=top_k * 4)
+        _fts_start = time.perf_counter()
+        with _sentry_span(op="memory.fts", description="bm25 search"):
+            if len(queries) <= 1:
+                fts_ids = self._fts_search(
+                    conn, queries[0] if queries else query, chat_id, limit=top_k * 4
+                )
+            else:
+                fts_lists: list[list[str]] = []
+                for q in queries:
+                    ids = self._fts_search(conn, q, chat_id, limit=top_k * 4)
+                    if ids:
+                        fts_lists.append(ids)
+                if not fts_lists:
+                    _observe_phase("fts", time.perf_counter() - _fts_start)
+                    _observe_phase("total", time.perf_counter() - _total_start)
+                    _inc_mode("none")
+                    return []
+                # RRF между FTS-списками разных перефразировок.
+                exp_fused = reciprocal_rank_fusion(*fts_lists, k=self._rrf_k)
+                fts_ids = [cid for cid, _ in sorted(exp_fused.items(), key=lambda kv: -kv[1])]
+                fts_ids = fts_ids[: top_k * 4]
+        _observe_phase("fts", time.perf_counter() - _fts_start)
+
         if not fts_ids:
+            _observe_phase("total", time.perf_counter() - _total_start)
+            _inc_mode("none")
             return []
+
+        query_for_vector = queries[0] if queries else query
 
         # Vector — опционально, если доступен.
         vec_ids: list[str] = []
-        if self._vec_available and self._model_name:
-            try:
-                vec_ids = self._vector_search(conn, query, chat_id, limit=top_k * 4)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "memory_retrieval_vec_failed",
-                    error=str(exc),
-                    fallback="fts_only",
-                )
+        _vec_start = time.perf_counter()
+        with _sentry_span(op="memory.vec", description="sqlite-vec KNN"):
+            if self._vec_available and self._model_name:
+                try:
+                    vec_ids = self._vector_search(conn, query_for_vector, chat_id, limit=top_k * 4)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "memory_retrieval_vec_failed",
+                        error=str(exc),
+                        fallback="fts_only",
+                    )
+        _observe_phase("vec", time.perf_counter() - _vec_start)
+        # mode tag — для фильтрации в Sentry UI (hybrid vs fts-only).
+        _sentry_tag("mode", "hybrid" if vec_ids else "fts")
 
-        # Fusion.
+        # Fusion. FTS list всегда weight=1.0; vec list — env-настраиваемый вес
+        # (C3 Memory Phase 2). Backward-compat: default weights → прежнее поведение.
         if vec_ids:
-            fused = reciprocal_rank_fusion(fts_ids, vec_ids, k=self._rrf_k)
+            fused = reciprocal_rank_fusion(
+                fts_ids,
+                vec_ids,
+                k=self._rrf_k,
+                weights=[1.0, _rrf_vector_weight()],
+            )
         else:
             fused = reciprocal_rank_fusion(fts_ids, k=self._rrf_k)
 
@@ -327,8 +484,8 @@ class HybridRetriever:
                     from src.core.prometheus_metrics import _ADAPTIVE_RERANK_COUNTER
 
                     _ADAPTIVE_RERANK_COUNTER[0] += 1
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("memory_adaptive_rerank_counter_failed", error=str(exc))
             except Exception as exc:  # noqa: BLE001
                 import traceback as _tb
 
@@ -359,8 +516,10 @@ class HybridRetriever:
                     from src.core.gemini_rerank_provider import default_provider as _grp_default
 
                     _rerank_provider = _grp_default()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    # Fallback: rerank без Gemini-провайдера. Не Sentry — Phase 2
+                    # downgrade ожидаемо (provider может быть disabled in env).
+                    logger.warning("memory_llm_rerank_provider_unavailable", error=str(exc))
                 reranked_cands = asyncio.get_event_loop().run_until_complete(
                     llm_rerank(query, candidates, top_k=top_k, provider=_rerank_provider)
                 )
@@ -375,7 +534,202 @@ class HybridRetriever:
                     fallback="pre_rerank_order",
                 )
 
+        # C6: total latency + mode counter + structured summary log.
+        total_elapsed = time.perf_counter() - _total_start
+        _observe_phase("total", total_elapsed)
+        mode = _compute_mode(len(vec_ids), len(fts_ids))
+        _inc_mode(mode)
+        logger.debug(
+            "memory_retrieval_summary",
+            query_len=len(query),
+            vec_hits=len(vec_ids),
+            fts_hits=len(fts_ids),
+            merged_hits=len(fused),
+            mmr_reranked=len(results),
+            mode=mode,
+            total_ms=round(total_elapsed * 1000, 1),
+        )
+
+        # Phase 2 shadow-reads: fire-and-forget сравнение FTS-only vs Hybrid.
+        # Когда KRAB_RAG_PHASE2_ENABLED=0 (production), но KRAB_RAG_PHASE2_SHADOW=1
+        # — запускаем vector search в background ТОЛЬКО для логирования. Результат
+        # пользователю НЕ возвращается. Это безопасный способ собрать 24-48h данные
+        # (recall delta, latency, anomalies) до реального toggle Phase 2.
+        if (
+            os.getenv("KRAB_RAG_PHASE2_SHADOW", "0") == "1"
+            and os.getenv("KRAB_RAG_PHASE2_ENABLED", "0") != "1"
+        ):
+            try:
+                top5_fts = [r.message_id for r in results[:5]]
+                # fts_latency_ms уже посчитан выше как время первого phase.
+                fts_latency_ms = round((_vec_start - _fts_start) * 1000, 1)
+                self._schedule_shadow_compare(
+                    conn=conn,
+                    query=query,
+                    chat_id=chat_id,
+                    fts_ids=fts_ids,
+                    top5_fts=top5_fts,
+                    top_k=top_k,
+                    with_context=with_context,
+                    decay_mode=decay_mode,
+                    fts_latency_ms=fts_latency_ms,
+                )
+            except Exception as exc:  # noqa: BLE001 - shadow best-effort
+                logger.warning("memory_phase2_shadow_schedule_failed", error=str(exc))
+
         return results
+
+    def _schedule_shadow_compare(
+        self,
+        conn: sqlite3.Connection,
+        query: str,
+        chat_id: Optional[str],
+        fts_ids: list[str],
+        top5_fts: list[str],
+        top_k: int,
+        with_context: int,
+        decay_mode: str,
+        fts_latency_ms: float,
+    ) -> None:
+        """Планирует shadow-сравнение через asyncio.create_task (fire-and-forget).
+
+        Если event loop не запущен — выполняет sync inline (в тестах / sync callers).
+        """
+        coro = self._shadow_compare(
+            conn=conn,
+            query=query,
+            chat_id=chat_id,
+            fts_ids=fts_ids,
+            top5_fts=top5_fts,
+            top_k=top_k,
+            with_context=with_context,
+            decay_mode=decay_mode,
+            fts_latency_ms=fts_latency_ms,
+        )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None and loop.is_running():
+            loop.create_task(coro)
+        else:
+            # Нет активного loop'а — выполняем синхронно (тесты, CLI).
+            try:
+                asyncio.run(coro)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("memory_phase2_shadow_sync_run_failed", error=str(exc))
+
+    async def _shadow_compare(
+        self,
+        conn: sqlite3.Connection,
+        query: str,
+        chat_id: Optional[str],
+        fts_ids: list[str],
+        top5_fts: list[str],
+        top_k: int,
+        with_context: int,
+        decay_mode: str,
+        fts_latency_ms: float,
+    ) -> None:
+        """Shadow-версия vector + RRF — только для логирования.
+
+        Временно выставляет KRAB_RAG_PHASE2_ENABLED=1, вызывает _vector_search(),
+        делает RRF с теми же весами и сравнивает top-5 с FTS-only результатом.
+        НЕ трогает self._last_query / возвращаемые results.
+        """
+        try:
+            if not self._vec_available or not self._model_name:
+                return
+
+            _vec_start = time.perf_counter()
+            # _vector_search() сам проверяет KRAB_RAG_PHASE2_ENABLED — временно
+            # включаем для shadow вызова.
+            prev_flag = os.environ.get("KRAB_RAG_PHASE2_ENABLED", "0")
+            os.environ["KRAB_RAG_PHASE2_ENABLED"] = "1"
+            try:
+                vec_ids_shadow = self._vector_search(conn, query, chat_id, limit=top_k * 4)
+            finally:
+                if prev_flag == "0":
+                    os.environ["KRAB_RAG_PHASE2_ENABLED"] = prev_flag
+            vec_latency_ms = round((time.perf_counter() - _vec_start) * 1000, 1)
+
+            if vec_ids_shadow:
+                fused_shadow = reciprocal_rank_fusion(
+                    fts_ids,
+                    vec_ids_shadow,
+                    k=self._rrf_k,
+                    weights=[1.0, _rrf_vector_weight()],
+                )
+            else:
+                fused_shadow = reciprocal_rank_fusion(fts_ids, k=self._rrf_k)
+
+            # Top-5 hybrid: сортируем fused по score и маппим chunk_id на message_id
+            # (берём первое message_id из chunk_messages).
+            top5_hybrid_chunk_ids = [
+                cid for cid, _ in sorted(fused_shadow.items(), key=lambda kv: -kv[1])[:5]
+            ]
+            top5_hybrid: list[str] = []
+            if top5_hybrid_chunk_ids:
+                placeholders = ",".join("?" * len(top5_hybrid_chunk_ids))
+                try:
+                    conn.row_factory = sqlite3.Row
+                    rows = conn.execute(
+                        f"""
+                        SELECT chunk_id, MIN(message_id) AS mid FROM chunk_messages
+                        WHERE chunk_id IN ({placeholders})
+                        GROUP BY chunk_id;
+                        """,  # noqa: S608
+                        top5_hybrid_chunk_ids,
+                    ).fetchall()
+                    mid_by_cid = {r["chunk_id"]: r["mid"] for r in rows}
+                    top5_hybrid = [mid_by_cid.get(cid, cid) for cid in top5_hybrid_chunk_ids]
+                except sqlite3.OperationalError:
+                    top5_hybrid = list(top5_hybrid_chunk_ids)
+
+            logger.info(
+                "memory_phase2_shadow_compare",
+                query_preview=query[:60],
+                chat_id=str(chat_id) if chat_id else None,
+                fts_hits=len(fts_ids),
+                vec_hits=len(vec_ids_shadow),
+                shadow_merged=len(fused_shadow),
+                would_change_top5=top5_fts != top5_hybrid,
+                latency_fts_ms=fts_latency_ms,
+                latency_vec_ms=vec_latency_ms,
+                model_mode="shadow",
+            )
+        except Exception as exc:  # noqa: BLE001 - shadow failure is non-fatal
+            logger.warning(
+                "memory_phase2_shadow_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+    def _maybe_expand_query(self, query: str) -> list[str]:
+        """
+        Возвращает [original] или [original + LLM-перефразировки].
+
+        Fallback на [query] при disabled-flag, ошибке или активном event loop
+        (нельзя запускать sync run_until_complete внутри async-кода).
+        """
+        try:
+            from src.core.memory_llm_query_expansion import expand_query_llm, is_enabled
+        except Exception:  # noqa: BLE001
+            return [query]
+        if not is_enabled():
+            return [query]
+        try:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+            if loop.is_running():
+                # В живом loop'е expansion не делаем — caller может вызвать async-версию.
+                return [query]
+            return loop.run_until_complete(expand_query_llm(query)) or [query]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("memory_query_expansion_invoke_failed", error=str(exc))
+            return [query]
 
     def close(self) -> None:
         """Закрывает БД-подключение. Безопасно при повторном вызове."""
@@ -418,8 +772,117 @@ class HybridRetriever:
             self._vec_available = False
             logger.debug("memory_retrieval_vec_unavailable", error=str(exc))
 
+        # C7: embedding version guard. Если vec_chunks_meta существует и
+        # model_name/model_dim не совпадают с текущими — вектора
+        # невалидны (Model2Vec поменялся), падаем в FTS-only до rebuild_all().
+        if self._vec_available:
+            self._vec_available = self._check_vec_meta_compat(conn)
+
         self._conn = conn
         return conn
+
+    def _check_vec_meta_compat(self, conn: sqlite3.Connection) -> bool:
+        """
+        C7: сверяет текущую embedding-модель с записью в vec_chunks_meta.
+
+        Возвращает:
+          * True — metadata отсутствует (свежая БД без embeddings) ИЛИ
+            совпадает с текущими (model_name/model_dim).
+          * False — mismatch (меняли модель, вектора невалидны) ИЛИ
+            таблицы vec_chunks_meta нет вовсе (legacy-schema без C7 DDL —
+            безопасно fallback'аться в FTS, пока embedder не запишет meta).
+        """
+        try:
+            meta_rows = conn.execute(
+                "SELECT key, value FROM vec_chunks_meta WHERE key IN ('model_name','model_dim');"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # Таблицы ещё нет (legacy-БД: open_archive() не вызывает
+            # create_schema() для существующих БД, поэтому _DDL_VEC_CHUNKS_META
+            # до первого embedder-прогона не применяется). Создаём идемпотентно
+            # и обрабатываем как "пустую meta": первый embed_all_unindexed()
+            # заполнит её. Это разблокирует vector path для БД, где векторы
+            # уже пре-индексированы bootstrap-скриптом до C7.
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS vec_chunks_meta (
+                        key   TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    ) WITHOUT ROWID;
+                    """
+                )
+                conn.commit()
+                logger.debug("memory_vec_meta_created", action="legacy_db_upgrade")
+                return True
+            except sqlite3.Error as exc:
+                logger.debug(
+                    "memory_vec_meta_create_failed",
+                    error=str(exc),
+                    action="fallback_to_fts_only",
+                )
+                return False
+
+        if not meta_rows:
+            # Таблица есть, но ещё пуста — embedder не прогонялся.
+            # Вектора если и есть, не сверяемы — оставляем vec path включённым;
+            # первое успешное embed_all_unindexed() заполнит meta.
+            return True
+
+        meta = {str(k): str(v) for k, v in meta_rows}
+        stored_name = meta.get("model_name")
+        stored_dim_raw = meta.get("model_dim")
+        try:
+            stored_dim = int(stored_dim_raw) if stored_dim_raw is not None else 0
+        except (TypeError, ValueError):
+            stored_dim = 0
+
+        if stored_name and self._model_name and stored_name != self._model_name:
+            logger.warning(
+                "memory_vec_model_mismatch",
+                stored=stored_name,
+                current=self._model_name,
+                action="fallback_to_fts_only",
+            )
+            return False
+        if stored_dim and self._model_dim and stored_dim != self._model_dim:
+            logger.warning(
+                "memory_vec_dim_mismatch",
+                stored=stored_dim,
+                current=self._model_dim,
+                action="fallback_to_fts_only",
+            )
+            return False
+        return True
+
+    def _encode_query_cached(self, model: object, query: str) -> list[float]:
+        """
+        Encode query через Model2Vec с LRU-кешем.
+
+        Same `query` → same vector без повторного `model.encode()`. Hit O(1)
+        через OrderedDict.move_to_end; eviction LRU-тип (popitem(last=False)).
+        Возвращает list[float] (а не numpy array) — serialize_f32 принимает оба,
+        и list дешевле для tobytes-fallback.
+        """
+        cached = self._query_vec_cache.get(query)
+        if cached is not None:
+            self._query_vec_cache.move_to_end(query)
+            self._query_vec_cache_hits += 1
+            return cached
+        # Miss: encode и положим в cache.
+        vec = model.encode([query])[0]  # type: ignore[attr-defined]
+        # tolist() — гарантированно serializable; для cosine MMR-cache
+        # downstream будет .tolist() всё равно.
+        try:
+            vec_list = vec.tolist()
+        except AttributeError:
+            vec_list = list(vec)
+        self._query_vec_cache[query] = vec_list
+        self._query_vec_cache_misses += 1
+        # LRU eviction: drop oldest при overflow.
+        if len(self._query_vec_cache) > self._query_vec_cache_max:
+            self._query_vec_cache.popitem(last=False)
+        return vec_list
 
     def _ensure_model(self) -> object | None:
         """Late-import Model2Vec. Возвращает model или None если недоступна."""
@@ -502,21 +965,73 @@ class HybridRetriever:
         limit: int,
     ) -> list[str]:
         """
-        Пока no-op (sqlite-vec загружен, но vec_chunks таблица не создана).
-        После Phase 2 индексации — полноценный `vector MATCH ? ORDER BY distance`.
+        Vector KNN через sqlite-vec: `vec_chunks.vector MATCH ? AND k = ?`.
+
+        Поведение:
+          * Feature-flag `KRAB_RAG_PHASE2_ENABLED` (env, default "0"). При
+            `!= "1"` возвращает []. Проверка per-call — toggle без restart'а.
+          * Lazy-load Model2Vec через `_ensure_model()`. Если модель
+            недоступна — []
+          * Per-chat фильтр реализован через subquery: KNN MATCH не
+            поддерживает дополнительный WHERE напрямую, поэтому берём
+            `limit * 3` соседей по вектору и фильтруем по `chat_id`
+            во внешнем SELECT.
+          * Любой `sqlite3.OperationalError` → warning + []. Retriever
+            продолжает работу в FTS-only режиме.
+          * C7 guard: `self._vec_available` выставляется в `_ensure_connection()`
+            по результату `_check_vec_meta_compat()` (сверка model_name/dim с
+            vec_chunks_meta). `search()` gate'ит вызов `_vector_search()` по
+            этому флагу — при embedding-mismatch путь автоматически обходится.
         """
+        if os.getenv("KRAB_RAG_PHASE2_ENABLED", "0") != "1":
+            return []
+
         model = self._ensure_model()
         if model is None:
             return []
-        # В Phase 2 реализация:
-        #   q_vec = model.encode([query])[0]
-        #   rows = conn.execute(
-        #       "SELECT rowid FROM vec_chunks "
-        #       "WHERE vector MATCH ? ORDER BY distance LIMIT ?",
-        #       (serialize_f32(q_vec), limit),
-        #   ).fetchall()
-        #   → JOIN chunks ON rowid для получения chunk_id
-        return []
+
+        # Late-import serialize_f32 — тот же путь, что в memory_embedder'е.
+        try:
+            from src.core.memory_embedder import serialize_f32
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_vec_search_import_failed", error=str(exc))
+            return []
+
+        try:
+            q_vec = self._encode_query_cached(model, query)
+            q_blob = serialize_f32(q_vec)
+        except Exception as exc:  # noqa: BLE001 - encode best-effort
+            logger.warning("memory_vec_search_encode_failed", error=str(exc))
+            return []
+
+        try:
+            if chat_id is not None:
+                # KNN-поиск по вектору с запасом, затем фильтр по chat_id.
+                # `limit * 3` — типичный recall-boost для per-chat режима.
+                sql = """
+                    SELECT c.chunk_id
+                    FROM chunks AS c
+                    WHERE c.id IN (
+                        SELECT rowid FROM vec_chunks
+                        WHERE vector MATCH ? AND k = ?
+                    )
+                      AND c.chat_id = ?
+                    ORDER BY c.id;
+                """
+                rows = conn.execute(sql, (q_blob, limit * 3, chat_id)).fetchall()
+                return [r[0] for r in rows][:limit]
+            sql = """
+                SELECT c.chunk_id, v.distance
+                FROM vec_chunks AS v
+                JOIN chunks AS c ON c.id = v.rowid
+                WHERE v.vector MATCH ? AND k = ?
+                ORDER BY v.distance;
+            """
+            rows = conn.execute(sql, (q_blob, limit)).fetchall()
+            return [r[0] for r in rows]
+        except sqlite3.OperationalError as exc:
+            logger.warning("memory_vec_search_failed", error=str(exc))
+            return []
 
     # ------------------------------------------------------------------
     # Сборка результатов.
@@ -544,6 +1059,8 @@ class HybridRetriever:
 
         now = self._now()
         enriched: list[tuple[SearchResult, float]] = []
+        # C4: сохраняем chunk_id рядом с SearchResult — нужен для lookup в vec_chunks.
+        chunk_id_by_sr: dict[int, str] = {}
         for chunk_id, row in chunk_rows.items():
             raw_score = fused.get(chunk_id, 0.0)
             ts = _parse_iso(row["start_ts"])
@@ -560,14 +1077,17 @@ class HybridRetriever:
                 context_before=ctx_before,
                 context_after=ctx_after,
             )
+            chunk_id_by_sr[id(sr)] = chunk_id
             enriched.append((sr, decayed))
 
         # Пересортировка по decayed, min-max нормализация в [0, 1].
         scored = {id(sr): score for sr, score in enriched}
         normed = normalize_scores_0_1(scored)
 
-        final = [
-            SearchResult(
+        final: list[SearchResult] = []
+        chunk_id_by_msg_id: dict[str, str] = {}
+        for sr, _ in enriched:
+            new_sr = SearchResult(
                 message_id=sr.message_id,
                 chat_id=sr.chat_id,
                 text_redacted=sr.text_redacted,
@@ -576,9 +1096,197 @@ class HybridRetriever:
                 context_before=sr.context_before,
                 context_after=sr.context_after,
             )
-            for sr, _ in enriched
-        ]
+            cid = chunk_id_by_sr.get(id(sr))
+            if cid is not None:
+                chunk_id_by_msg_id[new_sr.message_id] = cid
+            final.append(new_sr)
         final.sort(key=lambda r: r.score, reverse=True)
+
+        # MMR diversity re-ranking (P2 carry-over). Убирает near-duplicate chunks
+        # из top-K. Backward-compat: при KRAB_RAG_MMR_ENABLED=0 — не применяется.
+        # C6: per-phase latency histogram (phase=mmr) вокруг всего блока.
+        # Sentry span: op="memory.mmr" для UI performance фильтров.
+        _mmr_start = time.perf_counter()
+        _mmr_span_cm = _sentry_span(op="memory.mmr", description="MMR rerank")
+        _mmr_span_cm.__enter__()
+        if mmr_is_enabled() and len(final) > 1:
+            try:
+                doc_ids = [r.message_id for r in final]
+                doc_texts = [r.text_redacted for r in final]
+                rrf_scores_list = [r.score for r in final]
+                # chunk_id для каждого doc (для lookup в vec_chunks).
+                chunk_ids_for_mmr: list[str | None] = [
+                    chunk_id_by_msg_id.get(mid) for mid in doc_ids
+                ]
+
+                # C4: пре-вычисленные эмбеддинги из vec_chunks вместо on-the-fly encode.
+                # Ожидаемое ускорение MMR 50-100ms → 5-10ms (10× speedup).
+                ordered_ids: list[str] = []
+                model = self._ensure_model()
+                d_vecs: list[list[float] | None] = [None] * len(doc_ids)
+                if (
+                    model is not None
+                    and self._last_query
+                    and self._vec_available
+                    and any(c is not None for c in chunk_ids_for_mmr)
+                ):
+                    try:
+                        # struct-unpack — обратная операция к serialize_f32.
+                        import struct as _struct
+
+                        def _deser(blob: bytes) -> list[float]:
+                            return list(_struct.unpack(f"<{len(blob) // 4}f", blob))
+
+                        valid_ids = [c for c in chunk_ids_for_mmr if c is not None]
+                        if valid_ids:
+                            placeholders = ",".join("?" * len(valid_ids))
+                            rows = conn.execute(
+                                f"SELECT c.chunk_id, v.vector "  # noqa: S608
+                                f"FROM vec_chunks v JOIN chunks c ON c.id = v.rowid "
+                                f"WHERE c.chunk_id IN ({placeholders});",
+                                valid_ids,
+                            ).fetchall()
+                            vec_by_chunk: dict[str, list[float]] = {}
+                            for cid, vec_blob in rows:
+                                if vec_blob:
+                                    vec_by_chunk[cid] = _deser(bytes(vec_blob))
+                            for i, cid in enumerate(chunk_ids_for_mmr):
+                                if cid is not None and cid in vec_by_chunk:
+                                    d_vecs[i] = vec_by_chunk[cid]
+                    except Exception as exc:  # noqa: BLE001 - cache read best-effort
+                        logger.warning(
+                            "memory_mmr_vec_cache_failed",
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                        )
+
+                cache_hit_rate = (
+                    sum(1 for v in d_vecs if v is not None) / len(d_vecs) if d_vecs else 0.0
+                )
+
+                if model is not None and self._last_query and cache_hit_rate >= 0.5:
+                    try:
+                        q_vec = model.encode([self._last_query])[0].tolist()  # type: ignore[attr-defined]
+                        # Для missing векторов — encode on-the-fly только нужные (edge case).
+                        missing_idx = [i for i, v in enumerate(d_vecs) if v is None]
+                        if missing_idx:
+                            missing_texts = [doc_texts[i] for i in missing_idx]
+                            missing_encoded = model.encode(missing_texts)  # type: ignore[attr-defined]
+                            for idx, enc in zip(missing_idx, missing_encoded):
+                                d_vecs[idx] = enc.tolist()
+                        ordered_ids = mmr_rerank(
+                            q_vec,
+                            d_vecs,  # type: ignore[arg-type]
+                            doc_ids,
+                            rrf_scores=rrf_scores_list,
+                            top_k=top_k,
+                        )
+                        logger.debug(
+                            "memory_mmr_mode",
+                            mode="cosine_cached",
+                            cache_hit=round(cache_hit_rate, 2),
+                            docs=len(doc_texts),
+                        )
+                    except MemoryError:
+                        raise
+                    except (AttributeError, ImportError, ModuleNotFoundError) as exc:
+                        logger.warning(
+                            "memory_mmr_cosine_model_unavailable",
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                            fallback="jaccard",
+                        )
+                        ordered_ids = []
+                    except ValueError as exc:
+                        logger.warning(
+                            "memory_mmr_cosine_shape_error",
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                            fallback="jaccard",
+                        )
+                        ordered_ids = []
+                    except Exception as exc:  # noqa: BLE001 - cosine best-effort
+                        logger.warning(
+                            "memory_mmr_cosine_failed",
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                            fallback="jaccard",
+                        )
+                        ordered_ids = []
+                elif model is not None and self._last_query:
+                    # cache_hit < 0.5 — fallback на on-the-fly encode (старый путь).
+                    try:
+                        q_vec = model.encode([self._last_query])[0].tolist()  # type: ignore[attr-defined]
+                        d_vecs_full = [v.tolist() for v in model.encode(doc_texts)]  # type: ignore[attr-defined]
+                        ordered_ids = mmr_rerank(
+                            q_vec,
+                            d_vecs_full,
+                            doc_ids,
+                            rrf_scores=rrf_scores_list,
+                            top_k=top_k,
+                        )
+                        logger.debug(
+                            "memory_mmr_mode",
+                            mode="cosine_encode",
+                            cache_hit=round(cache_hit_rate, 2),
+                            docs=len(doc_texts),
+                        )
+                    except MemoryError:
+                        raise
+                    except (AttributeError, ImportError, ModuleNotFoundError) as exc:
+                        logger.warning(
+                            "memory_mmr_cosine_model_unavailable",
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                            fallback="jaccard",
+                        )
+                        ordered_ids = []
+                    except ValueError as exc:
+                        logger.warning(
+                            "memory_mmr_cosine_shape_error",
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                            fallback="jaccard",
+                        )
+                        ordered_ids = []
+                    except Exception as exc:  # noqa: BLE001 - cosine best-effort
+                        logger.warning(
+                            "memory_mmr_cosine_failed",
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                            fallback="jaccard",
+                        )
+                        ordered_ids = []
+
+                if not ordered_ids:
+                    ordered_ids = mmr_rerank_texts(
+                        query=self._last_query or "",
+                        doc_ids=doc_ids,
+                        doc_texts=doc_texts,
+                        rrf_scores=rrf_scores_list,
+                        top_k=top_k,
+                    )
+                    logger.debug(
+                        "memory_mmr_mode",
+                        mode="jaccard_fallback",
+                        reason="no_model_or_empty_query",
+                    )
+
+                if ordered_ids:
+                    by_id = {r.message_id: r for r in final}
+                    final = [by_id[i] for i in ordered_ids if i in by_id]
+            except Exception as exc:  # noqa: BLE001 - MMR не должен ломать retrieval.
+                logger.warning(
+                    "memory_mmr_rerank_failed",
+                    error=str(exc),
+                    fallback="rrf_order",
+                )
+        _observe_phase("mmr", time.perf_counter() - _mmr_start)
+        try:
+            _mmr_span_cm.__exit__(None, None, None)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("memory_mmr_span_close_failed", error=str(exc))
+
         return final[:top_k]
 
     # ------------------------------------------------------------------

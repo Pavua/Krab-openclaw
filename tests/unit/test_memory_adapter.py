@@ -39,6 +39,10 @@ def _fresh_adapter():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(
+    reason="Wave 11: Track E memory layer уже мержнут — search_archive больше не stub, "
+    "реально обращается к archive.db (43k msgs). Тест obsolete."
+)
 def test_stub_returns_empty_list():
     """До мержа Track E stub возвращает []."""
     result = search_archive("когда мы обсуждали dashboard", top_k=5)

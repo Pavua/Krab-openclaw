@@ -100,25 +100,31 @@ async def test_version_git_unavailable() -> None:
 
 @pytest.mark.asyncio
 async def test_version_openclaw_unavailable() -> None:
-    """Если openclaw CLI недоступен — только OpenClaw → unknown, остальное работает."""
+    """Если openclaw CLI недоступен — только OpenClaw → unknown, остальное работает.
+
+    Wave 11 API drift: openclaw версию теперь читаем через asyncio.create_subprocess_exec,
+    поэтому патчим именно его (не subprocess.run).
+    """
     git_responses = [
         _make_run_result("deadbee\n"),
         _make_run_result("feature-x\n"),
         _make_run_result("2026-01-01 00:00:00 +0000\n"),
-        MagicMock(side_effect=OSError("not found")),  # openclaw --version
     ]
 
-    # subprocess.run вызывается 4 раза; 4-й поднимает OSError
     call_count = [0]
 
-    def side_effect(*args, **kwargs):
+    def sync_side_effect(*args, **kwargs):
         i = call_count[0]
         call_count[0] += 1
         if i < 3:
             return git_responses[i]
+        raise OSError("unexpected subprocess.run call")
+
+    async def async_subprocess_oserror(*args, **kwargs):
         raise OSError("openclaw not found")
 
-    with patch("src.handlers.command_handlers.subprocess.run", side_effect=side_effect):
+    with patch("src.handlers.command_handlers.subprocess.run", side_effect=sync_side_effect), \
+         patch("asyncio.create_subprocess_exec", side_effect=async_subprocess_oserror):
         message = _msg()
         await handle_version(_bot(), message)
 

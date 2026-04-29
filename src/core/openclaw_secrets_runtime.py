@@ -18,7 +18,6 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from .openclaw_cli_budget import get_global_semaphore, terminate_and_reap
 from .subprocess_env import clean_subprocess_env
 
 _DEFAULT_OPENCLAW_BIN_CANDIDATES = (
@@ -142,8 +141,11 @@ async def reload_openclaw_secrets(timeout_sec: float = 25.0) -> dict[str, Any]:
 
     cli_path = str(cli_resolution.get("path") or "openclaw")
     cli_source = str(cli_resolution.get("source") or "")
+    from .openclaw_cli_budget import acquire as _cli_acquire
+    from .openclaw_cli_budget import terminate_and_reap as _reap
+
     try:
-        async with get_global_semaphore():
+        async with _cli_acquire():
             proc = await asyncio.create_subprocess_exec(
                 cli_path,
                 "secrets",
@@ -155,7 +157,7 @@ async def reload_openclaw_secrets(timeout_sec: float = 25.0) -> dict[str, Any]:
             try:
                 stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
             except asyncio.TimeoutError:
-                await terminate_and_reap(proc)
+                await _reap(proc)
                 return {
                     "ok": False,
                     "exit_code": 124,
@@ -164,15 +166,15 @@ async def reload_openclaw_secrets(timeout_sec: float = 25.0) -> dict[str, Any]:
                     "cli_source": cli_source,
                     "output": "secrets_reload_timeout",
                 }
-        output = stdout.decode("utf-8", errors="replace").strip()
-        return {
-            "ok": proc.returncode == 0,
-            "exit_code": int(proc.returncode or 0),
-            "error": "" if proc.returncode == 0 else "secrets_reload_failed",
-            "cli_path": cli_path,
-            "cli_source": cli_source,
-            "output": output[-2000:],
-        }
+            output = stdout.decode("utf-8", errors="replace").strip()
+            return {
+                "ok": proc.returncode == 0,
+                "exit_code": int(proc.returncode or 0),
+                "error": "" if proc.returncode == 0 else "secrets_reload_failed",
+                "cli_path": cli_path,
+                "cli_source": cli_source,
+                "output": output[-2000:],
+            }
     except asyncio.TimeoutError:
         return {
             "ok": False,

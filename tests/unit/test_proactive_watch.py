@@ -63,6 +63,12 @@ async def test_capture_manual_baseline_persists_state_and_memory(
         "append_workspace_memory_entry",
         lambda text, **kwargs: calls.append(text) or True,
     )
+    # _fetch_openclaw_cron_jobs → subprocess `openclaw cron list` (до 20s) — мокаем
+    monkeypatch.setattr(
+        proactive_watch_module,
+        "_fetch_openclaw_cron_jobs",
+        AsyncMock(return_value=[]),
+    )
 
     result = await service.capture(manual=True, persist_memory=True, notify=False)
 
@@ -95,6 +101,12 @@ async def test_capture_route_change_triggers_notifier(
     monkeypatch.setattr(service, "collect_snapshot", _collect)
     monkeypatch.setattr(
         proactive_watch_module, "append_workspace_memory_entry", lambda text, **kwargs: True
+    )
+    # _fetch_openclaw_cron_jobs → subprocess `openclaw cron list` (до 20s) — мокаем
+    monkeypatch.setattr(
+        proactive_watch_module,
+        "_fetch_openclaw_cron_jobs",
+        AsyncMock(return_value=[]),
     )
     notifier = AsyncMock()
 

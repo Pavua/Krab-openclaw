@@ -74,7 +74,13 @@ class CronNativeScheduler:
             await asyncio.sleep(_POLL_INTERVAL)
 
     async def _tick(self) -> None:
-        """Один цикл: проверяет jobs и запускает просроченные."""
+        """Один цикл: проверяет jobs и запускает просроченные.
+
+        Triggers fire ровно когда due_ts фактически наступил (due_ts ≤ now),
+        без early-pick на _POLL_INTERVAL вперёд. Это устраняет calendar-boundary
+        drift (e.g. Sunday 23:59:30 → Monday 00:00 cron — early pick раньше
+        мог триггерить job до полуночи).
+        """
         now = time.time()
         jobs = cron_native_store.list_jobs()
         for job in jobs:
@@ -84,11 +90,11 @@ class CronNativeScheduler:
             due_ts = cron_native_store.next_due(job)
             if due_ts is None:
                 continue
-            # Проверяем: next_due ≤ now + poll_interval (чтобы не пропустить)
-            # и job не был запущен в течение последних 50 секунд
+            # Trigger только когда due_ts фактически due. Cooldown на 1 poll-interval
+            # защищает от двойного срабатывания при дрожании next_due вокруг now.
             last = self._last_fired.get(job_id, 0.0)
-            if due_ts <= now + _POLL_INTERVAL and (now - last) > 50:
-                self._last_fired[job_id] = now
+            if due_ts <= now and (now - last) > _POLL_INTERVAL:
+                self._last_fired[job_id] = due_ts
                 asyncio.ensure_future(self._run_job(job))
 
     async def _run_job(self, job: dict) -> None:
@@ -101,6 +107,17 @@ class CronNativeScheduler:
         try:
             if self._sender:
                 await self._sender("cron_native", prompt)
+                logger.info("cron_native_job_sender_returned", job_id=job_id)
+            else:
+                # W32: critical observability — was silent no-op до session 22.
+                # Если sender is None, scheduler tick'ает но cron prompts
+                # никогда не доходят до LLM/Telegram. Mark_run всё ещё
+                # обновляется чтобы избежать infinite re-fire.
+                logger.warning(
+                    "cron_native_job_sender_not_bound",
+                    job_id=job_id,
+                    hint="bind_sender() was never called or scheduler started before bind",
+                )
             cron_native_store.mark_run(job_id)
             logger.info("cron_native_job_done", job_id=job_id)
         except Exception as exc:  # noqa: BLE001

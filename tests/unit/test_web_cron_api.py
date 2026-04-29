@@ -8,6 +8,7 @@
   POST /api/openclaw/cron/jobs/create
   POST /api/openclaw/cron/jobs/toggle
   POST /api/openclaw/cron/jobs/remove
+  POST /api/openclaw/cron/jobs/run_now
 """
 
 from __future__ import annotations
@@ -341,3 +342,81 @@ def test_cron_remove_missing_id_returns_400() -> None:
     )
     assert resp.status_code == 400
     assert resp.json()["detail"] == "cron_id_required"
+
+
+# ---------------------------------------------------------------------------
+# POST /api/openclaw/cron/jobs/run_now (Wave VV)
+# ---------------------------------------------------------------------------
+
+
+def test_cron_run_now_success(monkeypatch) -> None:
+    """POST /api/openclaw/cron/jobs/run_now запускает job (fire-and-forget)."""
+    import src.core.cron_native_scheduler as _sched
+    import src.core.cron_native_store as _store
+
+    monkeypatch.setattr(
+        _store, "list_jobs", lambda: [{"id": "job-zzz", "name": "manual-run"}]
+    )
+    monkeypatch.setattr(_sched.cron_native_scheduler, "_sender", object(), raising=False)
+    monkeypatch.setattr(
+        type(_sched.cron_native_scheduler), "is_running", property(lambda self: True)
+    )
+
+    async def _fake_run_job(target):  # noqa: ARG001
+        return None
+
+    monkeypatch.setattr(_sched.cron_native_scheduler, "_run_job", _fake_run_job)
+
+    client = _client()
+    resp = client.post(
+        "/api/openclaw/cron/jobs/run_now",
+        json={"id": "job-zzz"},
+        headers={"X-Krab-Web-Key": _VALID_TOKEN, "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["job_id"] == "job-zzz"
+    assert data["sender_bound"] is True
+    assert data["scheduler_running"] is True
+    assert "note" in data
+
+
+def test_cron_run_now_missing_id_returns_400() -> None:
+    """POST /api/openclaw/cron/jobs/run_now без id → 400 cron_id_required."""
+    client = _client()
+    resp = client.post(
+        "/api/openclaw/cron/jobs/run_now",
+        json={},
+        headers={"X-Krab-Web-Key": _VALID_TOKEN, "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "cron_id_required"
+
+
+def test_cron_run_now_unknown_id_returns_404(monkeypatch) -> None:
+    """POST /api/openclaw/cron/jobs/run_now с неизвестным id → 404."""
+    import src.core.cron_native_store as _store
+
+    monkeypatch.setattr(_store, "list_jobs", lambda: [{"id": "other"}])
+
+    client = _client()
+    resp = client.post(
+        "/api/openclaw/cron/jobs/run_now",
+        json={"id": "missing"},
+        headers={"X-Krab-Web-Key": _VALID_TOKEN, "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"].startswith("cron_id_unknown:")
+
+
+def test_cron_run_now_no_auth_returns_403(monkeypatch) -> None:
+    """POST /api/openclaw/cron/jobs/run_now без ключа → 403."""
+    monkeypatch.setenv("WEB_API_KEY", _VALID_TOKEN)
+    client = _client()
+    resp = client.post(
+        "/api/openclaw/cron/jobs/run_now",
+        json={"id": "any"},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 403

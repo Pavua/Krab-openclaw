@@ -76,6 +76,29 @@ def _msg_to_dict(msg: Message) -> dict[str, Any]:
     }
 
 
+def _resolve_parse_mode(raw: str | None):
+    """Конвертит string parse_mode в pyrogram.enums.ParseMode.
+
+    Поддерживает 'markdown' / 'html' / 'disabled' (case-insensitive).
+    None или пустая строка → возвращает None (Pyrogram default).
+    """
+    if not raw:
+        return None
+    try:
+        from pyrogram.enums import ParseMode
+    except ImportError:
+        return None
+    key = raw.strip().lower()
+    mapping = {
+        "markdown": ParseMode.MARKDOWN,
+        "md": ParseMode.MARKDOWN,
+        "html": ParseMode.HTML,
+        "disabled": ParseMode.DISABLED,
+        "none": ParseMode.DISABLED,
+    }
+    return mapping.get(key)
+
+
 class TelegramBridge:
     """
     Singleton-обёртка над Pyrogram Client.
@@ -215,11 +238,84 @@ class TelegramBridge:
 
         return await self._run_client_call(_op)
 
-    async def send_message(self, chat_id: int | str, text: str) -> dict[str, Any]:
-        """Отправляет текстовое сообщение и возвращает его метаданные."""
+    async def send_message(
+        self,
+        chat_id: int | str,
+        text: str,
+        *,
+        reply_to_message_id: int | None = None,
+        quote_text: str | None = None,
+        parse_mode: str | None = None,
+        disable_web_page_preview: bool = False,
+    ) -> dict[str, Any]:
+        """Отправляет текстовое сообщение через userbot Pyrogram session.
+
+        Поддерживает userbot capabilities:
+        - reply_to_message_id: Telegram отрисует как Reply на сообщение
+        - quote_text: цитата фрагмента (Pyrogram quote_text param)
+        - parse_mode: 'markdown' / 'html' / 'disabled' / None
+        - disable_web_page_preview: отключить link preview
+        """
+
         async def _op(client: Client) -> dict[str, Any]:
-            msg = await client.send_message(chat_id, text)
-            return _msg_to_dict(msg)
+            kwargs: dict[str, Any] = {}
+            if reply_to_message_id is not None:
+                kwargs["reply_to_message_id"] = reply_to_message_id
+            if quote_text:
+                kwargs["quote_text"] = quote_text
+            if parse_mode:
+                kwargs["parse_mode"] = _resolve_parse_mode(parse_mode)
+            if disable_web_page_preview:
+                kwargs["disable_web_page_preview"] = True
+
+            # Auto-resolve attempt: если chat_id числовой и peer не в кэше,
+            # try get_chat для populate access_hash. Безопасный no-op если
+            # peer уже знаком. См. Session 25 lesson:
+            # https://docs.pyrogram.org/topics/peer-id-invalid
+            try:
+                msg = await client.send_message(chat_id, text, **kwargs)
+                return _msg_to_dict(msg)
+            except Exception as exc:  # noqa: BLE001
+                exc_name = type(exc).__name__
+                exc_text = str(exc).lower()
+                # Pyrogram peer-id-invalid сценарии:
+                # - PeerIdInvalid (subclass of BadRequest)
+                # - "Peer id invalid" в message
+                # - "PEER_ID_INVALID" RPC error code
+                is_peer_invalid = (
+                    "peeridinvalid" in exc_name.lower()
+                    or "peer id invalid" in exc_text
+                    or "peer_id_invalid" in exc_text
+                    or "chat not found" in exc_text
+                )
+                if not is_peer_invalid:
+                    raise
+
+                # Fallback: попробовать get_chat для populate cache
+                try:
+                    await client.get_chat(chat_id)
+                    msg = await client.send_message(chat_id, text, **kwargs)
+                    return _msg_to_dict(msg)
+                except Exception as retry_exc:  # noqa: BLE001
+                    # Structured error с hint вместо raise — LLM получит
+                    # понятное сообщение что делать.
+                    return {
+                        "ok": False,
+                        "error_code": "peer_id_invalid",
+                        "error": str(retry_exc) or str(exc),
+                        "hint": (
+                            "Userbot не может писать пользователю по user_id "
+                            "если у него нет username и он никогда не появлялся "
+                            "в общих чатах с этой session. Решения: "
+                            "(1) попроси target user отправить любое сообщение "
+                            "в общий чат с тобой; "
+                            "(2) если у user есть @username — используй его как "
+                            "chat_id вместо числового user_id; "
+                            "(3) forward'ни любое его сообщение чтобы populate "
+                            "peer cache."
+                        ),
+                        "chat_id": chat_id,
+                    }
 
         return await self._run_client_call(_op)
 
@@ -266,11 +362,213 @@ class TelegramBridge:
         return await self._run_client_call(_op)
 
     async def edit_message(
-        self, chat_id: int | str, message_id: int, text: str
+        self,
+        chat_id: int | str,
+        message_id: int,
+        text: str,
+        *,
+        parse_mode: str | None = None,
+        disable_web_page_preview: bool = False,
     ) -> dict[str, Any]:
-        """Редактирует ранее отправленное сообщение."""
+        """Редактирует ранее отправленное сообщение (userbot)."""
+
         async def _op(client: Client) -> dict[str, Any]:
-            msg = await client.edit_message_text(chat_id, message_id, text)
+            kwargs: dict[str, Any] = {}
+            if parse_mode:
+                kwargs["parse_mode"] = _resolve_parse_mode(parse_mode)
+            if disable_web_page_preview:
+                kwargs["disable_web_page_preview"] = True
+            msg = await client.edit_message_text(chat_id, message_id, text, **kwargs)
             return _msg_to_dict(msg)
 
         return await self._run_client_call(_op)
+
+    async def send_photo(
+        self,
+        chat_id: int | str,
+        photo: str,
+        caption: str = "",
+        *,
+        reply_to_message_id: int | None = None,
+        parse_mode: str | None = None,
+        disable_web_page_preview: bool = False,
+    ) -> dict[str, Any]:
+        """Отправляет фото (локальный путь или URL) с опциональной подписью.
+
+        Поддерживает userbot capabilities (Session 25):
+        - reply_to_message_id: Telegram отрисует как Reply на сообщение
+        - parse_mode: 'markdown' / 'html' / 'disabled' / None — разметка caption
+        - disable_web_page_preview: отключить link preview в caption
+        """
+        async def _op(client: Client) -> dict[str, Any]:
+            kwargs: dict[str, Any] = {"caption": caption or None}
+            if reply_to_message_id is not None:
+                kwargs["reply_to_message_id"] = reply_to_message_id
+            if parse_mode:
+                kwargs["parse_mode"] = _resolve_parse_mode(parse_mode)
+            if disable_web_page_preview:
+                kwargs["disable_web_page_preview"] = True
+            msg = await client.send_photo(chat_id, photo, **kwargs)
+            return _msg_to_dict(msg)
+
+        return await self._run_client_call(_op)
+
+    async def send_reaction(
+        self,
+        chat_id: int | str,
+        message_id: int,
+        emoji: str | list[str],
+    ) -> dict[str, Any]:
+        """Ставит реакцию на сообщение."""
+        emojis = [emoji] if isinstance(emoji, str) else list(emoji)
+
+        async def _op(client: Client) -> dict[str, Any]:
+            # pyrofork send_reaction принимает emoji напрямую как str | list[str]
+            await client.send_reaction(chat_id, message_id, emoji=emojis)
+            return {"ok": True, "chat_id": str(chat_id), "message_id": message_id, "emoji": emojis}
+
+        return await self._run_client_call(_op)
+
+    async def forward_message(
+        self,
+        from_chat_id: int | str,
+        message_id: int,
+        to_chat_id: int | str,
+    ) -> dict[str, Any]:
+        """Пересылает сообщение из одного чата в другой."""
+        async def _op(client: Client) -> dict[str, Any]:
+            msgs = await client.forward_messages(to_chat_id, from_chat_id, message_id)
+            forwarded = msgs[0] if isinstance(msgs, list) else msgs
+            return _msg_to_dict(forwarded)
+
+        return await self._run_client_call(_op)
+
+    async def delete_messages(
+        self,
+        chat_id: int | str,
+        message_ids: int | list[int],
+    ) -> dict[str, Any]:
+        """Удаляет одно или несколько сообщений."""
+        ids = [message_ids] if isinstance(message_ids, int) else list(message_ids)
+
+        async def _op(client: Client) -> dict[str, Any]:
+            await client.delete_messages(chat_id, ids)
+            return {"ok": True, "deleted": ids}
+
+        return await self._run_client_call(_op)
+
+    async def pin_message(
+        self,
+        chat_id: int | str,
+        message_id: int,
+        unpin: bool = False,
+    ) -> dict[str, Any]:
+        """Закрепляет или открепляет сообщение в чате."""
+        async def _op(client: Client) -> dict[str, Any]:
+            if unpin:
+                await client.unpin_chat_message(chat_id, message_id)
+                return {"ok": True, "action": "unpinned", "message_id": message_id}
+            else:
+                await client.pin_chat_message(chat_id, message_id)
+                return {"ok": True, "action": "pinned", "message_id": message_id}
+
+        return await self._run_client_call(_op)
+
+    async def get_message(
+        self,
+        chat_id: int | str,
+        message_id: int,
+    ) -> dict[str, Any]:
+        """Получает одно сообщение по ID."""
+        async def _op(client: Client) -> dict[str, Any]:
+            msgs = await client.get_messages(chat_id, message_ids=message_id)
+            msg: Message = msgs if not isinstance(msgs, list) else msgs[0]
+            if msg is None:
+                raise ValueError(f"Сообщение {message_id} не найдено в чате {chat_id}")
+            result = _msg_to_dict(msg)
+            # Расширенные поля
+            result["entities"] = (
+                [{"type": str(e.type), "offset": e.offset, "length": e.length} for e in msg.entities]
+                if msg.entities
+                else []
+            )
+            return result
+
+        return await self._run_client_call(_op)
+
+    async def send_voice(
+        self,
+        chat_id: int | str,
+        voice_path: str,
+        duration: int | None = None,
+        *,
+        reply_to_message_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Отправляет голосовое сообщение (.ogg).
+
+        Userbot capability (Session 25):
+        - reply_to_message_id: Telegram отрисует как Reply на сообщение.
+        Voice не имеет caption, поэтому parse_mode/preview не применимы.
+        """
+        async def _op(client: Client) -> dict[str, Any]:
+            kwargs: dict = {}
+            if duration is not None:
+                kwargs["duration"] = duration
+            if reply_to_message_id is not None:
+                kwargs["reply_to_message_id"] = reply_to_message_id
+            msg = await client.send_voice(chat_id, voice_path, **kwargs)
+            return _msg_to_dict(msg)
+
+        return await self._run_client_call(_op)
+
+    async def session_info_json(self) -> str:
+        """Возвращает JSON с диагностической инфой о текущей session.
+
+        Используется MCP tool ``telegram_session_info`` для проверки
+        is_bot/is_user — критично для понимания userbot capabilities
+        (бот не может писать в DM первым).
+        """
+        import json
+
+        async def _op(client: Client) -> dict[str, Any]:
+            me = await client.get_me()
+            is_bot = bool(getattr(me, "is_bot", False))
+            user_capabilities = [
+                "send_message_to_dm_first (write to user_id without /start)",
+                "reply_to_message_id (proper Reply UI)",
+                "quote_text (cite a fragment)",
+                "edit_message (own messages)",
+                "send_reaction (emoji reactions)",
+                "pin_message",
+                "forward_message (no bot limits)",
+                "search across all dialogs",
+                "read message history of any joined chat",
+            ]
+            bot_capabilities = [
+                "send_message ONLY если user уже сделал /start",
+                "send_reaction (limited)",
+                "no DM-first",
+                "no proper user search",
+            ]
+            return {
+                "ok": True,
+                "is_bot": is_bot,
+                "user_id": me.id,
+                "username": me.username,
+                "first_name": me.first_name,
+                "session_name": _session_name(),
+                "capabilities": bot_capabilities if is_bot else user_capabilities,
+                "warning": (
+                    "is_bot=True — этой session не хватает userbot capabilities. "
+                    "Для активации userbot mode: удали "
+                    "~/.krab_mcp_sessions/krab_mcp.session и запусти "
+                    "./venv/bin/python mcp-servers/telegram/auth_setup.py "
+                    "(потребуется phone+SMS)."
+                ) if is_bot else None,
+            }
+
+        try:
+            result = await self._run_client_call(_op)
+        except Exception as exc:  # noqa: BLE001
+            result = {"ok": False, "error": str(exc)[:200]}
+        return json.dumps(result, ensure_ascii=False, indent=2)

@@ -11,6 +11,7 @@ MemoryIndexerWorker — Phase 4 Memory Layer (Track E).
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import hashlib
 import sqlite3
 from dataclasses import dataclass, field
@@ -126,15 +127,35 @@ class MemoryIndexerWorker:
         self._queue: asyncio.Queue[QueuedMessage] | None = None
         self._consumer_task: asyncio.Task | None = None  # type: ignore[type-arg]
         self._stop_requested: bool = False
+        self._executor_shutdown: bool = False  # флаг: executor уже закрыт
         self._stats = IndexerStats(queue_maxsize=queue_maxsize)
         self._builders: dict[str, ChunkBuilder] = {}
         # Watermark cache: chat_id → last indexed message_id (для idempotency).
         self._watermark_cache: dict[str, str] = {}
+        # C5: dedicated single-thread executor для embedder — гарантирует,
+        # что все вызовы embed_specific идут в ОДИН и тот же OS thread →
+        # threading.local SQLite connection + sqlite-vec загружаются один раз.
+        # asyncio.to_thread использует общий threadpool, который ротирует
+        # workers, из-за чего connection пересоздаётся на каждом вызове.
+        self._embed_executor: concurrent.futures.ThreadPoolExecutor = (
+            concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="krab_embed",
+            )
+        )
 
     async def start(self) -> None:
         """Запускает worker: создаёт queue и consumer task."""
         if self._consumer_task is not None and not self._consumer_task.done():
             return
+        # Если executor был закрыт предыдущим stop() — пересоздаём его.
+        # Без этого после restart_userbot все embed-вызовы упадут в shutdown skip.
+        if self._executor_shutdown or getattr(self._embed_executor, "_shutdown", False):
+            self._embed_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="krab_embed",
+            )
+            self._executor_shutdown = False
         self._queue = asyncio.Queue(maxsize=self._queue_maxsize)
         self._stop_requested = False
         self._stats.started_at = datetime.now(timezone.utc)
@@ -168,13 +189,42 @@ class MemoryIndexerWorker:
                 )
         # Принудительно закрываем все ещё открытые builders.
         await self._force_flush_all_builders()
+        # Cancel + await supervised_loop с жёстким таймаутом 5s — гарантия,
+        # что старый loop не доживёт до момента, когда новый start() пересоздаст
+        # executor (race: cannot schedule new futures after shutdown).
         if self._consumer_task is not None and not self._consumer_task.done():
             self._consumer_task.cancel()
             try:
-                await self._consumer_task
+                await asyncio.wait_for(self._consumer_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("memory_indexer_consumer_task_cancel_timeout")
             except (asyncio.CancelledError, Exception):
                 pass
+        # C5: закрываем embedder connection + shutdown dedicated executor.
+        # Флаг выставляется ДО shutdown чтобы гонка с _maybe_embed_chunks не
+        # приводила к RuntimeError "cannot schedule new futures after shutdown".
+        self._executor_shutdown = True
+        if self._embedder is not None:
+            close_fn = getattr(self._embedder, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("memory_indexer_embedder_close_failed", error=str(exc))
+        try:
+            self._embed_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_indexer_embed_executor_shutdown_failed", error=str(exc))
         logger.info("memory_indexer_stopped")
+
+    def __del__(self) -> None:
+        # Best-effort cleanup на случай если stop() не был вызван.
+        executor = getattr(self, "_embed_executor", None)
+        if executor is not None:
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:  # noqa: BLE001
+                pass
 
     async def enqueue(self, pyrofork_message: Any) -> bool:
         """Non-blocking enqueue. Returns False on deny/overflow/empty."""
@@ -264,7 +314,23 @@ class MemoryIndexerWorker:
         """Загружает indexer_state.last_message_id per chat для skip replay."""
         try:
             conn = open_archive(self._paths, create_if_missing=False)
-        except (FileNotFoundError, Exception):
+        except FileNotFoundError:
+            # Архив ещё не создан — норма на cold start.
+            return
+        except Exception as exc:  # noqa: BLE001
+            # Любая другая ошибка → cache пуст → indexer будет replay'ить
+            # всё заново. Это не data loss, но producer заметной нагрузки на БД.
+            logger.warning(
+                "memory_indexer_watermark_open_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            try:
+                import sentry_sdk
+
+                sentry_sdk.capture_exception(exc)
+            except Exception:  # noqa: BLE001
+                pass
             return
         try:
             rows = conn.execute("SELECT chat_id, last_message_id FROM indexer_state;").fetchall()
@@ -289,6 +355,16 @@ class MemoryIndexerWorker:
         backoff_sec = 1.0
         max_backoff = 30.0
         while True:
+            # Защита от race-condition restart_userbot: если executor уже
+            # закрыт — выходим до начала consumer loop. Иначе старая
+            # supervised_loop coroutine продолжит работу после того, как stop()
+            # выставил флаг, и попытается _flush_batch → _maybe_embed_chunks →
+            # submit на закрытый executor.
+            # NB: _stop_requested сюда не включаем — consumer_loop сам должен
+            # дренировать очередь по условию `not stop or not empty`.
+            if self._executor_shutdown:
+                logger.info("memory_indexer_supervised_loop_exit_pre_loop")
+                break
             try:
                 await self._consumer_loop()
                 break  # Нормальный выход (consumer решил остановиться)
@@ -303,8 +379,8 @@ class MemoryIndexerWorker:
                     restart_in_sec=backoff_sec,
                     restart_count=self._stats.restarts,
                 )
-                # Не перезапускаем если остановка уже запрошена.
-                if self._stop_requested:
+                # Не перезапускаем если остановка уже запрошена или executor закрыт.
+                if self._stop_requested or self._executor_shutdown:
                     break
                 await asyncio.sleep(backoff_sec)
                 backoff_sec = min(backoff_sec * 2, max_backoff)
@@ -605,12 +681,43 @@ class MemoryIndexerWorker:
                     logger.warning("memory_indexer_embed_skipped_no_vec")
                 self._stats.embed_disabled = True
                 return
+        # Если executor уже закрыт (например, в процессе restart_userbot) —
+        # тихо пропускаем: данные в БД уже сохранены, embed будет при следующем старте.
+        # Двойная проверка: явный флаг (выставлен в stop()) + интроспекция
+        # private-атрибута `_shutdown` ThreadPoolExecutor — закрывает кейс,
+        # когда executor закрыт извне (например, через __del__ предыдущей
+        # instance) и наш флаг не выставлен.
+        if self._executor_shutdown or getattr(self._embed_executor, "_shutdown", False):
+            logger.info("memory_indexer_executor_shutdown_skip")
+            return
         try:
-            await asyncio.to_thread(self._embedder.embed_specific, chunk_ids)
+            # C5: используем dedicated executor, чтобы переиспользовать один
+            # и тот же OS thread → persistent sqlite connection + sqlite-vec.
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                self._embed_executor,
+                self._embedder.embed_specific,
+                chunk_ids,
+            )
             self._stats.embeddings_committed += len(chunk_ids)
+        except RuntimeError as exc:
+            # Гонка: executor успел закрыться после нашей проверки флага —
+            # silent skip, не логируем как ошибку (это не data loss).
+            if "cannot schedule new futures after shutdown" in str(exc):
+                return
+            self._stats.bump_failed("embed")
+            logger.error(
+                "memory_indexer_embed_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
         except Exception as exc:
             self._stats.bump_failed("embed")
-            logger.error("memory_indexer_embed_failed", error=str(exc))
+            logger.error(
+                "memory_indexer_embed_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
 
 # ---------------------------------------------------------------------------

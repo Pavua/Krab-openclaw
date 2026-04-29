@@ -488,3 +488,41 @@ def test_llm_latency_histogram_in_metrics_output():
     assert "krab_llm_route_latency_seconds_count" in text
 
     llm_latency_tracker.reset()
+
+
+# ---------------------------------------------------------------------------
+# inc_telegram_flood_wait — counter helper для FloodWait alerts
+# ---------------------------------------------------------------------------
+
+
+def test_inc_telegram_flood_wait_increments_counter():
+    """inc_telegram_flood_wait увеличивает счётчик с label caller."""
+    from src.core.prometheus_metrics import (
+        _TELEGRAM_FLOOD_WAIT_COUNTER,
+        collect_metrics,
+        inc_telegram_flood_wait,
+    )
+
+    caller = "test_caller_unique_42"
+    baseline = _TELEGRAM_FLOOD_WAIT_COUNTER.get(caller, 0)
+
+    inc_telegram_flood_wait(caller)
+    inc_telegram_flood_wait(caller)
+
+    assert _TELEGRAM_FLOOD_WAIT_COUNTER[caller] == baseline + 2
+
+    text = collect_metrics()
+    assert f'caller="{caller}"' in text
+    assert "krab_telegram_flood_wait_total" in text
+
+
+def test_inc_telegram_flood_wait_handles_empty_caller():
+    """Пустой caller → нормализуется до 'unknown', без crash."""
+    from src.core.prometheus_metrics import (
+        _TELEGRAM_FLOOD_WAIT_COUNTER,
+        inc_telegram_flood_wait,
+    )
+
+    baseline = _TELEGRAM_FLOOD_WAIT_COUNTER.get("unknown", 0)
+    inc_telegram_flood_wait("")
+    assert _TELEGRAM_FLOOD_WAIT_COUNTER["unknown"] == baseline + 1

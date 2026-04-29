@@ -1,0 +1,84 @@
+#!/bin/bash
+# Krab post-commit hook — auto-push + optional e2e + Sentry auto-resolve
+#
+# Install: run `scripts/install_git_hooks.sh` (copies into .git/hooks/)
+#
+# Env (в .env или shell):
+#   KRAB_AUTOPUSH=1              — auto `git push origin <branch>` после commit
+#   KRAB_POSTCOMMIT_E2E=0|1      — запустить e2e smoke (если Krab alive)
+#   SENTRY_AUTH_TOKEN=sntryu_…   — для auto-resolve PYTHON-FASTAPI-XX
+#   SENTRY_ORG_SLUG=<slug>       — Sentry org slug
+#
+# Log: /tmp/krab_post_commit.log
+
+set -euo pipefail
+
+LOG=/tmp/krab_post_commit.log
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$HOME/Antigravity_AGENTS/Краб")"
+ENV_FILE="$REPO_ROOT/.env"
+
+{
+    echo ""
+    echo "=== $(date '+%Y-%m-%d %H:%M:%S') ==="
+
+    COMMIT=$(git log -1 --pretty=%H)
+    MSG=$(git log -1 --pretty=%B)
+    BRANCH=$(git branch --show-current 2>/dev/null || echo "HEAD")
+    echo "commit=$COMMIT branch=$BRANCH"
+
+    # Подхватываем .env (KRAB_AUTOPUSH / KRAB_POSTCOMMIT_E2E / SENTRY_*)
+    if [ -f "$ENV_FILE" ]; then
+        # shellcheck disable=SC1090
+        set -a
+        source "$ENV_FILE"
+        set +a
+    fi
+
+    # 1. Push only if KRAB_AUTOPUSH=1
+    if [[ "${KRAB_AUTOPUSH:-0}" == "1" ]]; then
+        if git remote get-url origin >/dev/null 2>&1; then
+            echo "push: origin/$BRANCH"
+            git push origin "$BRANCH" 2>&1 || echo "push_failed"
+        else
+            echo "push: skipped (no origin)"
+        fi
+    else
+        echo "push: disabled (KRAB_AUTOPUSH != 1)"
+    fi
+
+    # 2. Sentry auto-resolve: ищем PYTHON-FASTAPI-XX в commit message
+    if [[ -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
+        SHORT_IDS=$(echo "$MSG" | grep -oE '[A-Z][A-Z0-9_-]*-[A-Z0-9]+' | sort -u || true)
+        if [[ -n "$SHORT_IDS" ]]; then
+            echo "sentry_auto_resolve candidates:"
+            # shellcheck disable=SC2086
+            printf '  %s\n' $SHORT_IDS
+            if [ -x "$REPO_ROOT/scripts/sentry_resolve_from_commit.sh" ]; then
+                # shellcheck disable=SC2086
+                "$REPO_ROOT/scripts/sentry_resolve_from_commit.sh" $SHORT_IDS 2>&1 \
+                    || echo "sentry_resolve_error"
+            else
+                echo "sentry_resolve: helper not installed"
+            fi
+        fi
+    fi
+
+    # 3. Optional e2e (off by default — KRAB_POSTCOMMIT_E2E=1 to opt-in)
+    if [[ "${KRAB_POSTCOMMIT_E2E:-0}" == "1" ]]; then
+        if curl -sf http://127.0.0.1:8080/api/health/lite >/dev/null 2>&1; then
+            echo "e2e: running smoke..."
+            OWNER_FIRST="${OWNER_USER_IDS%%,*}"
+            if [ -n "$OWNER_FIRST" ] && [ -x "$REPO_ROOT/venv/bin/python" ]; then
+                (cd "$REPO_ROOT" && venv/bin/python scripts/e2e_mcp_smoke.py \
+                    --force --chat-id "$OWNER_FIRST" 2>&1 | tail -20) \
+                    || echo "e2e_failed"
+            else
+                echo "e2e: skipped (no OWNER_USER_IDS or venv)"
+            fi
+        else
+            echo "e2e: skipped (panel :8080 not responding)"
+        fi
+    fi
+} >> "$LOG" 2>&1
+
+exit 0

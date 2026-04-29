@@ -190,6 +190,34 @@ def test_notify_userbot_no_client_attr_returns_503() -> None:
     assert resp.status_code == 503
 
 
+def test_notify_userbot_not_ready_includes_retry_after_header() -> None:
+    """503 во время boot должен содержать Retry-After header и graceful JSON
+    (не raise HTTPException → не попадает в Sentry как ошибка)."""
+    deps = {
+        "router": _DummyRouter(),
+        "openclaw_client": _FakeOpenClaw(),
+        "black_box": None,
+        "health_service": None,
+        "provisioning_service": None,
+        "ai_runtime": None,
+        "reaction_engine": None,
+        "voice_gateway_client": _FakeHealthClient(),
+        "krab_ear_client": _FakeHealthClient(),
+        "perceptor": None,
+        "watchdog": None,
+        "queue": None,
+        "kraab_userbot": None,
+    }
+    app = WebApp(deps, port=18093, host="127.0.0.1")
+    client = TestClient(app.app)
+    resp = client.post("/api/notify", json={"text": "hi", "chat_id": "111"})
+    assert resp.status_code == 503
+    assert resp.headers.get("Retry-After") == "10"
+    body = resp.json()
+    assert body.get("ok") is False
+    assert body.get("error") == "userbot_not_ready"
+
+
 # ---------------------------------------------------------------------------
 # 4. 403 — неверный WEB_API_KEY (write-эндпоинты)
 # ---------------------------------------------------------------------------

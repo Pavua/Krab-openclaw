@@ -124,6 +124,14 @@ def test_model_catalog_ok() -> None:
         patch.object(
             WebApp, "_openclaw_models_full_catalog", return_value={"providers": {}, "count": 0}
         ),
+        # _build_runtime_cloud_presets → subprocess openclaw models list (20s timeout) + auth_recovery
+        patch.object(
+            WebApp,
+            "_build_runtime_cloud_presets",
+            classmethod(lambda cls, current_slots=None: []),
+        ),
+        # build_auth_recovery_readiness_snapshot → openclaw models status (20s) + plugins list (20s)
+        patch("src.modules.web_app.build_auth_recovery_readiness_snapshot", return_value={}),
     ):
         resp = _client().get("/api/model/catalog")
     assert resp.status_code == 200
@@ -142,6 +150,12 @@ def test_model_catalog_has_providers_key() -> None:
         patch.object(
             WebApp, "_openclaw_models_full_catalog", return_value={"providers": {}, "count": 0}
         ),
+        patch.object(
+            WebApp,
+            "_build_runtime_cloud_presets",
+            classmethod(lambda cls, current_slots=None: []),
+        ),
+        patch("src.modules.web_app.build_auth_recovery_readiness_snapshot", return_value={}),
     ):
         resp = _client().get("/api/model/catalog")
     data = resp.json()
@@ -160,6 +174,12 @@ def test_model_catalog_force_refresh_param() -> None:
         patch.object(
             WebApp, "_openclaw_models_full_catalog", return_value={"providers": {}, "count": 0}
         ),
+        patch.object(
+            WebApp,
+            "_build_runtime_cloud_presets",
+            classmethod(lambda cls, current_slots=None: []),
+        ),
+        patch("src.modules.web_app.build_auth_recovery_readiness_snapshot", return_value={}),
     ):
         resp = _client().get("/api/model/catalog?force_refresh=true")
     assert resp.status_code == 200

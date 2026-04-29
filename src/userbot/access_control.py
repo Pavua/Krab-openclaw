@@ -186,6 +186,7 @@ class AccessControlMixin:
         *,
         is_allowed_sender: bool,
         access_level: str | "AccessLevel | None" = None,
+        chat_id: str | int | None = None,
     ) -> str:
         """
         Возвращает системный промпт в зависимости от доверия к отправителю.
@@ -242,10 +243,16 @@ class AccessControlMixin:
         )
         base_prompt = base_prompt + injection_defense
 
-        return self._append_runtime_constraints(base_prompt)
+        return self._append_runtime_constraints(base_prompt, chat_id=chat_id)
 
     @staticmethod
-    def _append_runtime_constraints(prompt: str) -> str:
+    def _append_runtime_constraints(
+        prompt: str,
+        *,
+        chat_id: str | int | None = None,
+        owner_id: str | int | None = None,
+        user_id: str | int | None = None,
+    ) -> str:
         """
         Добавляет runtime-ограничения, которые не должны теряться между ролями.
         """
@@ -260,7 +267,174 @@ class AccessControlMixin:
             )
             if guard not in base:
                 base = f"{base}\n\n{guard}".strip()
+
+        # Anti-parasite: запрет паразитных хвостов и меню вариантов без запроса.
+        # Источник проблемы — модель сама генерит «если хочешь, могу...» и подобные
+        # хвосты. Stripper в llm_text_processing — лишь safety net, а реальный fix
+        # идёт через system prompt (Bug 9).
+        anti_parasite = (
+            "Стиль ответа — без паразитных хвостов. Запрещены фразы вида: "
+            "«если хочешь, могу...», «готов(ность) блока...», «могу дать ещё N версий», "
+            "«если нужно — спрашивай», «дай знать, если...», «обращайся, если...». "
+            "Не предлагай меню вариантов и продолжений без явного запроса. "
+            "Заканчивай ответ по сути — без приглашений к диалогу и без служебных оговорок."
+        )
+        if anti_parasite not in base:
+            base = f"{base}\n\n{anti_parasite}".strip()
+
+        # Reply-first: новый reply имеет приоритет над предыдущим контекстом.
+        reply_first = (
+            "Reply-first правило: если в пользовательском сообщении присутствует блок "
+            "«[В ответ на сообщение ...]», сначала прочитай его полностью, найди адресатов "
+            "и собственно вопрос/просьбу внутри цитируемого сообщения, и только затем формируй ответ. "
+            "Текущий reply-контекст приоритетнее предыдущего истории чата: отвечай на то, на что "
+            "пользователь ответил сейчас, а не на более раннюю реплику."
+        )
+        if reply_first not in base:
+            base = f"{base}\n\n{reply_first}".strip()
+
+        # Chat persona drift suffix (Feature C, Bug 11 follow-up):
+        # per-chat tone adaptation. Fail-open — любая ошибка не должна
+        # сломать сборку system prompt.
+        if chat_id is not None:
+            try:
+                from ..core.chat_persona_profile import format_persona_suffix  # noqa: PLC0415
+
+                chat_suffix = format_persona_suffix(chat_id)
+                if chat_suffix and chat_suffix not in base:
+                    base = f"{base}\n\n{chat_suffix}".strip()
+            except Exception:  # noqa: BLE001
+                # Не логируем здесь — внутри format_persona_suffix уже есть
+                # fail-safe c warning, повторно шуметь смысла нет.
+                pass
+
+        # Owner mood suffix (Feature F): подстройка тона под настроение
+        # owner. Идёт ПОСЛЕ persona drift, чтобы mood мог уточнить общий
+        # стиль чата под текущий настрой. Fail-open.
+        if chat_id is not None:
+            try:
+                from ..core.owner_mood import format_mood_suffix  # noqa: PLC0415
+
+                resolved_owner = owner_id
+                if resolved_owner is None:
+                    # Lazy lookup эффективного owner — нужен для ключа кэша.
+                    from ..core.access_control import (  # noqa: PLC0415
+                        get_effective_owner_subjects,
+                    )
+
+                    subjects = get_effective_owner_subjects() or []
+                    resolved_owner = next(iter(subjects), None)
+
+                if resolved_owner:
+                    mood_suffix = format_mood_suffix(chat_id, resolved_owner)
+                    if mood_suffix and mood_suffix not in base:
+                        base = f"{base}\n\n{mood_suffix}".strip()
+            except Exception:  # noqa: BLE001
+                # format_mood_suffix сам логирует, повторно не шумим.
+                pass
+
+        # Session goals suffix (Feature J): активные цели/проекты owner'а
+        # в данном чате. Идёт ПОСЛЕ mood suffix. Fail-open.
+        if chat_id is not None:
+            try:
+                from ..core.session_goals import goal_tracker  # noqa: PLC0415
+
+                goals_suffix = goal_tracker.system_prompt_suffix(str(chat_id))
+                if goals_suffix and goals_suffix.strip() and goals_suffix.strip() not in base:
+                    base = f"{base}\n\n{goals_suffix.strip()}".strip()
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Idea 31 multi-persona switcher (Session 29 part B):
+        # переключатель персон по chat_id. Идёт ПОСЛЕ Feature C/F/J,
+        # чтобы выбранная persona видела общий контекст. Fail-open и
+        # под env-флагом — выключено по умолчанию.
+        if chat_id is not None:
+            try:
+                import os  # noqa: PLC0415
+
+                if os.environ.get("KRAB_MULTI_PERSONA_ENABLED", "0") == "1":
+                    from ..core.multi_persona import (  # noqa: PLC0415
+                        persona_suffix_for_prompt as _persona_suffix,
+                    )
+
+                    ms = _persona_suffix(chat_id)
+                    if ms and ms not in base:
+                        base = f"{base}\n\n{ms}".strip()
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Idea 24 A/B testing wire (Session 29 part C):
+        # sticky per-user variant подмешивается в system prompt. Под env-флагом
+        # `KRAB_AB_TESTING_ENABLED=1`. Fail-open: любая ошибка не ломает prompt.
+        if user_id is not None:
+            try:
+                import os  # noqa: PLC0415
+
+                if os.environ.get("KRAB_AB_TESTING_ENABLED", "0") == "1":
+                    from ..core.prompt_ab_testing import ab_tester  # noqa: PLC0415
+
+                    # Убедимся, что default-эксперимент зарегистрирован.
+                    AccessControlMixin._ensure_ab_default_experiment()
+                    try:
+                        variant_name, variant_text = ab_tester.pick_variant(
+                            "system_prompt_tone", str(user_id)
+                        )
+                        if variant_text and variant_text.strip():
+                            ab_chunk = f"[A/B variant '{variant_name}']:\n{variant_text.strip()}"
+                            if ab_chunk not in base:
+                                base = f"{base}\n\n{ab_chunk}".strip()
+                    except KeyError:
+                        # Эксперимент не зарегистрирован — тихо пропускаем.
+                        pass
+            except Exception:  # noqa: BLE001
+                pass
+
+        # VPN tools awareness (Bug 15): сообщаем LLM о доступных VPN-инструментах,
+        # чтобы модель использовала function-call вместо ручных инструкций по x-ui.
+        # Управляется через KRAB_VPN_TOOLS_ENABLED (default "1" = включено).
+        import os  # noqa: PLC0415
+
+        if os.environ.get("KRAB_VPN_TOOLS_ENABLED", "1").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+        ):
+            vpn_hint = (
+                "VPN-инструменты: у тебя есть vpn_list_clients, vpn_get_config(client_name), "
+                "vpn_panel_health, vpn_traffic_stats(client_name). "
+                "При вопросах о VPN-клиентах, конфигах или состоянии панели — вызывай эти инструменты "
+                "через function-call. "
+                "Не предлагай ручной вход в панель, не проси пароли, не описывай ручные шаги управления x-ui."
+            )
+            if vpn_hint not in base:
+                base = f"{base}\n\n{vpn_hint}".strip()
+
         return base
+
+    @staticmethod
+    def _ensure_ab_default_experiment() -> None:
+        """Регистрирует дефолтный эксперимент `system_prompt_tone`, если его нет.
+
+        Owner может перерегистрировать его через `ab_tester.register_experiment(...)`
+        в любой момент — перерегистрация сохраняет уже накопленные outcomes
+        для variants с теми же именами.
+        """
+        try:
+            from ..core.prompt_ab_testing import ab_tester  # noqa: PLC0415
+
+            if "system_prompt_tone" in ab_tester.list_experiments():
+                return
+            ab_tester.register_experiment(
+                "system_prompt_tone",
+                variants={
+                    "control": "",
+                    "concise": "Стиль: коротко и по сути, без лишних слов.",
+                },
+                traffic_split={"control": 0.5, "concise": 0.5},
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     # ------------------------------------------------------------------
     # Optional AI disclosure

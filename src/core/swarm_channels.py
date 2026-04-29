@@ -15,6 +15,35 @@ Live-трансляция свёрм-раундов в Telegram Forum Group + п
 
 Вызывается из swarm.py (AgentRoom.run_round) через broadcast callback.
 Intervention перехватывается из userbot_bridge.
+
+Additional response chats (для обычных, не-форумных групп):
+``swarm_channels.json`` поддерживает массив ``additional_response_chats``,
+который перечисляет групповые чаты, где свёрм должен отвечать ПРЯМО в чат
+(без forum topic). Пример:
+
+    {
+      "forum_chat_id": null,
+      "team_topics": {},
+      "team_chats": {},
+      "additional_response_chats": [
+        {
+          "chat_id": -1001587432709,
+          "title": "ЧАТ How2AI",
+          "respond_in_same_chat": true
+        }
+      ]
+    }
+
+Workflow при запуске ``!swarm <team> <topic>`` из такого чата:
+  1. Caller (swarm command handler) проверяет
+     ``swarm_channels.is_additional_response_chat(chat_id)`` и при True
+     зовёт ``swarm_channels.set_round_origin(team, chat_id)`` ДО старта раунда.
+  2. ``_resolve_destination(team)`` вернёт ``(chat_id, None)`` — broadcast
+     уходит обратно в исходный чат, без topic_id.
+  3. ``mark_round_done(team)`` автоматически очищает origin.
+
+Listener (``swarm_team_listener.py``) дополнительно реагирует в этих чатах
+без необходимости reply/mention — как owner-DM, но в группе из allowlist.
 """
 
 from __future__ import annotations
@@ -93,6 +122,15 @@ class SwarmChannels:
         # Legacy: отдельные группы
         self._team_chats: dict[str, int] = {}
 
+        # Additional response chats — обычные (не-форумные) группы, в которых
+        # свёрм-команды должны отвечать прямо в чат-источник без forum topic.
+        # Структура: chat_id -> {"title": str, "respond_in_same_chat": bool}.
+        self._additional_chats: dict[int, dict[str, Any]] = {}
+
+        # Origin-чат текущего раунда: team -> chat_id (только для команд,
+        # запущенных из additional_response_chats). Очищается в mark_round_done.
+        self._round_origin_chats: dict[str, int] = {}
+
         self._client: Any = None
         self._team_clients: dict[str, Any] = {}  # team → per-team Pyrogram Client
         self._owner_id: int = 0
@@ -153,11 +191,19 @@ class SwarmChannels:
 
     # -- persistence ----------------------------------------------------------
 
+    def _state_path(self) -> Path:
+        """Текущий путь до JSON-state. Уважает override через self._STATE_PATH."""
+        override = getattr(self, "_STATE_PATH", None)
+        if override:
+            return Path(override)
+        return _STATE_PATH
+
     def _load(self) -> None:
-        if not _STATE_PATH.exists():
+        path = self._state_path()
+        if not path.exists():
             return
         try:
-            data = json.loads(_STATE_PATH.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
             # Forum
             if "forum_chat_id" in data and data["forum_chat_id"]:
                 self._forum_chat_id = int(data["forum_chat_id"])
@@ -166,20 +212,35 @@ class SwarmChannels:
             # Legacy
             for team, cid in data.get("team_chats", {}).items():
                 self._team_chats[team] = int(cid)
+            # Additional response chats — обычные группы для broadcast/listener
+            for entry in data.get("additional_response_chats", []) or []:
+                parsed = _parse_additional_chat_entry(entry)
+                if parsed is not None:
+                    cid, meta = parsed
+                    self._additional_chats[cid] = meta
         except Exception as exc:  # noqa: BLE001
             logger.warning("swarm_channels_load_failed", error=str(exc))
 
     def _save(self) -> None:
+        path = self._state_path()
         try:
-            _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            path.parent.mkdir(parents=True, exist_ok=True)
             data = {
                 "forum_chat_id": self._forum_chat_id,
                 "team_topics": self._team_topics,
                 "team_chats": self._team_chats,
+                "additional_response_chats": [
+                    {
+                        "chat_id": cid,
+                        "title": meta.get("title", ""),
+                        "respond_in_same_chat": bool(meta.get("respond_in_same_chat", True)),
+                    }
+                    for cid, meta in self._additional_chats.items()
+                ],
             }
-            tmp = _STATE_PATH.with_suffix(".tmp")
+            tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(_STATE_PATH)
+            tmp.replace(path)
         except Exception as exc:  # noqa: BLE001
             logger.error("swarm_channels_save_failed", error=str(exc))
 
@@ -438,10 +499,21 @@ class SwarmChannels:
         """
         Определяет куда слать: (chat_id, topic_id).
 
-        Forum mode: один chat_id + topic_id per team.
-        Legacy mode: отдельный chat_id per team, topic_id=None.
+        Приоритеты:
+        1. Round origin chat (если раунд запущен из additional_response_chats
+           с respond_in_same_chat=True) — отвечаем прямо туда без topic_id.
+        2. Forum mode: один chat_id + topic_id per team.
+        3. Legacy mode: отдельный chat_id per team, topic_id=None.
+        4. Crossteam topic как fallback в forum-режиме.
         """
         team_lower = team.lower()
+
+        # Origin override: команда запущена из обычной группы из allowlist
+        origin = self._round_origin_chats.get(team_lower)
+        if origin is not None:
+            meta = self._additional_chats.get(origin)
+            if meta and meta.get("respond_in_same_chat", True):
+                return origin, None
 
         # Forum mode — приоритет
         if self._forum_chat_id and team_lower in self._team_topics:
@@ -456,6 +528,67 @@ class SwarmChannels:
             return self._forum_chat_id, self._team_topics["crossteam"]
 
         return None, None
+
+    # -- additional response chats -------------------------------------------
+
+    def register_additional_chat(
+        self,
+        chat_id: int,
+        *,
+        title: str = "",
+        respond_in_same_chat: bool = True,
+    ) -> None:
+        """
+        Регистрирует обычный (не-форумный) чат как пункт назначения для свёрма.
+
+        При запуске !swarm <team> <topic> из такого чата broadcast'ы и ответы
+        team-аккаунтов идут прямо в него (без forum topic).
+        """
+        self._additional_chats[int(chat_id)] = {
+            "title": str(title or ""),
+            "respond_in_same_chat": bool(respond_in_same_chat),
+        }
+        self._save()
+        logger.info(
+            "swarm_channels_additional_chat_registered",
+            chat_id=int(chat_id),
+            title=title,
+            respond_in_same_chat=bool(respond_in_same_chat),
+        )
+
+    def unregister_additional_chat(self, chat_id: int) -> bool:
+        """Удаляет чат из allowlist. True — если был зарегистрирован."""
+        existed = self._additional_chats.pop(int(chat_id), None) is not None
+        if existed:
+            self._save()
+            logger.info("swarm_channels_additional_chat_unregistered", chat_id=int(chat_id))
+        return existed
+
+    def is_additional_response_chat(self, chat_id: int) -> bool:
+        """True если chat_id зарегистрирован как additional response chat."""
+        return int(chat_id) in self._additional_chats
+
+    def get_additional_chats(self) -> dict[int, dict[str, Any]]:
+        """Read-only снапшот additional response chats."""
+        return {cid: dict(meta) for cid, meta in self._additional_chats.items()}
+
+    def set_round_origin(self, team: str, chat_id: int | None) -> None:
+        """
+        Запоминает чат-источник, из которого был запущен раунд команды.
+
+        Используется в _resolve_destination, чтобы отвечать в тот же чат
+        вместо forum/legacy. None — очищает запись.
+        """
+        key = team.lower()
+        if chat_id is None:
+            self._round_origin_chats.pop(key, None)
+            return
+        self._round_origin_chats[key] = int(chat_id)
+        logger.info("swarm_channels_round_origin_set", team=key, chat_id=int(chat_id))
+
+    def get_round_origin(self, team: str) -> int | None:
+        """Возвращает origin chat_id текущего раунда команды (или None)."""
+        return self._round_origin_chats.get(team.lower())
 
     # -- public API -----------------------------------------------------------
 
@@ -489,6 +622,12 @@ class SwarmChannels:
         for team, cid in self._team_chats.items():
             if cid == chat_id:
                 return team
+
+        # Additional response chats — обычные группы из allowlist.
+        # Возвращаем спецмаркер, чтобы вызвавший знал, что это shared-чат
+        # (без привязки к одной команде).
+        if int(chat_id) in self._additional_chats:
+            return "_additional"
         return None
 
     def resolve_team_from_topic(self, topic_id: int) -> str | None:
@@ -504,8 +643,10 @@ class SwarmChannels:
         self._interventions.pop(team.lower(), None)
 
     def mark_round_done(self, team: str) -> None:
-        """Раунд завершён — больше не принимаем intervention."""
-        self._active_rounds.pop(team.lower(), None)
+        """Раунд завершён — больше не принимаем intervention и чистим origin."""
+        key = team.lower()
+        self._active_rounds.pop(key, None)
+        self._round_origin_chats.pop(key, None)
 
     def is_round_active(self, team: str) -> bool:
         """Идёт ли сейчас раунд для команды."""
@@ -752,6 +893,37 @@ class SwarmChannels:
             "**Legacy:**\n"
             "`SWARM_TEAM_CHATS=traders:-100xxx,coders:-100yyy` в `.env`"
         )
+
+
+def _parse_additional_chat_entry(
+    entry: Any,
+) -> tuple[int, dict[str, Any]] | None:
+    """
+    Парсит одну запись additional_response_chats из swarm_channels.json.
+
+    Ожидаемый формат:
+        {
+            "chat_id": -1001587432709,
+            "title": "ЧАТ How2AI",
+            "respond_in_same_chat": true
+        }
+
+    Невалидные записи игнорируются (с warning'ом).
+    """
+    if not isinstance(entry, dict):
+        logger.warning("swarm_channels_additional_chat_bad_type", entry=repr(entry))
+        return None
+    raw_id = entry.get("chat_id")
+    try:
+        chat_id = int(raw_id)
+    except (TypeError, ValueError):
+        logger.warning("swarm_channels_additional_chat_bad_id", raw=raw_id)
+        return None
+    meta = {
+        "title": str(entry.get("title", "") or ""),
+        "respond_in_same_chat": bool(entry.get("respond_in_same_chat", True)),
+    }
+    return chat_id, meta
 
 
 def _extract_topic_id(updates: Any) -> int | None:

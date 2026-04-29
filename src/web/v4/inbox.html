@@ -1,1121 +1,808 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inbox Dashboard V4 - Krab AI</title>
-    <link rel="stylesheet" href="/v4/liquid-glass.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+    <title>Inbox | Krab</title>
+    <link href="/v4/liquid-glass.css" rel="stylesheet">
+    <script src="/v4/theme-toggle.js" defer></script>
     <style>
-        body { margin:0; background-color:var(--bg-primary); color:#fff; font-family:system-ui,-apple-system,sans-serif; padding-bottom:80px; }
-        .container { max-width:1200px; margin:0 auto; padding:2rem 1rem; }
-        .flex { display:flex; } .flex-col { flex-direction:column; } .flex-1 { flex:1; }
-        .items-center { align-items:center; } .justify-between { justify-content:space-between; }
-        .justify-center { justify-content:center; }
-        .gap-1{gap:.25rem}.gap-2{gap:.5rem}.gap-3{gap:1rem}.gap-4{gap:1.5rem}
-        .mt-2{margin-top:.5rem}.mt-4{margin-top:1rem}.mb-2{margin-bottom:.5rem}.mb-4{margin-bottom:1rem}
-        .p-4{padding:1rem}.text-center{text-align:center}.text-right{text-align:right}.w-full{width:100%}
-        .text-sm{font-size:.875rem}.text-xs{font-size:.75rem}.text-lg{font-size:1.125rem}
-        .text-xl{font-size:1.25rem;font-weight:600}.text-2xl{font-size:1.5rem;font-weight:700}
-        .text-3xl{font-size:1.875rem;font-weight:700}
-        .text-muted{color:rgba(255,255,255,.72)}.text-success{color:#6ee7b7}
-        .text-error{color:#fca5a5}.text-warning{color:#fde68a}
-        .text-accent{color:#bae6fd}.text-purple{color:#c4b5fd}
-        .grid{display:grid}
-        .grid-2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem}
-        .grid-3{grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1rem}
-        .grid-4{grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem}
-        .grid-2x2{grid-template-columns:1fr 1fr;gap:.75rem}
-        .table-responsive{overflow-x:auto}
-        table{width:100%;border-collapse:collapse}
-        th,td{padding:.75rem;text-align:left;border-bottom:1px solid var(--glass-border)}
-        th{color:#bae6fd;font-weight:600}
-        tbody tr:hover{background:var(--glass-bg-hover)}
-        .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);backdrop-filter:blur(5px);z-index:100;display:none;align-items:center;justify-content:center}
-        .modal-overlay.active{display:flex}
-        .modal-content{max-width:480px;width:90%}
-        @keyframes shimmer{0%{opacity:.3}50%{opacity:.7}100%{opacity:.3}}
-        .skeleton{animation:shimmer 1.5s infinite;background:var(--glass-bg-hover);border-radius:4px;color:transparent!important;min-height:1.2em;display:inline-block}
-        .stat-card{transition:transform .2s ease,box-shadow .2s ease;display:flex;flex-direction:column;align-items:center;justify-content:space-between;min-height:140px}
-        .stat-card:hover{transform:translateY(-4px);box-shadow:0 8px 24px rgba(0,0,0,.4)}
-        .sparkline-wrapper{height:36px;width:100%;max-width:120px;opacity:.8;margin-top:.5rem;display:flex;justify-content:center;align-items:flex-end}
-        .bar-row{display:grid;grid-template-columns:100px 1fr 70px;gap:.75rem;align-items:center;margin-bottom:.75rem}
-        .bar-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .bar-container{background:rgba(0,0,0,.3);border-radius:999px;height:8px;width:100%;overflow:hidden}
-        .bar-fill{height:100%;border-radius:999px;transition:width .5s ease}
-        /* Алерт-баннеры */
-        .stale-banner{display:none;padding:.875rem 1.25rem;border-radius:14px;border:1px solid;margin-bottom:.75rem;align-items:center;justify-content:space-between;gap:1rem}
-        .stale-banner.red{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.4);color:#fca5a5}
-        .stale-banner.amber{background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.35);color:#fde68a}
-        .stale-banner.visible{display:flex}
-        .banner-close{background:none;border:none;color:inherit;cursor:pointer;font-size:1.1rem;opacity:.7;padding:0;line-height:1}
-        .banner-close:hover{opacity:1}
-        .banner-actions{display:flex;align-items:center;gap:.5rem}
-        /* Статус-бейджи */
-        .badge{display:inline-flex;align-items:center;gap:.4rem;padding:.2rem .65rem;border-radius:999px;font-size:.75rem;font-weight:700}
-        .badge-ok{background:rgba(52,211,153,.15);color:#6ee7b7;border:1px solid rgba(52,211,153,.3)}
-        .badge-warn{background:rgba(251,191,36,.15);color:#fde68a;border:1px solid rgba(251,191,36,.3)}
-        .badge-err{background:rgba(248,113,113,.15);color:#fca5a5;border:1px solid rgba(248,113,113,.3)}
-        .status-badge-open{background:rgba(125,211,252,.12);color:#7dd3fc;border:1px solid rgba(125,211,252,.3);display:inline-block;padding:.1rem .55rem;border-radius:999px;font-size:.72rem;font-weight:600}
-        .status-badge-processing{background:rgba(251,191,36,.1);color:#fde68a;border:1px solid rgba(251,191,36,.25);display:inline-block;padding:.1rem .55rem;border-radius:999px;font-size:.72rem;font-weight:600}
-        .status-badge-done{background:rgba(52,211,153,.1);color:#6ee7b7;border:1px solid rgba(52,211,153,.25);display:inline-block;padding:.1rem .55rem;border-radius:999px;font-size:.72rem;font-weight:600}
-        .status-badge-acked{background:rgba(196,181,253,.1);color:#c4b5fd;border:1px solid rgba(196,181,253,.25);display:inline-block;padding:.1rem .55rem;border-radius:999px;font-size:.72rem;font-weight:600}
-        .status-badge-error{background:rgba(248,113,113,.12);color:#fca5a5;border:1px solid rgba(248,113,113,.3);display:inline-block;padding:.1rem .55rem;border-radius:999px;font-size:.72rem;font-weight:600}
-        .severity-badge-warning{color:#fde68a;font-size:.7rem}
-        .severity-badge-error{color:#fca5a5;font-size:.7rem}
-        .severity-badge-info{color:#bae6fd;font-size:.7rem}
-        .severity-badge-critical{color:#f87171;font-size:.7rem;font-weight:700}
-        /* Фильтры */
-        .filter-bar{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:1rem}
-        .filter-select{background:rgba(0,0,0,.2);border:1px solid var(--glass-border);color:#fff;padding:.4rem .75rem;border-radius:10px;font-family:inherit;font-size:.8rem;outline:none;cursor:pointer}
-        .filter-select option{background:#0a0a1a}
-        .filter-select:focus{border-color:var(--accent-cyan)}
-        .search-input{background:rgba(0,0,0,.2);border:1px solid var(--glass-border);color:#fff;padding:.4rem .75rem;border-radius:10px;font-family:inherit;font-size:.8rem;outline:none;min-width:200px;flex:1}
-        .search-input::placeholder{color:rgba(255,255,255,.4)}
-        .search-input:focus{border-color:var(--accent-cyan)}
-        /* Кнопки действий в таблице */
-        .action-btn{background:none;border:1px solid var(--glass-border);color:rgba(255,255,255,.7);padding:.2rem .55rem;border-radius:8px;font-size:.75rem;cursor:pointer;transition:all .2s}
-        .action-btn:hover{background:var(--glass-bg-hover);color:#fff;border-color:rgba(255,255,255,.3)}
-        .action-btn.done-btn:hover{border-color:rgba(52,211,153,.5);color:#6ee7b7}
-        .action-btn.del-btn:hover{border-color:rgba(248,113,113,.5);color:#fca5a5}
-        /* Toast */
-        .toast-container{position:fixed;top:70px;right:1rem;z-index:999;display:flex;flex-direction:column;gap:.5rem}
-        .toast{background:rgba(20,20,41,.95);border:1px solid var(--glass-border);backdrop-filter:blur(20px);border-radius:12px;padding:.75rem 1.25rem;font-size:.875rem;min-width:260px;max-width:360px;box-shadow:0 4px 20px rgba(0,0,0,.4)}
-        .toast.error{border-color:rgba(248,113,113,.4)}.toast.success{border-color:rgba(52,211,153,.4)}
-        @keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-        .toast{animation:fadeUp .3s ease}
-        /* Пустое состояние */
-        .empty-state{text-align:center;padding:3rem 1rem;color:rgba(255,255,255,.5)}
-        .empty-state-icon{font-size:3rem;margin-bottom:1rem}
-        /* Создание item */
-        .create-section{overflow:hidden;max-height:0;transition:max-height .35s ease,opacity .35s ease;opacity:0}
-        .create-section.open{max-height:500px;opacity:1}
-        .glass-input{background:rgba(0,0,0,.2);border:1px solid var(--glass-border);color:#fff;padding:.5rem 1rem;border-radius:var(--radius-button);width:100%;box-sizing:border-box;font-family:inherit}
-        .glass-textarea{background:rgba(0,0,0,.2);border:1px solid var(--glass-border);color:#fff;padding:.5rem 1rem;border-radius:var(--radius-button);width:100%;box-sizing:border-box;font-family:inherit;resize:vertical;min-height:80px}
-        .glass-input:focus,.glass-textarea:focus{outline:none;border-color:var(--accent-cyan)}
-        .glass-input::placeholder,.glass-textarea::placeholder{color:rgba(255,255,255,.35)}
-        /* Пагинация */
-        .pagination{display:flex;justify-content:space-between;align-items:center;margin-top:1rem;font-size:.875rem}
-        .hidden{display:none!important}
-        @media(max-width:768px){.grid-4{grid-template-columns:1fr 1fr}.filter-bar{gap:.5rem}.search-input{min-width:100px}}
+        /* Minimal page-specific CSS */
+        :root {
+            --text-muted: rgba(255, 255, 255, 0.6);
+            --border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            margin: 0;
+            background-color: #0f0f13;
+            color: #ffffff;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+
+        /* Layout */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Header */
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .page-header h1 {
+            margin: 0;
+            font-size: 2rem;
+            font-weight: 600;
+        }
+
+        .last-updated {
+            font-size: 0.75rem;
+            color: rgba(255,255,255,0.35);
+            white-space: nowrap;
+        }
+
+        .actions {
+            display: flex;
+            gap: 1rem;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .stat-label {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        /* Filter Tabs */
+        .filter-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.5rem;
+            overflow-x: auto;
+        }
+
+        .filter-tab {
+            padding: 0.5rem 1.25rem;
+            cursor: pointer;
+            border-radius: 6px;
+            color: var(--text-muted);
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .filter-tab:hover {
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .filter-tab.active {
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.1);
+            font-weight: 500;
+        }
+
+        /* Items List */
+        .items-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .inbox-item {
+            padding: 1.25rem;
+            cursor: pointer;
+            transition: transform 0.2s, background 0.2s;
+        }
+
+        .inbox-item:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .inbox-item-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .inbox-item-main {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex: 1;
+            min-width: 300px;
+        }
+
+        .severity-icon {
+            font-size: 1.25rem;
+        }
+
+        .item-title {
+            font-weight: 500;
+            font-size: 1.05rem;
+        }
+
+        .badges {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .badge {
+            padding: 0.2rem 0.6rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            background: rgba(255, 255, 255, 0.1);
+            color: #ddd;
+        }
+
+        .badge.critical { background: rgba(255, 71, 87, 0.2); color: #ff4757; }
+        .badge.warning { background: rgba(255, 165, 2, 0.2); color: #ffa502; }
+        .badge.info { background: rgba(30, 144, 255, 0.2); color: #1e90ff; }
+
+        .inbox-item-actions {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .inbox-actions { display: flex; gap: 0.4rem; }
+        .inbox-actions .glass-button { padding: 0.25rem 0.7rem; font-size: 0.75rem; }
+        .inbox-actions .btn-ack { color: var(--accent-yellow, #fde68a); border-color: rgba(251,191,36,0.3); }
+        .inbox-actions .btn-done { color: var(--accent-green, #6ee7b7); border-color: rgba(52,211,153,0.3); }
+        .inbox-actions .btn-dismiss { color: var(--accent-red, #fca5a5); border-color: rgba(248,113,113,0.3); }
+
+        .time-ago {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .inbox-item-body {
+            display: none;
+            padding-top: 1rem;
+            margin-top: 1rem;
+            border-top: 1px solid var(--border-color);
+            color: #ccc;
+            line-height: 1.5;
+        }
+
+        .inbox-item.expanded .inbox-item-body {
+            display: block;
+        }
+
+        /* Skeletons */
+        .skeleton {
+            background: linear-gradient(90deg, rgba(255,255,255,0.03) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.03) 75%);
+            background-size: 200% 100%;
+            animation: skeleton-loading 1.5s infinite;
+            border-radius: 8px;
+        }
+
+        @keyframes skeleton-loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            z-index: 9999;
+        }
+
+        .toast {
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            background: rgba(30, 30, 35, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-color);
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            animation: slideIn 0.3s ease-out forwards;
+            min-width: 250px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(120%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* Mobile Adjustments */
+        @media (max-width: 768px) {
+            .container {
+                padding: 1.5rem;
+                padding-bottom: 90px;
+            }
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+            .inbox-item-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .inbox-item-actions {
+                width: 100%;
+                justify-content: space-between;
+            }
+        }
     </style>
 </head>
 <body>
 
-<div class="toast-container" id="toast-container"></div>
+    <!-- Desktop Nav -->
+    <nav class="glass-nav">
+        <div class="nav-logo">Krab AI</div>
+        <div class="nav-links">
+            <a href="/v4/" class="nav-link">Hub</a>
+            <a href="/v4/chat" class="nav-link">Chat</a>
+            <a href="/costs" class="nav-link">Costs</a>
+            <a href="/inbox" class="nav-link active">Inbox</a>
+            <a href="/swarm" class="nav-link">Swarm</a>
+            <a href="/translator" class="nav-link">Translator</a>
+            <a href="/ops" class="nav-link">Ops</a>
+            <a href="/v4/research" class="nav-link">Research</a>
+            <a href="/settings" class="nav-link">Settings</a>
+            <a href="/commands" class="nav-link">Commands</a>
+            <div class="nav-bell-wrapper">
+                <a href="/inbox" class="nav-bell" title="Notifications">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                    </svg>
+                    <span class="bell-count hidden" id="nav-bell-count">0</span>
+                </a>
+                <div class="bell-dropdown hidden" id="bell-dropdown"></div>
+            </div>
+        </div>
+    </nav>
 
-<!-- Desktop Nav -->
-<nav class="glass-nav">
-    <div class="nav-logo">Krab AI</div>
-    <div class="nav-links">
-        <a href="/v4/" class="nav-link">Hub</a>
-        <a href="/v4/chat" class="nav-link">Chat</a>
-        <a href="/v4/costs" class="nav-link">Costs</a>
-        <a href="/v4/inbox" class="nav-link active">Inbox</a>
-        <a href="/v4/swarm" class="nav-link">Swarm</a>
-        <a href="/v4/translator" class="nav-link">Translator</a>
-        <a href="/v4/ops" class="nav-link">Ops</a>
-        <a href="/v4/settings" class="nav-link">Settings</a>
-        <a href="/v4/commands" class="nav-link">Commands</a>
-        <div class="nav-bell-wrapper">
-            <a href="/v4/inbox" class="nav-bell" title="Уведомления">
-                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
-                </svg>
-                <span class="bell-count hidden" id="nav-bell-count">0</span>
-            </a>
-            <div class="bell-dropdown hidden" id="bell-dropdown"></div>
-        </div>
-    </div>
-    <div style="display:flex;align-items:center;gap:.75rem;">
-        <span class="status-dot ok" id="api-status" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent-green);"></span>
-        <span class="text-muted text-sm" id="nav-timer">↻ 30s</span>
-    </div>
-</nav>
-
-<main class="container">
-    <!-- Заголовок -->
-    <div class="flex justify-between items-center mb-4" style="flex-wrap:wrap;gap:1rem;">
-        <div>
-            <h1 class="text-3xl">Inbox</h1>
-            <p class="text-muted text-sm mt-2">Входящие события, owner requests и системные уведомления</p>
-        </div>
-        <div class="flex gap-2 items-center">
-            <span class="badge skeleton" id="inbox-health-badge">ОК</span>
-            <button class="glass-button" id="btn-toggle-create" style="font-size:.85rem;">+ Создать</button>
-            <button class="glass-button" style="font-size:.78rem;padding:.35rem .9rem;" id="btn-refresh">Обновить</button>
-        </div>
-    </div>
-
-    <!-- Stale Processing Banner (красный — критичнее) -->
-    <div class="stale-banner red" id="stale-processing-banner">
-        <span id="stale-processing-text"></span>
-        <div class="banner-actions">
-            <button class="glass-button" id="btn-remediate-processing" style="font-size:.78rem;padding:.3rem .85rem;color:#fca5a5;border-color:rgba(248,113,113,.4);">Исправить</button>
-            <button class="banner-close" id="close-processing-banner" title="Скрыть">×</button>
-        </div>
-    </div>
-
-    <!-- Stale Open Banner (янтарный) -->
-    <div class="stale-banner amber" id="stale-open-banner">
-        <span id="stale-open-text"></span>
-        <div class="banner-actions">
-            <button class="glass-button" id="btn-remediate-open" style="font-size:.78rem;padding:.3rem .85rem;color:#fde68a;border-color:rgba(251,191,36,.4);">Исправить</button>
-            <button class="banner-close" id="close-open-banner" title="Скрыть">×</button>
-        </div>
+    <!-- Mobile Tab Bar -->
+    <div class="glass-tab-bar">
+        <a href="/v4/" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+            Hub
+        </a>
+        <a href="/v4/chat" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+            Chat
+        </a>
+        <a href="/costs" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+            Costs
+        </a>
+        <a href="/inbox" class="tab-item active">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+            Inbox
+        </a>
+        <a href="/swarm" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            Swarm
+        </a>
+        <a href="/translator" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6"></path><path d="M4 14l6-6 2-3"></path><path d="M2 5h12"></path><path d="M7 2h1"></path><path d="M22 22l-5-10-5 10"></path><path d="M14 18h6"></path></svg>
+            Trans
+        </a>
     </div>
 
-    <!-- Summary Card -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-3" style="flex-wrap:wrap;gap:.5rem;">
-            <h3 class="text-lg text-accent">Сводка Inbox</h3>
-            <span class="text-muted text-xs" id="inbox-last-updated">Загрузка...</span>
-        </div>
-        <div class="grid-4" style="margin-bottom:1rem;">
-            <div class="glass-card stat-card">
-                <span class="text-muted text-sm w-full">Всего</span>
-                <div class="text-3xl text-accent skeleton my-2" id="stat-total" data-val="0">0</div>
-                <div id="sparkline-total" class="sparkline-wrapper"></div>
+    <!-- Main Content -->
+    <main class="container">
+        <header class="page-header">
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <h1>Inbox</h1>
+                <span class="last-updated" id="live-status">Connecting...</span>
             </div>
-            <div class="glass-card stat-card">
-                <span class="text-muted text-sm w-full">Открытые</span>
-                <div class="text-3xl skeleton my-2" id="stat-open" data-val="0" style="color:#7dd3fc;">0</div>
-                <div id="sparkline-open" class="sparkline-wrapper"></div>
+            <div class="actions">
+                <button class="glass-button" id="btn-remediate-stale">Remediate Stale</button>
+                <button class="glass-button glass-button-primary" id="btn-ack-all">Ack All Open</button>
             </div>
-            <div class="glass-card stat-card">
-                <span class="text-muted text-sm w-full">В обработке</span>
-                <div class="text-3xl text-warning skeleton my-2" id="stat-processing" data-val="0">0</div>
-                <div id="sparkline-processing" class="sparkline-wrapper"></div>
-            </div>
-            <div class="glass-card stat-card">
-                <span class="text-muted text-sm w-full">Выполнено</span>
-                <div class="text-3xl text-success skeleton my-2" id="stat-done" data-val="0">0</div>
-                <div id="sparkline-done" class="sparkline-wrapper"></div>
-            </div>
-        </div>
-        <!-- Дополнительные счётчики -->
-        <div class="grid-2x2" id="extra-stats" style="gap:.5rem;">
-            <div class="glass-card text-center" style="padding:.6rem;">
-                <div class="text-muted text-xs mb-1">Требует внимания</div>
-                <div class="text-xl skeleton" id="stat-attention">0</div>
-            </div>
-            <div class="glass-card text-center" style="padding:.6rem;">
-                <div class="text-muted text-xs mb-1">Подтверждено</div>
-                <div class="text-xl skeleton" id="stat-acked">0</div>
-            </div>
-            <div class="glass-card text-center" style="padding:.6rem;">
-                <div class="text-muted text-xs mb-1">Owner requests</div>
-                <div class="text-xl skeleton" id="stat-owner-req">0</div>
-            </div>
-            <div class="glass-card text-center" style="padding:.6rem;">
-                <div class="text-muted text-xs mb-1">Упоминания</div>
-                <div class="text-xl skeleton" id="stat-mentions">0</div>
-            </div>
-        </div>
-    </div>
+        </header>
 
-    <!-- Breakdown по kind + source -->
-    <div class="grid-2 mb-4">
-        <div class="glass-card">
-            <h3 class="text-lg mb-3 text-accent">По типу (kind)</h3>
-            <div id="kind-chart-container">
-                <div class="bar-row"><div class="skeleton" style="height:1em;width:100%;grid-column:1/-1;"></div></div>
-                <div class="bar-row"><div class="skeleton" style="height:1em;width:80%;grid-column:1/-1;"></div></div>
-            </div>
-        </div>
-        <div class="glass-card">
-            <h3 class="text-lg mb-3 text-accent">По источнику (source)</h3>
-            <div id="source-chart-container">
-                <div class="bar-row"><div class="skeleton" style="height:1em;width:100%;grid-column:1/-1;"></div></div>
-                <div class="bar-row"><div class="skeleton" style="height:1em;width:80%;grid-column:1/-1;"></div></div>
-            </div>
-        </div>
-    </div>
+        <!-- Stats Grid -->
+        <section class="stats-grid" id="stats-container">
+            <!-- Skeletons rendered by JS initially -->
+        </section>
 
-    <!-- Collapsible: Создать элемент -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center" id="create-header" style="cursor:pointer;user-select:none;">
-            <h3 class="text-lg text-accent">Создать элемент</h3>
-            <span id="create-chevron" class="text-muted text-sm">▼ показать</span>
-        </div>
-        <div class="create-section" id="create-section">
-            <div style="margin-top:1rem;" id="create-form-wrap">
-                <div class="mb-2">
-                    <label class="text-muted text-xs block mb-1">Заголовок</label>
-                    <input type="text" id="create-title" class="glass-input" placeholder="Краткое описание...">
-                </div>
-                <div class="mb-2">
-                    <label class="text-muted text-xs block mb-1">Тело</label>
-                    <textarea id="create-body" class="glass-textarea" placeholder="Детали события..."></textarea>
-                </div>
-                <div class="flex gap-2 mb-4" style="flex-wrap:wrap;">
-                    <div style="flex:1;min-width:140px;">
-                        <label class="text-muted text-xs block mb-1">Категория / kind</label>
-                        <select id="create-kind" class="filter-select w-full">
-                            <option value="manual">manual</option>
-                            <option value="owner_request">owner_request</option>
-                            <option value="proactive_action">proactive_action</option>
-                            <option value="owner_mention">owner_mention</option>
-                            <option value="reminder">reminder</option>
-                            <option value="alert">alert</option>
-                        </select>
-                    </div>
-                    <div style="flex:1;min-width:140px;">
-                        <label class="text-muted text-xs block mb-1">Severity</label>
-                        <select id="create-severity" class="filter-select w-full">
-                            <option value="info">info</option>
-                            <option value="warning">warning</option>
-                            <option value="error">error</option>
-                            <option value="critical">critical</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="flex gap-2">
-                    <button class="glass-button glass-button-primary flex-1" id="btn-create-submit">Создать</button>
-                    <button class="glass-button" id="btn-create-cancel">Отмена</button>
-                </div>
-            </div>
-        </div>
-    </div>
+        <!-- Filter Tabs -->
+        <section class="filter-tabs" id="filter-tabs">
+            <div class="filter-tab active" data-filter="All">All</div>
+            <div class="filter-tab" data-filter="Open">Open</div>
+            <div class="filter-tab" data-filter="Acked">Acked</div>
+            <div class="filter-tab" data-filter="Processing">Processing</div>
+        </section>
 
-    <!-- Таблица элементов -->
-    <div class="glass-card mb-4">
-        <div class="flex justify-between items-center mb-3" style="flex-wrap:wrap;gap:.75rem;">
-            <h3 class="text-lg text-accent">Элементы Inbox</h3>
-            <span class="text-muted text-sm" id="items-count-label">Загрузка...</span>
-        </div>
+        <!-- Items List -->
+        <section class="items-list" id="inbox-items">
+            <!-- Skeletons rendered by JS initially -->
+        </section>
+    </main>
 
-        <!-- Фильтры -->
-        <div class="filter-bar">
-            <select id="filter-status" class="filter-select">
-                <option value="">Все статусы</option>
-                <option value="open">open</option>
-                <option value="processing">processing</option>
-                <option value="done">done</option>
-                <option value="acked">acked</option>
-                <option value="stale">stale</option>
-            </select>
-            <select id="filter-kind" class="filter-select">
-                <option value="">Все типы</option>
-                <option value="owner_request">owner_request</option>
-                <option value="proactive_action">proactive_action</option>
-                <option value="owner_mention">owner_mention</option>
-                <option value="reminder">reminder</option>
-                <option value="alert">alert</option>
-                <option value="manual">manual</option>
-            </select>
-            <select id="filter-severity" class="filter-select">
-                <option value="">Все severity</option>
-                <option value="info">info</option>
-                <option value="warning">warning</option>
-                <option value="error">error</option>
-                <option value="critical">critical</option>
-            </select>
-            <input type="text" id="filter-search" class="search-input" placeholder="Поиск по заголовку...">
-            <button class="glass-button" id="btn-reset-filters" style="font-size:.78rem;padding:.35rem .9rem;">Сбросить</button>
-        </div>
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
 
-        <div class="table-responsive">
-            <table>
-                <thead>
-                    <tr>
-                        <th style="width:130px;">Время</th>
-                        <th>Заголовок</th>
-                        <th>Статус</th>
-                        <th>Тип</th>
-                        <th>Severity</th>
-                        <th style="width:120px;">Действия</th>
-                    </tr>
-                </thead>
-                <tbody id="items-tbody">
-                    <tr><td colspan="6" class="text-center text-muted">Загрузка...</td></tr>
-                </tbody>
-            </table>
-        </div>
-
-        <!-- Пагинация -->
-        <div class="pagination text-muted" id="pagination-wrap" style="display:none;">
-            <span id="pagination-info"></span>
-            <div class="flex gap-2">
-                <button class="glass-button" style="font-size:.78rem;padding:.35rem .9rem;" id="page-prev">← Назад</button>
-                <button class="glass-button" style="font-size:.78rem;padding:.35rem .9rem;" id="page-next">Вперёд →</button>
-            </div>
-        </div>
-
-        <!-- Пустое состояние -->
-        <div class="empty-state hidden" id="empty-state">
-            <div class="empty-state-icon">📭</div>
-            <div class="text-lg text-muted">Inbox пуст</div>
-            <div class="text-sm text-muted mt-2">Нет элементов по выбранным фильтрам</div>
-        </div>
-    </div>
-
-    <!-- Футер -->
-    <div class="flex justify-between items-center text-muted text-sm mt-4">
-        <div id="last-updated">Последнее обновление: --:--:--</div>
-        <div id="footer-timer">Следующее обновление через 30s</div>
-    </div>
-</main>
-
-<!-- Mobile Tab Bar -->
-<div class="glass-tab-bar">
-    <a href="/v4/" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Hub</a>
-    <a href="/v4/chat" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Chat</a>
-    <a href="/v4/costs" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Costs</a>
-    <a href="/v4/inbox" class="tab-item active"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>Inbox</a>
-    <a href="/v4/swarm" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Swarm</a>
-    <a href="/v4/translator" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>Trans</a>
-</div>
-
-<!-- Detail Modal -->
-<div class="modal-overlay" id="detail-modal">
-    <div class="glass-card modal-content" style="max-width:600px;max-height:80vh;overflow-y:auto;">
-        <div class="flex justify-between items-center mb-3">
-            <h3 class="text-xl text-accent" id="modal-title">Детали</h3>
-            <button class="banner-close" id="modal-close" style="font-size:1.4rem;opacity:.8;">×</button>
-        </div>
-        <div id="modal-body"></div>
-    </div>
-</div>
-
-<script>
-// ── Mock данные для offline-тестирования ──────────────────────────────────
-const MOCK_STATUS = {
-    ok: true,
-    summary: {
-        total_items: 167, open_items: 66, processing_items: 14,
-        fresh_open_items: 11, stale_open_items: 3,
-        acked_items: 15, stale_processing_items: 2,
-        attention_items: 5,
-        pending_owner_requests: 8, new_owner_requests: 0,
-        pending_owner_mentions: 2
-    }
-};
-
-const MOCK_ITEMS = [
-    {item_id:'mock-001',kind:'owner_request',source:'telegram-userbot',status:'open',severity:'info',
-     title:'Входящий owner request от @p0lrd',
-     body:'Текст: Как дела? Что нового с Krab?\nЧат: 312322764',
-     created_at_utc:'2026-04-20T10:15:00+00:00',updated_at_utc:'2026-04-20T10:15:00+00:00'},
-    {item_id:'mock-002',kind:'proactive_action',source:'krab-internal',status:'open',severity:'warning',
-     title:'Cron job выполнен с ошибкой: HealthCheck',
-     body:'Job `HealthCheck` выполнен в 2026-04-20T09:00:00+00:00. Статус: error.',
-     created_at_utc:'2026-04-20T09:01:00+00:00',updated_at_utc:'2026-04-20T09:01:00+00:00'},
-    {item_id:'mock-003',kind:'alert',source:'krab-internal',status:'processing',severity:'error',
-     title:'LLM error rate превышен порог',
-     body:'Ошибок за последние 5 минут: 7. Порог: 5.',
-     created_at_utc:'2026-04-20T08:30:00+00:00',updated_at_utc:'2026-04-20T08:45:00+00:00'},
-    {item_id:'mock-004',kind:'owner_mention',source:'telegram-userbot',status:'done',severity:'info',
-     title:'Упоминание в группе "Dev Chat"',
-     body:'@pablito смотри, интересная идея тут...',
-     created_at_utc:'2026-04-19T22:10:00+00:00',updated_at_utc:'2026-04-20T07:00:00+00:00'},
-    {item_id:'mock-005',kind:'reminder',source:'krab-internal',status:'done',severity:'info',
-     title:'Напоминание: ревью PR #42',
-     body:'Время: 2026-04-20T10:00:00. Запланировано пользователем.',
-     created_at_utc:'2026-04-19T18:00:00+00:00',updated_at_utc:'2026-04-20T10:00:00+00:00'},
-    {item_id:'mock-006',kind:'proactive_action',source:'krab-internal',status:'acked',severity:'warning',
-     title:'LM Studio недоступен >5 минут',
-     body:'Сервис lm-studio не отвечает. Fallback на cloud включён.',
-     created_at_utc:'2026-04-19T14:22:00+00:00',updated_at_utc:'2026-04-19T14:30:00+00:00'},
-    {item_id:'mock-007',kind:'owner_request',source:'telegram-userbot',status:'open',severity:'info',
-     title:'Входящий owner request: задача для Swarm',
-     body:'Текст: Запусти swarm analysts по теме "крипто тренды апрель 2026"',
-     created_at_utc:'2026-04-20T11:00:00+00:00',updated_at_utc:'2026-04-20T11:00:00+00:00'}
-];
-
-const MOCK_STALE_OPEN = {ok:true, count:3, items:[]};
-const MOCK_STALE_PROCESSING = {ok:true, count:2, items:[]};
-
-// ── Состояние ──────────────────────────────────────────────────────────────
-let timer = 30;
-let isFirstLoad = true;
-let allItems = [];
-let filteredItems = [];
-let currentPage = 0;
-const PAGE_SIZE = 20;
-let rawStatus = null;
-let staleOpenCount = 0;
-let staleProcessingCount = 0;
-let staleIds = new Set();
-
-// ── Форматтеры ─────────────────────────────────────────────────────────────
-const fmtNum = function(n) { return new Intl.NumberFormat('ru-RU').format(Math.round(n||0)); };
-
-function fmtDateTime(isoStr) {
-    if (!isoStr) return '--';
-    try {
-        const d = new Date(isoStr);
-        return d.toLocaleString('ru-RU', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
-    } catch(e) { return isoStr.slice(0, 16).replace('T',' '); }
-}
-
-function fmtRelative(isoStr) {
-    if (!isoStr) return '';
-    const diff = (Date.now() - new Date(isoStr).getTime()) / 1000;
-    if (diff < 60) return 'сейчас';
-    if (diff < 3600) return Math.floor(diff/60) + ' мин';
-    if (diff < 86400) return Math.floor(diff/3600) + ' ч';
-    return Math.floor(diff/86400) + ' дн';
-}
-
-// ── Toast ──────────────────────────────────────────────────────────────────
-function showToast(msg, type) {
-    const tc = document.getElementById('toast-container');
-    const t = document.createElement('div');
-    t.className = 'toast ' + (type||'');
-    t.textContent = msg;
-    tc.appendChild(t);
-    setTimeout(function() {
-        t.style.opacity = '0';
-        t.style.transition = 'opacity 0.4s';
-        setTimeout(function() { t.remove(); }, 400);
-    }, 4000);
-}
-
-// ── DOM helpers ────────────────────────────────────────────────────────────
-function setText(id, val) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.remove('skeleton');
-    el.textContent = val;
-}
-
-function animateValue(el, start, end, duration, formatter) {
-    let t0 = null;
-    const step = function(ts) {
-        if (!t0) t0 = ts;
-        const p = Math.min((ts - t0) / duration, 1);
-        const ease = 1 - Math.pow(1 - p, 4);
-        el.textContent = formatter(Math.round(start + ease * (end - start)));
-        if (p < 1) requestAnimationFrame(step);
-        else { el.textContent = formatter(end); el.dataset.val = end; }
-    };
-    requestAnimationFrame(step);
-}
-
-function updateEl(id, value, animate) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.remove('skeleton');
-    if (animate && isFirstLoad) {
-        animateValue(el, parseFloat(el.dataset.val||0), value, 1000, fmtNum);
-    } else {
-        el.textContent = fmtNum(value);
-        el.dataset.val = value;
-    }
-}
-
-// ── Sparklines ─────────────────────────────────────────────────────────────
-function createSparkline(data, color) {
-    if (!data || data.length < 2) return null;
-    const max = Math.max.apply(null, data);
-    const min = Math.min.apply(null, data);
-    const range = max - min || 1;
-    const W = 120, H = 36;
-    const pts = data.map(function(v, i) {
-        return ((i / (data.length - 1)) * W) + ',' + (H - ((v - min) / range) * H);
-    }).join(' ');
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('width', '100%'); svg.setAttribute('height', '100%');
-    svg.setAttribute('viewBox', '0 -2 ' + W + ' ' + (H + 4));
-    svg.setAttribute('preserveAspectRatio', 'none');
-    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-    poly.setAttribute('fill', 'none'); poly.setAttribute('stroke', color);
-    poly.setAttribute('stroke-width', '2'); poly.setAttribute('stroke-linecap', 'round');
-    poly.setAttribute('points', pts);
-    svg.appendChild(poly);
-    return svg;
-}
-
-function renderSparkline(id, data, color) {
-    const c = document.getElementById(id);
-    if (!c) return;
-    while (c.firstChild) c.removeChild(c.firstChild);
-    const s = createSparkline(data, color);
-    if (s) c.appendChild(s);
-}
-
-// ── Bar Chart (горизонтальный) ─────────────────────────────────────────────
-function renderBarChart(containerId, dataObj) {
-    const c = document.getElementById(containerId);
-    if (!c || !dataObj) return;
-    while (c.firstChild) c.removeChild(c.firstChild);
-    const entries = Object.entries(dataObj).sort(function(a,b){return b[1]-a[1];}).slice(0, 8);
-    if (!entries.length) {
-        const empty = document.createElement('div');
-        empty.style.cssText = 'text-align:center;color:rgba(255,255,255,.5);padding:1.5rem;';
-        empty.textContent = 'Нет данных';
-        c.appendChild(empty);
-        return;
-    }
-    const maxVal = entries[0][1] || 1;
-    const palette = ['#bae6fd','#c4b5fd','#6ee7b7','#fde68a','#fca5a5','#fb923c','#a78bfa','#34d399'];
-    entries.forEach(function(entry, i) {
-        const key = entry[0], val = entry[1];
-        const color = palette[i % palette.length];
-        const row = document.createElement('div'); row.className = 'bar-row';
-        const label = document.createElement('span'); label.className = 'bar-label text-sm text-muted';
-        label.textContent = key; label.title = key;
-        const bc = document.createElement('div'); bc.className = 'bar-container';
-        const bf = document.createElement('div'); bf.className = 'bar-fill';
-        bf.style.width = ((val / maxVal) * 100) + '%'; bf.style.backgroundColor = color;
-        bc.appendChild(bf);
-        const vs = document.createElement('span'); vs.className = 'text-sm text-right';
-        vs.textContent = fmtNum(val);
-        row.appendChild(label); row.appendChild(bc); row.appendChild(vs);
-        c.appendChild(row);
-    });
-}
-
-// ── Статус-бейджи ──────────────────────────────────────────────────────────
-function statusBadge(status) {
-    const map = {
-        open: 'status-badge-open',
-        processing: 'status-badge-processing',
-        done: 'status-badge-done',
-        acked: 'status-badge-acked',
-        error: 'status-badge-error'
-    };
-    const cls = map[status] || 'status-badge-open';
-    const span = document.createElement('span');
-    span.className = cls;
-    span.textContent = status;
-    return span;
-}
-
-function severityBadge(severity) {
-    const map = {warning:'severity-badge-warning', error:'severity-badge-error', critical:'severity-badge-critical', info:'severity-badge-info'};
-    const span = document.createElement('span');
-    span.className = map[severity] || 'severity-badge-info';
-    span.textContent = severity || 'info';
-    return span;
-}
-
-// ── Таблица элементов ──────────────────────────────────────────────────────
-function applyFilters() {
-    const fStatus = document.getElementById('filter-status').value;
-    const fKind = document.getElementById('filter-kind').value;
-    const fSeverity = document.getElementById('filter-severity').value;
-    const fSearch = (document.getElementById('filter-search').value || '').toLowerCase();
-
-    filteredItems = allItems.filter(function(item) {
-        if (fStatus) {
-            if (fStatus === 'stale') {
-                if (!staleIds.has(item.item_id)) return false;
-            } else if (item.status !== fStatus) return false;
-        }
-        if (fKind && item.kind !== fKind) return false;
-        if (fSeverity && item.severity !== fSeverity) return false;
-        if (fSearch && !(item.title||'').toLowerCase().includes(fSearch) && !(item.body||'').toLowerCase().includes(fSearch)) return false;
-        return true;
-    });
-    currentPage = 0;
-    renderTable();
-}
-
-function renderTable() {
-    const tbody = document.getElementById('items-tbody');
-    const emptyEl = document.getElementById('empty-state');
-    const pagWrap = document.getElementById('pagination-wrap');
-    const countLabel = document.getElementById('items-count-label');
-    if (!tbody) return;
-
-    const total = filteredItems.length;
-    const start = currentPage * PAGE_SIZE;
-    const pageItems = filteredItems.slice(start, start + PAGE_SIZE);
-
-    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-
-    if (!pageItems.length) {
-        emptyEl.classList.remove('hidden');
-        pagWrap.style.display = 'none';
-        if (countLabel) countLabel.textContent = '0 элементов';
-        return;
-    }
-    emptyEl.classList.add('hidden');
-
-    pageItems.forEach(function(item) {
-        const tr = document.createElement('tr');
-
-        // Время
-        const tdTime = document.createElement('td');
-        tdTime.className = 'text-xs text-muted';
-        tdTime.textContent = fmtDateTime(item.created_at_utc);
-        tdTime.title = fmtRelative(item.created_at_utc) + ' назад';
-        tr.appendChild(tdTime);
-
-        // Заголовок + превью
-        const tdTitle = document.createElement('td');
-        const titleSpan = document.createElement('div');
-        titleSpan.className = 'text-sm';
-        titleSpan.style.cssText = 'font-weight:500;max-width:350px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;';
-        titleSpan.textContent = item.title || '(без заголовка)';
-        titleSpan.title = item.title;
-        titleSpan.addEventListener('click', function() { openDetail(item); });
-        const bodyPreview = document.createElement('div');
-        bodyPreview.className = 'text-xs text-muted';
-        bodyPreview.style.cssText = 'max-width:350px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;';
-        bodyPreview.textContent = (item.body || '').replace(/`/g, '').slice(0, 80);
-        tdTitle.appendChild(titleSpan);
-        tdTitle.appendChild(bodyPreview);
-        tr.appendChild(tdTitle);
-
-        // Статус
-        const tdStatus = document.createElement('td');
-        tdStatus.appendChild(statusBadge(item.status));
-        if (staleIds.has(item.item_id)) {
-            const staleTag = document.createElement('span');
-            staleTag.className = 'text-xs text-error';
-            staleTag.style.marginLeft = '.4rem';
-            staleTag.textContent = 'stale';
-            tdStatus.appendChild(staleTag);
-        }
-        tr.appendChild(tdStatus);
-
-        // Kind
-        const tdKind = document.createElement('td');
-        tdKind.className = 'text-xs text-muted';
-        tdKind.textContent = item.kind || '--';
-        tr.appendChild(tdKind);
-
-        // Severity
-        const tdSev = document.createElement('td');
-        tdSev.appendChild(severityBadge(item.severity));
-        tr.appendChild(tdSev);
-
-        // Действия
-        const tdActions = document.createElement('td');
-        tdActions.style.whiteSpace = 'nowrap';
-
-        const btnView = document.createElement('button');
-        btnView.className = 'action-btn';
-        btnView.textContent = 'Детали';
-        btnView.addEventListener('click', function() { openDetail(item); });
-        tdActions.appendChild(btnView);
-
-        if (item.status === 'open' || item.status === 'processing') {
-            const btnDone = document.createElement('button');
-            btnDone.className = 'action-btn done-btn';
-            btnDone.style.marginLeft = '.25rem';
-            btnDone.textContent = 'Закрыть';
-            btnDone.addEventListener('click', function() { updateItemStatus(item.item_id, 'done'); });
-            tdActions.appendChild(btnDone);
+    <!-- Vanilla JS Logic -->
+    <script>
+        function formatTimeAgo(iso) {
+            if (!iso) return '';
+            const then = new Date(iso);
+            if (isNaN(then)) return '';
+            const diff = (Date.now() - then) / 1000;
+            if (diff < 60) return Math.floor(diff) + 's ago';
+            if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+            if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+            return Math.floor(diff/86400) + 'd ago';
         }
 
-        tr.appendChild(tdActions);
-        tbody.appendChild(tr);
-    });
+        document.addEventListener('DOMContentLoaded', () => {
+            // State
+            let currentFilter = 'All';
+            let lastItems = [];
+            let evtSource = null;
 
-    // Пагинация
-    const maxPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
-    if (total > PAGE_SIZE) {
-        pagWrap.style.display = 'flex';
-        const info = document.getElementById('pagination-info');
-        if (info) info.textContent = total + ' эл., стр. ' + (currentPage + 1) + '/' + maxPage;
-        document.getElementById('page-prev').disabled = currentPage === 0;
-        document.getElementById('page-next').disabled = start + PAGE_SIZE >= total;
-    } else {
-        pagWrap.style.display = 'none';
-    }
-    if (countLabel) countLabel.textContent = total + ' из ' + allItems.length + ' элементов';
-}
+            // DOM Elements
+            const statsContainer = document.getElementById('stats-container');
+            const itemsContainer = document.getElementById('inbox-items');
+            const filterTabs = document.getElementById('filter-tabs');
+            const liveStatusEl = document.getElementById('live-status');
+            const toastContainer = document.getElementById('toast-container');
 
-// ── Модальное окно деталей ─────────────────────────────────────────────────
-function openDetail(item) {
-    const modal = document.getElementById('detail-modal');
-    const titleEl = document.getElementById('modal-title');
-    const bodyEl = document.getElementById('modal-body');
-    if (!modal || !titleEl || !bodyEl) return;
+            // Initialize
+            renderSkeletons();
+            initialLoad();
+            connectSSE();
 
-    titleEl.textContent = item.title || '(без заголовка)';
-    while (bodyEl.firstChild) bodyEl.removeChild(bodyEl.firstChild);
+            // --- Event Listeners ---
+            
+            // Filter Tabs
+            filterTabs.addEventListener('click', (e) => {
+                const tab = e.target.closest('.filter-tab');
+                if (!tab) return;
+                
+                document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                currentFilter = tab.dataset.filter;
+                
+                renderCurrentItems();
+            });
 
-    function addRow(label, value, cls) {
-        const row = document.createElement('div');
-        row.style.cssText = 'display:flex;gap:.75rem;margin-bottom:.5rem;align-items:flex-start;';
-        const lbl = document.createElement('span');
-        lbl.className = 'text-xs text-muted';
-        lbl.style.minWidth = '110px';
-        lbl.textContent = label;
-        const val = document.createElement('span');
-        val.className = 'text-sm ' + (cls||'');
-        val.textContent = value || '--';
-        row.appendChild(lbl); row.appendChild(val);
-        bodyEl.appendChild(row);
-    }
+            // Expand/Collapse and Action Button Delegation
+            itemsContainer.addEventListener('click', async (e) => {
+                const actionBtn = e.target.closest('[data-action]');
+                const item = e.target.closest('.inbox-item');
 
-    addRow('ID', item.item_id, 'text-muted');
-    addRow('Статус', item.status);
-    addRow('Тип', item.kind);
-    addRow('Source', item.source, 'text-muted');
-    addRow('Severity', item.severity);
-    addRow('Создан', fmtDateTime(item.created_at_utc) + ' (' + fmtRelative(item.created_at_utc) + ' назад)');
-    addRow('Обновлён', fmtDateTime(item.updated_at_utc));
+                if (actionBtn) {
+                    e.stopPropagation();
+                    const action = actionBtn.dataset.action;
+                    const id = actionBtn.dataset.id;
+                    actionBtn.disabled = true;
+                    await handleAction(action, { id });
+                    setTimeout(() => initialLoad(), 300);
+                    return;
+                }
 
-    // Тело
-    if (item.body) {
-        const bodyDiv = document.createElement('div');
-        bodyDiv.style.cssText = 'margin-top:1rem;padding:.75rem;background:rgba(0,0,0,.2);border-radius:10px;border:1px solid var(--glass-border);';
-        const pre = document.createElement('pre');
-        pre.className = 'text-sm text-muted';
-        pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;margin:0;font-family:inherit;';
-        pre.textContent = item.body;
-        bodyDiv.appendChild(pre);
-        bodyEl.appendChild(bodyDiv);
-    }
+                if (item) {
+                    item.classList.toggle('expanded');
+                }
+            });
 
-    // Кнопки действий
-    const actDiv = document.createElement('div');
-    actDiv.style.cssText = 'display:flex;gap:.5rem;margin-top:1rem;flex-wrap:wrap;';
+            // Header Actions
+            document.getElementById('btn-remediate-stale').addEventListener('click', () => {
+                handleAction('remediate_stale');
+            });
 
-    if (item.status === 'open' || item.status === 'processing') {
-        const btnDone = document.createElement('button');
-        btnDone.className = 'glass-button glass-button-primary';
-        btnDone.style.fontSize = '.85rem';
-        btnDone.textContent = 'Отметить закрытым';
-        btnDone.addEventListener('click', function() {
-            updateItemStatus(item.item_id, 'done');
-            modal.classList.remove('active');
-        });
-        actDiv.appendChild(btnDone);
-    }
+            document.getElementById('btn-ack-all').addEventListener('click', () => {
+                handleAction('ack_all_open');
+            });
 
-    const btnClose = document.createElement('button');
-    btnClose.className = 'glass-button';
-    btnClose.style.fontSize = '.85rem';
-    btnClose.textContent = 'Закрыть';
-    btnClose.addEventListener('click', function() { modal.classList.remove('active'); });
-    actDiv.appendChild(btnClose);
+            window.addEventListener('beforeunload', () => {
+                if (evtSource) evtSource.close();
+            });
 
-    bodyEl.appendChild(actDiv);
-    modal.classList.add('active');
-}
+            // --- API & Data Handling ---
 
-// ── Update item status ─────────────────────────────────────────────────────
-async function updateItemStatus(itemId, newStatus) {
-    try {
-        const res = await fetch('/api/inbox/update', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({item_id: itemId, status: newStatus})
-        });
-        if (res.ok) {
-            showToast('Статус обновлён: ' + newStatus, 'success');
-            // Обновляем локально без полного рефреша
-            const item = allItems.find(function(i) { return i.item_id === itemId; });
-            if (item) { item.status = newStatus; }
-            applyFilters();
-        } else {
-            showToast('Ошибка обновления статуса', 'error');
-        }
-    } catch(err) {
-        showToast('Ошибка сети', 'error');
-    }
-}
+            async function apiCall(endpoint, method = 'GET', body = null) {
+                const key = localStorage.getItem('krab_web_key') || '';
+                const options = {
+                    method,
+                    headers: {
+                        'X-Krab-Web-Key': key,
+                        'Content-Type': 'application/json'
+                    }
+                };
+                if (body) options.body = JSON.stringify(body);
 
-// ── Remediate stale ────────────────────────────────────────────────────────
-async function remediateStale(kind) {
-    const url = kind === 'processing' ? '/api/inbox/stale-processing/remediate' : '/api/inbox/stale-open/remediate';
-    try {
-        const res = await fetch(url, {method:'POST'});
-        if (res.ok) {
-            showToast('Remediate запущен', 'success');
-            fetchData();
-        } else {
-            showToast('Ошибка remediate', 'error');
-        }
-    } catch(err) {
-        showToast('Ошибка сети', 'error');
-    }
-}
-
-// ── Create item ────────────────────────────────────────────────────────────
-async function createItem() {
-    const title = (document.getElementById('create-title').value || '').trim();
-    const body = (document.getElementById('create-body').value || '').trim();
-    const kind = document.getElementById('create-kind').value;
-    const severity = document.getElementById('create-severity').value;
-    if (!title) { showToast('Заголовок обязателен', 'error'); return; }
-
-    try {
-        const res = await fetch('/api/inbox/create', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({title, body, kind, severity, source: 'owner-panel'})
-        });
-        if (res.ok) {
-            showToast('Элемент создан', 'success');
-            document.getElementById('create-title').value = '';
-            document.getElementById('create-body').value = '';
-            toggleCreateSection(false);
-            fetchData();
-        } else {
-            const j = await res.json().catch(function(){return {};});
-            showToast('Ошибка: ' + (j.detail || res.status), 'error');
-        }
-    } catch(err) {
-        showToast('Ошибка сети', 'error');
-    }
-}
-
-// ── Render summary ─────────────────────────────────────────────────────────
-function renderSummary(summary) {
-    updateEl('stat-total', summary.total_items || 0, true);
-    updateEl('stat-open', summary.open_items || 0, true);
-    // processing = owner_requests в обработке + owner_mentions в обработке
-    const procCount = (summary.processing_owner_requests || 0) + (summary.processing_owner_mentions || 0);
-    updateEl('stat-processing', procCount, true);
-    // done = total - open - acked (приближение, т.к. done_items нет в API)
-    const doneApprox = Math.max(0, (summary.total_items||0) - (summary.open_items||0) - (summary.acked_items||0) - procCount);
-    updateEl('stat-done', doneApprox, true);
-
-    setText('stat-attention', fmtNum(summary.attention_items || 0));
-    setText('stat-acked', fmtNum(summary.acked_items || 0));
-    setText('stat-owner-req', fmtNum(summary.pending_owner_requests || 0));
-    setText('stat-mentions', fmtNum(summary.pending_owner_mentions || 0));
-
-    // Sparklines — статичные заглушки (4 точки)
-    renderSparkline('sparkline-total', [120, 140, 155, summary.total_items || 167], '#bae6fd');
-    renderSparkline('sparkline-open', [50, 58, 62, summary.open_items || 66], '#7dd3fc');
-    renderSparkline('sparkline-processing', [10, 12, 14, summary.stale_processing_items || 15], '#fde68a');
-    renderSparkline('sparkline-done', [80, 90, 100, summary.acked_items || 15], '#6ee7b7');
-
-    // Health badge
-    const badge = document.getElementById('inbox-health-badge');
-    if (badge) {
-        badge.classList.remove('skeleton');
-        const staleOpen = summary.stale_open_items || 0;
-        const staleProc = summary.stale_processing_items || 0;
-        if (staleProc > 0) {
-            badge.className = 'badge badge-err'; badge.textContent = 'Проблемы';
-        } else if (staleOpen > 0) {
-            badge.className = 'badge badge-warn'; badge.textContent = 'Внимание';
-        } else {
-            badge.className = 'badge badge-ok'; badge.textContent = 'ОК';
-        }
-    }
-}
-
-// ── Render banners ─────────────────────────────────────────────────────────
-function renderBanners(staleOpen, staleProc) {
-    staleOpenCount = staleOpen;
-    staleProcessingCount = staleProc;
-
-    const procBanner = document.getElementById('stale-processing-banner');
-    const openBanner = document.getElementById('stale-open-banner');
-
-    if (staleProc > 0) {
-        document.getElementById('stale-processing-text').textContent =
-            staleProc + ' элемент(ов) зависло в обработке более 1 часа';
-        procBanner.className = 'stale-banner red visible';
-    } else {
-        procBanner.className = 'stale-banner red';
-    }
-
-    if (staleOpen > 0) {
-        document.getElementById('stale-open-text').textContent =
-            staleOpen + ' элемент(ов) открыты более 24 часов без действия';
-        openBanner.className = 'stale-banner amber visible';
-    } else {
-        openBanner.className = 'stale-banner amber';
-    }
-}
-
-// ── Bar charts by kind/source ──────────────────────────────────────────────
-function buildBreakdown(items) {
-    const byKind = {}, bySource = {};
-    items.forEach(function(item) {
-        const k = item.kind || 'unknown';
-        const s = item.source || 'unknown';
-        byKind[k] = (byKind[k]||0) + 1;
-        bySource[s] = (bySource[s]||0) + 1;
-    });
-    renderBarChart('kind-chart-container', byKind);
-    renderBarChart('source-chart-container', bySource);
-}
-
-// ── Create section toggle ──────────────────────────────────────────────────
-let createOpen = false;
-
-function toggleCreateSection(force) {
-    createOpen = (force !== undefined) ? force : !createOpen;
-    const section = document.getElementById('create-section');
-    const chevron = document.getElementById('create-chevron');
-    if (createOpen) {
-        section.classList.add('open');
-        if (chevron) chevron.textContent = '▲ скрыть';
-    } else {
-        section.classList.remove('open');
-        if (chevron) chevron.textContent = '▼ показать';
-    }
-}
-
-// ── Fetch ──────────────────────────────────────────────────────────────────
-async function fetchData() {
-    const statusDot = document.getElementById('api-status');
-    let summary = MOCK_STATUS.summary;
-    let items = MOCK_ITEMS;
-    let staleOpen = MOCK_STALE_OPEN.count;
-    let staleProc = MOCK_STALE_PROCESSING.count;
-    let anyOk = false;
-    staleIds = new Set();
-
-    try {
-        const results = await Promise.allSettled([
-            fetch('/api/inbox/status').catch(function(){return null;}),
-            fetch('/api/inbox/items').catch(function(){return null;}),
-            fetch('/api/inbox/stale-open').catch(function(){return null;}),
-            fetch('/api/inbox/stale-processing').catch(function(){return null;})
-        ]);
-
-        // /api/inbox/status
-        if (results[0].status==='fulfilled' && results[0].value && results[0].value.ok) {
-            const j = await results[0].value.json().catch(function(){return null;});
-            if (j && j.ok && j.summary) { summary = j.summary; anyOk = true; }
-        }
-
-        // /api/inbox/items
-        if (results[1].status==='fulfilled' && results[1].value && results[1].value.ok) {
-            const j = await results[1].value.json().catch(function(){return null;});
-            if (j && j.ok && Array.isArray(j.items)) { items = j.items; anyOk = true; }
-        }
-
-        // /api/inbox/stale-open
-        if (results[2].status==='fulfilled' && results[2].value && results[2].value.ok) {
-            const j = await results[2].value.json().catch(function(){return null;});
-            if (j && j.ok) {
-                staleOpen = j.count || 0;
-                if (Array.isArray(j.items)) j.items.forEach(function(i) { staleIds.add(i.item_id); });
+                try {
+                    const res = await fetch(endpoint, options);
+                    if (!res.ok) throw new Error(`API Error: ${res.status}`);
+                    return await res.json();
+                } catch (error) {
+                    console.warn(`Fetch to ${endpoint} failed. Using mock data for UI demonstration.`, error);
+                    return getMockData(endpoint, method, body);
+                }
             }
-        }
 
-        // /api/inbox/stale-processing
-        if (results[3].status==='fulfilled' && results[3].value && results[3].value.ok) {
-            const j = await results[3].value.json().catch(function(){return null;});
-            if (j && j.ok) {
-                staleProc = j.count || 0;
-                if (Array.isArray(j.items)) j.items.forEach(function(i) { staleIds.add(i.item_id); });
+            async function initialLoad() {
+                try {
+                    const [statsData, itemsData] = await Promise.all([
+                        apiCall('/api/inbox/status'),
+                        apiCall('/api/inbox/items?status=all&limit=50')
+                    ]);
+                    loadStatsFromData(statsData);
+                    const items = itemsData?.items || itemsData || [];
+                    loadItemsFromData(items);
+                } catch (e) {
+                    console.warn("Initial load failed", e);
+                }
             }
+
+            function connectSSE() {
+                if (evtSource) {
+                    evtSource.close();
+                }
+                evtSource = new EventSource('/api/inbox/events');
+
+                evtSource.addEventListener('update', (e) => {
+                    try {
+                        const data = JSON.parse(e.data);
+                        const summary = data.summary || (data.workflow && data.workflow.summary) || {};
+                        loadStatsFromData(summary);
+                        if (data.items) {
+                            loadItemsFromData(data.items);
+                        }
+                    } catch (err) {
+                        console.error('Error parsing SSE update:', err);
+                    }
+                });
+
+                evtSource.addEventListener('error', (e) => {
+                    try {
+                        const data = JSON.parse(e.data);
+                        console.warn('SSE error event:', data.error);
+                        showToast(data.error || 'SSE Error', 'error');
+                    } catch(err) {
+                        console.warn('SSE disconnected');
+                        showToast('SSE disconnected', 'error');
+                    }
+                });
+
+                evtSource.onerror = (err) => {
+                    console.warn('EventSource onerror triggered. Reconnecting in 5s...');
+                    evtSource.close();
+                    setTimeout(connectSSE, 5000);
+                };
+            }
+
+            function loadStatsFromData(data) {
+                if (!data) return;
+                statsContainer.innerHTML = `
+                    <div class="glass-card stat-card">
+                        <span class="stat-label">Open</span>
+                        <span class="stat-value">${data.open || 0}</span>
+                    </div>
+                    <div class="glass-card stat-card">
+                        <span class="stat-label">Attention</span>
+                        <span class="stat-value" style="color: #ffa502;">${data.attention || 0}</span>
+                    </div>
+                    <div class="glass-card stat-card">
+                        <span class="stat-label">Escalations</span>
+                        <span class="stat-value" style="color: #ff4757;">${data.escalations || 0}</span>
+                    </div>
+                    <div class="glass-card stat-card">
+                        <span class="stat-label">Stale</span>
+                        <span class="stat-value" style="color: #1e90ff;">${data.stale || 0}</span>
+                    </div>
+                `;
+                const now = new Date();
+                liveStatusEl.innerText = `Updated ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+            }
+
+            function loadItemsFromData(items) {
+                if (!items) return;
+                lastItems = items;
+                renderCurrentItems();
+            }
+
+            function renderCurrentItems() {
+                let filtered = lastItems;
+                if (currentFilter !== 'All') {
+                    filtered = lastItems.filter(item => {
+                        const status = (item.status || '').toLowerCase();
+                        if (currentFilter === 'Open') return status !== 'acked';
+                        return status === currentFilter.toLowerCase();
+                    });
+                }
+
+                if (!filtered || filtered.length === 0) {
+                    itemsContainer.innerHTML = `
+                        <div class="glass-card" style="text-align:center; padding: 3rem; color: var(--text-muted);">
+                            No items found for "${currentFilter}".
+                        </div>
+                    `;
+                    return;
+                }
+
+                itemsContainer.innerHTML = filtered.map(item => `
+                    <div class="glass-card inbox-item" data-id="${item.item_id || item.id}">
+                        <div class="inbox-item-header">
+                            <div class="inbox-item-main">
+                                <span class="severity-icon">
+                                    ${item.severity === 'critical' ? '🔴' : item.severity === 'warning' ? '🟠' : '🔵'}
+                                </span>
+                                <span class="item-title">${item.title}</span>
+                                <div class="badges">
+                                    ${[item.kind, item.source].filter(Boolean).map(b => `<span class="badge ${item.severity}">${b}</span>`).join('')}
+                                </div>
+                            </div>
+                            <div class="inbox-item-actions">
+                                <span class="time-ago">${formatTimeAgo(item.created_at_utc || item.created_at)}</span>
+                                ${item.status !== 'acked' 
+                                    ? `<div class="inbox-actions">
+                                           <button class="glass-button btn-ack" data-id="${item.item_id || item.id}" data-action="ack">Ack</button>
+                                           <button class="glass-button btn-done" data-id="${item.item_id || item.id}" data-action="done">Done</button>
+                                           <button class="glass-button btn-dismiss" data-id="${item.item_id || item.id}" data-action="dismiss">Dismiss</button>
+                                       </div>` 
+                                    : `<span class="badge">Acked</span>`}
+                            </div>
+                        </div>
+                        <div class="inbox-item-body">
+                            ${item.body || 'No further details available for this event.'}
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            async function handleAction(action, payload = {}) {
+                const actionToStatus = {
+                    'ack': 'acked',
+                    'done': 'done',
+                    'dismiss': 'cancelled',
+                    'approve': 'approved',
+                    'reject': 'rejected',
+                };
+                const status = actionToStatus[action] || action;
+                const itemId = payload.id || payload.item_id;
+
+                // special header-level actions без itemId — остаются как есть (proxy API)
+                if (action === 'remediate_stale' || action === 'ack_all_open') {
+                    try {
+                        await apiCall('/api/inbox/update', 'POST', { action, ...payload });
+                        showToast(`Successfully executed: ${action.replace(/_/g, ' ')}`);
+                    } catch (error) {
+                        showToast(`Error executing ${action}`, 'error');
+                    }
+                    return;
+                }
+
+                if (!itemId) {
+                    showToast(`No item ID for action: ${action}`, 'error');
+                    return;
+                }
+
+                try {
+                    await apiCall('/api/inbox/update', 'POST', {
+                        item_id: itemId,
+                        status: status,
+                        actor: 'owner-ui',
+                        note: '',
+                    });
+                    showToast(`✓ ${action}: success`);
+                } catch (error) {
+                    showToast(`Error: ${action}`, 'error');
+                }
+            }
+
+            // --- UI Helpers ---
+
+            function renderSkeletons() {
+                statsContainer.innerHTML = Array(4).fill('<div class="glass-card skeleton" style="height: 104px;"></div>').join('');
+                renderItemsSkeletons();
+            }
+
+            function renderItemsSkeletons() {
+                itemsContainer.innerHTML = Array(5).fill('<div class="glass-card skeleton" style="height: 72px;"></div>').join('');
+            }
+
+            function showToast(message, type = 'success') {
+                const toast = document.createElement('div');
+                toast.className = 'toast';
+                toast.innerHTML = `
+                    <span>${message}</span>
+                    <span style="cursor:pointer;" onclick="this.parentElement.remove()">✕</span>
+                `;
+                toastContainer.appendChild(toast);
+                setTimeout(() => {
+                    if (toast.parentElement) {
+                        toast.style.opacity = '0';
+                        toast.style.transform = 'translateX(100%)';
+                        toast.style.transition = 'all 0.3s';
+                        setTimeout(() => toast.remove(), 300);
+                    }
+                }, 4000);
+            }
+
+            // --- Mock Data Fallback (For UI Testing without Backend) ---
+            function getMockData(endpoint, method, body) {
+                if (endpoint.includes('/status')) {
+                    return { open: 24, attention: 5, escalations: 2, stale: 8 };
+                }
+                if (endpoint.includes('/items')) {
+                    return [
+                        { id: 'evt-1', severity: 'critical', title: 'DB Connection Pool Exhausted', timeAgo: '2m ago', badges: ['database', 'prod'], body: 'Primary database cluster is rejecting connections. Active connections have exceeded 5000.', status: 'open' },
+                        { id: 'evt-2', severity: 'warning', title: 'High Memory Usage on Worker Node', timeAgo: '15m ago', badges: ['k8s', 'worker-4'], body: 'Node memory utilization has been above 90% for the last 10 minutes.', status: 'open' },
+                        { id: 'evt-3', severity: 'info', title: 'SSL Certificate Auto-Renewed', timeAgo: '1h ago', badges: ['security', 'automated'], body: 'Wildcard certificate for *.krab.internal successfully renewed and deployed.', status: 'acked' },
+                        { id: 'evt-4', severity: 'critical', title: 'Payment Gateway API Latency', timeAgo: '1h 12m ago', badges: ['api', 'payments'], body: 'P99 latency spiked to 4.5s. Upstream provider might be experiencing issues.', status: 'open' },
+                        { id: 'evt-5', severity: 'warning', title: 'Stale Cache Entries Detected', timeAgo: '3h ago', badges: ['redis', 'cache'], body: 'Eviction policy is failing to clear outdated keys in region us-east-1.', status: 'processing' }
+                    ];
+                }
+                if (endpoint.includes('/update')) {
+                    return { success: true };
+                }
+                return {};
+            }
+        });
+
+        async function updateBellCount() {
+          try {
+            const [inboxRes, opsRes] = await Promise.all([
+              fetch('/api/inbox/status').catch(() => null),
+              fetch('/api/ops/alerts').catch(() => null)
+            ]);
+
+            const inboxData = (inboxRes && inboxRes.ok) ? await inboxRes.json().catch(() => ({})) : {};
+            const opsData = (opsRes && opsRes.ok) ? await opsRes.json().catch(() => ({})) : {};
+
+            const summary = inboxData.summary || {};
+            const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
+            const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
+
+            let total = 0;
+            if (typeof summary.open_items === 'number' || typeof summary.attention_items === 'number') {
+              total = (summary.open_items || 0) + (summary.attention_items || 0);
+            } else {
+              total = latestItems.length + alerts.length;
+            }
+
+            const countEl = document.getElementById('nav-bell-count');
+            if (countEl) {
+              if (total > 0) {
+                countEl.textContent = total > 99 ? '99+' : String(total);
+                countEl.classList.remove('hidden');
+              } else {
+                countEl.classList.add('hidden');
+              }
+            }
+
+            const dropdown = document.getElementById('bell-dropdown');
+            if (!dropdown) return;
+
+            dropdown.innerHTML = '';
+
+            if (alerts.length === 0 && latestItems.length === 0) {
+              const emptyDiv = document.createElement('div');
+              emptyDiv.className = 'bell-dropdown-empty';
+              emptyDiv.textContent = 'Нет уведомлений';
+              dropdown.appendChild(emptyDiv);
+            } else {
+              if (alerts.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'ALERTS';
+                dropdown.appendChild(header);
+
+                alerts.forEach(alert => {
+                  const a = document.createElement('a');
+                  a.className = 'bell-dropdown-item';
+                  a.href = '/v4/ops';
+          
+                  const dot = document.createElement('span');
+                  dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
+          
+                  const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+          
+                  a.appendChild(dot);
+                  a.appendChild(text);
+                  dropdown.appendChild(a);
+                });
+              }
+
+              if (latestItems.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'INBOX';
+                dropdown.appendChild(header);
+
+                latestItems.forEach(item => {
+                  const a = document.createElement('a');
+                  a.className = 'bell-dropdown-item';
+                  a.href = `/v4/inbox#${item.id || item.item_id || ''}`;
+          
+                  const dot = document.createElement('span');
+                  dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
+          
+                  const text = document.createTextNode(item.title || 'Notification');
+          
+                  a.appendChild(dot);
+                  a.appendChild(text);
+                  dropdown.appendChild(a);
+                });
+              }
+            }
+
+            const footer = document.createElement('a');
+            footer.className = 'bell-dropdown-footer';
+            footer.href = '/v4/inbox';
+            footer.textContent = 'Открыть все →';
+            footer.style.display = 'block';
+            footer.style.textDecoration = 'none';
+            dropdown.appendChild(footer);
+
+          } catch (err) {
+            console.error(err);
+          }
         }
 
-        if (!anyOk) showToast('API недоступен — показаны mock данные', 'error');
-    } catch(err) {
-        showToast('Ошибка загрузки — показаны mock данные', 'error');
-    }
+        setInterval(updateBellCount, 30000);
+        updateBellCount();
 
-    if (statusDot) statusDot.style.background = anyOk ? 'var(--accent-green)' : 'var(--accent-red)';
+        const navBell = document.querySelector('.nav-bell');
+        if (navBell) {
+          const bellWrapper = navBell.closest('.nav-bell-wrapper');
+          const bellDropdown = document.getElementById('bell-dropdown');
+  
+          if (bellWrapper && bellDropdown) {
+            navBell.addEventListener('click', (e) => {
+              e.preventDefault();
+              bellDropdown.classList.toggle('hidden');
+            });
 
-    renderSummary(summary);
-    renderBanners(staleOpen, staleProc);
+            document.addEventListener('click', (e) => {
+              if (!bellWrapper.contains(e.target)) {
+                bellDropdown.classList.add('hidden');
+              }
+            });
 
-    allItems = items;
-    filteredItems = items.slice();
-    buildBreakdown(items);
-    applyFilters();
-
-    isFirstLoad = false;
-    const lastEl = document.getElementById('last-updated');
-    if (lastEl) lastEl.textContent = 'Последнее обновление: ' + new Date().toLocaleTimeString('ru-RU');
-    const inboxUpdEl = document.getElementById('inbox-last-updated');
-    if (inboxUpdEl) inboxUpdEl.textContent = new Date().toLocaleTimeString('ru-RU');
-}
-
-// ── Timer ──────────────────────────────────────────────────────────────────
-function tickTimer() {
-    timer--;
-    if (timer <= 0) { timer = 30; fetchData(); }
-    setText('nav-timer', '\u21bb ' + timer + 's');
-    setText('footer-timer', 'Следующее обновление через ' + timer + 's');
-}
-
-// ── Bell ───────────────────────────────────────────────────────────────────
-async function updateBellCount() {
-    try {
-        const r = await fetch('/api/inbox/status').catch(function(){return null;});
-        if (!r || !r.ok) return;
-        const j = await r.json().catch(function(){return {};});
-        const s = j.summary || {};
-        const total = (s.open_items||0) + (s.attention_items||0);
-        const countEl = document.getElementById('nav-bell-count');
-        if (countEl) {
-            if (total > 0) { countEl.textContent = total > 99 ? '99+' : String(total); countEl.classList.remove('hidden'); }
-            else countEl.classList.add('hidden');
+            document.addEventListener('keydown', (e) => {
+              if (e.key === 'Escape') {
+                bellDropdown.classList.add('hidden');
+              }
+            });
+          }
         }
-    } catch(err) { /* тихо */ }
-}
-
-// ── Init ───────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', function() {
-    fetchData();
-    setInterval(tickTimer, 1000);
-    setInterval(updateBellCount, 60000);
-    updateBellCount();
-
-    // Stale banners
-    document.getElementById('close-processing-banner').addEventListener('click', function() {
-        document.getElementById('stale-processing-banner').className = 'stale-banner red';
-    });
-    document.getElementById('close-open-banner').addEventListener('click', function() {
-        document.getElementById('stale-open-banner').className = 'stale-banner amber';
-    });
-    document.getElementById('btn-remediate-processing').addEventListener('click', function() { remediateStale('processing'); });
-    document.getElementById('btn-remediate-open').addEventListener('click', function() { remediateStale('open'); });
-
-    // Create section
-    document.getElementById('create-header').addEventListener('click', function() { toggleCreateSection(); });
-    document.getElementById('btn-toggle-create').addEventListener('click', function() { toggleCreateSection(); });
-    document.getElementById('btn-create-cancel').addEventListener('click', function() { toggleCreateSection(false); });
-    document.getElementById('btn-create-submit').addEventListener('click', createItem);
-
-    // Refresh
-    document.getElementById('btn-refresh').addEventListener('click', function() { timer = 30; fetchData(); });
-
-    // Фильтры
-    document.getElementById('filter-status').addEventListener('change', applyFilters);
-    document.getElementById('filter-kind').addEventListener('change', applyFilters);
-    document.getElementById('filter-severity').addEventListener('change', applyFilters);
-    document.getElementById('filter-search').addEventListener('input', applyFilters);
-    document.getElementById('btn-reset-filters').addEventListener('click', function() {
-        document.getElementById('filter-status').value = '';
-        document.getElementById('filter-kind').value = '';
-        document.getElementById('filter-severity').value = '';
-        document.getElementById('filter-search').value = '';
-        applyFilters();
-    });
-
-    // Пагинация
-    document.getElementById('page-prev').addEventListener('click', function() {
-        currentPage = Math.max(0, currentPage - 1);
-        renderTable();
-    });
-    document.getElementById('page-next').addEventListener('click', function() {
-        const maxPage = Math.max(0, Math.ceil(filteredItems.length / PAGE_SIZE) - 1);
-        currentPage = Math.min(maxPage, currentPage + 1);
-        renderTable();
-    });
-
-    // Modal close
-    document.getElementById('modal-close').addEventListener('click', function() {
-        document.getElementById('detail-modal').classList.remove('active');
-    });
-    document.getElementById('detail-modal').addEventListener('click', function(e) {
-        if (e.target === this) this.classList.remove('active');
-    });
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') document.getElementById('detail-modal').classList.remove('active');
-    });
-
-    // Bell dropdown
-    const navBell = document.querySelector('.nav-bell');
-    if (navBell) {
-        const wrapper = navBell.closest('.nav-bell-wrapper');
-        const dd = document.getElementById('bell-dropdown');
-        if (wrapper && dd) {
-            navBell.addEventListener('click', function(e) { e.preventDefault(); dd.classList.toggle('hidden'); });
-            document.addEventListener('click', function(e) { if (!wrapper.contains(e.target)) dd.classList.add('hidden'); });
-        }
-    }
-});
-</script>
+    </script>
 </body>
 </html>

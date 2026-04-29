@@ -2623,10 +2623,15 @@ def test_restart_userbot_requires_web_key_and_restarts_runtime(monkeypatch):
     """Legacy watchdog endpoint должен требовать web-key и реально перезапускать userbot."""
     monkeypatch.setenv("WEB_API_KEY", "secret")
     fake_userbot = _FakeUserbot(startup_state="running", client_connected=True)
-    client = TestClient(_make_app(kraab_userbot=fake_userbot).app)
+    web_app = _make_app(kraab_userbot=fake_userbot)
+    client = TestClient(web_app.app)
 
     forbidden = client.post("/api/krab/restart_userbot")
     assert forbidden.status_code == 403
+
+    # Wave 11: rate limiter (5 min cooldown) проставляется ДО auth-чека.
+    # Сбрасываем timestamp, чтобы второй вызов прошёл без 'rate_limited'.
+    web_app._last_restart_userbot_ts = 0
 
     resp = client.post(
         "/api/krab/restart_userbot",
@@ -2838,6 +2843,18 @@ def test_model_catalog_uses_runtime_truth_for_loaded_flag(monkeypatch):
         }
 
     monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    # _build_runtime_cloud_presets → subprocess openclaw models list (20s timeout) + auth_recovery
+    monkeypatch.setattr(
+        WebApp,
+        "_build_runtime_cloud_presets",
+        classmethod(lambda cls, current_slots=None: []),
+    )
+    # build_auth_recovery_readiness_snapshot → openclaw models status + plugins list (по 20s)
+    import src.modules.web_app as _web_app_mod
+
+    monkeypatch.setattr(
+        _web_app_mod, "build_auth_recovery_readiness_snapshot", lambda **kw: {}
+    )
     client = _make_client_with_router(_TruthRouter())
 
     resp = client.get("/api/model/catalog")
@@ -6670,6 +6687,7 @@ def test_inbox_status_and_items_return_persisted_summary(
         due_at_iso="2026-03-12T10:00:00+00:00",
     )
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client()
 
     status_resp = client.get("/api/inbox/status")
@@ -6698,6 +6716,7 @@ def test_inbox_update_requires_web_key(monkeypatch: pytest.MonkeyPatch, tmp_path
         severity="error",
     )["item"]
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client()
 
     denied = client.post("/api/inbox/update", json={"item_id": item["item_id"], "status": "acked"})
@@ -6723,6 +6742,7 @@ def test_inbox_create_builds_owner_task_and_approval_request(
     monkeypatch.setenv("WEB_API_KEY", "secret")
     inbox = InboxService(state_path=tmp_path / "inbox.json")
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client()
 
     task_resp = client.post(
@@ -6771,6 +6791,7 @@ def test_inbox_update_approval_path_preserves_owner_note(
         approval_scope="money",
     )["item"]
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client()
 
     resp = client.post(
@@ -6832,6 +6853,7 @@ def test_inbox_stale_processing_preview_and_bulk_remediation(
     )
 
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client()
 
     preview_resp = client.get("/api/inbox/stale-processing?kind=owner_request&limit=10")
@@ -6896,6 +6918,7 @@ def test_inbox_stale_open_preview_and_bulk_remediation(
     )
 
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client()
 
     preview_resp = client.get("/api/inbox/stale-open?kind=owner_request&limit=10")
@@ -6938,6 +6961,7 @@ def test_inbox_create_can_escalate_from_existing_source_item(
         is_reply_to_me=True,
     )["item"]
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client()
 
     resp = client.post(

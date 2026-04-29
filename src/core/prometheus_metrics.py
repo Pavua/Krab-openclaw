@@ -17,12 +17,186 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Процесс стартовал в этот момент (unix ts). Используется для krab uptime gauge.
+_PROCESS_START_TIME: float = time.time()
+
 # Счётчик использований adaptive rerank (mutable singleton для hot-path инкремента).
 _ADAPTIVE_RERANK_COUNTER: list[int] = [0]
 
 # Security: счётчик пропущенных LLM-ответов гостям в группах (SwMaster incident 2026-04-21).
 # Словарь reason → count. Инкрементируется из userbot_bridge._process_message_serialized.
 _GUEST_LLM_SKIPPED_COUNTER: dict[str, int] = {}
+
+# Telegram FloodWait counter (alert TelegramRateLimited).
+# Словарь caller → count. Инкрементируется из error_handler.safe_handler и
+# других мест где ловится FloodWait. caller — free-form идентификатор
+# (имя handler'а или "voice_profile.refresh"). Pre-registered с пустым
+# словарём → /metrics всегда отдаёт # TYPE строку, alert не «мёртвый».
+_TELEGRAM_FLOOD_WAIT_COUNTER: dict[str, int] = {}
+
+
+def inc_telegram_flood_wait(caller: str) -> None:
+    """Инкремент krab_telegram_flood_wait_total{caller=...}.
+
+    Безопасно вызывать из любого FloodWait-handler'а. Не бросает, не I/O.
+    """
+    key = (caller or "unknown")[:80]
+    _TELEGRAM_FLOOD_WAIT_COUNTER[key] = _TELEGRAM_FLOOD_WAIT_COUNTER.get(key, 0) + 1
+
+
+# === C6: Memory retrieval метрики (prometheus_client). ===
+# Регистрируем один раз на уровне модуля. Если prometheus_client отсутствует —
+# объекты становятся None, а вызывающий код (memory_retrieval.search) делает
+# None-check перед inc/observe. Это сохраняет совместимость dev-окружений без
+# опциональной зависимости.
+try:
+    from prometheus_client import Counter as _Counter  # type: ignore[import-not-found]
+    from prometheus_client import Histogram as _Histogram  # type: ignore[import-not-found]
+
+    _memory_retrieval_mode_total = _Counter(
+        "krab_memory_retrieval_mode_total",
+        "Количество retrieval queries по режиму (fts/vec/hybrid/none)",
+        ["mode"],
+    )
+    _memory_retrieval_latency_seconds = _Histogram(
+        "krab_memory_retrieval_latency_seconds",
+        "Latency retrieval per phase (fts/vec/mmr/total)",
+        ["phase"],
+        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+    )
+    # sqlite-vec MATCH latency — trigger для миграции на HNSW.
+    # При p95 > 100ms (~250k vectors на M4 Max) — пора уходить с linear scan.
+    _vec_query_duration_seconds = _Histogram(
+        "krab_vec_query_duration_seconds",
+        "Latency of sqlite-vec MATCH queries (linear scan over vec_chunks)",
+        ["k"],
+        buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
+    )
+except Exception:  # noqa: BLE001 - prometheus_client optional
+    _memory_retrieval_mode_total = None  # type: ignore[assignment]
+    _memory_retrieval_latency_seconds = None  # type: ignore[assignment]
+    _vec_query_duration_seconds = None  # type: ignore[assignment]
+
+
+# === Feature K: Thread coherence metrics (observability-only). ===
+# Histogram score (-1..1) + counter drift events (с лейблом explicit).
+try:
+    from prometheus_client import Counter as _Counter2  # type: ignore[import-not-found]
+    from prometheus_client import Histogram as _Histogram2  # type: ignore[import-not-found]
+
+    _thread_coherence_score = _Histogram2(
+        "krab_thread_coherence_score",
+        "Thread coherence score (-1..1) — semantic similarity текущего сообщения к предыдущим",
+        buckets=(-1.0, -0.5, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+    )
+    _thread_coherence_drift_total = _Counter2(
+        "krab_thread_coherence_drift_total",
+        "Количество детектированных drift'ов в thread coherence",
+        ["explicit"],
+    )
+except Exception:  # noqa: BLE001 - prometheus_client optional
+    _thread_coherence_score = None  # type: ignore[assignment]
+    _thread_coherence_drift_total = None  # type: ignore[assignment]
+
+
+# === Idea 23: Per-handler latency dashboard. ===
+# Histogram + Counter для каждого handler (`!ask`, `!search`, ...).
+# Pure module — wire-up через декораторы/context manager в Wave 11-21 handlers
+# (см. backlog). Buckets настроены под p50≈0.3s / p99≈10s типичных handler'ов.
+try:
+    from prometheus_client import Counter as _Counter3  # type: ignore[import-not-found]
+    from prometheus_client import Histogram as _Histogram3  # type: ignore[import-not-found]
+
+    _handler_latency_seconds = _Histogram3(
+        "krab_handler_latency_seconds",
+        "Per-handler latency (seconds) — измерение времени выполнения userbot-команд",
+        ["handler"],
+        buckets=(0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0),
+    )
+    _handler_invocations_total = _Counter3(
+        "krab_handler_invocations_total",
+        "Per-handler invocations counter — статусы success/error/timeout",
+        ["handler", "status"],
+    )
+except Exception:  # noqa: BLE001 - prometheus_client optional
+    _handler_latency_seconds = None  # type: ignore[assignment]
+    _handler_invocations_total = None  # type: ignore[assignment]
+
+
+def observe_handler_latency(
+    handler_name: str,
+    latency_sec: float,
+    *,
+    status: str = "success",
+) -> None:
+    """Записывает latency и инкрементирует счётчик для handler.
+
+    Безопасно вызывать из любого места — fail-safe без prometheus_client.
+    `status` ∈ {success, error, timeout}; произвольные значения тоже принимаются,
+    но рекомендуется придерживаться enum'а для согласованности дашборда.
+    """
+    name = (handler_name or "unknown")[:60]
+    st = (status or "success")[:20]
+    try:
+        if _handler_latency_seconds is not None:
+            _handler_latency_seconds.labels(handler=name).observe(max(0.0, float(latency_sec)))
+        if _handler_invocations_total is not None:
+            _handler_invocations_total.labels(handler=name, status=st).inc()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+class _HandlerLatencyTimer:
+    """Async context manager, замеряющий latency handler.
+
+    При выходе через исключение — status="error"; иначе "success".
+    Можно вручную выставить статус через `.set_status('timeout')`.
+    """
+
+    __slots__ = ("_handler", "_start", "_status")
+
+    def __init__(self, handler_name: str) -> None:
+        self._handler = handler_name
+        self._start: float = 0.0
+        self._status: str = "success"
+
+    def set_status(self, status: str) -> None:
+        """Принудительно установить статус (например, 'timeout')."""
+        self._status = status
+
+    async def __aenter__(self) -> _HandlerLatencyTimer:
+        self._start = time.monotonic()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+        latency = max(0.0, time.monotonic() - self._start)
+        status = self._status
+        if exc_type is not None and status == "success":
+            status = "error"
+        observe_handler_latency(self._handler, latency, status=status)
+        # Не глотаем исключение — context manager только наблюдает.
+        return None
+
+
+def time_handler(handler_name: str) -> _HandlerLatencyTimer:
+    """Async context manager для замера handler latency.
+
+    Пример:
+        async with time_handler('ask'):
+            await do_ask()
+    """
+    return _HandlerLatencyTimer(handler_name)
+
+
+def observe_thread_coherence(score: float | None, *, drift: bool, explicit: bool) -> None:
+    """Записывает thread coherence в Prometheus (fail-safe, no-op без prom_client)."""
+    try:
+        if _thread_coherence_score is not None and score is not None:
+            _thread_coherence_score.observe(float(score))
+        if drift and _thread_coherence_drift_total is not None:
+            _thread_coherence_drift_total.labels(explicit=str(bool(explicit)).lower()).inc()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _sanitize_label(value: str) -> str:
@@ -343,6 +517,18 @@ def collect_metrics() -> str:
     except Exception:
         pass
 
+    # === Telegram FloodWait (alert TelegramRateLimited) ===
+    # Pre-register HELP/TYPE даже если счётчик пустой — чтобы alert
+    # `increase(krab_telegram_flood_wait_total[15m])` не считался "no data".
+    lines.append("# HELP krab_telegram_flood_wait_total Telegram FloodWait incidents by caller")
+    lines.append("# TYPE krab_telegram_flood_wait_total counter")
+    if not _TELEGRAM_FLOOD_WAIT_COUNTER:
+        lines.append('krab_telegram_flood_wait_total{caller="none"} 0')
+    else:
+        for _fw_caller, _fw_count in _TELEGRAM_FLOOD_WAIT_COUNTER.items():
+            label_str = f'caller="{_sanitize_label(_fw_caller)}"'
+            lines.append(f"krab_telegram_flood_wait_total{{{label_str}}} {_fw_count}")
+
     # === Guest LLM skip (security ACL) ===
     for _skip_reason, _skip_count in _GUEST_LLM_SKIPPED_COUNTER.items():
         lines.append(
@@ -355,12 +541,38 @@ def collect_metrics() -> str:
             )
         )
 
+    # === Swarm per-team tool blocks (silent strip) ===
+    try:
+        from src.core.swarm_tool_allowlist import (  # type: ignore[import-not-found]
+            get_blocked_tool_stats,
+        )
+
+        for (_team, _tool), _cnt in get_blocked_tool_stats().items():
+            lines.append(
+                _format_metric(
+                    "krab_swarm_tool_blocked_total",
+                    _cnt,
+                    labels={"team": _team[:40], "tool": _tool[:80]},
+                    help_text="Swarm per-team tool calls blocked by allowlist",
+                    mtype="counter",
+                )
+            )
+    except Exception:
+        pass
+
     # === Timestamps ===
     lines.append(
         _format_metric(
             "krab_metrics_generated_at",
             int(time.time()),
             help_text="Metrics generation timestamp",
+        )
+    )
+    lines.append(
+        _format_metric(
+            "krab_process_start_time_seconds",
+            _PROCESS_START_TIME,
+            help_text="Unix timestamp когда процесс owner panel стартовал",
         )
     )
 

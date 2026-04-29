@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.live
+
 
 def _make_router():
     """Создаёт минимальный ModelRouter с мок openclaw_client."""

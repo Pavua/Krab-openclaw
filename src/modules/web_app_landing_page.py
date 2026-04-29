@@ -268,7 +268,7 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
         </div>
 
         <footer>
-            Krab v8 · Opus 4.6 + Gemini 3.1 Pro · Session 4
+            Krab v8 · <span id="footer-model">—</span> · Session 4
         </footer>
     </div>
 
@@ -290,12 +290,12 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 updateUI(data);
             } catch (e) {
                 console.warn('Fetch failed, using fallback data for preview.');
-                // Fallback mock data if API is unreachable
+                // Fallback на "—" если API недоступен — без хардкода имён моделей
                 updateUI({
-                    last_runtime_route: { model: "claude-3-opus-20240229" },
-                    telegram: { session_state: "connected" },
-                    inbox_summary: { open_items: 12 },
-                    voice: { enabled: true },
+                    last_runtime_route: { model: "—" },
+                    telegram: { session_state: "unknown" },
+                    inbox_summary: { open_items: 0 },
+                    voice: { enabled: false },
                     scheduler: { enabled: false }
                 });
             }
@@ -303,7 +303,10 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
 
         function updateUI(data) {
             if (data.last_runtime_route && data.last_runtime_route.model) {
-                document.getElementById('model-name').textContent = data.last_runtime_route.model;
+                const liveModel = data.last_runtime_route.model;
+                document.getElementById('model-name').textContent = liveModel;
+                const footerModel = document.getElementById('footer-model');
+                if (footerModel) footerModel.textContent = liveModel;
             }
 
             if (data.telegram) {

@@ -79,8 +79,12 @@ class Config:
     ]
     MODEL: str = os.getenv("MODEL", "google/gemini-2.5-flash")
 
-    # LM Studio: preferred local model (substring match)
-    LOCAL_PREFERRED_MODEL: str = os.getenv("LOCAL_PREFERRED_MODEL", "nvidia/nemotron-3-nano")
+    # LM Studio: preferred local model (substring match).
+    # Default пуст: НЕ грузить ничего автоматически — user сам выбирает модель.
+    # Раньше дефолт был "nvidia/nemotron-3-nano" — устаревшая модель, вызвала
+    # RAM overflow incident 27.04.2026 при reboot (auto-load поверх тестовой модели
+    # пользователя). См. .env комментарий + LOCAL_AUTOLOAD_FALLBACK_LIMIT=0.
+    LOCAL_PREFERRED_MODEL: str = os.getenv("LOCAL_PREFERRED_MODEL", "")
     # LM Studio: preferred local vision model (для фото/изображений)
     LOCAL_PREFERRED_VISION_MODEL: str = os.getenv(
         "LOCAL_PREFERRED_VISION_MODEL",
@@ -306,6 +310,10 @@ class Config:
     OWNER_USER_IDS: list[str] = [
         u.strip() for u in os.getenv("OWNER_USER_IDS", "").split(",") if u.strip()
     ]
+    # Куда роутить уведомления (незнакомые контакты, proactive alerts, startup).
+    # Если не задан — fallback на "me" (Saved Messages userbot-аккаунта).
+    # Пример: OWNER_NOTIFY_CHAT_ID=<telegram_user_id_владельца>
+    OWNER_NOTIFY_CHAT_ID: str = os.getenv("OWNER_NOTIFY_CHAT_ID", "").strip()
     # Sentry — runtime error tracking.
     # DSN из ~/.env. Если пустой — Sentry не инициализируется, работа продолжается без трекинга.
     # Seer AI analysis доступен через MCP mcp__sentry__analyze_issue_with_seer.
@@ -501,6 +509,15 @@ class Config:
     # Voice Gateway POSTает сюда транскрипты → ответ LLM стримится как SSE.
     KRAB_VOICE_PORT: int = int(os.getenv("KRAB_VOICE_PORT", "8081"))
 
+    # Strict mode для транскрипции голосовых сообщений.
+    # 0 (default): при сбое оба backend → LLM получает честный промпт с описанием ошибки.
+    # 1: при сбое — немедленный reply "Не удалось распознать, напиши текстом" без LLM call.
+    KRAB_VOICE_STRICT_MODE: bool = os.getenv("KRAB_VOICE_STRICT_MODE", "0").strip() in (
+        "1",
+        "true",
+        "yes",
+    )
+
     @classmethod
     def validate(cls) -> list[str]:
         """Проверяет обязательные настройки и возвращает список ошибок"""
@@ -693,7 +710,7 @@ class Config:
             env_path.write_text("\n".join(new_lines) + "\n")
             return True
         except Exception as e:
-            print(f"Error updating config: {e}")
+            _config_logger.error("config_update_failed", exc_info=True, extra={"error": str(e)})
             return False
 
     @classmethod

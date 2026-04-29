@@ -9,10 +9,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 import structlog
 
@@ -266,6 +267,232 @@ def collect_alerts_block(router: Any) -> list[dict[str, Any]]:
             }
         )
     return normalized
+
+
+async def _run_subprocess_capture(*args: str, timeout: float = 1.5) -> tuple[int, str, str] | None:
+    """Async wrapper над create_subprocess_exec + communicate с timeout.
+
+    Возвращает (returncode, stdout, stderr) или None при ошибке/таймауте.
+    Не блокирует event loop. Аргументы передаются напрямую (без shell).
+    """
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+
+    try:
+        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            await proc.wait()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+    return (
+        proc.returncode if proc.returncode is not None else -1,
+        stdout_b.decode("utf-8", errors="replace"),
+        stderr_b.decode("utf-8", errors="replace"),
+    )
+
+
+async def _service_status_via_launchctl_async(label: str, *, timeout: float = 1.5) -> str:
+    """Async версия _service_status_via_launchctl — не блокирует event loop."""
+
+    result = await _run_subprocess_capture("launchctl", "list", label, timeout=timeout)
+    if result is None:
+        return "unknown"
+    returncode, stdout, _ = result
+    if returncode != 0:
+        return "down"
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith('"PID"'):
+            try:
+                value = stripped.split("=", 1)[1].strip().rstrip(";").strip()
+                pid = int(value)
+                return "running" if pid > 0 else "down"
+            except (ValueError, IndexError):
+                return "unknown"
+    return "down"
+
+
+async def _check_krab_process_async() -> tuple[str, int | None]:
+    """Async версия _check_krab_process."""
+
+    result = await _run_subprocess_capture("pgrep", "-f", "userbot_bridge", timeout=1.5)
+    if result is None:
+        return ("unknown", None)
+    returncode, stdout, _ = result
+    if returncode != 0 or not stdout.strip():
+        return ("down", None)
+    try:
+        pid = int(stdout.strip().splitlines()[0])
+        return ("running", pid)
+    except (ValueError, IndexError):
+        return ("unknown", None)
+
+
+async def _check_lm_studio_async() -> str:
+    """Async TCP-probe LM Studio через open_connection с таймаутом."""
+
+    try:
+        fut = asyncio.open_connection("127.0.0.1", 1234)
+        _reader, writer = await asyncio.wait_for(fut, timeout=0.5)
+    except (OSError, asyncio.TimeoutError):
+        return "down"
+    try:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception:  # noqa: BLE001
+        pass
+    return "running"
+
+
+async def collect_services_status_async() -> tuple[dict[str, str], int | None]:
+    """Async-версия collect_services_status: все пробы летят параллельно.
+
+    Запускаем 6 subprocess'ов (1 pgrep + 5 launchctl) + 1 TCP-probe одновременно
+    через asyncio.gather. Общее время ≈ max(probe), а не sum(probes).
+    """
+
+    krab_task = asyncio.create_task(_check_krab_process_async())
+    launchctl_tasks = {
+        name: asyncio.create_task(_service_status_via_launchctl_async(label))
+        for name, label in _SERVICE_LABELS.items()
+    }
+    lm_task = asyncio.create_task(_check_lm_studio_async())
+
+    services: dict[str, str] = {}
+
+    try:
+        krab_status, krab_pid = await krab_task
+    except Exception as exc:  # noqa: BLE001
+        _log.warning(
+            "dashboard_summary_krab_probe_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        krab_status, krab_pid = "unknown", None
+    services["krab"] = krab_status
+
+    for name, task in launchctl_tasks.items():
+        try:
+            services[name] = await task
+        except Exception as exc:  # noqa: BLE001
+            _log.warning(
+                "dashboard_summary_service_probe_failed",
+                service=name,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            services[name] = "unknown"
+
+    try:
+        services["lm_studio"] = await lm_task
+    except Exception as exc:  # noqa: BLE001
+        _log.warning(
+            "dashboard_summary_lm_studio_probe_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        services["lm_studio"] = "unknown"
+
+    return services, krab_pid
+
+
+async def collect_dashboard_summary_async(
+    *,
+    boot_ts: float | None = None,
+    router: Any = None,
+    services_probe: Callable[[], Awaitable[tuple[dict[str, str], int | None]]] | None = None,
+    archive_probe: Callable[[], dict[str, Any] | None] | None = None,
+    memory_probe: Callable[[], dict[str, Any] | None] | None = None,
+    activity_probe: Callable[[], dict[str, Any] | None] | None = None,
+    alerts_probe: Callable[[Any], list[dict[str, Any]]] | None = None,
+    version_info: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Async-агрегатор: не блокирует event loop, параллелит subprocess-пробы.
+
+    Лёгкие чтения (archive/memory/activity/alerts) — inline (быстрые in-memory/SQLite).
+    Тяжёлые subprocess-пробы (launchctl/pgrep/socket) идут через asyncio.gather
+    внутри collect_services_status_async.
+    """
+
+    started = time.perf_counter()
+    sources_queried: list[str] = []
+
+    now = time.time()
+    boot = boot_ts if boot_ts is not None else now
+    uptime = {"sec": int(round(now - boot)), "boot_ts": boot}
+    sources_queried.append("uptime")
+
+    version = version_info or {"session": "13", "krab_version": "v8"}
+    sources_queried.append("version")
+
+    services_fn = services_probe or collect_services_status_async
+    try:
+        services, krab_pid = await services_fn()
+        sources_queried.append("services")
+    except Exception as exc:  # noqa: BLE001
+        _log.warning(
+            "dashboard_summary_services_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        services, krab_pid = {}, None
+
+    archive_fn = archive_probe or collect_archive_block
+    archive = archive_fn()
+    if archive is not None:
+        sources_queried.append("archive")
+
+    memory_fn = memory_probe or collect_memory_layer_block
+    memory_layer = memory_fn()
+    if memory_layer is not None:
+        sources_queried.append("memory_layer")
+
+    activity_fn = activity_probe or collect_activity_block
+    activity = activity_fn()
+    if activity is not None:
+        sources_queried.append("activity")
+
+    alerts_fn = alerts_probe or collect_alerts_block
+    alerts = alerts_fn(router)
+    sources_queried.append("alerts")
+
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+
+    return {
+        "ok": True,
+        "uptime": uptime,
+        "version": version,
+        "krab_pid": krab_pid,
+        "services": services,
+        "archive": archive,
+        "memory_layer": memory_layer,
+        "activity": activity,
+        "alerts": alerts,
+        "_meta": {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "sources_queried": sources_queried,
+            "elapsed_ms": elapsed_ms,
+        },
+    }
 
 
 def collect_dashboard_summary(

@@ -135,7 +135,8 @@ src/
     memory_retrieval_scores.py — скоры поиска памяти (session 17)
     memory_doctor.py    — диагностика и авторемонт индекса памяти (session 17)
   handlers/
-    command_handlers.py — 175+ команд, _AgentRoomRouterAdapter
+    command_handlers.py — 105+ команд (auto-counted), _AgentRoomRouterAdapter; 4430 LOC (Session 28, −77.4% от 19637)
+    commands/           — 22 модуля (Waves 1-18): text_utils/chat/scheduler/voice/memory/social/ai/swarm/translator/system/admin/cli/fileio/group_admin/content/state/observability/memory_admin + policy + _shared
   integrations/
     tor_bridge.py       — Tor SOCKS5 proxy (httpx + Playwright)
     browser_bridge.py   — CDP подключение к Chrome
@@ -252,17 +253,83 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - **Handoff** — после изменений обновляй memory и IMPROVEMENTS.md
 - **Проверяй после правок**: `pytest tests/ -q`, `ruff check src/`
 
-## Phase 7 статус (21.04.2026)
+## Phase 7 статус (25.04.2026 — Session 22 close)
 
-- **Phase 7: 100%** (session 17 финализировала: Memory Layer Phase 2, cross-AI review, skill discovery, !mem/!chado/!filter, 238 endpoints)
-- Готово: ErrorDigest, WeeklyDigest, Research Pipeline, AlertSystem, Cost Budget Alerts, TaskBoard, CommandRegistry, 151 prod команд, 238 API endpoints, Memory heatmap/doctor/rerank
-- Session 17 новое: sender_context, operator_info_guard, memory_llm_rerank, gemini_rerank_provider, skill_scope, cross_ai_review, skill_discovery_check, mention_detector, fingerprint_http, human_like, stealth_metrics, memory_retrieval_scores, memory_doctor
+- **Phase 7: 100%**, Memory Phase 2: **LIVE in production** (`KRAB_RAG_PHASE2_ENABLED=1` + `KRAB_RAG_PHASE2_SHADOW=1` в `.env`)
+- **Sessions 20+21+22**: 88 commits на ветке `fix/daily-review-20260421`; **Session 27+28**: +46 commits, branch total 130+ commits
+- **250+ API endpoints** (live: `/api/endpoints`), 105+ prod команд, **11212 тестов collected** (Session 28 final)
+
+### Session 22 highlights
+- **Memory Phase 2 LIVE**: hybrid retrieval (FTS5 + vec_chunks RRF + MMR diversity), recall@5 +37.67 verified, 10× MMR speedup через vec-cache
+- **Cron pipeline FIXED** end-to-end (был silent no-op): `cron_native_scheduler` bind LLM-processing sender + numeric chat_id + 90s timeout + `adapter.route_query()` (вместо несуществующего `.stream()`) + context-augmented prompts (sub-30s exec, без tool-calls)
+- **Sentry pipeline live** — Performance traces (LLM + memory spans), email + webhook → Telegram, `userbot_not_ready` → 503+Retry-After (no spam during boot, -80 events expected)
+- **MCP tool expansion**: 44 tools — filesystem/git/system/http (SSRF-guarded)/time/db_query + Apple Notes/iMessage/Reminders/Calendar + dev-loop pack
+- **9 LaunchAgents active**: ai.krab.core, ai.openclaw.gateway, mcp-yung-nagato, mcp-p0lrd, mcp-hammerspoon, cloudflared-tunnel, cloudflared-sentry-sync, workspace-backup, log-rotation, inbox-watcher, gateway-watchdog
+- **Grafana**: dashboard imported `http://localhost:3000/d/krab-main` (admin/krab_local), 18 panels verified
+- **Models**: GPT-5.5 / GPT-5.5-pro / Opus 4.7 / DeepSeek V4 family добавлены в `models.json`; UI panel hardcoded model names removed across V4
+- **Wake-up message**: 60min rate limit (no more startup spam в Saved Messages)
+- **message_batcher**: preserve buffered messages during LLM processing (no drops)
+
+## Smart Message Routing (Session 26 — 26.04.2026 — LIVE)
+
+5-stage pipeline для intelligent group message routing — ответ на user issue «Krab отвечает не всегда вовремя».
+
+```
+1. Hard gates (DM/mention/reply/!cmd) → ALWAYS respond
+2. Per-chat policy (silent/cautious/normal/chatty) → SILENT drop
+3. Regex fast filter — score >=0.6 yes, <0.2 no
+4. LLM intent classifier (Qwen3.5 9B, 5min cache, 2s timeout) — borderline 0.2-0.6
+5. Post-response feedback (delete/reaction tracking → policy auto-adjust)
+```
+
+**Components**:
+- `src/core/chat_response_policy.py` — JSON store + ChatMode enum + auto-adjust (>5 negatives/24h → downshift, rate-limit 6h)
+- `src/core/llm_intent_classifier.py` — LM Studio HTTP + LRU cache (500 entries, 5min TTL)
+- `src/core/feedback_tracker.py` — Pyrogram delete/reaction → negative/positive signals
+- `src/core/trigger_detector.py:detect_smart_trigger()` — async 5-stage orchestrator
+- `src/userbot_bridge.py` — Pyrogram event hooks + post-response stash
+- `src/handlers/commands/policy_commands.py` — `!chatpolicy` (10 subcommands)
+- `src/modules/web_routers/chat_policy_router.py` — 4 endpoints
+
+**Owner control**:
+- `!chatpolicy [show|set <mode>|threshold <0.0-1.0>|add-blocked-topic|stats|list|reset]`
+- `GET/POST /api/chat/policy/{chat_id}`, `GET /api/chat/policies`, `DELETE /api/chat/policy/{chat_id}`
+- env override: `KRAB_IMPLICIT_TRIGGER_THRESHOLD`
+
+**Spec**: `docs/SMART_ROUTING_DESIGN.md` (319 LOC).
+
+## Phase 2 Code Splits (Session 25 — 26.04.2026 — COMPLETE; command_handlers split ongoing)
+
+- **Status: COMPLETE (web_app)** — 50 waves Wave A → Wave XX, ~50 commits (`db6d9fd..674ebd1`)
+- **25 routers / 207 endpoints** extracted в `src/modules/web_routers/`
+- **web_app.py: 15 822 → ~10k LOC (-37%)**
+- **Pattern**: factory `build_X_router(ctx)` + helper injection через late-bound lambda (zero behavior change)
+- **Foundation**: `src/modules/web_routers/_context.py` (RouterContext) + `src/modules/web_routers/_helpers.py` (shared helpers)
+- **Routers**: admin, assistant, browser, capabilities, commands, extras, health, inbox, memory, meta, misc, model, monitoring, openclaw, pages, policy, runtime_inspect, runtime_status, swarm, system, translator, version, voice, write + один common (см. `src/modules/web_routers/`)
+
+### command_handlers.py split (Session 27–28 — ONGOING)
+
+- **19637 → 4430 LOC (−77.4%)** через **18 waves** (Waves 1-15 в Session 27, Waves 16-18 в Session 28)
+- **Session 27** (Waves 1-15): text_utils / chat / scheduler / voice / memory / social / ai / swarm / translator / system / admin / cli / fileio / group_admin / content
+- **Session 28** (Waves 16-18): **state_commands** (clear/forget/reset/model/web/macos/browser, −1114 LOC) + **observability_commands** (watch/inbox/context/memo/bookmark/note, −711 LOC) + **memory_admin_commands** (memory recent/stats/clear/rebuild)
+- Все модули в `src/handlers/commands/` (22 файла): policy_commands.py + все extracted + `_shared.py`
+
+### Wave 12 backlog (Session 23)
+- Cron LLM output quality (короткие/обрезанные ответы — нужно поднять reasoning depth)
+- DB-locked retest after WAL+busy_timeout pragma fix
+- sqlite-vec `vec_chunks_meta` desync (carry-over)
+- KrabEar hanging investigation
+- LM Studio 401 — local fallback restore
+- FTS5 watcher + auto-rebuild
+- Named Cloudflare Tunnel (still on quick-tunnel ephemeral URL)
 
 ## Ссылки
 
+- `docs/SESSION_22_FINAL_REPORT.md` — финальный отчёт сессии 22 (88 commits)
+- `docs/SESSION_21_FINAL_REPORT.md` — отчёт сессии 21
+- `docs/PHASE2_MIGRATION_GUIDE.md` — Phase 2 activation procedure
 - `IMPROVEMENTS.md` — архитектурный бэклог и глобальное видение
 - `docs/MASTER_PLAN_VNEXT_RU.md` — мастер-план проекта
-- `docs/DASHBOARD_REDESIGN_SPEC.md` — спецификация frontend-дашборда (сессия 7)
 - `.remember/next_session.md` — handoff следующей сессии
 - Memory: `~/.claude/projects/-Users-pablito-Antigravity-AGENTS-----/memory/`
 
@@ -501,7 +568,7 @@ Endpoints session 6 (добавлены):
 | `/api/thinking/set` | POST | Включить/выключить thinking |
 | `/api/depth/status` | GET | Текущий уровень глубины reasoning |
 
-Endpoints session 7 (добавлены, ~180+ итого):
+Endpoints session 7 (добавлены, ~249 итого после Session 22):
 
 | Endpoint | Метод | Описание |
 |----------|-------|----------|
@@ -653,10 +720,17 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | Session 6 | 3633 |
 | Session 7 | ~6826+ |
 | Session 17 | ~7226+ (+400 новых: memory doctor/rerank/heatmap, skill_scope, cross_ai_review) |
+| Session 22 | 9991 (collected, после Wave 11/12 cleanup) |
+| Session 23 | 9991 collected, 1 intermittent flake (Wave 13 cleanup) |
+| Session 24 | **9527 passed**, 94 skipped, 0 failed (clean state, 538s full run; +busy_timeout test, +health_deep session 24 tests, +sentry markers tests) |
+| Session 25 | **10125 collected** (~9700+ passed), 94 skipped (Phase 2 Code Splits **COMPLETE** — **25 routers extracted, 207 endpoints** через factory `build_X_router(ctx)` pattern за 50 waves Wave A→XX; +tests на routers / RouterContext / MCP userbot capabilities / peer_id_invalid handling / HTML pages router) |
+| Session 26 | **+128 tests** Smart Routing (28 chat_response_policy + 29 llm_intent_classifier + 21 feedback_tracker + 12 chat_policy_router + 11 policy_commands + 14 smart_trigger_integration). +DB corruption circuit breaker (16 tests). +Phase 2 Wave YY/ZZ — costs cluster (7) + swarm leaked (12 endpoints). +inbox dual-patch (6 pre-existing failures fixed). +launchd auto-load fix (Stop Krab.command). +session recovery (kraab.session corrupt → sqlite .recover, 380 peers preserved) |
+| Session 27 | **10561 passed**, 93 skipped, **8 pre-existing fails**, 0 hangers (pytest-timeout=30). Phase 2 command_handlers split: 19637 → 6637 LOC (**−66.2%**) через **15 waves**: text_utils / chat / scheduler / voice / memory / social / ai / swarm / translator / system / **admin** (Wave 11) / **cli** (Wave 12) / **fileio** (Wave 13) / **group_admin** (Wave 14) / **content** (Wave 15). +Dual-namespace lookup pattern (fbf3262 + 847786f). +Bug fixes: mention trigger (e1ac040), reply_to context (5cf00ec), TTS 600→1800 (2e873a9), media filter video (80221b3), sender_name group attribution (28850e4), REACTION_INVALID whitelist (1866376). +Smart Routing analyzer (22 tests, 0c7f89d). +5-layer LLM recovery 27.04. +pytest-timeout 2.4.0 + 7 hangers RCA (3ca34a0). +memory_indexer shutdown race fix (0e6337c). +subprocess hot-path 60s cache (66ae8b8) |
+| Session 28 | **11212 collected** (~10650+ passed), +~651 tests. Phase 2 command_handlers split продолжен: **Wave 16** state_commands (clear/forget/reset/model/web/macos/browser, −1114 LOC) + **Wave 17** observability_commands (watch/inbox/context/memo/bookmark/note, −711 LOC) + **Wave 18** memory_admin_commands (memory recent/stats/clear/rebuild). command_handlers.py **19637 → 4430 LOC (−77.4%)**, 18 waves total. +`POST /api/inbox/bulk-ack-stale` endpoint. +Bug fixes: launchd respawn-storm root cause (KeepAlive Crashed + ThrottleInterval), video media wire-up в bridge, Bug 9 (openclaw model_apply test unhang), !swarm в additional_response_chats (How2AI). Environment bootstrap: multi-account Codex dev-layer, `scripts/sync_codex_dev_layer.py`, `docs/MULTI_ACCOUNT_CODEX_SETUP.md`, pablito MCP baseline 18 servers. P0 failures → 0: 55 passed (document/message batching/buffered/photo/analyzer). Smart Routing analyzer починен под ANSI structlog. 19 commits Session 28. |
 
 <!-- BEGIN:auto-endpoints -->
 
-### Auto-generated endpoints table (238 маршрутов)
+### Auto-generated endpoints table (254+ уникальных paths; **207 extracted в `src/modules/web_routers/`** через factory `build_X_router(ctx)` pattern — **25 routers** за 50 waves Phase 2 Wave A→XX; +`/api/inbox/bulk-ack-stale` Session 28)
 
 | Endpoint | Метод |
 |----------|-------|
@@ -683,12 +757,17 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/chrome/dedicated/status` | GET |
 | `/api/commands` | GET |
 | `/api/commands/usage` | GET |
+| `/api/commands/usage/top` | GET |
 | `/api/commands/{name}` | GET |
 | `/api/context/checkpoint` | POST |
 | `/api/context/latest` | GET |
 | `/api/context/transition-pack` | POST |
 | `/api/costs/budget` | GET |
+| `/api/costs/by-tier` | GET |
+| `/api/costs/by_chat` | GET |
+| `/api/costs/codex-quota` | GET |
 | `/api/costs/history` | GET |
+| `/api/costs/hourly` | GET |
 | `/api/costs/report` | GET |
 | `/api/ctx` | GET |
 | `/api/dashboard/summary` | GET |
@@ -700,7 +779,11 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/ecosystem/health/export` | GET |
 | `/api/endpoints` | GET |
 | `/api/health` | GET |
+| `/api/health/deep` | GET |
 | `/api/health/lite` | GET |
+| `/api/hooks/sentry` | POST |
+| `/api/hooks/sentry/secret/rotate` | POST |
+| `/api/inbox/bulk-ack-stale` | POST |
 | `/api/inbox/create` | POST |
 | `/api/inbox/events` | GET |
 | `/api/inbox/items` | GET |
@@ -713,8 +796,10 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/krab/restart_userbot` | POST |
 | `/api/krab_ear/status` | GET |
 | `/api/links` | GET |
+| `/api/memory/heatmap` | GET |
 | `/api/memory/indexer` | GET |
 | `/api/memory/indexer/flush` | POST |
+| `/api/memory/phase2/status` | GET |
 | `/api/memory/search` | GET |
 | `/api/memory/stats` | GET |
 | `/api/message_batcher/stats` | GET |
@@ -752,6 +837,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/openclaw/cron/jobs` | GET |
 | `/api/openclaw/cron/jobs/create` | POST |
 | `/api/openclaw/cron/jobs/remove` | POST |
+| `/api/openclaw/cron/jobs/run_now` | POST |
 | `/api/openclaw/cron/jobs/toggle` | POST |
 | `/api/openclaw/cron/status` | GET |
 | `/api/openclaw/deep-check` | GET |
@@ -775,6 +861,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/ops/maintenance/prune` | POST |
 | `/api/ops/metrics` | GET |
 | `/api/ops/models` | POST |
+| `/api/ops/openclaw-procs` | GET |
 | `/api/ops/report` | GET |
 | `/api/ops/report/export` | GET |
 | `/api/ops/runtime_snapshot` | GET |
@@ -788,6 +875,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/provisioning/preview/{draft_id}` | GET |
 | `/api/provisioning/templates` | GET |
 | `/api/queue` | GET |
+| `/api/reactions/incoming` | GET |
 | `/api/reactions/stats` | GET |
 | `/api/runtime/chat-session/clear` | POST |
 | `/api/runtime/handoff` | GET |
@@ -803,6 +891,7 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/stats/caches` | GET |
 | `/api/swarm/artifacts` | GET |
 | `/api/swarm/artifacts/cleanup` | POST |
+| `/api/swarm/delegations/active` | GET |
 | `/api/swarm/events` | GET |
 | `/api/swarm/listeners` | GET |
 | `/api/swarm/listeners/toggle` | POST |
@@ -863,46 +952,63 @@ Endpoints session 7 (добавлены, ~180+ итого):
 | `/api/voice/runtime` | GET |
 | `/api/voice/runtime/update` | POST |
 | `/api/voice/toggle` | POST |
+| `/commands` | GET |
+| `/costs` | GET |
+| `/inbox` | GET |
+| `/legacy/commands` | GET |
+| `/legacy/costs` | GET |
+| `/legacy/inbox` | GET |
+| `/legacy/ops` | GET |
+| `/legacy/settings` | GET |
+| `/legacy/swarm` | GET |
+| `/legacy/translator` | GET |
 | `/metrics` | GET |
-| `/api/ecosystem/comparison` | GET |
-| `/api/memory/heatmap` | GET |
-| `/api/memory/doctor` | GET |
-| `/api/memory/indexer/backfill` | POST |
-| `/api/swarm/channels/status` | GET |
-| `/api/memory/coverage-audit` | GET |
+| `/nano_theme.css` | GET |
+| `/ops` | GET |
+| `/prototypes/nano/nano_theme.css` | GET |
+| `/prototypes/{page}` | GET |
+| `/settings` | GET |
+| `/stats` | GET |
+| `/swarm` | GET |
+| `/translator` | GET |
+| `/v4` | GET |
+| `/v4/` | GET |
+| `/v4/chat` | GET |
+| `/v4/commands` | GET |
+| `/v4/costs` | GET |
+| `/v4/inbox` | GET |
+| `/v4/liquid-glass.css` | GET |
+| `/v4/ops` | GET |
+| `/v4/research` | GET |
+| `/v4/settings` | GET |
+| `/v4/swarm` | GET |
+| `/v4/theme-toggle.js` | GET |
+| `/v4/translator` | GET |
 
 <!-- END:auto-endpoints -->
 
 <!-- BEGIN:auto-commands -->
 
-### Auto-generated handlers (151 prod + beta: !mem, !chado, !filter)
+### Auto-generated handlers (105 команд из userbot_bridge.py; Phase 2 Waves 11-18 добавили модули: admin_commands / cli_commands / fileio_commands / group_admin_commands / content_commands / state_commands / observability_commands / memory_admin_commands в `src/handlers/commands/`)
 
-`!acl`, `!afk`, `!agent`, `!alias`, `!archive`, `!ask`
-`!audio_message`, `!autodel`, `!b64`, `!backup`, `!bench`, `!blocked`
-`!bookmark`, `!browser`, `!budget`, `!calc`, `!cap`, `!catchup`
-`!chatban`, `!chatinfo`, `!chatmute`, `!claude_cli`, `!clear`, `!codex`
-`!collect`, `!color`, `!config`, `!confirm`, `!contacts`, `!context`
-`!convert`, `!costs`, `!cron`, `!cronstatus`, `!currency`, `!debug`
-`!decrypt`, `!define`, `!del`, `!diagnose`, `!dice`, `!diff`
-`!digest`, `!dns`, `!emoji`, `!encrypt`, `!eval`, `!explain`
-`!export`, `!fix`, `!fwd`, `!gemini_cli`, `!grep`, `!hash`
-`!health`, `!help`, `!history`, `!hs`, `!id`, `!img`
-`!inbox`, `!invite`, `!ip`, `!json`, `!len`, `!link`
-`!listen`, `!log`, `!ls`, `!macos`, `!mark`, `!media`
-`!members`, `!memo`, `!memory`, `!model`, `!monitor`, `!new_chat_members`
-`!news`, `!note`, `!notify`, `!ocr`, `!opencode`, `!panel`
-`!paste`, `!pin`, `!ping`, `!poll`, `!profile`, `!purge`
-`!qr`, `!quiz`, `!quote`, `!rand`, `!rate`, `!react`
-`!read`, `!reasoning`, `!recall`, `!regex`, `!remember`, `!remind`
-`!reminders`, `!report`, `!reset`, `!restart`, `!rewrite`, `!rm_remind`
-`!role`, `!run`, `!say`, `!schedule`, `!scope`, `!screenshot`
-`!search`, `!sed`, `!set`, `!shop`, `!silence`, `!slowmode`
-`!snippet`, `!spam`, `!stats`, `!status`, `!sticker`, `!stopwatch`
-`!summary`, `!swarm`, `!sysinfo`, `!tag`, `!template`, `!time`
-`!timer`, `!todo`, `!top`, `!translate`, `!translate_auto`, `!translator`
-`!tts`, `!typing`, `!unarchive`, `!unpin`, `!uptime`, `!urban`
-`!version`, `!voice`, `!watch`, `!weather`, `!web`, `!welcome`
-`!who`, `!whois`, `!write`, `!yt`
+`!access`, `!acl`, `!agent`, `!alias`, `!archive`, `!ask`
+`!autodel`, `!backup`, `!bench`, `!block`, `!blocklist`, `!browser`
+`!budget`, `!cap`, `!catchup`, `!chatban`, `!claude_cli`, `!clear`
+`!clear_session`, `!codex`, `!collect`, `!config`, `!context`, `!costs`
+`!cronstatus`, `!debug`, `!del`, `!diag`, `!diagnose`, `!digest`
+`!e`, `!emoji`, `!eval`, `!explain`, `!export`, `!fix`
+`!forget`, `!fwd`, `!gemini`, `!grep`, `!health`, `!help`
+`!hs`, `!id`, `!inbox`, `!ls`, `!mac`, `!memo`
+`!memory`, `!model`, `!models`, `!monitor`, `!news`, `!note`
+`!notify`, `!opencode`, `!panel`, `!pin`, `!poll`, `!proactivity`
+`!purge`, `!qr`, `!quiz`, `!rate`, `!react`, `!read`
+`!reasoning`, `!recall`, `!remember`, `!remind`, `!reminders`, `!report`
+`!restart`, `!rewrite`, `!rm_remind`, `!role`, `!say`, `!schedule`
+`!scope`, `!screenshot`, `!search`, `!set`, `!shop`, `!stats`
+`!status`, `!stopwatch`, `!summary`, `!swarm`, `!sysinfo`, `!timer`
+`!todo`, `!translate`, `!translator`, `!trust`, `!unarchive`, `!unblock`
+`!unpin`, `!uptime`, `!version`, `!voice`, `!watch`, `!web`
+`!who`, `!whois`, `!write`
 
 Beta (Session 17): `!mem` — быстрый поиск по архиву памяти; `!chado` — chado-sync агент (W5.4); `!filter` — фильтрация сообщений по паттерну
 
@@ -910,10 +1016,10 @@ Beta (Session 17): `!mem` — быстрый поиск по архиву пам
 
 <!-- BEGIN:auto-metrics -->
 
-### Auto-generated Prometheus (8 алертов, 8 метрик)
+### Auto-generated Prometheus (11 алертов, 21 метрик)
 
-Alerts: `ArchiveDbSizeCritical`, `ArchiveDbSizeWarning`, `CommandHandlerErrors`, `KrabDown`, `LLMErrorRateHigh`, `MemoryQueryLatencyHigh`, `MessageBatcherBackpressure`, `TelegramRateLimited`
+Alerts: `ArchiveChunksStalled`, `ArchiveDbSizeCritical`, `ArchiveDbSizeWarning`, `ChatFilterModeMuteDominant`, `CommandInvocationSpike`, `KrabAutoRestartSpiking`, `KrabDown`, `LLMRouteLatencyHigh`, `MemoryValidatorConfirmFailedSpike`, `MemoryValidatorPendingHigh`, `RemindersQueueBacklog`
 
-Metrics: `krab_alerts`, `krab_archive_db_size_bytes`, `krab_command_errors_total`, `krab_critical`, `krab_llm_errors_total`, `krab_memory_query_duration_seconds_bucket`, `krab_message_batcher_queue_depth`, `krab_telegram_flood_wait_total`
+Metrics: `krab_archive_chunks_embedded_total`, `krab_archive_db_size_bytes`, `krab_auto_restart_attempts_total`, `krab_chat_filter_modes_total`, `krab_chat_windows_active`, `krab_chat_windows_capacity`, `krab_chat_windows_evicted_total`, `krab_chat_windows_total_messages`, `krab_command_invocations_total`, `krab_guest_llm_skipped_total`, `krab_llm_route_latency_seconds`, `krab_llm_route_ok`, `krab_memory_adaptive_rerank_used_total`, `krab_memory_retrieval_latency_seconds`, `krab_memory_retrieval_mode_total`, `krab_memory_validator_pending`, `krab_metrics_generated_at`, `krab_process_start_time_seconds`, `krab_reminders_pending_total`, `krab_stealth_detection_total`, `krab_swarm_tool_blocked_total`
 
 <!-- END:auto-metrics -->

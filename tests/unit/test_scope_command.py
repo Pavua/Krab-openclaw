@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import src.handlers.command_handlers as cmd_module
+import src.handlers.commands.admin_commands as admin_cmd_module
 from src.core.access_control import AccessLevel, AccessProfile
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_scope
@@ -150,7 +151,7 @@ async def test_scope_list_shows_all_acl_entries(monkeypatch: pytest.MonkeyPatch)
     bot = _make_bot("list", access_level=AccessLevel.OWNER)
     message = _make_message("list")
     monkeypatch.setattr(
-        cmd_module,
+        admin_cmd_module,
         "load_acl_runtime_state",
         lambda: {"owner": ["boss"], "full": ["alice"], "partial": ["bob"]},
     )
@@ -182,7 +183,7 @@ async def test_scope_list_empty_acl(monkeypatch: pytest.MonkeyPatch) -> None:
     bot = _make_bot("list", access_level=AccessLevel.OWNER)
     message = _make_message("list")
     monkeypatch.setattr(
-        cmd_module,
+        admin_cmd_module,
         "load_acl_runtime_state",
         lambda: {"owner": [], "full": [], "partial": []},
     )
@@ -205,7 +206,7 @@ async def test_scope_grant_full(monkeypatch: pytest.MonkeyPatch) -> None:
     bot = _make_bot("grant 123456789 full", access_level=AccessLevel.OWNER)
     message = _make_message("grant 123456789 full")
     monkeypatch.setattr(
-        cmd_module,
+        admin_cmd_module,
         "update_acl_subject",
         lambda level, subject, add: {
             "changed": True,
@@ -229,7 +230,7 @@ async def test_scope_grant_partial(monkeypatch: pytest.MonkeyPatch) -> None:
     bot = _make_bot("grant @reader partial", access_level=AccessLevel.OWNER)
     message = _make_message("grant @reader partial")
     monkeypatch.setattr(
-        cmd_module,
+        admin_cmd_module,
         "update_acl_subject",
         lambda level, subject, add: {
             "changed": True,
@@ -251,7 +252,7 @@ async def test_scope_grant_already_exists(monkeypatch: pytest.MonkeyPatch) -> No
     bot = _make_bot("grant 111 full", access_level=AccessLevel.OWNER)
     message = _make_message("grant 111 full")
     monkeypatch.setattr(
-        cmd_module,
+        admin_cmd_module,
         "update_acl_subject",
         lambda level, subject, add: {
             "changed": False,
@@ -329,7 +330,7 @@ async def test_scope_revoke_removes_from_both_levels(monkeypatch: pytest.MonkeyP
 
     bot = _make_bot("revoke 123456789", access_level=AccessLevel.OWNER)
     message = _make_message("revoke 123456789")
-    monkeypatch.setattr(cmd_module, "update_acl_subject", fake_update)
+    monkeypatch.setattr(admin_cmd_module, "update_acl_subject", fake_update)
 
     await handle_scope(bot, message)
 
@@ -350,7 +351,7 @@ async def test_scope_revoke_not_found_sends_info(monkeypatch: pytest.MonkeyPatch
     bot = _make_bot("revoke 999", access_level=AccessLevel.OWNER)
     message = _make_message("revoke 999")
     monkeypatch.setattr(
-        cmd_module,
+        admin_cmd_module,
         "update_acl_subject",
         lambda level, subject, add: {
             "changed": False,
@@ -389,7 +390,7 @@ async def test_scope_revoke_partial_only_removed(monkeypatch: pytest.MonkeyPatch
 
     bot = _make_bot("revoke alice", access_level=AccessLevel.OWNER)
     message = _make_message("revoke alice")
-    monkeypatch.setattr(cmd_module, "update_acl_subject", fake_update)
+    monkeypatch.setattr(admin_cmd_module, "update_acl_subject", fake_update)
 
     await handle_scope(bot, message)
 

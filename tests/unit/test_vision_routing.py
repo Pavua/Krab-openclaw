@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Тесты vision-aware роутинга для photo-запросов через CLI-провайдеры."""
+
 from __future__ import annotations
 
 import asyncio
@@ -107,6 +108,17 @@ def _make_client() -> OpenClawClient:
     return client
 
 
+def _run(coro):
+    # Новый event loop вместо asyncio.get_event_loop() — последний deprecated
+    # в Python 3.13 и поднимает RuntimeError, если предыдущий asyncio-тест
+    # закрыл default loop (вызывает pollution в полном test suite).
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 class TestCliProviderPhotoRedirect:
     """Проверяем, что photo + CLI-провайдер → redirect на vision-capable модель."""
 
@@ -117,13 +129,15 @@ class TestCliProviderPhotoRedirect:
         mm.is_local_model.return_value = False
 
         with (
-            patch("src.openclaw_client.get_runtime_primary_model", return_value="codex-cli/gpt-5.4"),
+            patch(
+                "src.openclaw_client.get_runtime_primary_model", return_value="codex-cli/gpt-5.4"
+            ),
             patch(
                 "src.openclaw_client.get_runtime_fallback_models",
                 return_value=["google/gemini-3-pro-preview", "codex-cli/backup"],
             ),
         ):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = _run(
                 client._pick_vision_cloud_model(
                     model_manager=mm,
                     current_model="codex-cli/gpt-5.4",
@@ -139,13 +153,15 @@ class TestCliProviderPhotoRedirect:
         mm.is_local_model.return_value = False
 
         with (
-            patch("src.openclaw_client.get_runtime_primary_model", return_value="codex-cli/gpt-5.4"),
+            patch(
+                "src.openclaw_client.get_runtime_primary_model", return_value="codex-cli/gpt-5.4"
+            ),
             patch(
                 "src.openclaw_client.get_runtime_fallback_models",
                 return_value=["opencode/backup"],
             ),
         ):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = _run(
                 client._pick_vision_cloud_model(
                     model_manager=mm,
                     current_model="codex-cli/gpt-5.4",
@@ -160,13 +176,16 @@ class TestCliProviderPhotoRedirect:
         mm.is_local_model.return_value = False
 
         with (
-            patch("src.openclaw_client.get_runtime_primary_model", return_value="google/gemini-3-pro-preview"),
+            patch(
+                "src.openclaw_client.get_runtime_primary_model",
+                return_value="google/gemini-3-pro-preview",
+            ),
             patch(
                 "src.openclaw_client.get_runtime_fallback_models",
                 return_value=["google/gemini-3-flash-preview"],
             ),
         ):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = _run(
                 client._pick_vision_cloud_model(
                     model_manager=mm,
                     current_model="google/gemini-3-pro-preview",

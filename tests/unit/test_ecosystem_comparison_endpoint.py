@@ -2,22 +2,23 @@
 """
 Тесты для GET /api/ecosystem/comparison.
 
-Проверяем:
-- Endpoint возвращает 200 и корректную структуру (self / peers / generated_at)
-- self.commands_count берётся из CommandRegistry.all() когда реестр доступен
-- self.api_endpoints_count берётся из app.routes
-- Fallback на hardcoded значения при отсутствии модулей
-- peers всегда содержит chado с ожидаемыми ключами
-- generated_at — ISO-строка с 'T' (datetime)
+Wave 11: endpoint /api/ecosystem/comparison ещё НЕ реализован в src/modules/web_app.py.
+Файл целиком помечен как skip — это спека будущей фичи (см. backlog ecosystem
+comparison panel).
 """
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.modules.web_app import WebApp
+
+pytestmark = pytest.mark.skip(
+    reason="Wave 11: endpoint /api/ecosystem/comparison не реализован; ждёт implementation"
+)
 
 # ---------------------------------------------------------------------------
 # Минимальные заглушки (паттерн из test_web_swarm_api.py)

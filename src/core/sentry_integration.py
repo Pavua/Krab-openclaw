@@ -1,15 +1,13 @@
 """
 Sentry runtime error tracking для Krab.
 
-Session 16: подключение к Sentry проекту po-zm/krab через DSN в .env.
-Фильтрует PII (токены, ключи, phone numbers) перед отправкой events.
-После init — captured exceptions автоматически летят в Sentry; MCP Seer может
-их анализировать: `mcp__sentry__analyze_issue_with_seer`.
-
-Design decisions:
-- Lazy init: только если SENTRY_DSN не пустой (dev может работать без трекинга).
-- Sample rates по умолчанию 10% для traces/profiles — минимальный impact на CPU.
-- `before_send` redact — защита от утечки secrets через stack traces.
+DEPRECATED (2026-04-25): production boot path использует
+`src/bootstrap/sentry_init.py:init_sentry()` (вызов в `src/main.py:62`).
+Здесь оставлены утилиты `capture_exception` / `capture_message` /
+`_read_current_session_id`, которые могут пригодиться call-site'ам и
+существующим тестам. Сам `init_sentry()` ниже — НЕ подключён к boot path
+и оставлен только для backward compatibility тестов; новые интеграции
+добавляй в `bootstrap/sentry_init.py`.
 """
 
 from __future__ import annotations
@@ -79,8 +77,13 @@ def _is_noise_event(event: dict[str, Any]) -> bool:
             frames = (ex.get("stacktrace") or {}).get("frames") or []
             filenames = " ".join(str(f.get("filename", "")) for f in frames)
 
-            # pyrogram graceful shutdown noise
-            if "Cannot operate on a closed database" in value and "pyrogram/session" in filenames:
+            # pyrogram graceful shutdown noise: исключение всплывает не только
+            # из pyrogram/session.py (Session.restart task), но и из
+            # pyrogram/storage/sqlite_storage.py (storage._get / update_peers),
+            # когда фоновый task добегает до уже закрытой sqlite-базы.
+            if "Cannot operate on a closed database" in value and (
+                "pyrogram/session" in filenames or "pyrogram/storage" in filenames
+            ):
                 return True
             # asyncio CancelledError во время shutdown
             if "CancelledError" in value and "Session.restart" in " ".join(
@@ -198,6 +201,9 @@ def init_sentry() -> bool:
             send_default_pii=False,
         )
         sentry_sdk.set_tag("agent_kin", "krab")
+        # Константа для cross-project distributed tracing: все события Main Krab
+        # помечены service=krab-main. Ear backend ставит service=krab-ear.
+        sentry_sdk.set_tag("service", "krab-main")
         session_id = _read_current_session_id()
         if session_id:
             sentry_sdk.set_tag("session", session_id)

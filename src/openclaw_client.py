@@ -46,6 +46,8 @@ from .core.openclaw_secrets_runtime import (
     reload_openclaw_secrets,
 )
 from .core.routing_errors import RouterError, RouterQuotaError
+from .core.sentry_perf import set_tag as _sentry_tag
+from .core.sentry_perf import start_transaction as _sentry_txn
 
 logger = get_logger(__name__)
 
@@ -148,6 +150,9 @@ class OpenClawClient:
         # `/api/v1/chat` без пересылки полного assistant-хвоста.
         self._lm_native_chat_state: Dict[str, dict[str, str]] = {}
         self._usage_stats = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        # Одноразовые флаги: чаты, для которых при следующем запросе история
+        # не должна отправляться в LLM (memory-query режим).
+        self._memory_query_flags: set[str] = set()
 
         # Source-of-truth по моделям/ключам OpenClaw (решение проекта: ~/.openclaw)
         self._models_path = default_openclaw_models_path()
@@ -157,6 +162,12 @@ class OpenClawClient:
         # doctor --fix при каждом старте Краба может ротировать gateway token,
         # поэтому .env может устареть — runtime openclaw.json всегда актуальнее.
         self._sync_token_from_runtime_on_init()
+        # W24/W26: авто-починка models.json — добавляем image в input для vision-моделей.
+        # OpenClaw gateway стриппит image_url из payload если 'image' не заявлен в input[].
+        # Вызывается при старте Краба; дополнительно — перед каждым photo-запросом
+        # с async reload_openclaw_secrets (см. ниже), т.к. gateway может перезаписать
+        # models.json при своём старте (race condition при одновременном запуске).
+        self.ensure_vision_input_in_models_json()
         self._openclaw_sessions_index_path = (
             Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json"
         )
@@ -1204,6 +1215,77 @@ class OpenClawClient:
         google["apiKey"] = key_value
         return self._write_models_json(data)
 
+    # Паттерны ID моделей, поддерживающих vision/multimodal.
+    _VISION_MODEL_PATTERNS: tuple[str, ...] = (
+        "gemini-1.5",
+        "gemini-2",
+        "gemini-3",
+        "gpt-4o",
+        "gpt-4.1",
+        "gpt-4-vision",
+        "gpt-5",
+        "claude-opus",
+        "claude-sonnet",
+        "claude-haiku",
+    )
+
+    def _is_model_declared_vision_in_config(self, model_id: str) -> bool:
+        """Проверяет что models.json объявляет image в input для модели model_id.
+
+        W24/W26: OpenClaw gateway читает input[] для маршрутизации multimodal запросов.
+        Если image отсутствует — gateway стриппит image_url из payload перед
+        передачей в Gemini/OpenAI, даже если bytes были переданы корректно.
+
+        ВАЖНО: НЕ делаем early-return на первом матче — у одной модели могут быть
+        записи в нескольких провайдерах (google/google-antigravity). Возвращаем True
+        если хотя бы одна запись имеет image в input[].
+        """
+        data = self._read_models_json()
+        norm = str(model_id or "").strip().lower()
+        for pdata in data.get("providers", {}).values():
+            for m in pdata.get("models", []):
+                mid = str(m.get("id", "") or "").lower()
+                if mid == norm or norm.endswith(f"/{mid}") or mid.endswith(f"/{norm}"):
+                    inp = m.get("input", [])
+                    if isinstance(inp, list) and "image" in inp:
+                        return True
+        return False
+
+    def ensure_vision_input_in_models_json(self) -> int:
+        """Добавляет 'image' в input[] для всех vision-capable моделей в models.json.
+
+        W24/W26 fix: при старте Краба авто-починяет models.json если gateway стриппит image.
+        Gateway может перезаписать models.json при собственном старте (race condition),
+        поэтому дополнительно вызывается перед каждым photo-запросом
+        (с последующим reload_openclaw_secrets).
+        Возвращает количество исправленных моделей (0 = ничего не изменилось).
+        """
+        data = self._read_models_json()
+        updated = 0
+        for pdata in data.get("providers", {}).values():
+            for m in pdata.get("models", []):
+                mid = str(m.get("id", "") or "").lower()
+                name = str(m.get("name", "") or "").lower()
+                is_vision = any(p in mid or p in name for p in self._VISION_MODEL_PATTERNS)
+                if not is_vision:
+                    continue
+                inp = m.get("input", [])
+                if not isinstance(inp, list):
+                    inp = ["text"]
+                if "image" not in inp:
+                    if "text" not in inp:
+                        inp.append("text")
+                    inp.append("image")
+                    m["input"] = inp
+                    updated += 1
+        if updated:
+            self._write_models_json(data)
+            logger.info(
+                "models_json_vision_input_patched",
+                patched_count=updated,
+            )
+        return updated
+
     def _detect_semantic_error(self, text: str) -> dict[str, str] | None:
         """Детектор ложных успехов, когда backend вернул 200 с текстом ошибки."""
         payload = (text or "").strip()
@@ -1942,6 +2024,21 @@ class OpenClawClient:
         _dt = disable_tools or getattr(self, "_request_disable_tools", False)
         tools = [] if _dt else await mcp_manager.get_tool_manifest()
 
+        # Per-team manifest filter: если активен swarm-контекст, оставляем
+        # только разрешённые команде tools (см. core/swarm_tool_allowlist.py).
+        if tools:
+            try:
+                from .core.swarm_tool_allowlist import (
+                    filter_tools_for_team,
+                    get_current_team,
+                )
+
+                _team = get_current_team()
+                if _team:
+                    tools = filter_tools_for_team(tools, _team)
+            except Exception as _flt_exc:  # noqa: BLE001
+                logger.warning("swarm_tool_filter_failed", error=str(_flt_exc))
+
         # ФИКС 2026.3.x: новый OpenClaw gateway требует "openclaw" или "openclaw/<agentId>"
         # вместо прямого имени провайдер/модель. Gateway сам маршрутизирует запрос
         # через агентскую конфигурацию (agents.defaults.model.primary + fallbacks).
@@ -1994,8 +2091,10 @@ class OpenClawClient:
             _rid = _get_ctxvars().get("request_id")
             if _rid:
                 _extra_headers = {"X-Request-ID": str(_rid)}
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # Чисто инструментация (X-Request-ID header). Не отправляем в Sentry,
+            # чтобы не плодить noise; debug для локального трейса при необходимости.
+            logger.debug("openclaw_request_id_extract_failed", error=str(exc))
         try:
             response = await self._http_client.post(
                 f"{self.base_url}/v1/chat/completions",
@@ -2011,6 +2110,17 @@ class OpenClawClient:
             raise ProviderError(
                 message=f"timeout waiting for {model_id}: {exc}",
                 user_message="Таймаут провайдера",
+                retryable=True,
+            )
+        except (httpx.ConnectError, httpx.RequestError) as exc:
+            # Gateway был down → ConnectError. Оборачиваем в ProviderError(retryable=True)
+            # чтобы 4-attempt retry loop поймал его и попробовал local fallback / cloud retry.
+            # До этого фикса ConnectError вылетал из loop напрямую — retry не происходил.
+            metrics.inc("llm_error")
+            logger.warning("openclaw_connect_error_retryable", model=model_id, error=str(exc))
+            raise ProviderError(
+                message=f"connect error for {model_id}: {exc}",
+                user_message="Провайдер временно недоступен",
                 retryable=True,
             )
         logger.info("openclaw_response_status", status=response.status_code, model=model_id)
@@ -2141,16 +2251,6 @@ class OpenClawClient:
         _elapsed_ms = (time.monotonic() - _t0) * 1000
         metrics.add_latency(_elapsed_ms)
         metrics.inc("llm_success")
-        # Записываем latency в Prometheus histogram
-        try:
-            from src.core.llm_latency_tracker import llm_latency_tracker as _llt
-
-            _parts = str(model_id).split("/", 1)
-            _provider_tag = _parts[0] if len(_parts) == 2 else "unknown"
-            _model_tag = _parts[1] if len(_parts) == 2 else str(model_id)
-            _llt.observe(provider=_provider_tag, model=_model_tag, duration_s=_elapsed_ms / 1000.0)
-        except Exception:  # noqa: BLE001
-            pass
         return full_response.strip()
 
     async def _resolve_local_model_for_retry(
@@ -2183,8 +2283,19 @@ class OpenClawClient:
                 try:
                     if not bool(model_manager._is_chat_capable_local_model(model_id, info)):  # noqa: SLF001
                         continue
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "openclaw_local_chat_capable_probe_failed",
+                        model_id=model_id,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                    try:
+                        import sentry_sdk
+
+                        sentry_sdk.capture_exception(exc)
+                    except Exception:  # noqa: BLE001
+                        pass
             if has_photo and not bool(getattr(info, "supports_vision", False)):
                 continue
             local_candidates.append((model_id, info))
@@ -2219,7 +2330,12 @@ class OpenClawClient:
         current_model: str,
         has_photo: bool,
     ) -> str:
-        """Возвращает облачный retry-кандидат (или пустую строку, если кандидата нет)."""
+        """Возвращает облачный retry-кандидат (или пустую строку, если кандидата нет).
+
+        ФИКС W16: при has_photo=True кандидат ОБЯЗАН поддерживать vision.
+        CLI-провайдеры (codex-cli, gemini-cli, opencode) не умеют multimodal —
+        возвращать их при photo-запросе значит гарантированно потерять вложение.
+        """
         runtime_chain: list[str] = []
         runtime_primary = str(get_runtime_primary_model() or "").strip()
         if runtime_primary:
@@ -2229,12 +2345,28 @@ class OpenClawClient:
             normalized = str(candidate or "").strip()
             if not normalized or normalized == str(current_model or "").strip():
                 continue
+            # Если запрос с фото — пропускаем модели без vision-поддержки.
+            if has_photo and not _supports_vision(normalized):
+                logger.debug(
+                    "photo_retry_skip_non_vision_candidate",
+                    candidate=normalized,
+                    current_model=current_model,
+                )
+                continue
             if self._is_cloud_candidate_usable(normalized, model_manager):
                 return normalized
         if not hasattr(model_manager, "get_best_cloud_model"):
             return ""
         candidate = str(await model_manager.get_best_cloud_model(has_photo=has_photo) or "").strip()
         if not candidate or candidate == str(current_model or "").strip():
+            return ""
+        # Финальная проверка: get_best_cloud_model тоже может вернуть non-vision кандидата.
+        if has_photo and not _supports_vision(candidate):
+            logger.warning(
+                "photo_retry_best_cloud_candidate_not_vision_capable",
+                candidate=candidate,
+                current_model=current_model,
+            )
             return ""
         if not self._is_cloud_candidate_usable(candidate, model_manager):
             return ""
@@ -2515,6 +2647,24 @@ class OpenClawClient:
         4) fallback на локальную модель,
         5) прямой LM Studio fallback (если force_cloud=False).
         """
+        # Sentry Performance Monitoring: обёртка-транзакция для P95 latency
+        # по gateway LLM call. Graceful — no-op если sentry_sdk не установлен
+        # или init пропущен (dev env без SENTRY_DSN).
+        _txn_name = f"openclaw_{preferred_model or 'auto'}"
+        _txn_cm = _sentry_txn(op="llm.call", name=_txn_name)
+        _txn_cm.__enter__()
+        # LLM latency histogram: старт таймера; observe в finally ниже.
+        _llm_call_start_perf = time.perf_counter()
+        try:
+            _sentry_tag("chat_id", str(chat_id))
+            _sentry_tag("model", str(preferred_model or "auto"))
+            _sentry_tag("force_cloud", "1" if force_cloud else "0")
+            _sentry_tag("has_images", "1" if images else "0")
+        except Exception as exc:  # noqa: BLE001
+            # Sentry tagging — чистая инструментация; debug чтобы не дублировать
+            # самих себя в Sentry при сбое тегирования.
+            logger.debug("openclaw_sentry_tag_failed", error=str(exc))
+
         self._request_disable_tools = disable_tools
         self._active_tool_calls.clear()
         if chat_id not in self._sessions:
@@ -2600,6 +2750,16 @@ class OpenClawClient:
                 clear_gemini_nonce(chat_id)
 
         self._sanitize_session_and_cache(chat_id)
+
+        # Если запрос помечен как memory-query — очищаем накопленную session history
+        # (кроме system prompt), чтобы старые stale-ответы не отравляли атрибуцию.
+        # Флаг одноразовый: is_memory_query_flagged() сбрасывает его при чтении.
+        if self.is_memory_query_flagged(chat_id):
+            existing = self._sessions.get(chat_id, [])
+            # Оставляем только system-сообщение (если есть).
+            system_msgs = [m for m in existing if m.get("role") == "system"]
+            self._sessions[chat_id] = system_msgs
+            logger.info("memory_query_history_cleared", chat_id=chat_id)
 
         if images:
             content_parts = [{"type": "text", "text": message}]
@@ -2758,6 +2918,35 @@ class OpenClawClient:
                     has_photo=has_photo,
                     trim_reason="local_primary_route",
                 )
+
+            # W24/W26: перед photo-запросом убеждаемся что models.json объявляет
+            # image в input[] для выбранной модели. Gateway кэширует capability config
+            # при старте и перезаписывает models.json — патч + reload решают race condition.
+            if has_photo and not self._is_model_declared_vision_in_config(selected_model):
+                patched = self.ensure_vision_input_in_models_json()
+                logger.warning(
+                    "photo_model_not_declared_vision_in_config",
+                    model=selected_model,
+                    patched_count=patched,
+                )
+                if patched:
+                    # Нужен reload чтобы gateway подхватил обновлённый input[].
+                    # Без этого gateway продолжает стрипать image_url в текущем запросе
+                    # (использует in-memory capability cache, не перечитывает models.json).
+                    try:
+                        from .core.openclaw_secrets_runtime import reload_openclaw_secrets
+
+                        reload_result = await reload_openclaw_secrets()
+                        logger.info(
+                            "photo_vision_patch_reload_done",
+                            ok=reload_result.get("ok"),
+                            model=selected_model,
+                        )
+                    except Exception as _reload_exc:  # noqa: BLE001
+                        logger.warning(
+                            "photo_vision_patch_reload_failed",
+                            error=str(_reload_exc),
+                        )
 
             logger.info(
                 "openclaw_stream_start",
@@ -2945,8 +3134,20 @@ class OpenClawClient:
                                 reason="vision_addon_missing",
                                 ttl_sec=1800.0,
                             )
-                        except Exception:
-                            pass
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "openclaw_local_model_exclude_failed",
+                                model=attempt_model,
+                                reason="vision_addon_missing",
+                                error=str(exc),
+                                error_type=type(exc).__name__,
+                            )
+                            try:
+                                import sentry_sdk
+
+                                sentry_sdk.capture_exception(exc)
+                            except Exception:  # noqa: BLE001
+                                pass
 
                     alt_local = ""
                     if (
@@ -3254,6 +3455,24 @@ class OpenClawClient:
                     model_manager.mark_request_finished()
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("model_manager_mark_request_finished_failed", error=str(exc))
+            # LLM latency histogram observe (provider+model из last_runtime_route).
+            try:
+                from .core.llm_latency_tracker import llm_latency_tracker
+
+                _duration = time.perf_counter() - _llm_call_start_perf
+                _route = self.get_last_runtime_route() or {}
+                llm_latency_tracker.observe(
+                    provider=str(_route.get("provider") or "unknown"),
+                    model=str(_route.get("model") or preferred_model or "unknown"),
+                    duration_s=float(_duration),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            # Закрываем Sentry-транзакцию (graceful no-op если SDK отсутствует).
+            try:
+                _txn_cm.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001
+                pass
 
     def clear_session(self, chat_id: str):
         """Очищает историю чата (in-memory + кэш + persistent session-файлы).
@@ -3288,6 +3507,21 @@ class OpenClawClient:
             )
 
         logger.info("session_cleared", chat_id=chat_id)
+
+    def flag_memory_query(self, chat_id: str) -> None:
+        """Помечает chat_id: следующий send_message_stream пропустит session history.
+
+        Одноразовый флаг — сбрасывается автоматически в начале запроса.
+        Используется memory_context_augmenter при детекции archive-запроса.
+        """
+        self._memory_query_flags.add(chat_id)
+        logger.debug("memory_query_flagged", chat_id=chat_id)
+
+    def is_memory_query_flagged(self, chat_id: str) -> bool:
+        """Возвращает True если флаг установлен (и немедленно сбрасывает его)."""
+        flagged = chat_id in self._memory_query_flags
+        self._memory_query_flags.discard(chat_id)
+        return flagged
 
     @staticmethod
     def _cleanup_openclaw_session_files(chat_id: str) -> int:

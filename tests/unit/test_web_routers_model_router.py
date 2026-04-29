@@ -1,0 +1,910 @@
+# -*- coding: utf-8 -*-
+"""
+Unit tests для model_router (Phase 2 Wave FF, Session 25).
+
+Покрывают:
+- GET  /api/model/status
+- POST /api/model/switch (200 + 403 + missing model)
+- GET  /api/model/recommend
+- POST /api/model/preflight (+ missing prompt 400)
+- GET  /api/model/explain
+- GET  /api/model/feedback
+- POST /api/model/feedback (+ idempotency)
+- GET  /api/model/local/status (через resolve_local_runtime_truth_helper)
+
+RouterContext создаётся напрямую — router self-contained, WebApp не нужен.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from src.modules.web_routers._context import RouterContext
+from src.modules.web_routers.model_router import build_model_router
+
+
+class _FakeRouter:
+    force_mode = "auto"
+    routing_policy = "balanced"
+    cloud_soft_cap_reached = False
+    is_local_available = True
+
+    def get_profile_recommendation(self, profile: str = "chat") -> dict:
+        return {"profile": profile, "model": "google/gemini-test", "channel": "cloud"}
+
+    def get_task_preflight(self, *, prompt: str, task_type: str, **_kwargs) -> dict:
+        return {"prompt": prompt, "task_type": task_type, "channel": "cloud"}
+
+    def get_route_explain(self, *, prompt: str, task_type: str, **_kwargs) -> dict:
+        return {"reason": {"code": "ok"}, "prompt": prompt, "task_type": task_type}
+
+    def get_feedback_summary(self, *, profile, top: int) -> dict:
+        return {"profile": profile, "top": top, "items": []}
+
+    def submit_feedback(self, *, score: int, profile, model_name, channel, note) -> dict:
+        return {
+            "score": score,
+            "profile": profile,
+            "model": model_name,
+            "channel": channel,
+            "note": note,
+        }
+
+
+class _FakeMM:
+    active_model_id = "google/gemini-test"
+
+    def format_status(self) -> str:
+        return "google/gemini-test (ok)"
+
+    def set_provider(self, provider: str) -> None:
+        self.active_model_id = f"provider:{provider}"
+
+    def set_model(self, model: str) -> None:
+        self.active_model_id = model
+
+
+class _FakeOC:
+    def get_last_runtime_route(self) -> dict:
+        return {"channel": "cloud", "model": "google/gemini-test", "status": "ok"}
+
+
+def _build_ctx(*, idem_store: dict | None = None, local_truth: dict | None = None) -> RouterContext:
+    deps: dict = {"router": _FakeRouter()}
+    store = idem_store if idem_store is not None else {}
+    deps["idempotency_get"] = lambda kind, key: store.get((kind, key)) if key else None
+    deps["idempotency_set"] = lambda kind, key, payload: (
+        store.__setitem__((kind, key), payload) if key else None
+    )
+    if local_truth is not None:
+        deps["resolve_local_runtime_truth_helper"] = lambda router: local_truth
+    return RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+
+
+def _client(ctx: RouterContext | None = None) -> TestClient:
+    app = FastAPI()
+    app.include_router(build_model_router(ctx or _build_ctx()))
+    return TestClient(app)
+
+
+# ---------- GET /api/model/status ------------------------------------------
+
+
+def test_model_status_returns_route_and_active_model() -> None:
+    with (
+        patch("src.model_manager.model_manager", _FakeMM()),
+        patch("src.openclaw_client.openclaw_client", _FakeOC()),
+    ):
+        resp = _client().get("/api/model/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["route"]["model"] == "google/gemini-test"
+    assert data["active_model"] == "google/gemini-test"
+
+
+# ---------- POST /api/model/switch -----------------------------------------
+
+
+def test_model_switch_missing_model_returns_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    resp = _client().post("/api/model/switch", json={})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+
+def test_model_switch_auto_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    fake_mm = _FakeMM()
+    with patch("src.model_manager.model_manager", fake_mm):
+        resp = _client().post("/api/model/switch", json={"model": "auto"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["model"] == "auto"
+
+
+def test_model_switch_explicit_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    fake_mm = _FakeMM()
+    with patch("src.model_manager.model_manager", fake_mm):
+        resp = _client().post("/api/model/switch", json={"model": "google/gemini-3-pro-preview"})
+    assert resp.status_code == 200
+    assert resp.json()["active"] == "google/gemini-3-pro-preview"
+
+
+def test_model_switch_invalid_auth_returns_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+    resp = _client().post("/api/model/switch", json={"model": "auto"})
+    assert resp.status_code == 403
+
+
+# ---------- GET /api/model/recommend ---------------------------------------
+
+
+def test_model_recommend_default_profile() -> None:
+    resp = _client().get("/api/model/recommend")
+    assert resp.status_code == 200
+    assert resp.json()["profile"] == "chat"
+
+
+def test_model_recommend_custom_profile() -> None:
+    resp = _client().get("/api/model/recommend?profile=code")
+    assert resp.json()["profile"] == "code"
+
+
+# ---------- POST /api/model/preflight --------------------------------------
+
+
+def test_model_preflight_missing_prompt_returns_400() -> None:
+    resp = _client().post("/api/model/preflight", json={})
+    assert resp.status_code == 400
+
+
+def test_model_preflight_returns_plan() -> None:
+    resp = _client().post(
+        "/api/model/preflight", json={"prompt": "Hello world", "task_type": "code"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["preflight"]["prompt"] == "Hello world"
+    assert body["preflight"]["task_type"] == "code"
+
+
+# ---------- GET /api/model/explain -----------------------------------------
+
+
+def test_model_explain_uses_route_explain_when_available() -> None:
+    resp = _client().get("/api/model/explain?prompt=hi&task_type=chat")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["explain"]["prompt"] == "hi"
+
+
+# ---------- GET /api/model/feedback ----------------------------------------
+
+
+def test_model_feedback_summary_returns_items() -> None:
+    resp = _client().get("/api/model/feedback?profile=chat&top=3")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["feedback"]["top"] == 3
+
+
+# ---------- POST /api/model/feedback ---------------------------------------
+
+
+def test_model_feedback_submit_returns_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    resp = _client().post(
+        "/api/model/feedback",
+        json={"score": 5, "profile": "chat", "model": "google/gemini-test"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["result"]["score"] == 5
+
+
+def test_model_feedback_submit_idempotency_returns_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    store: dict = {}
+    ctx = _build_ctx(idem_store=store)
+    client = _client(ctx)
+    headers = {"X-Idempotency-Key": "abc-123"}
+    r1 = client.post("/api/model/feedback", json={"score": 4}, headers=headers)
+    assert r1.status_code == 200
+    # Cached returns same payload — even if router would error, returns first body.
+    r2 = client.post("/api/model/feedback", json={"score": 1}, headers=headers)
+    assert r2.status_code == 200
+    assert r2.json() == r1.json()
+
+
+def test_model_feedback_submit_invalid_auth_returns_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret-key")
+    resp = _client().post("/api/model/feedback", json={"score": 5})
+    assert resp.status_code == 403
+
+
+# ---------- GET /api/model/local/status ------------------------------------
+
+
+def test_model_local_status_loaded_lifecycle() -> None:
+    truth = {
+        "active_model": "local-llama",
+        "engine": "lmstudio",
+        "runtime_url": "http://localhost:1234",
+        "is_loaded": True,
+        "runtime_reachable": True,
+        "loaded_models": ["local-llama"],
+        "probe_state": "ok",
+        "error": "",
+    }
+    ctx = _build_ctx(local_truth=truth)
+    resp = _client(ctx).get("/api/model/local/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["status"] == "loaded"
+    assert body["model_name"] == "local-llama"
+    assert body["details"]["is_loaded"] is True
+
+
+def test_model_local_status_not_loaded_lifecycle() -> None:
+    truth = {
+        "active_model": "",
+        "engine": "lmstudio",
+        "runtime_url": "n/a",
+        "is_loaded": False,
+        "runtime_reachable": False,
+        "loaded_models": [],
+        "probe_state": "down",
+        "error": "",
+    }
+    ctx = _build_ctx(local_truth=truth)
+    resp = _client(ctx).get("/api/model/local/status")
+    body = resp.json()
+    assert body["status"] == "not_loaded"
+
+
+# ============== Wave GG (Session 25) — thinking/depth + provider-action ====
+
+
+_FAKE_RUNTIME_CONTROLS = {
+    "primary": "google/gemini-test",
+    "fallbacks": [],
+    "context_tokens": 128000,
+    "thinking_default": "off",
+    "thinking_modes": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
+    "chain_items": [{"slot": "primary", "model": "google/gemini-test"}],
+}
+
+
+def _ctx_with_helpers(**overrides) -> RouterContext:
+    """RouterContext с Wave GG helpers (mockable через overrides)."""
+    deps: dict = {"router": _FakeRouter()}
+    deps["openclaw_runtime_controls_build_helper"] = overrides.get(
+        "openclaw_runtime_controls_build_helper",
+        lambda: dict(_FAKE_RUNTIME_CONTROLS),
+    )
+    deps["openclaw_runtime_controls_apply_helper"] = overrides.get(
+        "openclaw_runtime_controls_apply_helper",
+        lambda **kwargs: {
+            "thinking_default": kwargs.get("thinking_default_raw", "off"),
+            "changed": {"thinking_default": kwargs.get("thinking_default_raw", "off")},
+            "primary": kwargs.get("primary_raw", ""),
+            "fallbacks": list(kwargs.get("fallbacks_raw") or []),
+        },
+    )
+    deps["thinking_normalize_helper"] = overrides.get(
+        "thinking_normalize_helper",
+        lambda raw: str(raw).strip().lower()
+        if str(raw).strip().lower()
+        in {"off", "minimal", "low", "medium", "high", "xhigh", "adaptive"}
+        else (_ for _ in ()).throw(ValueError(f"invalid mode: {raw!r}")),
+    )
+    invalidated: list[bool] = overrides.get("_invalidated", [])
+    deps["lmstudio_snapshot_invalidate_helper"] = lambda: invalidated.append(True)
+    if "provider_ui_metadata_helper" in overrides:
+        deps["provider_ui_metadata_helper"] = overrides["provider_ui_metadata_helper"]
+    if "provider_repair_helper_path_helper" in overrides:
+        deps["provider_repair_helper_path_helper"] = overrides[
+            "provider_repair_helper_path_helper"
+        ]
+    if "launch_local_app_helper" in overrides:
+        deps["launch_local_app_helper"] = overrides["launch_local_app_helper"]
+    return RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+
+
+# ---------- GET /api/thinking/status ---------------------------------------
+
+
+def test_thinking_status_returns_default_and_modes() -> None:
+    ctx = _ctx_with_helpers()
+    resp = _client(ctx).get("/api/thinking/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["thinking_default"] == "off"
+    assert "high" in data["thinking_modes"]
+    assert isinstance(data["chain_items"], list)
+
+
+def test_thinking_status_helper_missing_returns_500() -> None:
+    deps: dict = {"router": _FakeRouter()}
+    ctx = RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+    resp = _client(ctx).get("/api/thinking/status")
+    assert resp.status_code == 500
+
+
+# ---------- POST /api/thinking/set ----------------------------------------
+
+
+def test_thinking_set_valid_mode_returns_applied() -> None:
+    invalidated: list[bool] = []
+    ctx = _ctx_with_helpers(_invalidated=invalidated)
+    resp = _client(ctx).post("/api/thinking/set", json={"mode": "medium"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["thinking_default"] == "medium"
+    assert "changed" in data
+    # Помешали ли invalidate runtime-lite cache
+    assert invalidated == [True]
+
+
+def test_thinking_set_invalid_mode_returns_400() -> None:
+    ctx = _ctx_with_helpers()
+    resp = _client(ctx).post("/api/thinking/set", json={"mode": "ultra-galaxy"})
+    assert resp.status_code == 400
+    assert "invalid_thinking_mode" in resp.json()["detail"]
+
+
+def test_thinking_set_apply_value_error_returns_400() -> None:
+    def _raising(**kwargs):
+        raise ValueError("bad chain")
+
+    ctx = _ctx_with_helpers(openclaw_runtime_controls_apply_helper=_raising)
+    resp = _client(ctx).post("/api/thinking/set", json={"mode": "high"})
+    assert resp.status_code == 400
+    assert "bad chain" in resp.json()["detail"]
+
+
+# ---------- GET /api/depth/status -----------------------------------------
+
+
+def test_depth_status_aliases_thinking() -> None:
+    ctx = _ctx_with_helpers(
+        openclaw_runtime_controls_build_helper=lambda: dict(
+            _FAKE_RUNTIME_CONTROLS, thinking_default="high"
+        )
+    )
+    resp = _client(ctx).get("/api/depth/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["depth"] == "high"
+    assert data["thinking_default"] == "high"
+    assert "high" in data["available_modes"]
+
+
+# ---------- POST /api/model/local/load-default ----------------------------
+
+
+class _RouterWithPreferred:
+    local_preferred_model = "local-llama-7b"
+    active_local_model = None
+
+    async def _smart_load(self, model: str, *, reason: str = ""):
+        return True
+
+
+class _RouterNoPreferred:
+    local_preferred_model = ""
+
+    async def _smart_load(self, model: str, *, reason: str = ""):
+        return True
+
+
+def test_local_load_default_success() -> None:
+    invalidated: list[bool] = []
+    deps: dict = {
+        "router": _RouterWithPreferred(),
+        "lmstudio_snapshot_invalidate_helper": lambda: invalidated.append(True),
+    }
+    ctx = RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+    resp = _client(ctx).post("/api/model/local/load-default")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["model"] == "local-llama-7b"
+    assert invalidated == [True]
+
+
+def test_local_load_default_no_preferred_returns_error(monkeypatch) -> None:
+    from src.config import config as _config
+
+    monkeypatch.setattr(_config, "LOCAL_PREFERRED_MODEL", "", raising=False)
+    deps: dict = {"router": _RouterNoPreferred()}
+    ctx = RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+    resp = _client(ctx).post("/api/model/local/load-default")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+    assert data["error"] == "no_preferred_model_configured"
+
+
+# ---------- POST /api/model/local/unload ----------------------------------
+
+
+class _RouterWithActive:
+    active_local_model = "local-llama"
+
+    async def unload_local_model(self, model: str):
+        return True
+
+    async def _evict_idle_models(self, *, needed_gb: float):
+        return 0.0
+
+
+class _RouterNoActive:
+    active_local_model = None
+
+    async def unload_local_model(self, model: str):
+        return True
+
+    async def _evict_idle_models(self, *, needed_gb: float):
+        return 12.5
+
+
+def test_local_unload_active_model_success() -> None:
+    deps: dict = {
+        "router": _RouterWithActive(),
+        "lmstudio_snapshot_invalidate_helper": lambda: None,
+    }
+    ctx = RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+    resp = _client(ctx).post("/api/model/local/unload")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["unloaded"] == "local-llama"
+
+
+def test_local_unload_no_active_evicts() -> None:
+    deps: dict = {
+        "router": _RouterNoActive(),
+        "lmstudio_snapshot_invalidate_helper": lambda: None,
+    }
+    ctx = RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+    resp = _client(ctx).post("/api/model/local/unload")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["freed_gb_estimate"] == 12.5
+
+
+# ---------- POST /api/model/provider-action -------------------------------
+
+
+def test_provider_action_repair_oauth_success(tmp_path: Path) -> None:
+    helper_path = tmp_path / "Login.command"
+    helper_path.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    launched: dict = {}
+
+    def _launch(target_path):
+        launched["path"] = str(target_path)
+        return {"ok": True, "exit_code": 0, "launched": True, "path": str(target_path)}
+
+    ctx = _ctx_with_helpers(
+        provider_ui_metadata_helper=lambda p: {
+            "repair_action": "repair_oauth",
+            "repair_detail": "Re-login required",
+        },
+        provider_repair_helper_path_helper=lambda p: helper_path,
+        launch_local_app_helper=_launch,
+    )
+    resp = _client(ctx).post(
+        "/api/model/provider-action",
+        json={"provider": "openai-codex", "action": "repair_oauth"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["provider"] == "openai-codex"
+    assert data["action"] == "repair_oauth"
+    assert "Login.command" in launched["path"]
+
+
+def test_provider_action_missing_provider_returns_400() -> None:
+    ctx = _ctx_with_helpers(
+        provider_ui_metadata_helper=lambda p: {},
+        provider_repair_helper_path_helper=lambda p: None,
+        launch_local_app_helper=lambda p: {"ok": True},
+    )
+    resp = _client(ctx).post("/api/model/provider-action", json={"action": "repair_oauth"})
+    assert resp.status_code == 400
+    assert "provider_required" in resp.json()["detail"]
+
+
+def test_provider_action_unsupported_action_returns_400() -> None:
+    ctx = _ctx_with_helpers(
+        provider_ui_metadata_helper=lambda p: {"repair_action": "repair_oauth"},
+        provider_repair_helper_path_helper=lambda p: None,
+        launch_local_app_helper=lambda p: {"ok": True},
+    )
+    resp = _client(ctx).post(
+        "/api/model/provider-action",
+        json={"provider": "openai", "action": "do_something_weird"},
+    )
+    assert resp.status_code == 400
+
+
+def test_provider_action_helper_missing_returns_404(tmp_path: Path) -> None:
+    ctx = _ctx_with_helpers(
+        provider_ui_metadata_helper=lambda p: {"repair_action": "repair_oauth"},
+        provider_repair_helper_path_helper=lambda p: tmp_path / "missing.command",
+        launch_local_app_helper=lambda p: {"ok": True},
+    )
+    resp = _client(ctx).post(
+        "/api/model/provider-action",
+        json={"provider": "openai", "action": "repair_oauth"},
+    )
+    assert resp.status_code == 404
+    assert "helper_missing" in resp.json()["detail"]
+
+
+def test_provider_action_migrate_to_gemini_cli_message(tmp_path: Path) -> None:
+    helper_path = tmp_path / "Migrate.command"
+    helper_path.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+
+    ctx = _ctx_with_helpers(
+        provider_ui_metadata_helper=lambda p: {"repair_action": "migrate_to_gemini_cli"},
+        provider_repair_helper_path_helper=lambda p: helper_path
+        if p == "google-gemini-cli"
+        else None,
+        launch_local_app_helper=lambda p: {"ok": True, "launched": True},
+    )
+    resp = _client(ctx).post(
+        "/api/model/provider-action",
+        json={"provider": "google-antigravity", "action": "migrate_to_gemini_cli"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "Gemini CLI OAuth" in data["message"]
+
+
+# ============== Wave OO (Session 25) — model/catalog + model/apply =========
+
+
+class _RouterWithModels:
+    force_mode = "auto"
+    active_local_model = ""
+    models = {"chat": "old-chat", "thinking": "old-think", "pro": "old-pro"}
+
+    def set_force_mode(self, mode: str) -> str:
+        self.force_mode = mode
+        return f"set:{mode}"
+
+
+def _wave_oo_ctx(
+    *,
+    catalog_payload: dict | None = None,
+    cached_payload: dict | None = None,
+    apply_timeout: float = 5.0,
+    quick_presets: dict | None = None,
+    runtime_apply_result: dict | None = None,
+    invalidated: list | None = None,
+    routing_status: dict | None = None,
+    runtime_controls: dict | None = None,
+    fallback_payload: dict | None = None,
+    raise_on_build: Exception | None = None,
+    timeout_on_build: bool = False,
+    omit_helpers: set[str] | None = None,
+    black_box: object | None = None,
+) -> RouterContext:
+    """RouterContext с Wave OO helpers (mockable через kwargs)."""
+    omit = omit_helpers or set()
+    deps: dict = {"router": _RouterWithModels()}
+
+    async def _build(router_obj):
+        if raise_on_build is not None:
+            raise raise_on_build
+        if timeout_on_build:
+            await asyncio.sleep(apply_timeout + 1.0)
+        return dict(catalog_payload or {"force_mode": "auto", "slots": []})
+
+    if "model_catalog_build_helper" not in omit:
+        deps["model_catalog_build_helper"] = _build
+    if "model_catalog_get_cache_helper" not in omit:
+        deps["model_catalog_get_cache_helper"] = lambda: cached_payload
+    store_log: list[dict] = []
+    if "model_catalog_store_cache_helper" not in omit:
+        deps["model_catalog_store_cache_helper"] = lambda payload: store_log.append(payload)
+    if "model_catalog_build_fallback_helper" not in omit:
+        deps["model_catalog_build_fallback_helper"] = (
+            lambda **kwargs: dict(fallback_payload or {"_fallback": True, **kwargs})
+        )
+    if "model_apply_catalog_timeout_helper" not in omit:
+        deps["model_apply_catalog_timeout_helper"] = lambda: apply_timeout
+    if "runtime_quick_presets_build_helper" not in omit:
+        deps["runtime_quick_presets_build_helper"] = lambda **kwargs: dict(
+            quick_presets or {}
+        )
+    if "openclaw_runtime_controls_apply_helper" not in omit:
+        deps["openclaw_runtime_controls_apply_helper"] = lambda **kwargs: dict(
+            runtime_apply_result
+            or {
+                "primary": kwargs.get("primary_raw") or "",
+                "fallbacks": list(kwargs.get("fallbacks_raw") or []),
+                "thinking_default": kwargs.get("thinking_default_raw", "off"),
+                "backup_openclaw_json": True,
+            }
+        )
+    if "openclaw_runtime_controls_build_helper" not in omit:
+        deps["openclaw_runtime_controls_build_helper"] = lambda: dict(
+            runtime_controls or {"primary": "p", "fallbacks": []}
+        )
+    if "openclaw_model_routing_helper" not in omit:
+        deps["openclaw_model_routing_helper"] = lambda: dict(
+            routing_status or {"effective_mode": "cloud"}
+        )
+    if "runtime_lite_cache_invalidator_helper" not in omit:
+        invalidated_log = invalidated if invalidated is not None else []
+        deps["runtime_lite_cache_invalidator_helper"] = lambda: invalidated_log.append(True)
+    if black_box is not None:
+        deps["black_box"] = black_box
+
+    ctx = RouterContext(
+        deps=deps,
+        project_root=Path("/tmp"),
+        web_api_key_fn=lambda: "",
+        assert_write_access_fn=lambda h, t: None,
+    )
+    # Прикрепляем store_log для проверки в тестах.
+    ctx.deps["__store_log"] = store_log
+    return ctx
+
+
+# ---------- GET /api/model/catalog -----------------------------------------
+
+
+def test_catalog_returns_cached_when_force_refresh_false() -> None:
+    cached = {"force_mode": "cloud", "slots": ["chat"], "cached_marker": True}
+    ctx = _wave_oo_ctx(cached_payload=cached)
+    resp = _client(ctx).get("/api/model/catalog")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["cached"] is True
+    assert data["catalog"]["cached_marker"] is True
+
+
+def test_catalog_force_refresh_bypasses_cache() -> None:
+    cached = {"force_mode": "stale", "cached_marker": True}
+    fresh = {"force_mode": "auto", "fresh_marker": True}
+    ctx = _wave_oo_ctx(cached_payload=cached, catalog_payload=fresh)
+    resp = _client(ctx).get("/api/model/catalog?force_refresh=true")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert "cached" not in data
+    assert data["catalog"]["fresh_marker"] is True
+
+
+def test_catalog_no_cache_builds_fresh() -> None:
+    fresh = {"force_mode": "auto", "fresh_marker": True}
+    ctx = _wave_oo_ctx(catalog_payload=fresh)
+    resp = _client(ctx).get("/api/model/catalog")
+    assert resp.status_code == 200
+    assert resp.json()["catalog"]["fresh_marker"] is True
+
+
+def test_catalog_helper_missing_returns_500() -> None:
+    ctx = _wave_oo_ctx(omit_helpers={"model_catalog_build_helper"})
+    resp = _client(ctx).get("/api/model/catalog?force_refresh=true")
+    assert resp.status_code == 500
+
+
+# ---------- POST /api/model/apply ------------------------------------------
+
+
+def test_apply_action_required_returns_400(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    ctx = _wave_oo_ctx()
+    resp = _client(ctx).post("/api/model/apply", json={})
+    assert resp.status_code == 400
+    assert "model_apply_action_required" in resp.json()["detail"]
+
+
+def test_apply_set_mode_success(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    ctx = _wave_oo_ctx(catalog_payload={"force_mode": "local"})
+    resp = _client(ctx).post(
+        "/api/model/apply", json={"action": "set_mode", "mode": "local"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["action"] == "set_mode"
+    assert body["result"]["mode"] == "local"
+    assert body["catalog"]["force_mode"] == "local"
+    assert body["catalog_refresh"]["degraded"] is False
+
+
+def test_apply_set_mode_invalid_returns_400(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    ctx = _wave_oo_ctx()
+    resp = _client(ctx).post(
+        "/api/model/apply", json={"action": "set_mode", "mode": "ultra"}
+    )
+    assert resp.status_code == 400
+    assert "invalid_mode" in resp.json()["detail"]
+
+
+def test_apply_set_slot_model_success(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    ctx = _wave_oo_ctx()
+    resp = _client(ctx).post(
+        "/api/model/apply",
+        json={"action": "set_slot_model", "slot": "chat", "model": "google/gemini-3-pro-preview"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["result"]["slot"] == "chat"
+    assert body["result"]["new_model"]
+    # Mutated underlying router.models
+    assert ctx.deps["router"].models["chat"] != "old-chat"
+
+
+def test_apply_set_slot_model_unknown_slot_returns_400(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    ctx = _wave_oo_ctx()
+    resp = _client(ctx).post(
+        "/api/model/apply",
+        json={"action": "set_slot_model", "slot": "deep_space", "model": "x"},
+    )
+    assert resp.status_code == 400
+    assert "unknown_slot" in resp.json()["detail"]
+
+
+def test_apply_set_runtime_chain_invalidates_cache(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    invalidated: list = []
+    ctx = _wave_oo_ctx(
+        invalidated=invalidated,
+        runtime_apply_result={
+            "primary": "g",
+            "fallbacks": ["a", "b"],
+            "thinking_default": "high",
+            "backup_openclaw_json": True,
+        },
+    )
+    resp = _client(ctx).post(
+        "/api/model/apply",
+        json={
+            "action": "set_runtime_chain",
+            "primary": "g",
+            "fallbacks": ["a", "b"],
+            "thinking_default": "high",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert "Глобальная цепочка" in body["message"]
+    assert "2 fallback(s)" in body["message"]
+    assert invalidated == [True]
+
+
+def test_apply_set_runtime_chain_value_error_returns_400(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+
+    def _raising(**kwargs):
+        raise ValueError("primary required")
+
+    ctx = _wave_oo_ctx()
+    ctx.deps["openclaw_runtime_controls_apply_helper"] = _raising
+    resp = _client(ctx).post(
+        "/api/model/apply", json={"action": "set_runtime_chain", "primary": ""}
+    )
+    assert resp.status_code == 400
+    assert "primary required" in resp.json()["detail"]
+
+
+def test_apply_unknown_action_returns_400(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    ctx = _wave_oo_ctx()
+    resp = _client(ctx).post(
+        "/api/model/apply", json={"action": "explode_universe"}
+    )
+    assert resp.status_code == 400
+    assert "unknown_action" in resp.json()["detail"]
+
+
+def test_apply_invalid_auth_returns_403(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    ctx = _wave_oo_ctx()
+    resp = _client(ctx).post(
+        "/api/model/apply", json={"action": "set_mode", "mode": "auto"}
+    )
+    assert resp.status_code == 403
+
+
+def test_apply_catalog_refresh_failed_uses_fallback(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    ctx = _wave_oo_ctx(
+        raise_on_build=RuntimeError("catalog blew up"),
+        fallback_payload={"_fallback": True, "force_mode": "auto"},
+    )
+    resp = _client(ctx).post(
+        "/api/model/apply", json={"action": "set_mode", "mode": "auto"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["catalog_refresh"]["degraded"] is True
+    assert body["catalog_refresh"]["reason"] == "catalog_refresh_failed"
+    assert body["catalog"]["_fallback"] is True
+
+
+def test_apply_logs_to_black_box_when_present(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+
+    class _BB:
+        def __init__(self) -> None:
+            self.events: list = []
+
+        def log_event(self, kind: str, msg: str) -> None:
+            self.events.append((kind, msg))
+
+    bb = _BB()
+    ctx = _wave_oo_ctx(black_box=bb)
+    resp = _client(ctx).post(
+        "/api/model/apply", json={"action": "set_mode", "mode": "auto"}
+    )
+    assert resp.status_code == 200
+    assert bb.events
+    assert bb.events[0][0] == "web_model_apply"

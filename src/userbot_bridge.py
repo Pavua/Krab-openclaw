@@ -35,6 +35,7 @@ from .core.chat_ban_cache import chat_ban_cache
 from .core.chat_capability_cache import chat_capability_cache
 from .core.chat_filter_config import chat_filter_config
 from .core.chat_window_manager import chat_window_manager
+from .core.command_blocklist import command_blocklist
 from .core.cron_native_scheduler import cron_native_scheduler
 from .core.exceptions import KrabError, UserInputError
 from .core.inbox_service import inbox_service
@@ -45,6 +46,7 @@ from .core.operator_identity import build_trace_id
 from .core.proactive_watch import proactive_watch
 from .core.routing_errors import RouterError, user_message_for_surface
 from .core.scheduler import krab_scheduler
+from .core.sender_context import _extract_forward_origin_parts
 from .core.silence_mode import silence_manager
 from .core.silence_schedule import silence_schedule_manager
 from .core.spam_filter import is_bulk_sender as _is_bulk_sender_ext
@@ -73,14 +75,18 @@ from .handlers import (
     handle_autodel,
     handle_backup,
     handle_bench,
+    handle_blocklist,
     handle_bookmark,
     handle_browser,
     handle_budget,
     handle_cap,
     handle_catchup,
     handle_chatban,
+    handle_chatpolicy,
     handle_claude_cli,
     handle_clear,
+    handle_cmdblock,
+    handle_cmdunblock,
     handle_codex,
     handle_collect,
     handle_config,
@@ -89,13 +95,16 @@ from .handlers import (
     handle_cronstatus,
     handle_debug,
     handle_del,
+    handle_diag,
     handle_diagnose,
     handle_digest,
+    handle_e2e_smoke,
     handle_emoji,
     handle_eval,
     handle_explain,
     handle_export,
     handle_fix,
+    handle_forget,
     handle_fwd,
     handle_gemini_cli,
     handle_grep,
@@ -110,6 +119,7 @@ from .handlers import (
     handle_memo,
     handle_memory,
     handle_model,
+    handle_models,
     handle_monitor,
     handle_news,
     handle_note,
@@ -118,6 +128,7 @@ from .handlers import (
     handle_panel,
     handle_pin,
     handle_poll,
+    handle_proactivity,
     handle_purge,
     handle_qr,
     handle_quiz,
@@ -152,9 +163,11 @@ from .handlers import (
     handle_todo,
     handle_translate,
     handle_translator,
+    handle_trust,
     handle_unarchive,
     handle_unpin,
     handle_uptime,
+    handle_version,
     handle_voice,
     handle_watch,
     handle_web,
@@ -291,6 +304,20 @@ class _TelegramSendQueue:
                     pass
         self._workers.clear()
         self._queues.clear()
+        self._slowmode_last_sent.clear()
+
+    def reset(self) -> None:
+        """
+        Сбрасывает state без async-cancel (W32: для синхронного bootstrap).
+
+        Вызывать при старте нового event loop'а, когда старые queues/workers
+        привязаны к убитому loop'у и `await` недоступен. Задачи не
+        отменяются (loop уже мёртв — `cancel()` бросит RuntimeError), просто
+        отбрасываем ссылки: GC подчистит их вместе со старым loop'ом.
+        """
+        self._queues.clear()
+        self._workers.clear()
+        self._slowmode_last_sent.clear()
 
     # ------------------------------------------------------------------
     # Internals
@@ -311,13 +338,70 @@ class _TelegramSendQueue:
             logger.debug("slowmode_wait", chat_id=chat_id, wait_sec=round(remaining, 1))
             await asyncio.sleep(remaining)
 
+    def _queue_matches_loop(
+        self,
+        queue: asyncio.Queue,
+        current_loop: asyncio.AbstractEventLoop,
+    ) -> bool:
+        """True, если очередь может безопасно использоваться в `current_loop`.
+
+        `asyncio.Queue` (через `_LoopBoundMixin`) лениво кэширует loop в
+        `_loop`. Пока `_loop is None` — очередь ещё не привязана, подходит
+        любому loop. При mismatch `_get_loop()` бросит
+        `RuntimeError: bound to a different event loop`.
+        """
+        bound = getattr(queue, "_loop", None)
+        if bound is None:
+            return True
+        return bound is current_loop
+
     def _get_or_create_queue(self, chat_id: int) -> asyncio.Queue:
-        if chat_id not in self._queues:
+        """Создаёт или возвращает per-chat очередь.
+
+        W32: если существующая очередь привязана к другому event loop
+        (сценарий рестарта userbot'а — модульный singleton переживает loop),
+        пересоздаём её вместе с воркером. Без этого `queue.put()` бросает
+        `RuntimeError: Queue bound to different event loop`.
+        """
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        existing = self._queues.get(chat_id)
+        if (
+            existing is not None
+            and current_loop is not None
+            and not self._queue_matches_loop(existing, current_loop)
+        ):
+            bound = getattr(existing, "_loop", None)
+            logger.warning(
+                "telegram_send_queue_loop_mismatch_rebind",
+                chat_id=chat_id,
+                bound_closed=getattr(bound, "_closed", None),
+            )
+            # Старый воркер привязан к убитому loop — просто отбрасываем
+            # ссылку; cancel() на foreign loop бросил бы RuntimeError.
+            self._workers.pop(chat_id, None)
+            existing = None
+
+        if existing is None:
             self._queues[chat_id] = asyncio.Queue()
         return self._queues[chat_id]
 
     def _ensure_worker_running(self, chat_id: int) -> None:
         task = self._workers.get(chat_id)
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        # W32: если task из другого loop'а — игнорируем и создаём новый.
+        if task is not None and current_loop is not None:
+            task_loop = getattr(task, "_loop", None)
+            if task_loop is not None and task_loop is not current_loop:
+                task = None
+
         if task is None or task.done():
             self._workers[chat_id] = asyncio.create_task(
                 self._worker(chat_id), name=f"tg-send-{chat_id}"
@@ -503,6 +587,9 @@ class KraabUserbot(
         self._error_digest_task: Optional[asyncio.Task] = None
         self._silence_schedule_task: Optional[asyncio.Task] = None
         self._command_usage_save_task: Optional[asyncio.Task] = None
+        # Idea-features periodic tick (reply_scheduler / daily_brief / channel_digest / patterns)
+        self._idea_features_task: Optional[asyncio.Task] = None
+        self._idea_tick_state: dict[str, float] = {}
         self._swarm_team_clients: dict[str, Any] = {}  # team → Pyrogram Client
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
@@ -514,6 +601,9 @@ class KraabUserbot(
         self._hidden_reasoning_traces: dict[str, dict[str, Any]] = {}
         self._session_workdir = config.BASE_DIR / "data" / "sessions"
         self._disclosure_sent_for_chat_ids: set[str] = set()
+        # Smart Routing Phase 5: per-chat pending SmartTriggerResult
+        # (consumed by _maybe_record_smart_trigger_for_delivery после доставки).
+        self._pending_smart_trigger: dict[str, Any] = {}
         # Время старта и счётчик обработанных сообщений за сессию (для !stats).
         self._session_start_time: float = time.time()
         self._session_messages_processed: int = 0
@@ -539,6 +629,18 @@ class KraabUserbot(
 
             def check_access(_, __, m):
                 if not m.from_user:
+                    return False
+                # Per-chat blocklist — silent skip (не логировать как ошибку).
+                # H6: для "silence" проверяем и legacy-ключ "тишина" (ACL skew).
+                _blocklist_keys = (command_name,)
+                if command_name == "silence":
+                    _blocklist_keys = ("silence", "тишина")
+                if any(command_blocklist.is_blocked(m.chat.id, key) for key in _blocklist_keys):
+                    logger.debug(
+                        "command_blocklist_skip",
+                        command=command_name,
+                        chat=m.chat.id,
+                    )
                     return False
                 result = self._has_command_access(m.from_user, command_name)
                 if not result:
@@ -604,10 +706,30 @@ class KraabUserbot(
             await run_cmd(handle_model, m)
 
         @self.client.on_message(
+            filters.command("models", prefixes=prefixes) & _make_command_filter("models"), group=-1
+        )
+        async def wrap_models(c, m):
+            await run_cmd(handle_models, m)
+
+        @self.client.on_message(
             filters.command("clear", prefixes=prefixes) & _make_command_filter("clear"), group=-1
         )
         async def wrap_clear(c, m):
             await run_cmd(handle_clear, m)
+
+        @self.client.on_message(
+            filters.command("forget", prefixes=prefixes) & _make_command_filter("forget"), group=-1
+        )
+        async def wrap_forget(c, m):
+            await run_cmd(handle_forget, m)
+
+        @self.client.on_message(
+            filters.command("clear_session", prefixes=prefixes)
+            & _make_command_filter("clear_session"),
+            group=-1,
+        )
+        async def wrap_clear_session(c, m):
+            await run_cmd(handle_forget, m)
 
         @self.client.on_message(
             filters.command("config", prefixes=prefixes) & _make_command_filter("config"), group=-1
@@ -647,6 +769,33 @@ class KraabUserbot(
             await run_cmd(handle_chatban, m)
 
         @self.client.on_message(
+            filters.command("chatpolicy", prefixes=prefixes) & _make_command_filter("chatpolicy"),
+            group=-1,
+        )
+        async def wrap_chatpolicy(c, m):
+            await run_cmd(handle_chatpolicy, m)
+
+        @self.client.on_message(
+            filters.command("block", prefixes=prefixes) & _make_command_filter("block"), group=-1
+        )
+        async def wrap_block(c, m):
+            await run_cmd(handle_cmdblock, m)
+
+        @self.client.on_message(
+            filters.command("unblock", prefixes=prefixes) & _make_command_filter("unblock"),
+            group=-1,
+        )
+        async def wrap_unblock(c, m):
+            await run_cmd(handle_cmdunblock, m)
+
+        @self.client.on_message(
+            filters.command("blocklist", prefixes=prefixes) & _make_command_filter("blocklist"),
+            group=-1,
+        )
+        async def wrap_blocklist(c, m):
+            await run_cmd(handle_blocklist, m)
+
+        @self.client.on_message(
             filters.command("translator", prefixes=prefixes) & _make_command_filter("translator"),
             group=-1,
         )
@@ -679,11 +828,26 @@ class KraabUserbot(
             await run_cmd(handle_cap, m)
 
         @self.client.on_message(
-            filters.command("тишина", prefixes=prefixes) & _make_command_filter("тишина"),
+            filters.command(["тишина", "silence"], prefixes=prefixes)
+            & _make_command_filter("silence"),
             group=-1,
         )
         async def wrap_silence(c, m):
             await run_cmd(handle_silence, m)
+
+        @self.client.on_message(
+            filters.command("version", prefixes=prefixes) & _make_command_filter("version"),
+            group=-1,
+        )
+        async def wrap_version(c, m):
+            await run_cmd(handle_version, m)
+
+        @self.client.on_message(
+            filters.command("diag", prefixes=prefixes) & _make_command_filter("diag"),
+            group=-1,
+        )
+        async def wrap_diag(c, m):
+            await run_cmd(handle_diag, m)
 
         @self.client.on_message(
             filters.command("stats", prefixes=prefixes) & _make_command_filter("stats"),
@@ -880,6 +1044,26 @@ class KraabUserbot(
         )
         async def wrap_todo(c, m):
             await run_cmd(handle_todo, m)
+
+        @self.client.on_message(
+            filters.command("proactivity", prefixes=prefixes) & _make_command_filter("proactivity"),
+            group=-1,
+        )
+        async def wrap_proactivity(c, m):
+            await run_cmd(handle_proactivity, m)
+
+        @self.client.on_message(
+            filters.command("trust", prefixes=prefixes) & _make_command_filter("trust"), group=-1
+        )
+        async def wrap_trust(c, m):
+            await run_cmd(handle_trust, m)
+
+        @self.client.on_message(
+            filters.command("e2e_smoke", prefixes=prefixes) & _make_command_filter("e2e_smoke"),
+            group=-1,
+        )
+        async def wrap_e2e_smoke(c, m):
+            await run_cmd(handle_e2e_smoke, m)
 
         @self.client.on_message(
             filters.command("ls", prefixes=prefixes) & _make_command_filter("ls"), group=-1
@@ -1229,12 +1413,81 @@ class KraabUserbot(
         # Voice/audio проходят в _process_message → _transcribe_audio_message
         # (устаревший wrap_audio с stop_propagation() удалён — он блокировал AI pipeline).
         @self.client.on_message(
-            (filters.text | filters.photo | filters.voice | filters.audio | filters.document)
+            (
+                filters.text
+                | filters.photo
+                | filters.voice
+                | filters.audio
+                | filters.document
+                | filters.video
+                | filters.video_note
+                | filters.animation
+                | filters.sticker
+            )
             & ~filters.bot,
             group=0,
         )
         async def wrap_message(c, m):
             await self._process_message(m)
+
+        # Smart Routing Phase 5: feedback hooks для negative learning.
+        # Best-effort — wrap всё в try/except, не падаем при проблемах с handlers.
+        try:
+
+            @self.client.on_deleted_messages()
+            async def _on_smart_routing_deleted(client, messages):
+                from .core.feedback_tracker import get_tracker  # noqa: PLC0415
+
+                tracker = get_tracker()
+                for msg in messages or []:
+                    try:
+                        _chat = getattr(msg, "chat", None)
+                        _cid = getattr(_chat, "id", None) if _chat else None
+                        _mid = getattr(msg, "id", None)
+                        if _cid is None or _mid is None:
+                            continue
+                        await tracker.on_message_deleted(
+                            chat_id=int(_cid),
+                            message_id=int(_mid),
+                            deleted_by=None,  # Pyrogram не сообщает кто удалил
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("smart_routing_delete_handler_failed", error=str(exc))
+
+        try:
+
+            @self.client.on_message_reaction_updated()
+            async def _on_smart_routing_reaction(client, reaction):
+                from .core.feedback_tracker import get_tracker  # noqa: PLC0415
+
+                try:
+                    _chat = getattr(reaction, "chat", None)
+                    _cid = getattr(_chat, "id", None) if _chat else None
+                    _mid = getattr(reaction, "message_id", None)
+                    _user = getattr(reaction, "user", None) or getattr(reaction, "from_user", None)
+                    _uid = getattr(_user, "id", None) if _user else None
+                    new_reactions = getattr(reaction, "new_reaction", None) or []
+                    if _cid is None or _mid is None or _uid is None:
+                        return
+                    tracker = get_tracker()
+                    for r in new_reactions:
+                        emoji = getattr(r, "emoji", None) or getattr(r, "reaction", None)
+                        if not emoji:
+                            continue
+                        await tracker.on_reaction_added(
+                            chat_id=int(_cid),
+                            message_id=int(_mid),
+                            reaction=str(emoji),
+                            user_id=int(_uid),
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
+
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("smart_routing_reaction_handler_failed", error=str(exc))
 
     # _is_sqlite_io_error, _start_client_serialized, _safe_stop_client,
     # _arm_client_session_shutdown_guard, _cancel_client_restart_tasks -> SessionMixin (src/userbot/session.py)
@@ -1452,6 +1705,212 @@ class KraabUserbot(
             return
         self.maintenance_task = asyncio.create_task(self._safe_maintenance())
 
+    @staticmethod
+    def _build_cron_system_prompt() -> str:
+        """
+        Минимальный system_prompt для cron-path.
+
+        Зачем отдельный: полный owner-prompt (`_build_system_prompt_for_sender`) грузит
+        workspace bundle + injection defense + role-инструкции и **регистрирует tools**.
+        У CLI-провайдеров (codex-cli/gpt-5.4) это приводило к tool-chain попыткам и
+        gateway возвращал плейсхолдер `No response from OpenClaw.` (26 chars) когда
+        text payload оставался пустым после tool calls.
+
+        Контракт: ≤500 chars, никаких упоминаний tools, NO_REPLY как escape hatch.
+        """
+        return (
+            "Ты — Krab cron-помощник. На вход — RUNTIME CONTEXT снапшот и задача. "
+            "Отвечай в один shot, кратко (≤6 строк), на русском. "
+            "Используй только данные из RUNTIME CONTEXT — никаких tool calls, "
+            "history_search, cost_lookup, inbox_status и т.п. "
+            "Если по контексту нечего сообщить владельцу — ответь ровно `NO_REPLY` "
+            "(одним токеном, без пояснений). Не извиняйся, не приветствуй."
+        )
+
+    async def _build_cron_context(self) -> str:
+        """
+        Собирает компактный snapshot runtime-данных для prefix-инъекции в cron prompts.
+
+        Цель: позволить LLM ответить "в один shot" без tool-chain (history_search,
+        cost_lookup, inbox_status, archive_size). Tool-chain раньше упирался в 90s
+        timeout. Все источники читаются дёшево (in-memory / file stat / sqlite count).
+
+        Формат: ≤500 токенов, многострочный markdown-блок. При ошибке любого
+        источника — заменяется на "n/a" чтобы не валить весь cron.
+        """
+        from datetime import datetime, timezone  # noqa: PLC0415
+
+        lines: list[str] = ["=== KRAB RUNTIME CONTEXT (auto, для one-shot ответа) ==="]
+        now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        lines.append(f"Время: {now_utc}")
+
+        # Costs (сессия + месяц + бюджет)
+        try:
+            from .core.cost_analytics import cost_analytics  # noqa: PLC0415
+
+            session_cost = cost_analytics.get_cost_so_far_usd()
+            month_cost = cost_analytics.get_monthly_cost_usd()
+            budget = cost_analytics.get_monthly_budget_usd()
+            remaining = cost_analytics.get_remaining_budget_usd()
+            cost_line = f"Расходы: сессия ${session_cost:.4f}, месяц ${month_cost:.4f}"
+            if budget > 0:
+                cost_line += f", бюджет ${budget:.2f}"
+                if remaining is not None:
+                    cost_line += f", осталось ${remaining:.2f}"
+            else:
+                cost_line += ", бюджет не задан"
+            lines.append(cost_line)
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"Расходы: n/a ({type(exc).__name__})")
+
+        # Inbox open/processing counts
+        try:
+            open_items = inbox_service.list_items(status="open", limit=200)
+            proc_items = inbox_service.list_items(status="processing", limit=200)
+            lines.append(f"Inbox: open={len(open_items)}, processing={len(proc_items)}")
+            # Топ-3 самых свежих open для контекста morning brief
+            preview = []
+            for it in open_items[:3]:
+                title = (getattr(it, "summary", None) or getattr(it, "title", "") or "")[:80]
+                kind = getattr(it, "kind", "") or "?"
+                if title:
+                    preview.append(f"  • [{kind}] {title}")
+            if preview:
+                lines.append("Inbox top-3 open:")
+                lines.extend(preview)
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"Inbox: n/a ({type(exc).__name__})")
+
+        # Archive.db size + delta за сутки
+        try:
+            from .core.archive_growth_monitor import (  # noqa: PLC0415
+                load_history,
+                take_snapshot,
+            )
+
+            snap = take_snapshot()
+            if snap:
+                archive_line = f"Archive.db: {snap.size_mb:.1f} MB, {snap.message_count} messages"
+                hist = load_history()
+                day_ago = int(time.time()) - 86400
+                older = [s for s in hist if s.ts < day_ago]
+                if older:
+                    delta_mb = snap.size_mb - older[-1].size_mb
+                    delta_msgs = snap.message_count - older[-1].message_count
+                    archive_line += f"; за сутки Δ {delta_mb:+.1f} MB / {delta_msgs:+d} msgs"
+                lines.append(archive_line)
+            else:
+                lines.append("Archive.db: n/a (нет файла)")
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"Archive.db: n/a ({type(exc).__name__})")
+
+        # Active reminders
+        try:
+            reminders = krab_scheduler.list_reminders()
+            lines.append(f"Reminders pending: {len(reminders)}")
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"Reminders: n/a ({type(exc).__name__})")
+
+        lines.append("=== END CONTEXT ===")
+        return "\n".join(lines)
+
+    async def _run_cron_prompt_and_send(self, chat_id: str, prompt: str) -> None:
+        """
+        W32: Cron job callback — пропускает prompt через LLM и отправляет
+        результат в Saved Messages владельца.
+
+        Раньше `_send_scheduled_message` был bound как cron sender, но он
+        просто слал raw prompt как текст. Для cron jobs нужен LLM-processing:
+        morning-brief/evening-recap формируют сводки, archive-growth/cost-budget
+        генерируют conditional alerts. LLM-путь obligatory.
+
+        2026-04-25: prefix-инъекция готового контекста (`_build_cron_context`)
+        чтобы LLM отвечал в один shot без tool-chain. Раньше LLM пытался
+        history_search/cost_lookup/inbox_status и упирался в 90s timeout.
+        """
+        try:
+            if not self.client or not self.client.is_connected:
+                logger.warning("cron_job_skip_no_telegram", prompt_preview=prompt[:80])
+                return
+
+            # Determine recipient: chat_id может быть "cron_native" — route to owner Saved Messages
+            owner_id = self.me.id if self.me else None
+            target_chat: int | str | None = None
+            if chat_id and chat_id != "cron_native" and re.fullmatch(r"-?\d+", str(chat_id or "")):
+                target_chat = int(str(chat_id))
+            elif owner_id:
+                target_chat = int(owner_id)
+
+            if target_chat is None:
+                logger.warning("cron_job_skip_no_target", prompt_preview=prompt[:80])
+                return
+
+            # LLM call через существующий router — reuse swarm-style adapter для one-shot
+            from .handlers.command_handlers import _AgentRoomRouterAdapter  # noqa: PLC0415
+
+            # Минимальный cron-prompt (см. _build_cron_system_prompt). Полный owner-prompt
+            # с workspace bundle + tool registration ломал CLI-провайдеры → пустой ответ →
+            # gateway возвращал "No response from OpenClaw." (26 chars).
+            system_prompt = self._build_cron_system_prompt()
+            # W32 hotfix v3: chat_id MUST be numeric (target_chat = owner_id),
+            # не synthetic string "cron:job:..." — иначе openclaw_client hangs
+            # in memory_adapter trying to load history for non-existent chat.
+            # Manual run_now showed firing → silent hang (никаких событий после
+            # cron_native_job_firing).
+            adapter = _AgentRoomRouterAdapter(
+                chat_id=str(target_chat),
+                system_prompt=system_prompt,
+                team_name=None,
+            )
+            # W32 hotfix v2: _AgentRoomRouterAdapter exposes route_query (returns
+            # full string), not .stream(). Add 90s timeout — cron prompts должны
+            # отвечать быстро, иначе откатываемся на skip без блокировки scheduler.
+            #
+            # 2026-04-25: префиксим prompt готовым context-блоком (cost/inbox/archive/
+            # reminders) — LLM отвечает в один shot без tool-chain (раньше hit 90s).
+            try:
+                context_block = await self._build_cron_context()
+            except Exception as ctx_exc:  # noqa: BLE001
+                logger.warning("cron_context_build_failed", error=str(ctx_exc))
+                context_block = ""
+            augmented_prompt = f"{context_block}\n\n{prompt}" if context_block else prompt
+            full_reply = (
+                await asyncio.wait_for(adapter.route_query(augmented_prompt), timeout=90.0)
+            ).strip()
+            if not full_reply:
+                logger.warning("cron_job_empty_llm_reply", prompt_preview=prompt[:80])
+                return
+
+            # Gateway placeholder = empty response → silent skip (не спамим Saved Messages)
+            if "no response from openclaw" in full_reply.lower():
+                logger.warning(
+                    "cron_job_gateway_placeholder",
+                    prompt_preview=prompt[:80],
+                    reply_preview=full_reply[:120],
+                )
+                return
+
+            # NO_REPLY marker — cron jobs с conditional logic могут решить тихо
+            if "NO_REPLY" in full_reply[:50].upper():
+                logger.info("cron_job_silent_skip", prompt_preview=prompt[:80])
+                return
+
+            for part in self._split_message(full_reply):
+                await self.client.send_message(target_chat, part)
+            logger.info(
+                "cron_job_message_sent",
+                target=str(target_chat),
+                reply_len=len(full_reply),
+                reply_preview=full_reply[:160],
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "cron_job_llm_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                prompt_preview=prompt[:80],
+            )
+
     async def _send_scheduled_message(self, chat_id: str, text: str) -> None:
         """
         Отправляет сообщение из scheduler в Telegram-чат.
@@ -1474,15 +1933,33 @@ class KraabUserbot(
         for part in self._split_message(payload):
             await self.client.send_message(target_chat, part)
 
+    @property
+    def _owner_notify_target(self) -> int | str:
+        """
+        Telegram chat, куда идут уведомления владельцу (незнакомые контакты,
+        proactive alerts, startup, monitor alerts).
+
+        Приоритет:
+          1. OWNER_NOTIFY_CHAT_ID env → int user_id
+          2. Fallback: "me" (Saved Messages userbot-аккаунта — для обратной совместимости)
+        """
+        raw = config.OWNER_NOTIFY_CHAT_ID
+        if raw:
+            try:
+                return int(raw)
+            except ValueError:
+                pass
+        return "me"
+
     async def _send_proactive_watch_alert(self, text: str) -> None:
         """
-        Отправляет watch-alert в Saved Messages владельца через userbot.
+        Отправляет watch-alert владельцу через userbot.
         Fallback: если userbot offline — пробует reserve bot (Phase 2.1).
         """
         clean_text = str(text or "").strip()
         if self.client and self.client.is_connected:
             for part in self._split_message(clean_text):
-                await self.client.send_message("me", part)
+                await self.client.send_message(self._owner_notify_target, part)
             return
         # userbot недоступен — пробуем reserve bot
         if reserve_bot.is_running:
@@ -1518,6 +1995,151 @@ class KraabUserbot(
         except Exception as exc:
             logger.warning("memory_indexer_start_failed", error=str(exc), non_fatal=True)
 
+    async def _idea_features_tick_loop(self) -> None:
+        """Единый периодический tick для idea-features (Idea 5/18/+).
+
+        Периодичность:
+        - reply_scheduler.pop_due() — каждые 30 секунд (отправка отложенных ответов)
+        - daily_brief — раз в день в 08:00 local (если KRAB_DAILY_BRIEF_ENABLED=1)
+        - channel_digest — раз в день в 09:00 в KRAB_CHANNEL_DIGEST_CHAT_ID
+        - pattern_detector.detect_patterns() — каждые 6 часов
+
+        State (last_run timestamps) — в self._idea_tick_state.
+        Каждая фича обёрнута в try/except: fail-open, не валит петлю.
+        """
+        # Шаг тика: 30 секунд (минимально для reply_scheduler)
+        tick_interval = 30.0
+        # Периоды (секунды)
+        pattern_period = 6 * 3600  # 6 часов
+        daily_reentry_guard = 23 * 3600  # 23 часа — защита от двойного запуска
+
+        while True:
+            try:
+                await asyncio.sleep(tick_interval)
+            except asyncio.CancelledError:
+                raise
+
+            now_ts = time.time()
+            now_local = datetime.now().astimezone()
+
+            # ── 1. reply_scheduler.pop_due ─────────────────────────────
+            try:
+                from .core.reply_scheduler import reply_scheduler  # noqa: PLC0415
+
+                due = reply_scheduler.pop_due()
+                for job in due:
+                    try:
+                        kwargs: dict[str, Any] = {}
+                        meta = dict(getattr(job, "metadata", {}) or {})
+                        rt = meta.get("reply_to_message_id")
+                        if rt is not None:
+                            try:
+                                kwargs["reply_to_message_id"] = int(rt)
+                            except (TypeError, ValueError):
+                                pass
+                        await self.client.send_message(job.chat_id, job.text, **kwargs)
+                        logger.info(
+                            "idea_tick_reply_sent",
+                            job_id=job.job_id,
+                            chat_id=job.chat_id,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "idea_tick_reply_send_failed",
+                            job_id=getattr(job, "job_id", "?"),
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                        )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "idea_tick_reply_scheduler_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+            # ── 2. daily_brief — 08:00 local в self-DM ─────────────────
+            try:
+                if os.getenv("KRAB_DAILY_BRIEF_ENABLED", "0").strip().lower() in (
+                    "1",
+                    "true",
+                    "yes",
+                ):
+                    last_run = float(self._idea_tick_state.get("daily_brief", 0.0))
+                    if (
+                        now_local.hour == 8
+                        and (now_ts - last_run) > daily_reentry_guard
+                        and self.me is not None
+                    ):
+                        from .core.daily_brief import DailyBriefBuilder  # noqa: PLC0415
+
+                        builder = DailyBriefBuilder()
+                        text = await builder.build_brief()
+                        if text:
+                            await self.client.send_message(self._owner_notify_target, text)
+                            logger.info("idea_tick_daily_brief_sent", chars=len(text))
+                        else:
+                            logger.info("idea_tick_daily_brief_empty")
+                        self._idea_tick_state["daily_brief"] = now_ts
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "idea_tick_daily_brief_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+            # ── 3. channel_digest — 09:00 local в configured chat ──────
+            try:
+                digest_chat = os.getenv("KRAB_CHANNEL_DIGEST_CHAT_ID", "").strip()
+                if digest_chat:
+                    last_run = float(self._idea_tick_state.get("channel_digest", 0.0))
+                    if now_local.hour == 9 and (now_ts - last_run) > daily_reentry_guard:
+                        from .core.channel_digest import (  # noqa: PLC0415
+                            channel_digest_builder,
+                        )
+
+                        text = channel_digest_builder.build_digest()
+                        if text:
+                            try:
+                                target: int | str = int(digest_chat)
+                            except ValueError:
+                                target = digest_chat
+                            await self.client.send_message(target, text)
+                            logger.info(
+                                "idea_tick_channel_digest_sent",
+                                chat=digest_chat,
+                                chars=len(text),
+                            )
+                        else:
+                            logger.info("idea_tick_channel_digest_empty")
+                        self._idea_tick_state["channel_digest"] = now_ts
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "idea_tick_channel_digest_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+            # ── 4. pattern_detector — каждые 6 часов ───────────────────
+            try:
+                last_run = float(self._idea_tick_state.get("pattern_detector", 0.0))
+                if (now_ts - last_run) >= pattern_period:
+                    from .core.proactive_suggestions import (  # noqa: PLC0415
+                        pattern_detector,
+                    )
+
+                    suggestions = pattern_detector.detect_patterns()
+                    logger.info(
+                        "proactive_patterns_detected",
+                        count=len(suggestions),
+                    )
+                    self._idea_tick_state["pattern_detector"] = now_ts
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "idea_tick_pattern_detector_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
     async def _command_usage_save_loop(self) -> None:
         """Периодически (каждые 5 минут) сохраняет счётчики команд на диск."""
         while True:
@@ -1549,6 +2171,17 @@ class KraabUserbot(
                 self._weekly_digest_task = weekly_digest.start_weekly_digest_loop()
         except Exception as exc:  # noqa: BLE001
             logger.warning("weekly_digest_setup_failed", error=str(exc))
+
+        # NightlySummary: привязываем bot и запускаем daily loop (fire в NIGHTLY_SUMMARY_HOUR)
+        try:
+            from .core.nightly_summary import nightly_summary_service  # noqa: PLC0415
+
+            nightly_summary_service.bind_bot(self.client)
+            nst = getattr(self, "_nightly_summary_task", None)
+            if nst is None or nst.done():
+                self._nightly_summary_task = nightly_summary_service.start()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("nightly_summary_setup_failed", error=str(exc))
 
     async def _run_proactive_watch_loop(self) -> None:
         """
@@ -1619,6 +2252,7 @@ class KraabUserbot(
                     return _AgentRoomRouterAdapter(
                         chat_id=f"swarm:scheduled:{team_name}",
                         system_prompt=system_prompt,
+                        team_name=team_name,
                     )
 
                 swarm_scheduler.bind(
@@ -1631,6 +2265,11 @@ class KraabUserbot(
                     logger.info("swarm_scheduler_runtime_started")
 
             # Native cron scheduler — fallback когда OpenClaw CLI недоступен
+            # W32: cron health check выявил что bind_sender не вызывался →
+            # все 4 jobs были silent no-op (last_run_at обновлялся, но messages
+            # не отправлялись). Fix: bind callback который пропускает prompt
+            # через LLM и отправляет результат в Saved Messages owner'а.
+            cron_native_scheduler.bind_sender(self._run_cron_prompt_and_send)
             if not cron_native_scheduler.is_running:
                 cron_native_scheduler.start()
                 logger.info("cron_native_scheduler_runtime_started")
@@ -1752,7 +2391,11 @@ class KraabUserbot(
     # ------------------------------------------------------------------
 
     def _is_translator_active_for_chat(self, chat_id: int | str) -> bool:
-        """Проверяет, активна ли translator сессия для данного чата."""
+        """Проверяет, активна ли translator сессия для данного чата.
+
+        Translator — строго opt-in: активируется только явным !translator on / !translator session start.
+        active_chats должен содержать chat_id чтобы pipeline сработал — пустой список = inactive.
+        """
         state = self.get_translator_session_state()
         if state.get("session_status") != "active":
             return False
@@ -1760,9 +2403,78 @@ class KraabUserbot(
             return False
         active_chats = state.get("active_chats") or []
         if not active_chats:
-            # Если active_chats пуст — translator активен для ВСЕХ чатов owner'а
-            return True
+            # Пустой active_chats → сессия не привязана ни к одному чату (не активна).
+            # Ранее здесь был fallback "активен для всех" — это нарушало opt-in семантику.
+            return False
         return str(chat_id) in [str(c) for c in active_chats]
+
+    async def _apply_voice_dispatcher(self, message: Any, transcript: str) -> str:
+        """Idea 1: подмешать summary/preview к голосовому transcript.
+
+        Принимает решение через VoiceMessageDispatcher.decide_format().
+        Если decision=summary|both — вызывает AudioSummarizer и собирает
+        форматированный prompt-блок. Fail-open: при любой ошибке возвращает
+        исходный transcript.
+        """
+        # Gate: env-флаг для отключения
+        if os.getenv("KRAB_VOICE_DISPATCHER_ENABLED", "1").strip().lower() not in (
+            "1",
+            "true",
+            "yes",
+        ):
+            return transcript
+        text = (transcript or "").strip()
+        if not text:
+            return transcript
+        try:
+            from .core.audio_summarizer import get_summarizer
+            from .core.voice_message_dispatcher import get_dispatcher
+
+            duration: float | None = None
+            voice_obj = getattr(message, "voice", None)
+            audio_obj = getattr(message, "audio", None)
+            for src_obj in (voice_obj, audio_obj):
+                if src_obj is not None:
+                    dur_attr = getattr(src_obj, "duration", None)
+                    if dur_attr is not None:
+                        duration = float(dur_attr)
+                        break
+
+            dispatcher = get_dispatcher()
+            decision = dispatcher.decide_format(text, duration_sec=duration)
+            summary = None
+            if decision.kind in ("summary", "both"):
+                try:
+                    summary = await get_summarizer().summarize(text)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "voice_dispatcher_summary_failed",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                    summary = None
+            formatted = dispatcher.format_response(
+                text,
+                summary=summary,
+                format_kind=decision.kind,
+                duration_sec=duration,
+            )
+            logger.info(
+                "voice_dispatcher_applied",
+                kind=decision.kind,
+                reason=decision.reason,
+                duration_sec=duration,
+                transcript_chars=len(text),
+                has_summary=bool(summary),
+            )
+            return formatted or transcript
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "voice_dispatcher_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return transcript
 
     async def _handle_translator_voice(
         self,
@@ -1909,6 +2621,165 @@ class KraabUserbot(
                 error_type=type(_exc).__name__,
             )
 
+        # Session 28: bootstrap learning singletons (DH/DI/DJ).
+        # Только persist-пути; sending holdover / REPL invocation —
+        # отдельная задача (требует UI решения).
+        try:
+            _learning_state_dir = Path(
+                os.environ.get("KRAB_RUNTIME_STATE_DIR")
+                or str(Path.home() / ".openclaw" / "krab_runtime_state")
+            ).expanduser()
+            try:
+                from .core.owner_presence import (  # noqa: PLC0415
+                    owner_presence_tracker,
+                )
+
+                owner_presence_tracker.configure_default_path(
+                    _learning_state_dir / "owner_presence.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "owner_presence_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            try:
+                from .core.repl_session import repl_session  # noqa: PLC0415
+
+                repl_session.configure_default_paths(_learning_state_dir / "repl_session_audit.log")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "repl_session_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            try:
+                from .core.proactive_suggestions import (  # noqa: PLC0415
+                    pattern_detector,
+                )
+
+                pattern_detector.configure_default_path(
+                    _learning_state_dir / "proactive_suggestions.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "pattern_detector_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            # Idea 13: Named Entity Memory — persist-путь для упомянутых
+            # имён/мест/проектов. Bootstrap fail-open.
+            try:
+                from .core.named_entity_memory import (  # noqa: PLC0415
+                    named_entity_memory,
+                )
+
+                named_entity_memory.configure_default_path(
+                    _learning_state_dir / "named_entities.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "named_entity_memory_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            # Idea 26: AnomalyDetector — sliding-window z-score baselines.
+            try:
+                from .core.anomaly_detector import (  # noqa: PLC0415
+                    anomaly_detector,
+                )
+
+                anomaly_detector.configure_default_path(
+                    _learning_state_dir / "anomaly_baselines.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "anomaly_detector_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            # Idea 28: SensitiveChatRegistry — privacy-уровни по чатам.
+            try:
+                from .core.chat_sensitivity import (  # noqa: PLC0415
+                    sensitive_chat_registry,
+                )
+
+                sensitive_chat_registry.configure_default_path(
+                    _learning_state_dir / "sensitive_chats.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "sensitive_chat_registry_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            # Idea 4: ChatTranslateConfig — авто-перевод по чатам, persist-путь.
+            try:
+                from .core.auto_translate_chat import (  # noqa: PLC0415
+                    auto_translate_chats,
+                )
+
+                auto_translate_chats.configure_default_path(
+                    _runtime_state_dir / "auto_translate_chats.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "auto_translate_chats_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            # Idea 5: ReplyScheduler — отложенные ответы (persist queue).
+            try:
+                from .core.reply_scheduler import (  # noqa: PLC0415
+                    reply_scheduler,
+                )
+
+                reply_scheduler.configure_default_path(
+                    _runtime_state_dir / "scheduled_replies.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "reply_scheduler_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            # Idea 7: ToolCompositionMemory — паттерны комбинаций tools.
+            try:
+                from .core.tool_composition_memory import (  # noqa: PLC0415
+                    tool_composition_memory,
+                )
+
+                tool_composition_memory.configure_default_path(
+                    _runtime_state_dir / "tool_composition.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "tool_composition_memory_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            # Idea 33: JokeCalibrationStore — per-chat humor scoring.
+            try:
+                from .core.joke_calibration import (  # noqa: PLC0415
+                    joke_calibration_store,
+                )
+
+                joke_calibration_store.configure_default_path(
+                    _runtime_state_dir / "joke_calibration.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "joke_calibration_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning(
+                "learning_singletons_bootstrap_failed",
+                error=str(_exc),
+                error_type=type(_exc).__name__,
+            )
+
         # B.7: global Telegram API rate limiter. Default 20 req/s, конфигурируется
         # через env TELEGRAM_GLOBAL_RATE_MAX_PER_SEC. Это soft cap — лимитер НЕ
         # отменяет вызовы, а замедляет (await asyncio.sleep). Нужно чтобы не
@@ -2044,6 +2915,35 @@ class KraabUserbot(
         self.me = await self.client.get_me()
         self._set_startup_state(state="running")
         logger.info("userbot_started", me=self.me.username, id=self.me.id)
+        # Smart Routing Phase 5: сообщить feedback_tracker owner_id
+        try:
+            from .core.feedback_tracker import get_tracker  # noqa: PLC0415
+
+            get_tracker().set_owner_id(int(self.me.id))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("feedback_tracker_owner_id_failed", error=str(exc))
+
+        # Feature M (Session 28): bind pyrogram client в userbot self-tools
+        # — позволяет LLM вызывать read tools (history/search/etc) через native API.
+        try:
+            from .core.userbot_self_tools import set_userbot_client  # noqa: PLC0415
+
+            set_userbot_client(self.client)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("userbot_self_tools_bind_failed", error=str(exc))
+        # Bug fix 27.04.2026: динамически зарегистрировать username userbot
+        # session чтобы @yung_nagato (или любой актуальный username) распознавался
+        # как mention Краба. Раньше hardcoded patterns ловили только @krab.
+        try:
+            from .core.krab_identity import (  # noqa: PLC0415
+                set_krab_user_id,
+                set_krab_username,
+            )
+
+            set_krab_user_id(int(self.me.id))
+            set_krab_username(self.me.username)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("krab_identity_init_failed", error=str(exc))
         try:
             self._sync_scheduler_runtime()
         except Exception as exc:  # noqa: BLE001
@@ -2061,11 +2961,34 @@ class KraabUserbot(
             status_emoji = "✅" if is_claw_ready else "⚠️"
             status_text = "Online" if is_claw_ready else "Gateway Unreachable (Check logs)"
 
-            await self.client.send_message(
-                "me",
-                f"🦀 **Krab System Online**\nGateway: {status_emoji} {status_text}\nReady to serve.",
-            )
-            logger.info("wake_up_message_sent", gateway_ready=is_claw_ready)
+            # W32: rate-limit wake-up message — раньше каждый restart спамил
+            # Saved Messages owner'а ("🦀 Krab System Online ..."). Если было
+            # >5 рестартов за день, owner получает 5 spam сообщений. Suppress
+            # if previous wake_up sent <60min ago.
+            from pathlib import Path as _Path
+
+            _wake_marker = _Path("/tmp/krab_last_wakeup.ts")
+            try:
+                last_ts = float(_wake_marker.read_text().strip()) if _wake_marker.exists() else 0
+            except (OSError, ValueError):
+                last_ts = 0
+            now_ts = time.time()
+            if now_ts - last_ts >= 3600:
+                await self.client.send_message(
+                    self._owner_notify_target,
+                    f"🦀 **Krab System Online**\nGateway: {status_emoji} {status_text}\nReady to serve.",
+                )
+                try:
+                    _wake_marker.write_text(str(now_ts))
+                except OSError:
+                    pass
+                logger.info("wake_up_message_sent", gateway_ready=is_claw_ready)
+            else:
+                logger.info(
+                    "wake_up_message_suppressed",
+                    reason="rate_limit_60min",
+                    elapsed_min=round((now_ts - last_ts) / 60, 1),
+                )
         except Exception as e:
             logger.error("wake_up_failed", error=str(e))
 
@@ -2103,6 +3026,10 @@ class KraabUserbot(
         self._ensure_silence_schedule_started()
         self._ensure_memory_indexer_started()
         self._command_usage_save_task = asyncio.create_task(self._command_usage_save_loop())
+        # Idea-features periodic tick: reply_scheduler / daily_brief / channel_digest / patterns
+        if self._idea_features_task is None or self._idea_features_task.done():
+            self._idea_features_task = asyncio.create_task(self._idea_features_tick_loop())
+            logger.info("idea_features_tick_started")
 
         # Wave 29-YY: chat_ban_cache periodic cleanup (follow-up 29-TT)
         # Фоновый sweep_expired каждые 5 минут, удаляет записи с истёкшим expires_at.
@@ -2220,8 +3147,16 @@ class KraabUserbot(
         clients = getattr(self, "_swarm_team_clients", None)
         if not clients:
             return
+        # Импорт здесь, чтобы избежать циклической зависимости при загрузке модуля.
+        from .userbot.session import SessionMixin
+
         for team, cl in list(clients.items()):
             try:
+                # Перед stop() ставим storage guard на каждый swarm client —
+                # иначе фоновые pyrogram-задачи (Session.restart / update_peers)
+                # после stop() добегают до закрытой sqlite-базы и спамят Sentry
+                # (~10 events/24h × 4 команды = заметная доля PYTHON-FASTAPI-1).
+                SessionMixin._arm_storage_shutdown_guard_for_client(cl)
                 if cl.is_connected:
                     await cl.stop()
                 logger.info("swarm_team_client_stopped", team=team)
@@ -2430,7 +3365,13 @@ class KraabUserbot(
                     else [],
                     "parts_count": 1,
                 }
-            updated = await self._safe_edit(temp_message, placeholder)
+            # Bug 4 guard: temp_message может совпадать с входящим чужим сообщением
+            # (в группах при is_self=False и _show_progress_notices=False). Edit чужого
+            # сообщения вернёт 403 MESSAGE_AUTHOR_REQUIRED, поэтому отвечаем reply'ем.
+            if temp_message is source_message:
+                updated = await self._safe_reply_or_send_new(source_message, placeholder)
+            else:
+                updated = await self._safe_edit(temp_message, placeholder)
             return {
                 "delivery_mode": "placeholder_only",
                 "text_message_ids": [str(getattr(updated, "id", "") or "")]
@@ -2450,6 +3391,7 @@ class KraabUserbot(
                 sent = await self._safe_reply_or_send_new(source_message, part)
                 if getattr(sent, "id", None):
                     delivered_ids.append(str(sent.id))
+            self._maybe_record_smart_trigger_response(source_message.chat.id, delivered_ids)
             self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
             return {
                 "delivery_mode": "edit_and_reply",
@@ -2481,6 +3423,7 @@ class KraabUserbot(
                     await delete_coro()
             except Exception:
                 pass
+            self._maybe_record_smart_trigger_response(source_message.chat.id, delivered_ids)
             self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
             return {
                 "delivery_mode": "send_message",
@@ -2488,7 +3431,13 @@ class KraabUserbot(
                 "parts_count": len(parts),
             }
 
-        temp_message = await self._safe_edit(temp_message, parts[0])
+        # Bug 4 guard: тот же случай для основного пути доставки — edit чужого
+        # сообщения недопустим, fallback на reply вместо edit.
+        if temp_message is source_message:
+            first_msg = await self._safe_reply_or_send_new(source_message, parts[0])
+        else:
+            first_msg = await self._safe_edit(temp_message, parts[0])
+        temp_message = first_msg
         if getattr(temp_message, "id", None):
             delivered_ids.append(str(temp_message.id))
         for part in parts[1:]:
@@ -2502,6 +3451,45 @@ class KraabUserbot(
         }
         self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
         return result
+
+    def _maybe_record_smart_trigger_response(
+        self,
+        chat_id: int | str,
+        delivered_ids: list[str],
+    ) -> None:
+        """Smart Routing Phase 5: записать KrabResponse если был pending smart trigger.
+
+        Вызывается из _deliver_response_parts после успешной доставки.
+        Best-effort — никогда не падает (best-effort tracking).
+        """
+        try:
+            cid = str(chat_id)
+            pending = self._pending_smart_trigger.pop(cid, None)
+            if pending is None or not delivered_ids:
+                return
+            from .core.feedback_tracker import (  # noqa: PLC0415
+                KrabResponse,
+                get_tracker,
+            )
+
+            tracker = get_tracker()
+            now = time.time()
+            for mid_str in delivered_ids:
+                try:
+                    mid = int(mid_str)
+                except (ValueError, TypeError):
+                    continue
+                tracker.record_krab_response(
+                    KrabResponse(
+                        chat_id=cid,
+                        message_id=mid,
+                        sent_at=now,
+                        decision_path=getattr(pending, "decision_path", "unknown"),
+                        confidence=float(getattr(pending, "confidence", 1.0) or 1.0),
+                    )
+                )
+        except Exception:  # noqa: BLE001
+            pass  # best-effort — не валим доставку из-за tracker
 
     def _maybe_schedule_autodel(self, chat_id: int, delivered_ids: list[str]) -> None:
         """
@@ -2567,7 +3555,14 @@ class KraabUserbot(
         )
 
     @staticmethod
-    def _build_effective_user_query(*, query: str, has_images: bool) -> str:
+    def _build_effective_user_query(
+        *,
+        query: str,
+        has_images: bool,
+        reply_context: str | None = None,
+        sender_name: str = "",
+        is_group: bool = False,
+    ) -> str:
         """
         Нормализует текст пользовательского запроса перед отправкой в модель.
 
@@ -2575,14 +3570,27 @@ class KraabUserbot(
         - раньше фото без подписи уходило как английское `(Image sent)`;
         - маленькие vision-модели цеплялись за этот placeholder и начинали
           описывать картинку по-английски, игнорируя тон чата;
-        - для user-facing канала безопаснее отправить явный русский запрос.
+        - для user-facing канала безопаснее отправить явный русский запрос;
+        - reply_context (если non-None) префиксится к query чтобы модель видела
+          контекст исходного сообщения, на которое user сделал reply (Telegram
+          UI показывает quoted message, но MTProto event delivers только
+          reply_to_message_id — без явной prepend'я модель не видит).
+        - sender_name + is_group (27.04.2026): для group chat'ов prefix
+          `[username]:` различает speakers (раньше LLM слышал "user / user / user"
+          и сливал participants).
         """
         normalized = str(query or "").strip()
-        if normalized:
-            return normalized
-        if has_images:
-            return "Опиши присланное изображение на русском языке."
-        return ""
+        if not normalized:
+            normalized = "Опиши присланное изображение на русском языке." if has_images else ""
+        ctx = (reply_context or "").strip()
+        sender_tag = ""
+        if is_group:
+            _sn = str(sender_name or "").strip()
+            if _sn:
+                sender_tag = f"[{_sn}]: "
+        if ctx:
+            return f"{sender_tag}[В ответ на сообщение: «{ctx}»]\n\n{normalized}".rstrip()
+        return f"{sender_tag}{normalized}".rstrip()
 
     @staticmethod
     def _should_capture_incoming_owner_item(
@@ -2792,7 +3800,7 @@ class KraabUserbot(
                 f"Чат: `{chat_id_str}` ({chat_type})\n\n"
                 f"**Сообщение:**\n{excerpt[:800]}"
             )
-            sent_message = await self.client.send_message(me.id, notification)
+            sent_message = await self.client.send_message(self._owner_notify_target, notification)
             try:
                 inbox_service.record_relay_delivery(
                     chat_id=chat_id_str,
@@ -2852,8 +3860,7 @@ class KraabUserbot(
                 f"**Сообщение:**\n{excerpt}\n\n"
                 f"↩️ **Краб ответил:**\n{response_excerpt}"
             )
-            me = await self.client.get_me()
-            await self.client.send_message(me.id, notification)
+            await self.client.send_message(self._owner_notify_target, notification)
             logger.info(
                 "guest_incoming_forwarded_to_owner",
                 sender=sender_name,
@@ -2999,6 +4006,204 @@ class KraabUserbot(
 
         return f"{doc_context}\n\n{query}".strip() if query else doc_context
 
+    async def _describe_video_frame(
+        self,
+        frame_bytes: bytes,
+        idx: int,
+        *,
+        chat_id: str,
+    ) -> str:
+        """Краткое описание одного кадра видео через vision-модель.
+
+        Использует тот же openclaw stream, что и фото-pipeline, но
+        собирает поток в одну строку (короткий prompt + жёсткий timeout).
+        Возвращает пустую строку при любой ошибке — perceptor пропустит кадр.
+        """
+        if not frame_bytes:
+            return ""
+        try:
+            b64 = base64.b64encode(frame_bytes).decode("utf-8")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "video_frame_b64_failed",
+                idx=idx,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return ""
+
+        prompt = (
+            "Опиши кратко (1-2 предложения), что видно на кадре. "
+            "Без вводных, без markdown — только описание."
+        )
+        timeout_sec = float(getattr(config, "VIDEO_FRAME_DESCRIBE_TIMEOUT_SEC", 25.0))
+        chunks: list[str] = []
+        try:
+
+            async def _consume() -> None:
+                async for chunk in openclaw_client.send_message_stream(
+                    message=prompt,
+                    chat_id=f"{chat_id}:video-frame:{idx}",
+                    images=[b64],
+                    force_cloud=True,
+                    disable_tools=True,
+                ):
+                    if chunk:
+                        chunks.append(chunk)
+
+            await asyncio.wait_for(_consume(), timeout=max(5.0, timeout_sec))
+        except asyncio.TimeoutError:
+            logger.warning("video_frame_describe_timeout", idx=idx, timeout_sec=timeout_sec)
+            return ""
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "video_frame_describe_failed",
+                idx=idx,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return ""
+
+        return "".join(chunks).strip()
+
+    async def _process_video_message(
+        self,
+        *,
+        message: "Message",
+        query: str,
+        temp_msg: Any,
+        is_self: bool,
+        chat_id: str,
+    ) -> str:
+        """Скачивает video / video_note / animation и обогащает query содержимым.
+
+        Кадры извлекаются через `perceptor.process_video_message`, описания —
+        через `_describe_video_frame` (vision-модель). При любой ошибке возвращаем
+        исходный query без модификации, чтобы не блокировать LLM-flow.
+        """
+        from .modules.perceptor import process_video_message  # noqa: PLC0415
+
+        media = (
+            getattr(message, "video", None)
+            or getattr(message, "video_note", None)
+            or getattr(message, "animation", None)
+        )
+        if not media:
+            return query
+
+        max_bytes = int(getattr(config, "VIDEO_DOWNLOAD_MAX_BYTES", 50 * 1024 * 1024))
+        file_size = int(getattr(media, "file_size", 0) or 0)
+        if file_size and file_size > max_bytes:
+            logger.info(
+                "video_skipped_too_large",
+                chat_id=chat_id,
+                file_size=file_size,
+                max_bytes=max_bytes,
+            )
+            return query
+
+        notice = "🎞 *Смотрю видео...*"
+        try:
+            if is_self:
+                await self._safe_edit(message, f"🦀 {query or '(видео)'}\n\n{notice}")
+            elif temp_msg is not None and temp_msg is not message:
+                await self._safe_edit(temp_msg, notice)
+        except Exception:  # noqa: BLE001
+            pass  # статусное сообщение — не критично
+
+        video_dir = Path(getattr(config, "VIDEO_DOWNLOAD_DIR", "/tmp/krab_videos"))
+        try:
+            video_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("video_dir_create_failed", error=str(exc))
+            return query
+
+        ts_ms = int(time.time() * 1000)
+        msg_id = int(getattr(message, "id", 0) or 0)
+        video_path = video_dir / f"vid_{ts_ms}_{msg_id}.bin"
+
+        download_timeout = float(getattr(config, "VIDEO_DOWNLOAD_TIMEOUT_SEC", 60.0))
+        try:
+            await asyncio.wait_for(
+                self.client.download_media(message, file_name=str(video_path)),
+                timeout=max(5.0, download_timeout),
+            )
+        except asyncio.TimeoutError:
+            logger.warning("video_download_timeout", chat_id=chat_id)
+            return query
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "video_download_failed",
+                chat_id=chat_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return query
+
+        max_frames = int(getattr(config, "VIDEO_MAX_FRAMES", 3))
+
+        async def _describer(frame: bytes, idx: int) -> str:
+            return await self._describe_video_frame(frame, idx, chat_id=chat_id)
+
+        try:
+            extra_context = await process_video_message(
+                str(video_path),
+                caption=getattr(message, "caption", None) or "",
+                max_frames=max_frames,
+                sample_strategy="uniform",
+                frame_describer=_describer,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "video_perceptor_failed",
+                chat_id=chat_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return query
+        finally:
+            try:
+                if video_path.exists():
+                    video_path.unlink()
+            except Exception:  # noqa: BLE001
+                pass
+
+        if not extra_context:
+            return query
+
+        logger.info(
+            "video_context_attached",
+            chat_id=chat_id,
+            context_len=len(extra_context),
+            max_frames=max_frames,
+        )
+        # Feature E: сохраняем vision-summary в archive.db (multi-modal memory).
+        # fail-open: ошибки лишь логируются, не ломают LLM-flow.
+        try:
+            from .modules.perceptor import save_media_summary_to_archive  # noqa: PLC0415
+
+            media_type = (
+                "video"
+                if getattr(message, "video", None) is not None
+                else "video_note"
+                if getattr(message, "video_note", None) is not None
+                else "animation"
+            )
+            save_media_summary_to_archive(
+                chat_id,
+                getattr(message, "id", 0) or 0,
+                media_type,
+                extra_context,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "media_summary_archive_failed",
+                chat_id=chat_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+        return f"{extra_context}\n\n{query}".strip() if query else extra_context
+
     @staticmethod
     def _is_message_not_modified_error(exc: Exception) -> bool:
         """Определяет типичную ошибку Telegram при повторном edit того же текста."""
@@ -3009,6 +4214,11 @@ class KraabUserbot(
     def _is_message_id_invalid_error(exc: Exception) -> bool:
         """Определяет ошибку Telegram при попытке edit невалидного message id."""
         return "MESSAGE_ID_INVALID" in str(exc).upper()
+
+    @staticmethod
+    def _is_message_author_required_error(exc: Exception) -> bool:
+        """Определяет 403 MESSAGE_AUTHOR_REQUIRED при попытке edit чужого сообщения."""
+        return "MESSAGE_AUTHOR_REQUIRED" in str(exc).upper()
 
     @staticmethod
     def _is_message_empty_error(exc: Exception) -> bool:
@@ -3144,7 +4354,7 @@ class KraabUserbot(
                 f"\u2500\u2500\u2500\u2500\u2500\n"
                 f"{msg_text}"
             )
-            await self.client.send_message(self.me.id, alert)
+            await self.client.send_message(self._owner_notify_target, alert)
             logger.info(
                 "monitor_alert_sent",
                 chat_id=str(message.chat.id),
@@ -3182,6 +4392,25 @@ class KraabUserbot(
                 return await _telegram_send_queue.run(
                     chat_id, lambda: self.client.send_message(chat_id, _text)
                 )
+            if self._is_message_author_required_error(exc):
+                # Bug 4 defense-in-depth: на случай, если guard в _deliver_response_parts
+                # был обойдён — отправляем как reply на исходное сообщение.
+                logger.warning(
+                    "telegram_edit_author_required_fallback_reply",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                msg_id = getattr(msg, "id", None)
+                if msg_id:
+                    return await _telegram_send_queue.run(
+                        chat_id,
+                        lambda: self.client.send_message(
+                            chat_id, _text, reply_to_message_id=msg_id
+                        ),
+                    )
+                return await _telegram_send_queue.run(
+                    chat_id, lambda: self.client.send_message(chat_id, _text)
+                )
             if self._is_message_too_long_error(exc):
                 # Текст превысил лимит Telegram (4096). Отрезаем и отправляем новым сообщением.
                 logger.warning("telegram_edit_too_long_fallback_send_new", error=str(exc))
@@ -3204,6 +4433,10 @@ class KraabUserbot(
         _text = target_text  # захват для lambda
         try:
             sent = await _telegram_send_queue.run(chat_id, lambda: msg.reply(_text))
+            # Фиксируем момент ответа Краба для follow-up детектора
+            from .core.trigger_detector import last_krab_msg  # noqa: PLC0415
+
+            last_krab_msg.record(chat_id)
             return sent or msg
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -3212,9 +4445,13 @@ class KraabUserbot(
                 message_id=str(getattr(msg, "id", "") or ""),
                 error=str(exc),
             )
-            return await _telegram_send_queue.run(
+            sent = await _telegram_send_queue.run(
                 chat_id, lambda: self.client.send_message(chat_id, _text)
             )
+            from .core.trigger_detector import last_krab_msg  # noqa: PLC0415
+
+            last_krab_msg.record(chat_id)
+            return sent
 
     # _get_chat_processing_lock -> BackgroundTasksMixin (src/userbot/background_tasks.py)
 
@@ -3246,8 +4483,13 @@ class KraabUserbot(
         access_profile: AccessProfile,
         is_allowed_sender: bool,
         chat_id: str,
+        _forward_batch_prompt: str | None = None,
     ) -> None:
-        """Обрабатывает одно входящее сообщение под эксклюзивным lock чата."""
+        """Обрабатывает одно входящее сообщение под эксклюзивным lock чата.
+
+        _forward_batch_prompt: если передан — используется вместо message.text
+        (результат batching пачки пересланных сообщений).
+        """
         from .core.command_aliases import alias_service as _alias_svc  # noqa: PLC0415
 
         text = message.text or message.caption or ""
@@ -3264,7 +4506,47 @@ class KraabUserbot(
         if text and text.lstrip()[:1] in ("!", "/", "."):
             cmd_word = text.lstrip().split()[0].lstrip("!/.").lower()
             if cmd_word in self._known_commands:
+                # W32 — blocklist silent skip даже в fallback dispatcher-пути.
+                # Раньше blocklist проверялся только в _make_command_filter; если
+                # filter не attached (команда известна, но правило per-chat
+                # отключает её), сообщение попадало сюда и генерировало deny-reply
+                # с текстом «!status доступна только…» — spam-бот ловил в нём
+                # подстроку !status → loop в группе How2AI.
+                # W32 hotfix (v2): использовать уже импортированный singleton
+                # из top-level (строка 38), а не импорт модуля — предыдущая
+                # версия падала AttributeError в silent `except Exception: pass`
+                # → blocklist check НЕ срабатывал → spam-loop повторился.
+                try:
+                    _blocklist_keys = (cmd_word,)
+                    if cmd_word == "silence":
+                        _blocklist_keys = ("silence", "тишина")
+                    if any(
+                        command_blocklist.is_blocked(message.chat.id, key)
+                        for key in _blocklist_keys
+                    ):
+                        logger.info(
+                            "command_blocklist_skip_fallback",
+                            command=cmd_word,
+                            chat=message.chat.id,
+                        )
+                        return
+                except Exception as _cb_exc:  # noqa: BLE001
+                    logger.warning(
+                        "command_blocklist_check_failed",
+                        command=cmd_word,
+                        error=str(_cb_exc),
+                    )
                 if not access_profile.can_execute_command(cmd_word, self._known_commands):
+                    # W32 — не отвечаем ботам / сообщениям на наши reply:
+                    # это часто триггер loop с другими спам-ботами группы.
+                    _from = getattr(message, "from_user", None)
+                    if _from is not None and bool(getattr(_from, "is_bot", False)):
+                        logger.debug(
+                            "command_access_denied_skip_bot_source",
+                            command=cmd_word,
+                            from_user=str(getattr(_from, "id", "?")),
+                        )
+                        return
                     await self._safe_reply_or_send_new(
                         message,
                         self._build_command_access_denied_text(cmd_word, access_profile),
@@ -3272,11 +4554,29 @@ class KraabUserbot(
                 return
 
         has_document = bool(getattr(message, "document", None))
-        if not text and not message.photo and not has_audio_message and not has_document:
+        # Bug 5 fix 27.04: video / video_note / animation / sticker были silent
+        # drop'ом. Теперь учитываем их в "any-media" guard, чтобы Krab по крайней
+        # мере acknowledge event (vision-обработка сейчас только для photo).
+        has_video = bool(
+            getattr(message, "video", None)
+            or getattr(message, "video_note", None)
+            or getattr(message, "animation", None)
+        )
+        has_sticker = bool(getattr(message, "sticker", None))
+        if (
+            not text
+            and not message.photo
+            and not has_audio_message
+            and not has_document
+            and not has_video
+            and not has_sticker
+            and not _forward_batch_prompt
+        ):
             return
 
         # Счётчик обработанных сообщений за сессию (для !stats).
-        self._session_messages_processed += 1
+        # getattr-guard: при __new__-стабах в тестах атрибут может отсутствовать.
+        self._session_messages_processed = getattr(self, "_session_messages_processed", 0) + 1
 
         runtime_chat_id = self._build_runtime_chat_scope_id(
             chat_id=chat_id,
@@ -3285,6 +4585,18 @@ class KraabUserbot(
             access_level=access_profile.level,
         )
         is_self = user.id == self.me.id
+
+        # Session 28 (DJ/Idea-17): фиксируем активность owner'а для
+        # offline-holdover. Любое исходящее сообщение = owner онлайн.
+        if is_self:
+            try:
+                from .core.owner_presence import (  # noqa: PLC0415
+                    owner_presence_tracker,
+                )
+
+                owner_presence_tracker.record_owner_seen()
+            except Exception:  # noqa: BLE001
+                pass
 
         # Phase 3: capability enforcement — проверяем право на chat
         if not is_self:
@@ -3309,11 +4621,134 @@ class KraabUserbot(
             and message.reply_to_message.from_user.id == self.me.id
         )
 
+        # Smart trigger (Session 26 Smart Routing Phase 5):
+        # per-chat policy + LLM intent classifier + feedback learning.
+        # Заменяет старый implicit trigger pipeline на 5-stage:
+        #   hard_gate → policy_silent → regex_high → regex_low → llm_yes/no.
+        # При LLM unavailable / errors — graceful fallback на regex threshold (legacy).
+        has_implicit_trigger = False
+        smart_trigger_result = None
+        if not has_trigger and not is_reply_to_me and not is_self:
+            _chat_type_impl = getattr(getattr(message, "chat", None), "type", None)
+            _is_group_impl = _chat_type_impl in (
+                enums.ChatType.GROUP,
+                enums.ChatType.SUPERGROUP,
+            )
+            if _is_group_impl:
+                from .core.chat_response_policy import (  # noqa: PLC0415
+                    get_store as _get_policy_store,
+                )
+                from .core.llm_intent_classifier import (  # noqa: PLC0415
+                    ChatMessage as _LLMChatMessage,
+                )
+                from .core.llm_intent_classifier import (  # noqa: PLC0415
+                    get_classifier as _get_intent_classifier,
+                )
+                from .core.trigger_detector import (  # noqa: PLC0415
+                    detect_smart_trigger,
+                )
+
+                # Build chat_context — последние сообщения чата (best-effort).
+                # 27.04.2026 fix: ChatWindow теперь хранит sender_name → LLM
+                # видит реальные имена speakers (не "user" / "user" / "user").
+                # role="assistant" → Krab; role="user" → используем sender_name
+                # из window (username / first_name / user_<id>).
+                _chat_context: list = []
+                try:
+                    _window = chat_window_manager.get_or_create(chat_id)
+                    _now = time.time()
+                    for _wm in _window.messages[-7:]:
+                        _is_krab = _wm.role == "assistant"
+                        _wm_sender = (getattr(_wm, "sender_name", "") or "").strip()
+                        _chat_context.append(
+                            _LLMChatMessage(
+                                sender_name=("krab" if _is_krab else (_wm_sender or "user")),
+                                sender_id=int(self.me.id) if _is_krab and self.me else 0,
+                                text=_wm.content or "",
+                                timestamp=getattr(_wm, "ts", _now),
+                                is_krab=_is_krab,
+                            )
+                        )
+                except Exception:  # noqa: BLE001
+                    pass  # empty context — LLM работает best-effort
+
+                try:
+                    # Bug 11 fix (Session 28): media (photo/video/video_note/animation/sticker)
+                    # без caption должно триггерить ответ — иначе кружочки/фото в группах
+                    # silent игнорируются Smart Routing'ом (regex_low по пустому тексту).
+                    _has_media_for_trigger = bool(
+                        getattr(message, "photo", None)
+                        or getattr(message, "video", None)
+                        or getattr(message, "video_note", None)
+                        or getattr(message, "animation", None)
+                        or getattr(message, "sticker", None)
+                    )
+                    # Feature B (Session 28): per-user reaction memory threshold modifier.
+                    _trigger_user_id = (
+                        str(message.from_user.id) if getattr(message, "from_user", None) else None
+                    )
+                    smart_trigger_result = await detect_smart_trigger(
+                        text=text or "",
+                        chat_id=str(chat_id),
+                        is_reply_to_me=bool(is_reply_to_me),
+                        has_explicit_mention=bool(has_trigger),
+                        has_command=False,  # commands handled separately ранее
+                        chat_context=_chat_context,
+                        policy_store=_get_policy_store(),
+                        llm_classifier=_get_intent_classifier(),
+                        has_media=_has_media_for_trigger,
+                        user_id=_trigger_user_id,
+                    )
+                    has_implicit_trigger = bool(smart_trigger_result.should_respond)
+                    logger.info(
+                        "smart_trigger_decision",
+                        chat_id=chat_id,
+                        should_respond=smart_trigger_result.should_respond,
+                        decision_path=smart_trigger_result.decision_path,
+                        confidence=smart_trigger_result.confidence,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "smart_trigger_failed",
+                        chat_id=chat_id,
+                        error=str(exc),
+                    )
+                    # Graceful fallback на legacy detect_implicit_mention.
+                    try:
+                        from .core.trigger_detector import (  # noqa: PLC0415
+                            TriggerType as _ITType,
+                        )
+                        from .core.trigger_detector import (  # noqa: PLC0415
+                            detect_implicit_mention as _legacy_impl,
+                        )
+
+                        _is_reply_to_other = bool(
+                            message.reply_to_message
+                            and message.reply_to_message.from_user
+                            and message.reply_to_message.from_user.id != self.me.id
+                        )
+                        _impl = _legacy_impl(
+                            text or "",
+                            chat_id,
+                            is_reply_to_explicit_msg=_is_reply_to_other,
+                        )
+                        has_implicit_trigger = _impl.trigger_type != _ITType.NONE
+                    except Exception:  # noqa: BLE001
+                        has_implicit_trigger = False
+
+        # Stash smart_trigger_result для последующего feedback hook
+        # (consumed in _deliver_response_parts or finish blocks).
+        if smart_trigger_result is not None:
+            self._pending_smart_trigger[str(chat_id)] = smart_trigger_result
+
+        # Forward batch: уже прошли фильтрацию в _process_message — trigger-gate пропускаем
         if not (
             has_trigger
+            or has_implicit_trigger
             or message.chat.type == enums.ChatType.PRIVATE
             or is_reply_to_me
             or has_group_audio_fallback
+            or bool(_forward_batch_prompt)
         ):
             return
 
@@ -3323,8 +4758,12 @@ class KraabUserbot(
             logger.info("silence_mode_skip", chat_id=chat_id)
             return
 
-        query = self._get_clean_text(text)
-        if not query and has_audio_message:
+        # Forward batch override: используем batched prompt вместо исходного текста
+        if _forward_batch_prompt:
+            query = _forward_batch_prompt
+        else:
+            query = self._get_clean_text(text)
+        if not _forward_batch_prompt and not query and has_audio_message:
             query, voice_error = await self._transcribe_audio_message(message)
             if not query:
                 await self._safe_reply_or_send_new(
@@ -3337,7 +4776,11 @@ class KraabUserbot(
                 handled = await self._handle_translator_voice(message, query, chat_id)
                 if handled:
                     return
-        elif query and not message.photo and not has_audio_message:
+            # Idea 1: voice dispatcher решает формат (full/summary/both) и
+            # подмешивает структурированный контекст в LLM prompt. Fail-open:
+            # любая ошибка возвращает raw transcript.
+            query = await self._apply_voice_dispatcher(message, query)
+        elif query and not message.photo and not has_audio_message and not _forward_batch_prompt:
             message, query = await self._coalesce_text_burst(
                 message=message,
                 user=user,
@@ -3411,54 +4854,75 @@ class KraabUserbot(
         # как GUEST, но LLM всё равно генерировал ответ с данными оператора.
         #
         # Правило XOR:
-        #   - если user не owner (GUEST) И chat это группа И нет @mention Краба
+        #   - если user GUEST И chat это группа И нет @mention Краба
         #     → ТОЛЬКО forward к оператору, ответ LLM не генерируется.
-        #   - Если есть @mention или reply-to-Krab — нормальная обработка.
+        #   - Исключение: trusted_guests allowlist — legit friends (@dodik_ggt etc.)
+        #     могут получать LLM-ответы даже без @mention.
+        #   - DM и non-GUEST уровни не затронуты.
         # ──────────────────────────────────────────────────────────────────
         if not is_self:
-            from .core.access_control import AccessLevel  # noqa: PLC0415
+            from .core.access_control import AccessLevel as _AL  # noqa: PLC0415, N814
             from .core.krab_identity import is_krab_mentioned  # noqa: PLC0415
-            from .core.prometheus_metrics import _GUEST_LLM_SKIPPED_COUNTER  # noqa: PLC0415
+            from .core.trusted_guests import trusted_guests  # noqa: PLC0415
 
-            _chat_obj = getattr(message, "chat", None)
-            _chat_type_for_guard = getattr(_chat_obj, "type", None)
-            _is_group_for_guard = _chat_type_for_guard in (
+            _chat_obj_g = getattr(message, "chat", None)
+            _chat_type_g = getattr(_chat_obj_g, "type", None)
+            _is_group_g = _chat_type_g in (
                 enums.ChatType.GROUP,
                 enums.ChatType.SUPERGROUP,
             )
-            _is_guest = access_profile.level == AccessLevel.GUEST
-            if _is_group_for_guard and _is_guest:
-                # Pyrogram native mention flag + text scan через krab_identity
-                _pyrogram_mentioned = bool(getattr(message, "mentioned", False))
-                _text_mention = is_krab_mentioned(text or "")
-                _is_reply_to_krab = bool(
-                    getattr(message, "reply_to_message", None)
-                    and self.me
-                    and getattr(getattr(message, "reply_to_message", None), "from_user", None)
-                    and message.reply_to_message.from_user.id == self.me.id
-                )
-                if not _pyrogram_mentioned and not _text_mention and not _is_reply_to_krab:
-                    # Forward-only: информируем оператора, LLM не вызываем
-                    _skip_reason = "not_owner_no_mention"
-                    _GUEST_LLM_SKIPPED_COUNTER[_skip_reason] = (
-                        _GUEST_LLM_SKIPPED_COUNTER.get(_skip_reason, 0) + 1
+            _is_guest_g = access_profile.level == _AL.GUEST
+            if _is_group_g and _is_guest_g:
+                _uid_g = int(getattr(user, "id", 0) or 0)
+                _uname_g = str(getattr(user, "username", "") or "")
+                _cid_g = int(chat_id) if str(chat_id).lstrip("-").isdigit() else 0
+                _is_trusted = trusted_guests.is_trusted(_cid_g, _uid_g, _uname_g)
+
+                if not _is_trusted:
+                    _pyrogram_mentioned = bool(getattr(message, "mentioned", False))
+                    _text_mention = is_krab_mentioned(text or "")
+                    _is_reply_to_krab = bool(
+                        getattr(message, "reply_to_message", None)
+                        and self.me
+                        and getattr(getattr(message, "reply_to_message", None), "from_user", None)
+                        and message.reply_to_message.from_user.id == self.me.id
                     )
-                    logger.info(
-                        "guest_llm_reply_skipped",
-                        reason=_skip_reason,
-                        chat_id=chat_id,
-                        user_id=str(getattr(user, "id", "?")),
-                        username=str(getattr(user, "username", "?")),
-                    )
-                    if bool(getattr(config, "FORWARD_UNKNOWN_INCOMING", True)):
-                        asyncio.create_task(
-                            self._forward_guest_incoming_to_owner(
-                                message=message,
-                                query=query or text or "",
-                                krab_response="[LLM пропущен: гость в группе без @mention]",
-                            )
+                    if not _pyrogram_mentioned and not _text_mention and not _is_reply_to_krab:
+                        logger.info(
+                            "guest_llm_reply_skipped",
+                            reason="not_owner_no_mention",
+                            chat_id=chat_id,
+                            user_id=str(_uid_g),
+                            username=_uname_g,
                         )
-                    return
+                        # Prometheus counter: krab_guest_llm_skipped_total{reason}.
+                        try:
+                            from .core.prometheus_metrics import (  # noqa: PLC0415
+                                _GUEST_LLM_SKIPPED_COUNTER,
+                            )
+
+                            _reason_key = "not_owner_no_mention"
+                            _GUEST_LLM_SKIPPED_COUNTER[_reason_key] = (
+                                _GUEST_LLM_SKIPPED_COUNTER.get(_reason_key, 0) + 1
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                        if bool(getattr(config, "FORWARD_UNKNOWN_INCOMING", True)):
+                            asyncio.create_task(
+                                self._forward_guest_incoming_to_owner(
+                                    message=message,
+                                    query=query or text or "",
+                                    krab_response="[LLM пропущен: гость в группе без @mention]",
+                                )
+                            )
+                        return
+                else:
+                    logger.debug(
+                        "trusted_guest_llm_allowed",
+                        chat_id=chat_id,
+                        user_id=str(_uid_g),
+                        username=_uname_g,
+                    )
 
         # Реакция "видит" — owner сразу понимает что Краб получил сообщение.
         # Только для owner-сообщений (is_self=True или is_allowed_sender+is_self check).
@@ -3466,12 +4930,24 @@ class KraabUserbot(
             asyncio.create_task(self._send_message_reaction(message, "👀"))
 
         _ai_request_start_ts = time.time()
+        # Diag 27.04.2026: расширенный photo/media check для тестирования
+        # bug "has_photo=False даже если PHOTO". Снять после resolve.
+        _media_diag = {
+            "photo_attr": bool(getattr(message, "photo", None)),
+            "document_attr": bool(getattr(message, "document", None)),
+            "video_attr": bool(getattr(message, "video", None)),
+            "media_value": str(getattr(message, "media", "") or ""),
+            "caption": bool(getattr(message, "caption", None)),
+            "msg_id": getattr(message, "id", None),
+            "msg_type": type(message).__name__,
+        }
         logger.info(
             "processing_ai_request",
             chat_id=chat_id,
             user=user.username,
             has_photo=bool(message.photo),
             has_audio=bool(has_audio_message),
+            media_diag=_media_diag,
         )
         action = enums.ChatAction.TYPING
         _typing_stop_event = asyncio.Event()
@@ -3493,6 +4969,13 @@ class KraabUserbot(
                     return
 
         temp_msg = message
+        # W16.3: сохраняем оригинальное сообщение с фото ДО любых edit'ов.
+        # is_self=True → первый _safe_edit (ACK) заменяет message на текстовый объект
+        # у которого photo=None. Проверка `if message.photo:` внизу становится False
+        # → download_media не вызывается → vision miss.
+        # Решение: _photo_download_source хранит ссылку на исходный Message.
+        _photo_download_source = message if bool(getattr(message, "photo", None)) else None
+
         # Формируем информативный ack с моделью и маршрутом
         _ack_model = ""
         try:
@@ -3662,41 +5145,83 @@ class KraabUserbot(
         # VISION: Обработка фото
         images = []
         photo_error = ""
-        if message.photo:
+        # W16.3: при is_self=True первый ACK-edit (выше) заменяет message на объект
+        # без photo. Используем _photo_download_source (сохранён ДО edit'ов).
+        _has_original_photo = bool(message.photo or _photo_download_source)
+        if _has_original_photo:
             try:
+                # _photo_source_msg: оригинальный объект с photo для download_media.
+                # При is_self=True message уже заменён edit'ом (photo=None),
+                # поэтому берём _photo_download_source.
+                _photo_source_msg = _photo_download_source or message
                 if is_self:
+                    # ACK уже был сделан выше (Собираю контекст...). Обновляем на vision-статус.
                     message = await self._safe_edit(
                         message, f"🦀 {query}\n\n👀 *Разглядываю фото...*"
                     )
-                else:
+                elif _show_progress_notices and temp_msg is not message:
+                    # temp_msg — наше собственное ack-сообщение (личный чат) → можно редактировать
                     temp_msg = await self._safe_edit(temp_msg, "👀 *Разглядываю фото...*")
+                else:
+                    # Групповой чат: temp_msg == message (чужое) → нельзя редактировать.
+                    # Отправляем реплай-статус молча, чтобы не падать и не блокировать download.
+                    try:
+                        temp_msg = await self._safe_reply_or_send_new(
+                            message, "👀 *Разглядываю фото...*"
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass  # статусное сообщение не критично — продолжаем download
 
                 # Защита от зависания media-path: ограничиваем download timeout.
                 photo_timeout_sec = float(getattr(config, "PHOTO_DOWNLOAD_TIMEOUT_SEC", 40.0))
                 photo_obj = await asyncio.wait_for(
-                    self.client.download_media(message, in_memory=True),
+                    self.client.download_media(_photo_source_msg, in_memory=True),
                     timeout=max(5.0, photo_timeout_sec),
+                )
+                logger.info(
+                    "photo_download_attempt",
+                    chat_id=chat_id,
+                    is_self=is_self,
+                    source_msg_id=getattr(_photo_source_msg, "id", None),
+                    source_has_photo=bool(getattr(_photo_source_msg, "photo", None)),
                 )
                 if photo_obj:
                     img_bytes = photo_obj.getvalue()
                     b64_img = base64.b64encode(img_bytes).decode("utf-8")
                     images.append(b64_img)
+                    logger.info(
+                        "photo_download_success",
+                        chat_id=chat_id,
+                        is_self=is_self,
+                        size_bytes=len(img_bytes),
+                        b64_len=len(b64_img),
+                    )
                 else:
+                    logger.warning(
+                        "photo_download_empty",
+                        chat_id=chat_id,
+                        is_self=is_self,
+                        source_msg_id=getattr(_photo_source_msg, "id", None),
+                    )
                     photo_error = "❌ Не удалось прочитать фото. Отправь изображение повторно."
             except asyncio.TimeoutError:
                 photo_error = "❌ Таймаут загрузки фото. Повтори отправку изображения."
                 logger.error(
                     "photo_processing_timeout",
                     chat_id=chat_id,
+                    is_self=is_self,
                     timeout_sec=float(getattr(config, "PHOTO_DOWNLOAD_TIMEOUT_SEC", 40.0)),
                 )
             except Exception as e:
-                logger.error("photo_processing_error", error=str(e))
+                logger.error(
+                    "photo_processing_error", chat_id=chat_id, is_self=is_self, error=str(e)
+                )
                 photo_error = "❌ Ошибка обработки фото. Попробуй отправить его ещё раз."
 
         # Для фото-пути не продолжаем в AI-stream без успешно загруженного изображения:
         # это исключает зависание на «Разглядываю фото...» и пустые/необъяснимые ответы.
-        if message.photo and not images:
+        # W16.3: используем _has_original_photo (сохранён до edit'ов) вместо message.photo
+        if _has_original_photo and not images:
             safe_query = (query or "(Фото)").strip()
             safe_error = (
                 photo_error or "❌ Фото не удалось обработать. Отправь изображение повторно."
@@ -3730,6 +5255,37 @@ class KraabUserbot(
             await asyncio.gather(_typing_task, return_exceptions=True)
             return
 
+        # REPLY MEDIA: извлекаем фото/анимацию из reply_to_message
+        reply_msg = getattr(message, "reply_to_message", None)
+        if not images and reply_msg:
+            reply_has_image = (
+                getattr(reply_msg, "photo", None)
+                or getattr(reply_msg, "animation", None)
+                or (
+                    getattr(reply_msg, "document", None)
+                    and getattr(reply_msg.document, "mime_type", "").startswith("image/")
+                )
+            )
+            if reply_has_image:
+                try:
+                    photo_timeout_sec = float(getattr(config, "PHOTO_DOWNLOAD_TIMEOUT_SEC", 40.0))
+                    reply_media_obj = await asyncio.wait_for(
+                        self.client.download_media(reply_msg, in_memory=True),
+                        timeout=max(5.0, photo_timeout_sec),
+                    )
+                    if reply_media_obj:
+                        img_bytes = reply_media_obj.getvalue()
+                        b64_img = base64.b64encode(img_bytes).decode("utf-8")
+                        images.append(b64_img)
+                        # caption из reply добавляем в контекст
+                        reply_caption = getattr(reply_msg, "caption", None) or ""
+                        if reply_caption and reply_caption not in (query or ""):
+                            query = f"[Изображение из reply: {reply_caption}]\n{query or ''}"
+                except asyncio.TimeoutError:
+                    logger.warning("reply_media_download_timeout", chat_id=chat_id)
+                except Exception as e:
+                    logger.warning("reply_media_download_error", chat_id=chat_id, error=str(e))
+
         # DOCUMENT: Скачиваем и встраиваем содержимое файла в запрос
         if has_document:
             query = await self._process_document_message(
@@ -3741,28 +5297,63 @@ class KraabUserbot(
                 await asyncio.gather(_typing_task, return_exceptions=True)
                 return
 
+        # VIDEO: video / video_note / animation → frame extraction + per-frame
+        # vision describe (Bug 5 follow-up: Krab отвечает на содержимое видео,
+        # а не только на caption). Sticker остаётся skip — animated stickers
+        # редко information-rich и часто вызывают false positives.
+        if has_video:
+            query = await self._process_video_message(
+                message=message,
+                query=query,
+                temp_msg=temp_msg,
+                is_self=is_self,
+                chat_id=str(chat_id),
+            )
+
         system_prompt = self._build_system_prompt_for_sender(
             is_allowed_sender=is_allowed_sender,
             access_level=access_profile.level,
         )
 
-        # SENDER CONTEXT: Инъектируем identity отправителя в system prompt.
-        # Защита от identity confusion — LLM видит is_owner явно и не может
-        # перепутать гостя с владельцем на основе текста сообщения.
+        # SENDER CONTEXT: инжектируем метаданные отправителя + текст reply-parent в prompt.
+        # Это даёт LLM информацию «на чьё сообщение отвечают» (fix «не вижу reply»).
         try:
-            from .core.access_control import AccessLevel as _AccessLevel  # noqa: PLC0415
             from .core.sender_context import (  # noqa: PLC0415
                 attach_to_system_prompt,
-                build_context_block,
+                build_sender_context_from_message,
             )
 
-            _sender_is_owner = (
-                hasattr(access_profile, "level") and access_profile.level == _AccessLevel.OWNER
+            _me_uid = getattr(self.me, "id", None) if self.me else None
+            _me_uname = getattr(self.me, "username", None) if self.me else None
+            _sender_ctx = build_sender_context_from_message(
+                message,
+                self_user_id=_me_uid,
+                is_owner=is_allowed_sender,
+                own_username=_me_uname,
             )
-            _sender_ctx = build_context_block(message, is_owner=_sender_is_owner)
             system_prompt = attach_to_system_prompt(system_prompt, _sender_ctx)
-        except Exception:  # noqa: BLE001
-            pass  # Никогда не ломаем LLM flow из-за context injection
+        except Exception as _sc_exc:  # noqa: BLE001
+            logger.warning("sender_context_inject_failed", error=str(_sc_exc))
+
+        # MEMORY ATTRIBUTION: если MEMORY_AUTO_CONTEXT_ENABLED=true — prepend [MEMORY] блоки
+        # с явной атрибуцией (chat_title + timestamp) в system_prompt.
+        # Это предотвращает приписывание LLM чужих сообщений (history poisoning).
+        # force_enable=True только если env явно включён; иначе — не мешаем.
+        try:
+            from .core.memory_context_augmenter import augment_query_with_memory as _aug_mem
+
+            _mem_aug = await _aug_mem(
+                query, force_enable=None
+            )  # уважает MEMORY_AUTO_CONTEXT_ENABLED
+            if _mem_aug.enabled and _mem_aug.chunks_used:
+                system_prompt = _mem_aug.augmented_prompt + "\n\n" + system_prompt
+                logger.debug(
+                    "memory_attribution_injected_to_system_prompt",
+                    chunks=len(_mem_aug.chunks_used),
+                    chat_id=chat_id,
+                )
+        except Exception as _mem_exc:  # noqa: BLE001
+            logger.debug("memory_attribution_inject_failed", error=str(_mem_exc))
 
         # CONTEXT: Добавляем контекст чата для групп (сэндвич-защита от инъекций)
         if is_allowed_sender and message.chat.type != enums.ChatType.PRIVATE:
@@ -3787,12 +5378,18 @@ class KraabUserbot(
                 preferred_vision=str(getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or ""),
             )
             force_cloud = True
+        # Bug 12 (Session 28): handoff notice «🦀 Принял запрос... в фоне» допустим
+        # только в DM/self (где владелец ждёт явного ack). В групповых чатах он
+        # выглядит как мусор — Krab должен молча обрабатывать и отдавать финальный
+        # ответ. Пользователь явно просил это поведение (commit `06f7bb4` regression).
         should_defer_background = (
             bool(getattr(config, "USERBOT_BACKGROUND_LLM_HANDOFF", True))
             and not is_self
+            and (_is_private_chat or is_self)
             and not bool(images)
             and not bool(has_audio_message)
             and not bool(message.photo)
+            and not _has_original_photo
             and not has_document
         )
         if should_defer_background:
@@ -3912,10 +5509,20 @@ class KraabUserbot(
                 )
             chat_id = str(message.chat.id)
 
-            # Обновляем sliding window активности чата при каждом сообщении
+            # Обновляем sliding window активности чата при каждом сообщении.
+            # 27.04.2026 fix: передаём sender_name (username / first_name / id),
+            # чтобы LLM различал speakers в group chat. Без этого все participants
+            # сливались в один "user" → Krab путал собеседников.
             if message.text and chat_id:
+                _sender = (
+                    str(getattr(user, "username", "") or "").strip()
+                    or str(getattr(user, "first_name", "") or "").strip()
+                    or f"user_{getattr(user, 'id', '?')}"
+                )
                 chat_window_manager.get_or_create(chat_id).append_message(
-                    "user", (message.text or "")[:500]
+                    "user",
+                    (message.text or "")[:500],
+                    sender_name=_sender,
                 )
 
             # B.8 chat ban cache: если этот чат уже помечен как persistently
@@ -4099,6 +5706,105 @@ class KraabUserbot(
                     )
                     return
 
+            # FORWARD BATCH: если входящее сообщение является пересылкой,
+            # буферизуем в ForwardBatchBuffer — дожидаемся конца пачки (5s окно)
+            # и обрабатываем всё одним LLM-запросом с per-sender attribution.
+            # Команды (!) и self-сообщения не буферизуем.
+            _fwd_from, _fwd_name, _fwd_from_chat = _extract_forward_origin_parts(message)
+            _is_fwd_message = bool(
+                not is_command and not is_self and any([_fwd_from, _fwd_name, _fwd_from_chat])
+            )
+            if _is_fwd_message and message.text:
+                from .core.message_batcher import PendingMessage, message_batcher  # noqa: PLC0415
+
+                # Извлекаем данные об оригинальном отправителе через единый compat-layer.
+                if _fwd_from is not None:
+                    _fwd_uname = str(getattr(_fwd_from, "username", "") or "")
+                    _fwd_display = (
+                        _fwd_uname
+                        or " ".join(
+                            filter(
+                                None,
+                                [
+                                    str(getattr(_fwd_from, "first_name", "") or ""),
+                                    str(getattr(_fwd_from, "last_name", "") or ""),
+                                ],
+                            )
+                        ).strip()
+                        or str(getattr(_fwd_from, "id", "unknown"))
+                    )
+                elif _fwd_from_chat is not None:
+                    _fwd_uname = str(getattr(_fwd_from_chat, "username", "") or "")
+                    _fwd_display = _fwd_uname or str(
+                        getattr(_fwd_from_chat, "title", "") or "channel"
+                    )
+                else:
+                    _fwd_uname = ""
+                    _fwd_display = str(_fwd_name) if _fwd_name else "unknown"
+
+                _fwd_date = getattr(message, "forward_date", None)
+                if _fwd_date is not None and not isinstance(_fwd_date, int):
+                    # pyrogram может вернуть datetime
+                    _fwd_date = int(getattr(_fwd_date, "timestamp", lambda: _fwd_date)())
+
+                _pending_fwd = PendingMessage(
+                    text=str(message.text),
+                    sender_id=str(getattr(user, "id", "") or ""),
+                    ts=time.time(),
+                    message_id=getattr(message, "id", None),
+                    is_forwarded=True,
+                    forward_sender_name=_fwd_display,
+                    forward_sender_username=_fwd_uname,
+                    forward_date=_fwd_date,
+                )
+
+                # Closure захватывает контекст для обработки пачки
+                _fwd_access_profile = access_profile
+                _fwd_is_allowed = is_allowed_sender
+                _fwd_message = message  # первое сообщение пачки — reply target
+
+                async def _process_forward_batch(
+                    _chat_id: str,
+                    msgs: list,
+                    _ap=_fwd_access_profile,
+                    _ia=_fwd_is_allowed,
+                    _orig_msg=_fwd_message,
+                ) -> None:
+                    """Обрабатываем накопленную пачку пересланных сообщений."""
+                    from .core.message_batcher import ForwardBatchBuffer  # noqa: PLC0415
+
+                    # Собираем batched prompt
+                    buf = ForwardBatchBuffer(chat_id=_chat_id)
+                    buf.messages = msgs
+                    combined = buf.format_prompt()
+                    if not combined:
+                        return
+
+                    logger.info(
+                        "forward_batch_processing",
+                        chat_id=_chat_id,
+                        count=len(msgs),
+                        combined_len=len(combined),
+                    )
+
+                    async with self._get_chat_processing_lock(_chat_id):
+                        await self._process_message_serialized(
+                            message=_orig_msg,
+                            user=_orig_msg.from_user,
+                            access_profile=_ap,
+                            is_allowed_sender=_ia,
+                            chat_id=_chat_id,
+                            _forward_batch_prompt=combined,
+                        )
+
+                buffered = message_batcher.add_forward(
+                    chat_id=chat_id,
+                    msg=_pending_fwd,
+                    on_flush=_process_forward_batch,
+                )
+                if buffered:
+                    return  # пачка накапливается, выходим из обработчика
+
             # P0_INSTANT bypass: classify_priority сигнализирует, что сообщение
             # требует немедленного ответа (DM, mention, reply-to-self, команда).
             # В этих случаях не ждём per-chat lock — обрабатываем напрямую.
@@ -4141,6 +5847,20 @@ class KraabUserbot(
                 chat_id=chat_id,
             )
 
+            # Проверяем поглощённые follower-сообщения ДО P0-bypass — иначе
+            # DM-followup, уже вложенный в batched burst, запустится повторно.
+            if self._consume_batched_followup_message_id(
+                chat_id=chat_id,
+                message_id=str(getattr(message, "id", "") or ""),
+            ):
+                logger.info(
+                    "skip_batched_followup_message",
+                    chat_id=chat_id,
+                    message_id=str(getattr(message, "id", "") or ""),
+                    user=getattr(user, "username", None),
+                )
+                return
+
             if _msg_priority == Priority.P0_INSTANT:
                 # Не ждём lock — P0 обрабатывается немедленно.
                 logger.debug(
@@ -4152,17 +5872,6 @@ class KraabUserbot(
                 await self._process_message_serialized(**_process_kwargs)
             else:
                 async with self._get_chat_processing_lock(chat_id):
-                    if self._consume_batched_followup_message_id(
-                        chat_id=chat_id,
-                        message_id=str(getattr(message, "id", "") or ""),
-                    ):
-                        logger.info(
-                            "skip_batched_followup_message",
-                            chat_id=chat_id,
-                            message_id=str(getattr(message, "id", "") or ""),
-                            user=getattr(user, "username", None),
-                        )
-                        return
                     await self._process_message_serialized(**_process_kwargs)
 
         except KrabError as e:

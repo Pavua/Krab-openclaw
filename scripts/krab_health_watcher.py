@@ -263,7 +263,6 @@ def main() -> int:
     status_summary = (
         f"panel={'✅' if panel_ok else '❌'}({state['panel_down_count']}) "
         f"gateway={'✅' if gateway_ok else '❌'}({state['gateway_down_count']}) "
-        f"gemini={'✅' if gemini_ok else '❌'}({gemini_status}) "
         f"disk={free_gb}GB"
     )
     _log(f"OK {status_summary} actions={actions or 'none'}", "info")
@@ -271,7 +270,7 @@ def main() -> int:
     # Exit code: 0 if all ok, 1 if any warnings, 2 if any errors/actions taken
     if not panel_ok or not disk_ok:
         return 2
-    if not gateway_ok or not gemini_ok:
+    if not gateway_ok:
         return 1
     return 0
 

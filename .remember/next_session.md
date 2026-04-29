@@ -1,356 +1,196 @@
-# Session 18 — Starter Prompt (post Session 17 mega wave)
+# Session 30 — Starter Handoff (after Session 28+29 close + part 30 panel/models, 2026-04-30)
 
-## Quick status (as of end Session 17, 2026-04-21)
-- 48 commits in main Session 17 (43 чисто S17 + 5 carryover S16), range 7b32ce8..fd657c3
-- Memory Phase 2 live: 752k msgs / 72k chunks / 100% embedded (archive.db 472 MB)
-- Security hardening complete: guest XOR, operator PII guard, sender context
-- Architecture v2: 3 artifacts (Hero/Engineering/Ops) published, Design System v1.0 locked
-- Krab restarted, 238 endpoints live, ~154 commands + beta !mem/!chado/!filter
-- Killer fix: dead code `classify_priority()` (0 call-sites) → P0_INSTANT bypass wired (51ee5ad)
-- Dashboard V4 complete: 7/7 pages (/v4/ops, /v4/costs, /v4/inbox, /v4/stats, /v4/settings, /v4/translator, /v4/commands)
-- 24 новых тест-файла, +6750 / −226 строк; ruff clean
+## TL;DR (что получишь в следующей сессии)
 
-## Known issues carried forward
-- pytest full-suite failures (exact count unknown) → check before starting, may need conftest fix
-- YMB chat (8 msgs) + 599 other under-indexed chats need Telegram bootstrap
-- MCP stats "embedded: 0" display bug (may be already fixed — verify)
-- patchright feasibility POC (§1 P2) — not started
-- (Ear issues outside scope — leave alone)
+- **Branch `fix/daily-review-20260421`**: 645+ commits ahead of `origin/main` (1 trivial README conflict)
+- **Phase 2 splits complete**: command_handlers.py 19637 → 1226 LOC (−93.8%), 21 waves, 22 modules в `src/handlers/commands/`
+- **13 learning features (A-M)** + **27 idea modules** landed (1, 2, 3, 4, 5, 6, 7, 8, 10-26, 28-38)
+- **VPN integration LIVE** обоими сторонами (Phase A MCP tools + B brain endpoint + C alerts bridge)
+- **Models catalog** расширен до **151 моделей в 13 провайдерах** (gpt-5.5, gpt-5.6, o3/o4-mini, Claude 4.6/4.7/4.8, Gemini 3.x, DeepSeek V4, Qwen 3.5/3.6 LM Studio)
+- **Panel routing**: `/` → V4 (Liquid Glass), `/legacy` → старый landing
+- **Primary model вернули на `codex-cli/gpt-5.5`** + fallbacks убрали openai-codex (был red-state)
 
-## Next session priorities (from CHADO_INSIGHTS deferred ⏳)
+## КРИТИЧЕСКИЕ БАГИ найдены в feedback из чатов (нужно fix)
 
-### P2 deferred from Session 17
-1. **patchright POC** (§1 P2) — drop-in замена Playwright в `src/skills/mercadona.py` для anti-bot
-2. **asyncio.Event reread_chat** (§2 P2) — явный event в `src/userbot/background_tasks.py` (код есть, нужна доводка)
-3. **Architecture swimlane "async primitives"** (§2 P3) — `docs/ARCHITECTURE_V2_SKELETON.md` → Artifact 2 Engineering
-4. **MMR diversity penalty** (§6 P2) — λ=0.7 relevance / 0.3 diversity в `src/memory_engine.py`
-5. **Query expansion** (§6 P2) — для queries <3 слов: 3 rephrase через Gemini flash, OR merge RRF
-6. **Publish Design System v1.0** (§8 P2) — `docs/DESIGN_SYSTEM.md`, Chado как co-author
+### Bug 13 — Krab не видит images в reply context
+User: «изображения он видит только если ему их именно отправить в телеграме, если к примеру ответить на какое-то сообщение — не видит»
+- Текущий `reply_preprocessor` (Session 28 commit `74a7b95`) extracts text из reply_to.text/caption но **НЕ pulls media** из reply_to_message
+- Fix: в `src/userbot/reply_preprocessor.py` extract `reply.photo/video/document/animation` → augment vision pipeline
 
-### P3 deferred from Session 17
-7. **Skill self-test on startup** (§4 P3) — `check_all_skills_discovered()` в init
-8. **Residential proxies env** (§1 P3) — `KRAB_RESIDENTIAL_PROXY_URL`
-9. **CAPTCHA audio fallback** (§1 P3) — через KrabEar STT
-10. **Temporal re-ranking** (§6 P3) — "recent wins" + per-chat memory scoping
-11. **Weekly digest → ecosystem comparison in How2AI Forum Topic** (§7 P2)
+### Bug 14 — Krab "печатает..." бесконечно на отдельных вопросах
+User: «бывает долго что-то "печатает" и это почти бесконечно, хотя на другие вопросы отвечает в том же чате»
+- Hypothesis: LLM streaming hangs или tool execution loop infinite
+- Возможные причины:
+  - `process_video_message` (commit `c0dba1a`) с broken ffmpeg path → 75s timeout per frame × 3 = до 4 min stall
+  - Self-correction loop (Idea H) re-genering forever если LLM не возвращает `ok:true`
+  - Smart routing LLM classifier 2s timeout зависает (LM Studio 401 issue)
+- Fix: extra timeouts на каждом этапе + global hard cap 60s per response
 
-## First commands for Session 18
+### Bug 15 — Krab предлагает password/admin доступ вместо VPN MCP tools
+User: «с впн сервером он не очень хотел помогать, мы же вроде сделали ему поддержку этого, а он предлагает мне дать ему пароли и доступ через админку впн»
+- VPN MCP tools зарегистрированы (commit `cc19f7b` + refactor `0008607`) но **system prompt** Krab не упоминает что у него есть VPN tools
+- LLM не знает что может вызывать `vpn_list_clients`, `vpn_get_config(client_name)` etc
+- Fix: добавить в `src/userbot/access_control.py:_append_runtime_constraints` блок:
+  ```
+  Доступные tools для VPN операций (call через function-call):
+  - vpn_list_clients() — список клиентов x-ui панели
+  - vpn_get_config(client_name) — vless link для клиента
+  - vpn_panel_health() — статус панели
+  - vpn_traffic_stats(client_name) — расход трафика
+  Используй эти tools вместо запроса паролей.
+  ```
+
+### Bug 16 — Krab banned в чате How2AI
+User в чате (msg 78934): «аа, он же здесь забанен, ебт»
+- Krab (yung_nagato) забанен в групповом чате How2AI (-1001587432709)
+- chat_ban_cache работает (commit Session 28), но user может захотеть unban
+- Action: `!chatban list` чтобы увидеть, `!chatban remove -1001587432709` если admin вернул permissions
+
+### Issue 17 — Old panel showed at / (FIXED в этой сессии commit `ab05d70`)
+- `/` теперь serves V4 dashboard
+- `/legacy` сервит старый landing
+- `/legacy/inbox`, `/legacy/costs` и т.д. (existing paths) сохранены
+
+### Issue 18 — Models selector incomplete (FIXED в этой сессии)
+- models.json: 151 моделей в 13 providers (было ~10 в total)
+- codex-cli, openai-codex, codex теперь имеют GPT-5/5.4/5.5/5.5-pro/5.6 + o3/o3-mini/o3-pro/o4-mini
+- openai (API): gpt-3.5/4/4o/4.1/5/5-mini/5.5/5.5-pro/5.6 + o1/o1-pro/o3/o3-pro/o4-mini
+- Anthropic: claude-3 series + 3.5/3.7/4/4.5/4.6/4.7/4.8 (haiku/sonnet/opus)
+- Google: full Gemini 1.5/2.0/2.5/3/3.1 (flash/pro/preview)
+- DeepSeek: chat/coder/reasoner/V3/V4
+- Qwen Portal: 13 моделей (turbo/plus/max/2.5/3/3.5/3.6, qwq, reasoner)
+- LM Studio: 13 локальных MLX моделей
+
+### Issue 19 — primary вернули на codex-cli/gpt-5.5 (FIXED)
+- В предыдущей сессии user manually переключил на 5.4 потому что в catalog не было 5.5
+- После expansion catalog → primary вернул `codex-cli/gpt-5.5`, fallbacks: openai/gpt-5.5 → claude-opus-4-7 → gemini chain
+- Removed openai-codex из fallbacks (был red в panel)
+
+## VPN integration architecture (final)
+
+| Component | Where | What |
+|---|---|---|
+| `vpn_list_clients`, `vpn_get_config` | Krab MCP via subprocess | Calls `/Users/pablito/Antigravity_AGENTS/VPN/list_clients.command` and `get_client_config.command --json` |
+| `vpn_panel_health` | Krab `vpn_tools.py` | HTTP probe |
+| `vpn_traffic_stats` | Krab read-only sqlite | `client_traffics` table |
+| `POST /api/inbox/create-vpn-alert` | Krab inbox bridge | VPN watchdogs (cert_guard, disk_guard, watchdog_vpn_panel, bruteforce_audit, endpoint_failover_check) post via `krab_alert.command` shell wrapper |
+| `POST /api/vpn/help` | Krab brain endpoint | VPN bot `@pablito_vpn_bot` proxies friend questions → Krab LLM with persona drift |
+
+**Single source of truth** для `build_vless_link()` — `vpn_bot.py` в VPN repo. Krab MCP tools тонкие subprocess wrappers.
+
+## KRAB_WEB_KEY (sync'нут оба .env)
+
+- `/Users/pablito/Antigravity_AGENTS/Краб/.env` ← `KRAB_WEB_KEY=aQio6Iwr...`
+- `/Users/pablito/Antigravity_AGENTS/VPN/alerts.env` ← same key
+- Verified: keys match (`aQio6Iwr...`)
+
+## Session 30 work (commits ab05d70 + earlier)
+
+- `ab05d70` — `/` → V4 dashboard, `/legacy` → old landing, primary вернули gpt-5.5
+- models.json расширен (151 моделей)
+- VPN integration smoke tests PASSED:
+  - `list_clients.command` returns 24 clients JSON ✓
+  - `/api/inbox/create-vpn-alert` creates inbox items ✓
+- Bug 13/14/15 documented (нужно fix в next session)
+
+## Backlog для Session 31 (приоритет)
+
+### P0 — Bug fixes
+1. **Bug 13**: extract media из `reply_to_message` в `src/userbot/reply_preprocessor.py`. Test cases: photo в reply, video в reply, document в reply
+2. **Bug 14**: investigate "infinite typing" — добавить hard 60s cap на response generation. Probable culprits: `process_video_message` ffmpeg, self-correction re-gen loop, smart routing LLM 2s timeout
+3. **Bug 15**: добавить VPN tools awareness в system prompt (`access_control.py:_append_runtime_constraints`). Test: спросить Krab "дай конфиг для Anya" → должен вызвать `vpn_get_config("Anya")` через function-call
+4. **Bug 16**: unban Krab в How2AI чате (manual action: попросить admin chat unban yung_nagato или `!chatban clear`)
+
+### P1 — Activations & test
+5. Включить env flags по очереди: `KRAB_TODO_EXTRACTION_ENABLED=1` (passive log), `KRAB_JOKE_CALIBRATION_ENABLED=1`, `KRAB_MULTI_PERSONA_ENABLED=1`, `KRAB_AB_TESTING_ENABLED=1`
+6. Test VPN integration end-to-end: ты в Krab DM → "дай конфиг для Anya" → vless link
+7. Smoke tested: `/api/inbox/create-vpn-alert` creates items ✅ (verified)
+
+### P2 — Architecture
+8. Final merge to main (`git merge --no-ff fix/daily-review-20260421`, 1 trivial README conflict)
+9. WAL flush wait sentinel перед rapid respawn (PYTHON-FASTAPI-5W transient — happens на rapid Stop+Start cycles)
+10. **Investigate openai-codex provider** — он never working, why в fallback chain previously?
+
+### P3 — Optional ideas not landed
+- Idea 9 (parallel tool execution) — heavy openclaw_client work
+- Idea 27 (archive.db SQLCipher encryption)
+
+## Operational quick reference
+
 ```bash
-cat .remember/next_session.md        # you're reading it
-git log --oneline -20                # recent commits
-pytest tests/ -q --tb=no 2>&1 | tail -5  # test suite state
-curl -s http://127.0.0.1:8080/api/ecosystem/health | python3 -m json.tool | head -30
-cat docs/SESSION_17_SUMMARY.md
-cat docs/CHADO_INSIGHTS.md
-```
-
-## Restart notes
-- Krab running via launchd, no SIGHUP to OpenClaw
-- Restart: `/Users/pablito/Antigravity_AGENTS/new\ Stop\ Krab.command` → wait → `new\ start_krab.command`
-- MCP servers: `./scripts/restart_mcp_servers.command` if transport closed
-- OpenClaw gateway: `openclaw gateway` (NOT SIGHUP)
-- Memory Doctor: `./scripts/memory_doctor.command --fix` if stale chunks
-
-## Infrastructure state
-- archive.db: 472 MB / 752,712 msgs / 72,258 chunks
-- MCP ports: 8011 (yung-nagato), 8012 (p0lrd) LISTEN; 8013 (hammerspoon) stdio
-- Owner Panel :8080 UP (238 endpoints)
-- OpenClaw Gateway :18789 UP
-
-## Architecture artifacts (Session 17)
-- Hero (Canva): https://www.canva.com/d/wDX_xg3mClWE0t7
-- Engineering (Claude Design): https://claude.ai/design/p/f8108663-9376-444f-8c2c-1e93302a02d6
-- Ops (Canva mirror): https://www.canva.com/d/3dkWS667S3h08UB
-
-## Context hints
-- Use parallel sonnet agents for bounded tasks (10+ OK)
-- Don't blindly fix tests — check WHY they fail first (root cause, not symptoms)
-- Gemini: 3 Pro by default, NOT flash (translator exception)
-- Model routing: `~/.openclaw/agents/main/agent/models.json`
-- `google-antigravity` — НЕ использовать (квота/бан)
-- Subprocess: всегда `env=clean_subprocess_env()`
-- LM Studio: ONE AT A TIME (RAM overflow на 36GB M4 Max)
-- Krab > Chado: OpenClaw Gateway, Swarm teams, Dashboard V4, Memory Phase 2, 12 routines, 7000+ tests
-
----
-
-<!-- previous handoff (Session 13) preserved below for reference -->
-# Session 13 Handoff — Krab Project
-
-> Session 12 CLOSED: ~20 commits, Chado architecture fully wired, Memory Phase 2 end-to-end, 10+ новых команд, 12+ endpoints
-
----
-
-## 🟢 REBOOT RESUME NOTE (18.04.2026 ~21:40)
-
-### State at reboot
-- **main branch HEAD:** `071e45d` merge Wave 24-28 batch
-- **Pipeline active:** parallel-orchestration mode (Sonnet/Haiku, medium reasoning)
-- **Krab:** restart initiated after Wave 27-A routing fix (handle_bench/react/uptime/archive wired to dispatcher)
-- **Git stash:** `stash@{0}` "wip-wave23f-ruff-tests-cleanup" — Wave 23-F ruff autofix 190 test files, safe to `git stash pop` later
-- **Worktree:** `/Users/pablito/Antigravity_AGENTS/Краб/.claude/worktrees/fervent-goldstine-2947a2` (session id `8c162de3-...`)
-
-### Agents still in flight при reboot (могут быть killed)
-- Wave 22-C Chado Q6 RAG interview (>30 мин, возможно зависло)
-- Wave 28-B `/api/commands/usage/top` endpoint
-- Wave 28-C async reminders/ACL/chat_ban_cache load
-
-### Commands to resume
-```bash
-# Verify Krab alive
-curl -s http://127.0.0.1:8080/api/uptime
-# MCP dispatcher verify (send !uptime к Yung Nagato)
-
-# Get current todo + continue
 cd /Users/pablito/Antigravity_AGENTS/Краб
-git log main --oneline -20
-git stash list
+cat .remember/next_session.md  # this file
+
+# Krab control
+"/Users/pablito/Antigravity_AGENTS/new Stop Krab.command"
+"/Users/pablito/Antigravity_AGENTS/new start_krab.command"
+
+# After Stop иногда нужен kickstart (KeepAlive Crashed-only):
+launchctl kickstart -k gui/$(id -u)/ai.krab.core
+
+# Health
+curl -sS http://127.0.0.1:8080/api/health/lite | python3 -m json.tool
+
+# Models catalog (verify expansion landed):
+curl -sS http://127.0.0.1:8080/api/model/catalog | python3 -c "
+import json,sys
+d=json.loads(sys.stdin.read())
+print('cloud_presets:', len(d.get('catalog',{}).get('cloud_presets',[])))
+"
+
+# DB doctor (если disk I/O error на boot)
+venv/bin/python scripts/memory_doctor.py --all-db --json
+
+# Inbox cleanup
+venv/bin/python scripts/inbox_bulk_ack.py --age-hours 24 --kind proactive_action --severity warning --target done
+
+# VPN helpers (read-only)
+/Users/pablito/Antigravity_AGENTS/VPN/list_clients.command
+/Users/pablito/Antigravity_AGENTS/VPN/get_client_config.command <email> --json
+
+# Tests
+venv/bin/python -m pytest tests/unit/ -q --tb=line --timeout=30
 ```
 
-### Resume prompt template (next session starter)
-> "продолжаем Session 13 pipeline с точки reboot. Проверь main HEAD 071e45d, git stash pop wip-wave23f-ruff-tests-cleanup, verify Krab alive via MCP, запусти Wave 29. Напомни мне ключевые in-flight items из next_session.md REBOOT RESUME NOTE секции."
+## Operational notes (важно)
 
----
+- Pre-commit hook иногда auto-stage'ит файлы соседних агентов в commit — verify после dispatch
+- Memory pressure: при rapid Stop+Start ловим disk I/O error (PYTHON-FASTAPI-5W). Mitigation: wait 30s между cycles
+- Pyrogram session corruption: kraab.session может corrupt'нуться (Apr 26 + Apr 29). Recovery via `sqlite3 .recover` (preserves peers)
+- Multi-agent dispatch: Sonnet работает плотно на parallel (5-7 agents OK), Haiku падает на context size (CLAUDE.md тяжёлый)
+- Reasoning depth: medium fine для оркестрации, high когда архитектурные решения
 
-## Session 13 WAVE 18-20 progress (18.04.2026)
+## Key files modified в Sessions 28-30
 
-### Wave 18 (post-disk-cleanup recovery)
-- **18-A:** session_12 empty bug → **FIXED** (chat_window_manager singleton missing from ecosystem_health reflection)
-- **18-B:** Live MCP verify — 5/5 commands pass, 224 endpoints active, all handlers integrated
-- **18-C:** Session 13 handoff prep + docs sync
-- **18-D:** Disk audit — 16 GB free post-cleanup, npm cache +1.4 GB recovered
-- **18-E:** Chado Q5 answered — `disabled: true` validated MVP approach ✓
+### Krab repo (645+ commits)
+- `src/handlers/commands/*.py` — 22 modules (Phase 2 split)
+- `src/core/vpn_tools.py`, `vpn_brain.py` — VPN integration
+- `src/modules/web_routers/vpn_brain_router.py`, `inbox_router.py` — endpoints
+- `src/userbot/access_control.py` — multi-persona + AB + mood + goals + persona drift suffixes
+- `src/userbot/reply_preprocessor.py` — Bug 9+3+10 fix (но нужен Bug 13)
+- `src/userbot_bridge.py` — VPN media handler + bridge tick + bootstrap singletons
+- `src/bootstrap/pyrogram_patch.py` — proper accessor wrap (NoneType guard)
+- `src/modules/web_routers/pages_router.py` — `/` → V4 routing
+- `~/.openclaw/agents/main/agent/models.json` — 151 моделей в 13 провайдерах
+- `~/.openclaw/openclaw.json` — primary `codex-cli/gpt-5.5`
+- `~/.openclaw/krab_runtime_state/*.json` — singleton state files
 
-### Wave 19 (Chado follow-ups & hot-reload)
-- **19-A:** `chat_filters.json` hot-reload (mtime polling + `!listen reload` command)
-- **19-B:** EXPERIMENTAL_SKILLS_WORKFLOW.md documentation layer
-- **19-C:** SKILLS_INVENTORY.md (4 skills, 0 plugin.json, 7 MCP servers catalogued)
-- **19-D:** `/api/ecosystem/health/debug` promoted to permanent diagnostic tool
-- **19-E:** Hot-reload integration tests (14 pass + 1 skip) — chatfilter, batcher, mempool
+### VPN repo (PR #2 Pavua/vpn-3x-ui-ops)
+- `vpn_bot.py` — pure stdlib, ask_krab_brain proxy для Krab
+- `krab_alert.command` — shell wrapper для watchdogs
+- `get_client_config.command` — JSON helper для Krab MCP tools
+- `list_clients.command` — JSON list 24 clients
+- 5 watchdogs (cert_guard/disk_guard/watchdog_vpn_panel/bruteforce_audit/endpoint_failover_check) wired
 
-### Wave 20 (current live)
-- Prometheus metrics expanded (commands/filter/ChatWindow instrumentation)
-- Performance benchmark suite (FTS/semantic/ChatWindow/PII latency profiles)
-- HotReloadableConfig generic helper class
-- `!memory clear --chat|--before` per-chat delete subcommands
-- Auto-reactions (👍✅❌⚙️🧠) — context-aware
-- Commands usage analytics + `/api/commands/usage` endpoint
-- `!loglevel` runtime toggle (DEBUG/INFO/WARN)
-- `sync_docs.py` composite regenerator (Prometheus + OpenAPI + command list)
-- ChatWindow env config + `/api/chat_windows/evict_idle`
-- Voice smoke test suite
+## Memory state (key snapshot)
 
-### Wave 21 (recovery + wiring + monitoring)
-- **21-A:** auto_reactions module recovered (lost commit) + !react toggle
-- **21-B:** auto_reactions wired в llm_flow (5 hooks: start/memory/agent/complete/fail) + graceful fallback
-- **21-C:** Weekly maintenance LaunchAgent plist + WEEKLY_MAINTENANCE.md docs
-- **21-D:** archive growth monitor + /api/archive/growth + anomaly alert
-- **21-E:** !uptime extended (Krab + Gateway + LM Studio + Archive + macOS)
-- **21-F:** Live verify — все endpoints live, some stale from pre-restart cache
+- archive.db: 753k+ messages, 72k chunks
+- response_feedback: 50 records (Feature A — successful response retrieval boost)
+- chunk_clusters/cluster_meta: empty (нужен first recluster — `scripts/memory_recluster.py`)
+- message_media_summaries: 1 (Feature E — multi-modal memory, нужны wire-up в bridge after process_video)
+- `aQio6Iwr...` — KRAB_WEB_KEY synced
+- inbox: open=22, stale=4
 
-### Wave 22 (Phase 3 prep + Chado Q6)
-- **22-A:** Archive growth daily snapshot в nightly summary (`cc3c01c`)
-- **22-B:** !archive growth/stats Telegram command (`ad245a3`)
-- **22-C:** Chado Q6 interview on RAG retrieval tuning (pending, возможно killed reboot)
-- **22-D:** Memory query expansion (synonyms RU+EN, stem) (`8e3ab8e`)
-- **22-E:** Reminders persistence + concurrency integration tests (`6ad64c4`)
-- **22-F:** !bench Telegram command runner (`5914fcc`)
-- **22-G:** Session 13 handoff update
-- **22-H:** Auto-reactions live verify via MCP — FOUND DISPATCHER BUG (event loop stall `swarm_task_board_loaded` 200)
+## Active learning singletons (state в `~/.openclaw/krab_runtime_state/`)
 
-### Wave 23 (docs & dashboards)
-- **23-A:** Prometheus alert rules YAML (`073f630`) — 8 alerts + README
-- **23-B:** Chat filters user guide (`3175ae8`) — 148 lines
-- **23-C:** Dashboard V4 spec append Wave 17-22 (`beb84d7`) — 6 new widgets
-- **23-D:** `/api/memory/stats` endpoint (`e07dfb1`) — 9158 chunks / 51MB archive.db
-- **23-E:** Dashboard summary (initial — killed, retry в 24-C)
-- **23-F:** Ruff autofix tests/ — **stashed** `stash@{0}` (190 files F401 cleanup)
-
-### Wave 24 (perf fixes + diagnostics)
-- **24-A:** async task_board load — **root cause fix** (`424568f`) + hidden `cleanup_old()` AttributeError fix
-- **24-B:** Session lock audit — LOW risk, clock drift main cause, stagger recommended
-- **24-C:** `/api/dashboard/summary` single-call aggregator (`b257daa`) — 12 tests, DI pattern
-
-### Wave 25 (follow-up fixes)
-- **25-A:** Stagger swarm startup 1.5s + warmup gate (`de6c973`) — 3 tests
-- **25-B:** `/api/system/clock_drift` diagnostic (`5d0fec6`) — real offset +0.139s = ok
-- **25-C:** IMPROVEMENTS.md Wave 22-25 learnings (`0bac0c9`)
-
-### Wave 26 (maintenance + e2e)
-- **26-A:** MCP e2e live verify — **FOUND Wave 21-A/E handlers not routed** (LLM fallback)
-- **26-B:** archive.db VACUUM + log rotation 100MB threshold (`433fc15`)
-- **26-C:** Ruff per-dir config (`0e45cb2`) — tests 112→1, src unchanged
-
-### Wave 27 (critical fix)
-- **27-A:** Routing fix (`9c183f9`) — `USERBOT_KNOWN_COMMANDS` frozenset blocked bench/react/uptime/archive/unarchive (ACL rejected silently → LLM fallback)
-- **27-B:** sync_docs.py composite regen (`198a018`) — 190 endpoints / 151 handlers / 8 alerts / 8 metrics autoextract
-
-### Wave 28 (Phase 3 + backlog)
-- **28-A:** swarm_research_pipeline profile + non-blocking persist (`5d2e911`) — 31 tests
-- **28-B:** /api/commands/usage/top (in-flight reboot)
-- **28-C:** async reminders/ACL/chat_ban_cache load (in-flight reboot)
-- **28-D:** memory_adaptive_rerank stub (`f74418e`) — MMR + temporal decay + trust, 12 tests
-
-### merge 24-28 batch (`071e45d`)
-13 commits консолидированы в main через --no-ff merge с conflict resolution `--theirs`.
-
-### Recovery lessons learned
-- **Merge markers** can leak when `git checkout --theirs` in conflicts — ALWAYS grep `<<<<<<< | =======$ | >>>>>>>` after merge.
-- **Python .pyc cache** — clear `find src -name __pycache__ -exec rm -rf {} +` when stale SyntaxError in log.
-- **Branch confusion** — agents sometimes commit to current branch instead of main. Always `git checkout main` before merging agent worktrees.
-
-### Critical notes saved
-`.remember/session_13_critical_notes.md` contains:
-- Merge conflict gotchas
-- Python cache workarounds
-- Live Krab verification workflow
-- Session 12-13 achievements recap
-
----
-
-## Session 12 achievements
-
-### Chado-inspired architecture (How2AI interview learnings Q1-Q3)
-- **Per-chat ChatWindow** + LRU cache (`chat_window_manager.py`) — isolates message context per чат
-- **Priority Dispatcher** (P0/P1/P2, `message_priority_dispatcher.py`) — queues по приоритету
-- **Per-chat Filter** (`chat_filter_config.py` + `!listen` / `!mode`) — мutes/unmutes по чату
-- **Message Batcher** backpressure (`message_batcher.py`) — handles concurrent batching
-- **Structured Reflector** (pydantic schema, `swarm_self_reflection.py`) — JSON reflection schema
-- **Krab Identity** + **Group Identity** (`krab_identity.py`, `group_identity.py`) — 🦀 prefix в groups
-- **Full integration в `_process_message`** (Wave 17-A + 17-B) — chatwindow → filter → priority → batcher → reflect
-
-### Memory Layer Phase 2 (LIVE)
-- **9131+ chunks encoded** (Model2Vec + sqlite-vec vectors)
-- **Hybrid FTS+semantic RRF re-ranker** — full-text search + cosine distance combo
-- **`/api/memory/search`** + **`!recall`** command + MCP tools for memory query
-- **Live message indexing** as messages arrive in archive.db
-
-### Proactivity (3 levels)
-1. **Level 1:** `!cron quick "каждый день в 10:00" "prompt"` — рекуррентные задачи
-2. **Level 2:** Reminders queue (time-based, event-based) — `!remind <time> <text>`
-3. **Level 3:** Self-reflection → auto follow-ups — structured JSON schema in `swarm_self_reflection.py`
-
-### UX & Resilience polish
-- **parse_mode=markdown default** + fallback в `_safe_reply()`
-- **Typing keepalive** с explicit CANCEL (context manager)
-- **!help pagination fix** для MESSAGE_TOO_LONG в groups
-- **!reset ACL fast-path** (direct handler registration, no LLM routing)
-- **Auto-failover policy** (opt-in)
-- **Auto-restart launchctl** (detects "not loaded")
-- **Archive.db size alerts** (500MB/1GB warning)
-
-### New Telegram commands (10+)
-`!confirm`, `!reset`, `!recall`, `!remind`, `!cron quick`, `!model info`, `!memory stats`, `!stats ecosystem`, `!digest`, `!listen` (alias `!mode`)
-
-### New API endpoints (12+)
-- `/api/memory/search` — semantic + FTS search
-- `/api/session10/summary` — session timeline
-- `/api/chat_windows/stats` — per-chat window stats
-- `/api/message_batcher/stats` — batcher backpressure status
-- `/api/swarm/task-board/export?format=csv|json`
-- `/api/krab_ear/status` — KrabEar health + active sessions
-- `/metrics` — Prometheus scrape endpoint
-- session_12 block в `/api/ecosystem/health`
-
-### Tests & Coverage
-- **Wave 12-17:** +700+ new tests
-- **Memory Layer:** 94% coverage
-- **Wave 17 modules:** 86-100% coverage
-- **Total:** ~7465 tests (from session 10)
-
----
-
-## Session 13 priorities
-
-### 🔴 High (critical path)
-1. **session_12 block empty fix** — Wave 18-A investigation: why ecosystem_health.session_12 returns empty dict?
-2. **Chado Q4+Q5 interview** (postponed from Session 12) — plugin architecture, prod vs experimental skills
-3. **p0lrd Telegram Export** (>48h ETA) — when ready, bootstrap ~500k more messages to Memory Layer Phase 2
-4. **Dashboard V4 frontend** — delegate Gemini 3.1 Pro (spec ready from Session 11)
-
-### 🟡 Medium (quality)
-5. **Live verify Chado modules** after Wave 17 — do ChatWindow+Filter+Priority+Batcher work end-to-end?
-6. **Ruff cleanup** src/ and tests/ (total ~580 errors in tests/scripts outside src/)
-7. **Memory Phase 3 prep** — query expansion, adaptive re-ranking, chunk sampling strategies
-8. **Disk hygiene** — archive.db compaction, log rotation automation
-
-### 🟢 Low (enhancements)
-9. Bookmark cheatsheet в Dashboard
-10. Add ruff pre-commit hook
-11. Context-aware `!listen suggest` — predict mode based on chat activity patterns
-
----
-
-## Known issues carried forward
-- 99% disk usage (user cleaning partition incrementally)
-- **session_12 block empty bug** (appears in ecosystem_health — Wave 18-A investigation needed)
-- **Chado Q4 timeout** — retry Session 13 with extended budget
-- Some locked worktrees may still exist (cleanup in progress)
-
----
-
-## Infrastructure snapshot (18.04.2026)
-
-| Component | Status | Notes |
-|-----------|--------|-------|
-| Krab PID | 3515 | codex-cli/gpt-5.4 primary |
-| archive.db | 43k+ msgs / 50+ MB | Live indexing active |
-| Dedicated Chrome | :9222 | Isolated profile, running |
-| MCP yung-nagato | 8011 | Bootstrap complete |
-| MCP p0lrd | 8012 | Ready for Telegram export |
-| MCP Hammerspoon | 8013 | Registered in Claude Desktop |
-| OpenClaw Gateway | 18789 | Gateway mode active |
-
----
-
-## Launch commands (Session 13)
-
-```bash
-# Canonical safe restart
-/Users/pablito/Antigravity_AGENTS/new\ Stop\ Krab.command
-sleep 4
-/Users/pablito/Antigravity_AGENTS/new\ start_krab.command
-
-# If stale (rare)
-launchctl bootout gui/$(id -u)/ai.krab.core
-sleep 3; pkill -9 -f src.main
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.krab.core.plist
-
-# Test suite
-pytest tests/ -q
-pytest tests/core/test_chado_integration.py -q  # Wave 17
-```
-
----
-
-## Carry-forward rules (Session 13)
-
-- **Russian communication** always
-- **Sonnet/Haiku default** (Opus only for architecture decisions)
-- **parse_mode=markdown** in all replies
-- **НЕ SIGHUP openclaw** — only `openclaw gateway`
-- **Max parallel agents** for Wave 18+ tasks
-- **NO destructive MCP commands** without `!confirm`
-- **Archive.db alerts** at 500MB / 1GB
-- **Wave 17 e2e tests** must pass before next wave
-
----
-
-## Session 14 priorities
-
-> Session 13 CLOSED 2026-04-19 22:30 UTC — Wave 27-29 massive (46 commits, !health deep, !memory rebuild, MMR 49× speedup, 14 Prometheus alerts, classifier fix pending)
-
-### 🔴 High
-1. **Memory bootstrap** — when user Telegram export ready (~500k+ messages, aged account): `venv/bin/python scripts/bootstrap_memory.py --export <path/to/result.json>`
-2. **how2ai spam-ban recovery** — expires 04:11 UTC 20.04.2026. Manual cleanup: `!chatban unban -1001587432709`
-3. **OpenClaw auto_restart_policy review** — Wave 29-X diagnosis: over-aggressive CPU load >3×. Fixes: ExitTimeout=120 in krab.core.plist, ThrottleInterval 1→5 in openclaw.plist
-
-### 🟡 Medium
-4. **Wave 29 in-progress cleanup:** LL (classify_priority sig), MM (ruff pop 190 files), NN (CAPACITY import), OO (DM reactions), PP (FTS5 orphans)
-5. **LM Studio load avg** — 73+ chronic, unload when idle. Switch to cloud primary (google/gemini-3-pro)
-6. **Integration test flakes** — Chado 17/19 fixed, remaining: classify_priority sig mismatch + CAPACITY import (2 tests)
-
-### 🟢 Low
-7. **Live benchmark 29-KK** — unified is_owner after ACL edits propagate
-8. **Dashboard V4 frontend** — delegate Gemini 3.1 Pro (spec: docs/DASHBOARD_V4_SESSION10_FRONTEND_SPEC.md)
-9. **`!memory rebuild` e2e test** — requires brief Krab downtime for archive.db lock
+chat_ban_cache, chat_response_policy, owner_presence, repl_session_audit, proactive_suggestions, owner_mood, chat_persona_profile, swarm_channels, named_entities, anomaly_baselines, sensitive_chats, auto_translate_chats, scheduled_replies, tool_composition, joke_calibration, voice_fingerprints, ab_experiments, session_goals.

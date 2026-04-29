@@ -3,6 +3,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pyrogram import enums
 
+pytestmark = pytest.mark.live
+
 from src.userbot_bridge import KraabUserbot
 
 

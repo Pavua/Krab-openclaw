@@ -551,6 +551,68 @@ class ModelManager:
         """Текущая активная локальная модель (если есть)."""
         return self._current_model
 
+    @property
+    def active_model_id(self) -> str:
+        """
+        Удобный alias для web/UI: возвращает текущую активную модель.
+
+        Порядок источников истины:
+        1) загруженная локальная модель (`_current_model`);
+        2) cloud-truth из OpenClaw runtime (`_effective_cloud_config_model`);
+        3) пусто, если ничего не определено.
+        """
+        if self._current_model:
+            return str(self._current_model)
+        cloud = self._effective_cloud_config_model()
+        return str(cloud or "")
+
+    def set_provider(self, provider: str) -> None:
+        """
+        Переключает высокоуровневый режим провайдера: `auto` | `local` | `cloud`.
+
+        Почему здесь, а не в handler'е:
+        - Web API `/api/model/switch` и CLI `!model <mode>` должны делить логику;
+        - Persist в `.env` нужен, чтобы режим переживал рестарт runtime.
+        """
+        mode = str(provider or "").strip().lower()
+        if mode not in {"auto", "local", "cloud"}:
+            raise ValueError(f"unknown provider mode: {provider!r} (expected auto/local/cloud)")
+
+        if mode == "cloud":
+            config.update_setting("FORCE_CLOUD", "1")
+            config.FORCE_CLOUD = True
+        else:
+            # auto и local оба снимают принудительный cloud.
+            config.update_setting("FORCE_CLOUD", "0")
+            config.FORCE_CLOUD = False
+        logger.info("model_provider_switched", provider=mode)
+
+    def set_model(self, model_id: str) -> None:
+        """
+        Фиксирует конкретную модель (local или cloud) в конфиге.
+
+        Для local модели: обновляет `LOCAL_PREFERRED_MODEL` и снимает `FORCE_CLOUD`.
+        Для cloud модели: обновляет `MODEL` и выставляет `FORCE_CLOUD=1`.
+
+        Reload в LM Studio делает `ensure_model_loaded()` на следующем запросе —
+        сам `set_model` остаётся синхронным, чтобы его безопасно звать из web API.
+        """
+        resolved = str(model_id or "").strip()
+        if not resolved:
+            raise ValueError("model_id must be a non-empty string")
+
+        if self.is_local_model(resolved):
+            config.update_setting("LOCAL_PREFERRED_MODEL", resolved)
+            config.update_setting("FORCE_CLOUD", "0")
+            config.FORCE_CLOUD = False
+            logger.info("model_set_local", model=resolved)
+            return
+
+        config.update_setting("MODEL", resolved)
+        config.update_setting("FORCE_CLOUD", "1")
+        config.FORCE_CLOUD = True
+        logger.info("model_set_cloud", model=resolved)
+
     async def ensure_model_loaded(self, model_id: str, *, has_photo: bool = False) -> bool:
         """
         Гарантирует, что локальная модель реально загружена.

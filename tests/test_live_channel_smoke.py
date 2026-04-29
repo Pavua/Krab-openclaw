@@ -6,6 +6,10 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.live
+
 import importlib.util
 import re
 from datetime import datetime, timedelta, timezone

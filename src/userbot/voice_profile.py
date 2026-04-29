@@ -331,6 +331,12 @@ class VoiceProfileMixin:
                     chat_id=target,
                     error=str(exc),
                 )
+                try:
+                    from src.core.prometheus_metrics import inc_telegram_flood_wait
+
+                    inc_telegram_flood_wait("voice_profile.chat_capability_refresh")
+                except Exception:  # noqa: BLE001
+                    pass
             # Остальное (ChannelPrivate, ChatAdminRequired, PeerIdInvalid,
             # ValueError на приватках с ID, etc.) — ожидаемо → debug.
             # Это именно тот класс ошибок для которого debug severity правильная.
@@ -424,6 +430,26 @@ class VoiceProfileMixin:
                 return "", "❌ Не удалось распознать голосовое сообщение."
             if normalized.lower().startswith("ошибка транскрибации"):
                 return "", f"❌ {normalized}"
+
+            # Детектируем error markup от perceptor (оба backend провалились)
+            if normalized.startswith("[transcription_failed:"):
+                # Парсим детали из markup: "[transcription_failed: voice_gateway=...; mlx_whisper=...]"
+                details = normalized[len("[transcription_failed:") :].rstrip("]").strip()
+                strict_mode = bool(getattr(config, "KRAB_VOICE_STRICT_MODE", False))
+                if strict_mode:
+                    # Strict mode: не тратим LLM call, сразу честный ответ
+                    return "", (
+                        "🎙️ Не удалось распознать голосовое сообщение. Пожалуйста, напиши текстом."
+                    )
+                # Non-strict: передаём LLM промпт с описанием ошибки
+                llm_prompt = (
+                    "🎙️ Голосовое сообщение получено, НО автоматическая транскрипция не удалась.\n"
+                    f"Backends tried: {details}\n"
+                    "Честно скажи пользователю, что не смог распознать голосовое, "
+                    "и предложи написать текстом. Не выдумывай содержание сообщения."
+                )
+                return llm_prompt, ""
+
             return normalized, ""
         except asyncio.TimeoutError:
             return "", "❌ Таймаут обработки голосового сообщения. Попробуй отправить его ещё раз."

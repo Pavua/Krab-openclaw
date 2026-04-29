@@ -81,9 +81,9 @@ class TestIsTranslatorActiveForChat:
         assert self._call(state, 123) is False
 
     def test_active_for_all_when_active_chats_empty(self):
-        """active_chats пуст + active → переводчик активен для всех чатов."""
+        """active_chats пуст → opt-in нарушен, переводчик неактивен (strict opt-in)."""
         state = {"session_status": "active", "translation_muted": False, "active_chats": []}
-        assert self._call(state, 999) is True
+        assert self._call(state, 999) is False
 
     def test_active_for_listed_chat(self):
         """Чат есть в active_chats → активен."""

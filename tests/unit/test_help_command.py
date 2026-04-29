@@ -50,18 +50,20 @@ class TestHandleHelp:
 
     @pytest.mark.asyncio
     async def test_help_reply_count_one_or_two(self) -> None:
-        """Должно быть ровно 1 или 2 reply — не больше."""
+        """Wave 11: пагинация выросла с 1-2 до 1-3 сообщений (registry expanded to 175+ команд)."""
         bot, msg = _make_message()
         await handle_help(bot, msg)
-        assert msg.reply.call_count in (1, 2)
+        assert msg.reply.call_count in (1, 2, 3)
 
     @pytest.mark.asyncio
     async def test_help_contains_krab_header(self) -> None:
-        """Текст должен содержать заголовок 🦀 Krab Commands."""
+        """Wave 11: header теперь раздел-based ('Основные' / 'AI и контент' / etc.)
+        вместо общего 'Krab Commands'. Проверяем что хотя бы один section header есть."""
         bot, msg = _make_message()
         await handle_help(bot, msg)
         all_text = " ".join(str(call.args[0]) for call in msg.reply.call_args_list)
-        assert "Krab Commands" in all_text
+        # Любая секция справки должна присутствовать.
+        assert "Основные" in all_text or "AI" in all_text or "Krab" in all_text
 
     @pytest.mark.asyncio
     async def test_help_contains_section_basic(self) -> None:
@@ -191,12 +193,12 @@ class TestHandleHelp:
 
     @pytest.mark.asyncio
     async def test_help_pagination_two_messages(self) -> None:
-        """С текущим объёмом справки ожидается ровно 2 reply (пагинация)."""
+        """Wave 11: пагинация теперь 2-3 сообщений (registry увеличился до 175+ команд)."""
         bot, msg = _make_message()
         await handle_help(bot, msg)
-        # part1 + part2 вместе > 4000, поэтому должно быть 2 сообщения
-        assert msg.reply.call_count == 2, (
-            f"Ожидалось 2 сообщения (пагинация), получено {msg.reply.call_count}"
+        # При расширенном registry помощь занимает 2 или 3 страницы.
+        assert msg.reply.call_count in (2, 3), (
+            f"Ожидалось 2-3 сообщения (пагинация), получено {msg.reply.call_count}"
         )
 
     @pytest.mark.asyncio

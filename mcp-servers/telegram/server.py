@@ -25,10 +25,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
+import re
 import subprocess
 import sys
-import tempfile
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -66,6 +68,10 @@ _KRAB_EAR_SOCKET = Path(
     os.getenv("KRAB_EAR_SOCKET_PATH", "~/Library/Application Support/KrabEar/krabear.sock")
 ).expanduser()
 _WHISPER_MODEL = os.getenv("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo")
+
+# ── Logger ────────────────────────────────────────────────────────────────────
+
+_dev_logger = logging.getLogger("krab_mcp.dev_loop")
 
 # ── Singleton бридж ────────────────────────────────────────────────────────────
 
@@ -152,6 +158,34 @@ class _SendMessageInput(BaseModel):
     text: str = Field(
         ..., min_length=1, max_length=4096, description="Текст сообщения (до 4096 символов)"
     )
+    reply_to_message_id: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "ID сообщения в этом же чате, на которое отвечаем. Telegram покажет "
+            "ответ как реплай на конкретное сообщение (как при 'Reply' в UI)."
+        ),
+    )
+    quote_text: str | None = Field(
+        default=None,
+        max_length=1024,
+        description=(
+            "Опциональный фрагмент исходного сообщения для цитирования "
+            "(`quote_text` Pyrogram). Используется вместе с reply_to_message_id "
+            "когда хотим процитировать только часть длинного сообщения."
+        ),
+    )
+    parse_mode: str = Field(
+        default="",
+        description=(
+            "Режим разметки текста: 'markdown' / 'html' / 'disabled' / '' (default). "
+            "По умолчанию Pyrogram сам определяет — для безопасности можно указать."
+        ),
+    )
+    disable_web_page_preview: bool = Field(
+        default=False,
+        description="Если True — отключает превью ссылок в сообщении.",
+    )
 
 
 class _MediaInput(BaseModel):
@@ -178,6 +212,96 @@ class _EditMessageInput(BaseModel):
     chat_id: str = Field(..., description="ID чата или username")
     message_id: int = Field(..., gt=0, description="ID сообщения для редактирования")
     text: str = Field(..., min_length=1, max_length=4096, description="Новый текст сообщения")
+    parse_mode: str = Field(
+        default="",
+        description=(
+            "Режим разметки: 'markdown' / 'html' / 'disabled' / '' (default). "
+            "Аналог параметра в telegram_send_message."
+        ),
+    )
+    disable_web_page_preview: bool = Field(
+        default=False,
+        description="Если True — отключает превью ссылок при редактировании.",
+    )
+
+
+class _SendPhotoInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(..., description="ID чата или username получателя")
+    photo_path: str = Field(default="", description="Локальный путь к файлу фото")
+    photo_url: str = Field(default="", description="URL фото (если не задан photo_path)")
+    caption: str = Field(default="", max_length=1024, description="Подпись к фото (необязательно)")
+    reply_to_message_id: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "ID сообщения для reply (Telegram отрисует ответ как Reply на конкретное "
+            "сообщение). Userbot capability — аналогично telegram_send_message."
+        ),
+    )
+    parse_mode: str = Field(
+        default="",
+        description=(
+            "Режим разметки caption: 'markdown' / 'html' / 'disabled' / '' (default). "
+            "Аналог параметра в telegram_send_message."
+        ),
+    )
+    disable_web_page_preview: bool = Field(
+        default=False,
+        description="Если True — отключает превью ссылок в caption.",
+    )
+
+
+class _SendReactionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(..., description="ID чата или username")
+    message_id: int = Field(..., gt=0, description="ID сообщения для реакции")
+    emoji: str = Field(
+        ..., min_length=1, description="Эмодзи реакции (например: '👍') или JSON-список"
+    )
+
+
+class _ForwardMessageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    from_chat_id: str = Field(..., description="ID чата-источника")
+    message_id: int = Field(..., gt=0, description="ID пересылаемого сообщения")
+    to_chat_id: str = Field(..., description="ID чата-назначения")
+
+
+class _DeleteMessageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(..., description="ID чата или username")
+    message_id: int = Field(..., gt=0, description="ID сообщения для удаления")
+
+
+class _PinMessageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(..., description="ID чата или username")
+    message_id: int = Field(..., gt=0, description="ID сообщения для закрепления")
+    unpin: bool = Field(default=False, description="True — открепить, False — закрепить (default)")
+
+
+class _GetMessageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(..., description="ID чата или username")
+    message_id: int = Field(..., gt=0, description="ID сообщения")
+
+
+class _SendVoiceInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(..., description="ID чата или username получателя")
+    voice_path: str = Field(..., min_length=1, description="Локальный путь к .ogg файлу")
+    duration: int | None = Field(
+        default=None, ge=0, description="Длительность в секундах (необязательно)"
+    )
+    reply_to_message_id: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "ID сообщения для reply (Telegram Reply UI). Userbot capability — "
+            "позволяет отвечать голосом на конкретное сообщение."
+        ),
+    )
 
 
 class _TailLogsInput(BaseModel):
@@ -257,23 +381,43 @@ async def telegram_get_chat_history(params: _GetHistoryInput) -> str:
     annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
 )
 async def telegram_send_message(params: _SendMessageInput) -> str:
-    """Отправляет текстовое сообщение в указанный чат Telegram.
+    """Отправляет текстовое сообщение в чат Telegram через **userbot session**
+    (Pyrogram MTProto, не bot API).
 
-    ВНИМАНИЕ: это действие отправляет реальное сообщение от имени аккаунта.
+    Это даёт возможности userbot:
+    - писать в DM любому user_id даже если он не запускал /start (в отличие
+      от bot API, у которого ошибка ``bot not started in DM``);
+    - отвечать на конкретное сообщение через ``reply_to_message_id``
+      (Telegram отрисует это как "Reply" cutout);
+    - цитировать фрагмент исходного сообщения через ``quote_text``;
+    - выбирать parse_mode (markdown/html) и отключать link preview.
+
+    ВНИМАНИЕ: реальная отправка от имени owner-аккаунта.
 
     Args:
-        params: Параметры сообщения:
+        params:
             - chat_id (str): ID чата или @username получателя
             - text (str): Текст сообщения (до 4096 символов)
+            - reply_to_message_id (int|None): ID сообщения для reply (Telegram quote UI)
+            - quote_text (str|None): Фрагмент для цитаты (Pyrogram quote_text)
+            - parse_mode (str): 'markdown' / 'html' / 'disabled' / ''
+            - disable_web_page_preview (bool)
 
     Returns:
-        str: JSON-объект с метаданными отправленного сообщения (id, date, chat_id)
+        str: JSON-объект с метаданными отправленного сообщения (id, date, chat_id, reply_to_message_id)
     """
     try:
         cid: int | str = int(params.chat_id)
     except ValueError:
         cid = params.chat_id
-    result = await _bridge.send_message(cid, params.text)
+    result = await _bridge.send_message(
+        cid,
+        params.text,
+        reply_to_message_id=params.reply_to_message_id,
+        quote_text=params.quote_text,
+        parse_mode=params.parse_mode or None,
+        disable_web_page_preview=params.disable_web_page_preview,
+    )
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -430,16 +574,17 @@ async def telegram_search(params: _SearchInput) -> str:
     annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True},
 )
 async def telegram_edit_message(params: _EditMessageInput) -> str:
-    """Редактирует ранее отправленное сообщение Telegram.
+    """Редактирует ранее отправленное сообщение Telegram (от имени userbot).
 
-    Работает только для сообщений, отправленных самим аккаунтом.
-    Нельзя редактировать сообщения других пользователей.
+    Работает только для сообщений, отправленных этим же аккаунтом.
 
     Args:
         params:
             - chat_id (str): ID чата или @username
             - message_id (int): ID сообщения для редактирования
             - text (str): Новый текст сообщения (до 4096 символов)
+            - parse_mode (str): 'markdown' / 'html' / 'disabled' / ''
+            - disable_web_page_preview (bool)
 
     Returns:
         str: JSON-объект с обновлёнными метаданными сообщения
@@ -448,8 +593,274 @@ async def telegram_edit_message(params: _EditMessageInput) -> str:
         cid: int | str = int(params.chat_id)
     except ValueError:
         cid = params.chat_id
-    result = await _bridge.edit_message(cid, params.message_id, params.text)
+    result = await _bridge.edit_message(
+        cid,
+        params.message_id,
+        params.text,
+        parse_mode=params.parse_mode or None,
+        disable_web_page_preview=params.disable_web_page_preview,
+    )
     return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool(
+    name="telegram_send_photo",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
+async def telegram_send_photo(params: _SendPhotoInput) -> str:
+    """Отправляет фото в Telegram-чат из локального файла или URL (userbot session).
+
+    Userbot capabilities (Session 25):
+    - reply_to_message_id: отрисует фото как Reply на конкретное сообщение
+      (Telegram показывает quote cutout — как при `Reply` в UI);
+    - parse_mode: разметка caption (markdown/html);
+    - disable_web_page_preview: отключить превью ссылок в caption.
+
+    Args:
+        params:
+            - chat_id (str): ID чата или @username
+            - photo_path (str): Локальный путь к файлу (приоритет перед photo_url)
+            - photo_url (str): URL фото (если photo_path не задан)
+            - caption (str): Подпись к фото (до 1024 символов, необязательно)
+            - reply_to_message_id (int|None): ID сообщения для reply (Telegram quote UI)
+            - parse_mode (str): 'markdown' / 'html' / 'disabled' / '' для caption
+            - disable_web_page_preview (bool)
+
+    Returns:
+        str: JSON-объект с метаданными отправленного сообщения
+    """
+    photo = params.photo_path.strip() or params.photo_url.strip()
+    if not photo:
+        return json.dumps(
+            {"ok": False, "error": "Укажи photo_path или photo_url"}, ensure_ascii=False
+        )
+    try:
+        cid: int | str = int(params.chat_id)
+    except ValueError:
+        cid = params.chat_id
+    try:
+        result = await _bridge.send_photo(
+            cid,
+            photo,
+            caption=params.caption,
+            reply_to_message_id=params.reply_to_message_id,
+            parse_mode=params.parse_mode or None,
+            disable_web_page_preview=params.disable_web_page_preview,
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_send_reaction",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True},
+)
+async def telegram_send_reaction(params: _SendReactionInput) -> str:
+    """Ставит эмодзи-реакцию на сообщение Telegram.
+
+    Args:
+        params:
+            - chat_id (str): ID чата или @username
+            - message_id (int): ID сообщения
+            - emoji (str): Эмодзи (например: '👍', '❤️') или JSON-список эмодзи
+
+    Returns:
+        str: JSON-объект {"ok": true, "emoji": [...]}
+    """
+    try:
+        cid: int | str = int(params.chat_id)
+    except ValueError:
+        cid = params.chat_id
+    # Поддержка JSON-списка в строке
+    try:
+        emoji_val: str | list[str] = json.loads(params.emoji)
+    except (json.JSONDecodeError, ValueError):
+        emoji_val = params.emoji
+    try:
+        result = await _bridge.send_reaction(cid, params.message_id, emoji_val)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_forward_message",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
+async def telegram_forward_message(params: _ForwardMessageInput) -> str:
+    """Пересылает сообщение из одного чата в другой.
+
+    Args:
+        params:
+            - from_chat_id (str): ID чата-источника
+            - message_id (int): ID сообщения для пересылки
+            - to_chat_id (str): ID чата-назначения
+
+    Returns:
+        str: JSON-объект с метаданными пересланного сообщения
+    """
+    try:
+        from_cid: int | str = int(params.from_chat_id)
+    except ValueError:
+        from_cid = params.from_chat_id
+    try:
+        to_cid: int | str = int(params.to_chat_id)
+    except ValueError:
+        to_cid = params.to_chat_id
+    try:
+        result = await _bridge.forward_message(from_cid, params.message_id, to_cid)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_delete_message",
+    annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True},
+)
+async def telegram_delete_message(params: _DeleteMessageInput) -> str:
+    """Удаляет своё сообщение из чата Telegram.
+
+    ВНИМАНИЕ: действие необратимо.
+
+    Args:
+        params:
+            - chat_id (str): ID чата или @username
+            - message_id (int): ID сообщения для удаления
+
+    Returns:
+        str: JSON-объект {"ok": true, "deleted": [message_id]}
+    """
+    try:
+        cid: int | str = int(params.chat_id)
+    except ValueError:
+        cid = params.chat_id
+    try:
+        result = await _bridge.delete_messages(cid, params.message_id)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_pin_message",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True},
+)
+async def telegram_pin_message(params: _PinMessageInput) -> str:
+    """Закрепляет или открепляет сообщение в чате Telegram.
+
+    Args:
+        params:
+            - chat_id (str): ID чата или @username
+            - message_id (int): ID сообщения
+            - unpin (bool): True — открепить, False — закрепить (default: False)
+
+    Returns:
+        str: JSON-объект {"ok": true, "action": "pinned"|"unpinned"}
+    """
+    try:
+        cid: int | str = int(params.chat_id)
+    except ValueError:
+        cid = params.chat_id
+    try:
+        result = await _bridge.pin_message(cid, params.message_id, unpin=params.unpin)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_get_message",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def telegram_get_message(params: _GetMessageInput) -> str:
+    """Получает одно сообщение Telegram по его ID.
+
+    Возвращает полную информацию: текст, медиа, entities, from_user, дату.
+
+    Args:
+        params:
+            - chat_id (str): ID чата или @username
+            - message_id (int): ID сообщения
+
+    Returns:
+        str: JSON-объект с полями сообщения (id, text, from_user, date, has_media, entities, ...)
+    """
+    try:
+        cid: int | str = int(params.chat_id)
+    except ValueError:
+        cid = params.chat_id
+    try:
+        result = await _bridge.get_message(cid, params.message_id)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_send_voice",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
+async def telegram_send_voice(params: _SendVoiceInput) -> str:
+    """Отправляет голосовое сообщение (.ogg) в Telegram-чат (userbot session).
+
+    Userbot capability (Session 25):
+    - reply_to_message_id: отрисует голос как Reply на конкретное сообщение
+      (Telegram quote UI — как при `Reply` в клиенте).
+    Voice не имеет caption у userbot, поэтому parse_mode не применяется.
+
+    Args:
+        params:
+            - chat_id (str): ID чата или @username получателя
+            - voice_path (str): Локальный путь к .ogg файлу
+            - duration (int | None): Длительность в секундах (необязательно)
+            - reply_to_message_id (int|None): ID сообщения для reply (Telegram quote UI)
+
+    Returns:
+        str: JSON-объект с метаданными отправленного сообщения
+    """
+    try:
+        cid: int | str = int(params.chat_id)
+    except ValueError:
+        cid = params.chat_id
+    try:
+        result = await _bridge.send_voice(
+            cid,
+            params.voice_path,
+            duration=params.duration,
+            reply_to_message_id=params.reply_to_message_id,
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_session_info",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def telegram_session_info() -> str:
+    """Возвращает информацию о текущей Telegram MCP сессии.
+
+    КРИТИЧНО: используй этот tool **первым делом** при запуске для проверки
+    что session — это userbot (is_bot=False), а не bot. Если is_bot=True,
+    то отправка сообщений в DM первым невозможна (Telegram возвращает
+    ``bot not started in DM``), и нужна re-авторизация:
+    ``./venv/bin/python mcp-servers/telegram/auth_setup.py`` от owner.
+
+    Returns:
+        str: JSON-объект:
+            - ok (bool)
+            - is_bot (bool): True → bot session, False → userbot
+            - user_id (int): Telegram ID
+            - username (str|None): @username аккаунта
+            - first_name (str|None)
+            - session_name (str): имя session (например krab_mcp)
+            - capabilities (list[str]): краткая сводка userbot capabilities
+              если is_bot=False, иначе ограниченный bot toolkit
+    """
+    return await _bridge.session_info_json()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -871,6 +1282,2001 @@ async def krab_memory_stats() -> str:
             archive["error"] = str(exc)
 
     return json.dumps({"archive": archive}, ensure_ascii=False, indent=2, default=str)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── FILESYSTEM TOOLS (read-only, sandboxed к _PROJECT_ROOT) ──────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Security model (sanitize_path):
+#   1. Путь резолвится через Path.resolve() — симлинки и «..» разворачиваются.
+#   2. Проверяем `is_relative_to(_PROJECT_ROOT)` — запрет escape из sandbox.
+#   3. Все fs_* операции READ-ONLY (никаких write/mkdir/rm).
+#   4. Жёсткие лимиты: fs_read_file ≤ 500 строк, fs_search max_results ≤ 200.
+
+
+def _sanitize_path(raw: str) -> Path:
+    """Резолвит путь и проверяет что он внутри _PROJECT_ROOT. Иначе ValueError."""
+    if not raw or not isinstance(raw, str):
+        raise ValueError("empty_path")
+    # Разрешаем как абсолютные, так и относительные (от project root).
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = _PROJECT_ROOT / candidate
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(_PROJECT_ROOT.resolve())
+    except ValueError as exc:
+        raise ValueError(f"path_escape: {raw} вне sandbox {_PROJECT_ROOT}") from exc
+    return resolved
+
+
+class _FsReadInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(..., description="Путь к файлу (absolute или относительно корня проекта)")
+    start_line: int = Field(default=1, ge=1, description="Стартовая строка (1-indexed)")
+    end_line: int | None = Field(
+        default=None,
+        description="Последняя строка (inclusive). Если None — читаем start_line + 500.",
+    )
+
+
+class _FsSearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pattern: str = Field(..., min_length=1, max_length=500, description="Regex или литерал")
+    glob: str = Field(default="", description="Glob фильтр, напр. '*.py' или 'src/**/*.py'")
+    max_results: int = Field(default=50, ge=1, le=200, description="Лимит совпадений (1–200)")
+
+
+class _FsListDirInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(default=".", description="Путь к директории (default: корень проекта)")
+
+
+@mcp.tool(
+    name="fs_read_file",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def fs_read_file(params: _FsReadInput) -> str:
+    """Читает файл из sandbox проекта Краба (read-only, ≤500 строк за запрос).
+
+    Returns:
+        JSON {"ok": bool, "path": str, "start_line": int, "end_line": int,
+              "total_lines": int, "content": str, "truncated": bool}
+    """
+    try:
+        target = _sanitize_path(params.path)
+    except ValueError as exc:
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+    if not target.exists():
+        return json.dumps({"ok": False, "error": f"not_found: {target}"}, ensure_ascii=False)
+    if not target.is_file():
+        return json.dumps({"ok": False, "error": f"not_a_file: {target}"}, ensure_ascii=False)
+    try:
+        with open(target, encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": f"read_failed: {exc}"}, ensure_ascii=False)
+
+    total = len(all_lines)
+    start = max(1, params.start_line)
+    # Максимум 500 строк за вызов
+    default_end = start + 499
+    end = params.end_line if params.end_line is not None else default_end
+    end = min(end, start + 499, total)
+    if start > total:
+        return json.dumps(
+            {
+                "ok": True,
+                "path": str(target),
+                "start_line": start,
+                "end_line": start,
+                "total_lines": total,
+                "content": "",
+                "truncated": False,
+            },
+            ensure_ascii=False,
+        )
+    slice_lines = all_lines[start - 1 : end]
+    return json.dumps(
+        {
+            "ok": True,
+            "path": str(target),
+            "start_line": start,
+            "end_line": end,
+            "total_lines": total,
+            "content": "".join(slice_lines),
+            "truncated": end < total,
+        },
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool(
+    name="fs_search",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def fs_search(params: _FsSearchInput) -> str:
+    """Полнотекстовый поиск по файлам проекта Краба через ripgrep (read-only).
+
+    Returns:
+        JSON {"ok": bool, "pattern": str, "count": int,
+              "matches": [{"path","line","text"}]}
+    """
+    rg_cmd = [
+        "rg",
+        "--no-heading",
+        "--line-number",
+        "--color=never",
+        "--max-count",
+        str(params.max_results),
+        "-e",
+        params.pattern,
+    ]
+    if params.glob:
+        rg_cmd.extend(["--glob", params.glob])
+    rg_cmd.append(str(_PROJECT_ROOT))
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(rg_cmd, capture_output=True, text=True, timeout=15),
+        )
+    except FileNotFoundError:
+        return json.dumps({"ok": False, "error": "ripgrep_not_installed"}, ensure_ascii=False)
+    except subprocess.TimeoutExpired:
+        return json.dumps({"ok": False, "error": "search_timeout"}, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    matches: list[dict[str, Any]] = []
+    for line in (result.stdout or "").splitlines():
+        # Формат: path:line:text
+        parts = line.split(":", 2)
+        if len(parts) < 3:
+            continue
+        path_s, line_s, text_s = parts
+        try:
+            line_n = int(line_s)
+        except ValueError:
+            continue
+        matches.append({"path": path_s, "line": line_n, "text": text_s})
+        if len(matches) >= params.max_results:
+            break
+    return json.dumps(
+        {"ok": True, "pattern": params.pattern, "count": len(matches), "matches": matches},
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool(
+    name="fs_list_dir",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def fs_list_dir(params: _FsListDirInput) -> str:
+    """Листинг директории (structured `ls -la`).
+
+    Returns:
+        JSON {"ok": bool, "path": str, "entries":
+              [{"name","type","size","mtime"}]}
+    """
+    try:
+        target = _sanitize_path(params.path)
+    except ValueError as exc:
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+    if not target.exists():
+        return json.dumps({"ok": False, "error": f"not_found: {target}"}, ensure_ascii=False)
+    if not target.is_dir():
+        return json.dumps({"ok": False, "error": f"not_a_dir: {target}"}, ensure_ascii=False)
+    entries: list[dict[str, Any]] = []
+    try:
+        for item in sorted(target.iterdir(), key=lambda p: p.name):
+            try:
+                st = item.stat()
+            except OSError:
+                continue
+            entries.append(
+                {
+                    "name": item.name,
+                    "type": "dir" if item.is_dir() else ("link" if item.is_symlink() else "file"),
+                    "size": st.st_size,
+                    "mtime": int(st.st_mtime),
+                }
+            )
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": f"list_failed: {exc}"}, ensure_ascii=False)
+    return json.dumps(
+        {"ok": True, "path": str(target), "entries": entries},
+        ensure_ascii=False,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── GIT TOOLS (read-only) ─────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class _GitLogInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    limit: int = Field(default=10, ge=1, le=100, description="Количество коммитов (1–100)")
+    file: str = Field(default="", description="Опциональный путь файла (лог по файлу)")
+
+
+class _GitDiffInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    file: str = Field(default="", description="Опциональный путь файла")
+    staged: bool = Field(default=False, description="True — diff staged изменений")
+
+
+async def _run_git(args: list[str], timeout: float = 10.0) -> tuple[int, str]:
+    """Запускает git в _PROJECT_ROOT, возвращает (exit_code, output)."""
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                ["git", *args],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=str(_PROJECT_ROOT),
+            ),
+        )
+        out = (result.stdout + result.stderr).rstrip()
+        return result.returncode, out
+    except subprocess.TimeoutExpired:
+        return 124, "git_timeout"
+    except FileNotFoundError:
+        return 127, "git_not_installed"
+
+
+@mcp.tool(
+    name="git_status",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def git_status() -> str:
+    """Короткий git status (porcelain). READ-ONLY."""
+    code, out = await _run_git(["status", "--short", "--branch"])
+    return json.dumps({"ok": code == 0, "exit_code": code, "output": out}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="git_log",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def git_log(params: _GitLogInput) -> str:
+    """Последние N коммитов. Если задан file — лог по файлу."""
+    args = ["log", f"-n{params.limit}", "--oneline", "--no-decorate"]
+    if params.file:
+        try:
+            fp = _sanitize_path(params.file)
+            args.extend(["--", str(fp.relative_to(_PROJECT_ROOT.resolve()))])
+        except ValueError as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+    code, out = await _run_git(args)
+    return json.dumps({"ok": code == 0, "exit_code": code, "output": out}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="git_diff",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def git_diff(params: _GitDiffInput) -> str:
+    """git diff (опционально --staged, опционально по файлу). Вывод обрезается до 50k символов."""
+    args = ["diff"]
+    if params.staged:
+        args.append("--staged")
+    if params.file:
+        try:
+            fp = _sanitize_path(params.file)
+            args.extend(["--", str(fp.relative_to(_PROJECT_ROOT.resolve()))])
+        except ValueError as exc:
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+    code, out = await _run_git(args, timeout=15.0)
+    truncated = False
+    if len(out) > 50_000:
+        out = out[:50_000]
+        truncated = True
+    return json.dumps(
+        {"ok": code == 0, "exit_code": code, "output": out, "truncated": truncated},
+        ensure_ascii=False,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── SYSTEM INFO ──────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool(
+    name="system_info",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def system_info() -> str:
+    """CPU/RAM/Disk/uptime/load_avg хоста. Использует psutil если есть, иначе os/shutil."""
+    import platform as _pl
+    import shutil
+
+    info: dict[str, Any] = {
+        "platform": _pl.platform(),
+        "python": _pl.python_version(),
+    }
+    try:
+        import psutil  # type: ignore
+
+        info["cpu_count"] = psutil.cpu_count(logical=True)
+        info["cpu_percent"] = psutil.cpu_percent(interval=0.1)
+        vm = psutil.virtual_memory()
+        info["ram"] = {
+            "total_mb": round(vm.total / 1024 / 1024),
+            "available_mb": round(vm.available / 1024 / 1024),
+            "percent": vm.percent,
+        }
+        du = psutil.disk_usage(str(_PROJECT_ROOT))
+        info["disk"] = {
+            "total_gb": round(du.total / 1024**3, 2),
+            "free_gb": round(du.free / 1024**3, 2),
+            "percent": du.percent,
+        }
+        info["uptime_sec"] = int(__import__("time").time() - psutil.boot_time())
+    except ImportError:
+        du = shutil.disk_usage(str(_PROJECT_ROOT))
+        info["disk"] = {
+            "total_gb": round(du.total / 1024**3, 2),
+            "free_gb": round(du.free / 1024**3, 2),
+        }
+        info["cpu_count"] = os.cpu_count()
+
+    try:
+        load1, load5, load15 = os.getloadavg()
+        info["load_avg"] = {"1m": round(load1, 2), "5m": round(load5, 2), "15m": round(load15, 2)}
+    except (OSError, AttributeError):
+        info["load_avg"] = None
+
+    return json.dumps(info, ensure_ascii=False, indent=2)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── HTTP FETCH ───────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class _HttpFetchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str = Field(..., min_length=7, description="URL (http://... или https://...)")
+    method: str = Field(default="GET", pattern="^(GET|HEAD)$", description="GET|HEAD")
+    timeout: float = Field(default=15.0, ge=1.0, le=60.0, description="Timeout в секундах")
+
+
+_HTTP_MAX_BYTES = 100 * 1024  # 100KB
+_HTTP_MAX_REDIRECTS = 5
+_HTTP_ALLOWED_CT_PREFIXES = ("text/", "application/json", "application/xml")
+
+
+def _host_is_private(host: str) -> bool:
+    """Резолвит hostname и возвращает True, если ЛЮБОЙ из адресов — частный/loopback/link-local.
+
+    Используем ipaddress stdlib: is_private покрывает RFC1918 + loopback + link-local,
+    плюс явная проверка на IPv6 ULA (fc00::/7) и unique-local.
+    """
+    import ipaddress
+    import socket
+
+    if not host:
+        return True
+    # Прямая проверка, если hostname уже IP-литерал
+    try:
+        ip_obj = ipaddress.ip_address(host.strip("[]"))
+        return (
+            ip_obj.is_private
+            or ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or ip_obj.is_reserved
+            or ip_obj.is_multicast
+            or ip_obj.is_unspecified
+        )
+    except ValueError:
+        pass
+    # Резолвим все адреса
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        # Нерезолвимый хост — блокируем (fail-closed)
+        return True
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip_obj = ipaddress.ip_address(addr)
+        except ValueError:
+            return True
+        if (
+            ip_obj.is_private
+            or ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or ip_obj.is_reserved
+            or ip_obj.is_multicast
+            or ip_obj.is_unspecified
+        ):
+            return True
+    return False
+
+
+@mcp.tool(
+    name="http_fetch",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def http_fetch(params: _HttpFetchInput) -> str:
+    """HTTP GET/HEAD с SSRF guard, ручным redirect loop (до 5 hops) и 100KB cap.
+
+    Блокирует private/loopback/link-local адреса перед каждым hop'ом.
+    Бинарные content-type возвращаются как summary без decode.
+
+    Returns:
+        JSON {"ok","status","headers","body","truncated","final_url","content_type"}
+    """
+    from urllib.parse import urljoin, urlparse
+
+    if not (params.url.startswith("http://") or params.url.startswith("https://")):
+        return json.dumps({"ok": False, "error": "invalid_scheme"}, ensure_ascii=False)
+
+    current_url = params.url
+    try:
+        async with httpx.AsyncClient(timeout=params.timeout, follow_redirects=False) as client:
+            for _hop in range(_HTTP_MAX_REDIRECTS + 1):
+                parsed = urlparse(current_url)
+                host = parsed.hostname or ""
+                if _host_is_private(host):
+                    return json.dumps(
+                        {"ok": False, "error": "private_host_blocked", "host": host},
+                        ensure_ascii=False,
+                    )
+                r = await client.request(params.method, current_url)
+                # Редирект?
+                if r.status_code in (301, 302, 303, 307, 308):
+                    loc = r.headers.get("location")
+                    if not loc:
+                        break
+                    current_url = urljoin(current_url, loc)
+                    if not (
+                        current_url.startswith("http://") or current_url.startswith("https://")
+                    ):
+                        return json.dumps(
+                            {"ok": False, "error": "invalid_redirect_scheme"},
+                            ensure_ascii=False,
+                        )
+                    continue
+                # Финальный ответ — обрабатываем
+                ct = (r.headers.get("content-type") or "").lower()
+                raw = r.content or b""
+                truncated = len(raw) > _HTTP_MAX_BYTES
+                raw = raw[:_HTTP_MAX_BYTES]
+                # Content-type guard: только text/* и json/xml decode'им
+                ct_main = ct.split(";", 1)[0].strip()
+                is_textual = ct_main.startswith("text/") or ct_main in (
+                    "application/json",
+                    "application/xml",
+                    "application/javascript",
+                )
+                if not is_textual and ct_main:
+                    body = f"<binary:{len(raw)} bytes>"
+                    truncated = True
+                else:
+                    body = raw.decode("utf-8", errors="replace")
+                return json.dumps(
+                    {
+                        "ok": True,
+                        "status": r.status_code,
+                        "final_url": str(r.url),
+                        "headers": dict(r.headers),
+                        "body": body,
+                        "truncated": truncated,
+                        "content_type": ct_main,
+                    },
+                    ensure_ascii=False,
+                )
+            return json.dumps({"ok": False, "error": "too_many_redirects"}, ensure_ascii=False)
+    except httpx.TimeoutException:
+        return json.dumps({"ok": False, "error": "timeout"}, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── TIME / CALENDAR ──────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class _TimeNowInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    timezone: str = Field(default="Europe/Madrid", description="IANA timezone")
+
+
+class _TimeParseInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(..., min_length=1, max_length=200, description="Текст: «завтра 15:00»")
+    timezone: str = Field(default="Europe/Madrid", description="IANA timezone для относительных")
+
+
+@mcp.tool(
+    name="time_now",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def time_now(params: _TimeNowInput) -> str:
+    """Текущее время в указанной timezone (ISO 8601)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        tz = ZoneInfo(params.timezone)
+    except ZoneInfoNotFoundError:
+        return json.dumps(
+            {"ok": False, "error": f"unknown_timezone: {params.timezone}"}, ensure_ascii=False
+        )
+    now = datetime.now(tz)
+    return json.dumps(
+        {
+            "ok": True,
+            "iso": now.isoformat(),
+            "timezone": params.timezone,
+            "unix": int(now.timestamp()),
+            "weekday": now.strftime("%A"),
+        },
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool(
+    name="time_parse",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def time_parse(params: _TimeParseInput) -> str:
+    """Парсит свободный текст («завтра 15:00», «in 2 hours») в ISO."""
+    try:
+        import dateparser  # type: ignore
+    except ImportError:
+        return json.dumps({"ok": False, "error": "dateparser_not_installed"}, ensure_ascii=False)
+
+    parsed = dateparser.parse(
+        params.text,
+        settings={
+            "TIMEZONE": params.timezone,
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "PREFER_DATES_FROM": "future",
+        },
+    )
+    if parsed is None:
+        return json.dumps(
+            {"ok": False, "error": "parse_failed", "text": params.text}, ensure_ascii=False
+        )
+    return json.dumps(
+        {
+            "ok": True,
+            "iso": parsed.isoformat(),
+            "unix": int(parsed.timestamp()),
+            "text": params.text,
+            "timezone": params.timezone,
+        },
+        ensure_ascii=False,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── DB QUERY (READ-ONLY) ─────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+
+import re as _re  # noqa: E402
+import sqlite3 as _sqlite3  # noqa: E402
+
+# Белый список БД, к которым разрешён запрос.
+_DB_WHITELIST: dict[str, Path] = {
+    "archive": Path("/Users/pablito/.openclaw/krab_memory/archive.db"),
+    "memory": _PROJECT_ROOT / "memory_db" / "chroma.sqlite3",
+}
+
+# Запрещённые write-ключевые слова (regex word-boundaries, case-insensitive).
+_FORBIDDEN_SQL_KEYWORDS = (
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "DROP",
+    "CREATE",
+    "ALTER",
+    "ATTACH",
+    "DETACH",
+    "REPLACE",
+    "TRUNCATE",
+    "VACUUM",
+    "REINDEX",
+)
+
+# PRAGMA — разрешаем только read-only подмножество (schema_version, table_info и т.п.).
+# На всякий случай блокируем PRAGMA writes (с '=').
+_PRAGMA_WRITE_RE = _re.compile(r"\bPRAGMA\b[^;]*=", _re.IGNORECASE)
+
+
+def _strip_sql_comments(sql: str) -> str:
+    """Убирает SQL-комментарии (/* ... */ и -- ...) без затрагивания строковых литералов.
+
+    Нужно, чтобы write-keyword чек не обойти через `/* x */ INSERT` или `-- \n INSERT`.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        nxt = sql[i + 1] if i + 1 < n else ""
+        # Строковые литералы — копируем как есть (с учётом doubled-quote escape).
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            while i < n:
+                c = sql[i]
+                out.append(c)
+                i += 1
+                if c == quote:
+                    # doubled quote — escape, продолжаем внутри литерала
+                    if i < n and sql[i] == quote:
+                        out.append(sql[i])
+                        i += 1
+                        continue
+                    break
+            continue
+        # Block comment
+        if ch == "/" and nxt == "*":
+            i += 2
+            while i < n and not (sql[i] == "*" and i + 1 < n and sql[i + 1] == "/"):
+                i += 1
+            i += 2  # skip */
+            out.append(" ")
+            continue
+        # Line comment
+        if ch == "-" and nxt == "-":
+            i += 2
+            while i < n and sql[i] != "\n":
+                i += 1
+            out.append(" ")
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _has_semicolon_outside_literals(sql: str) -> bool:
+    """True если в SQL есть ';' вне строковых литералов (т.е. multi-statement).
+
+    Trailing ';' допустим — удаляется вызывающим через rstrip(';').
+    """
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            while i < n:
+                c = sql[i]
+                i += 1
+                if c == quote:
+                    if i < n and sql[i] == quote:
+                        # doubled quote escape
+                        i += 1
+                        continue
+                    break
+            continue
+        if ch == ";":
+            return True
+        i += 1
+    return False
+
+
+def _is_read_only_sql(sql: str) -> bool:
+    """True если SQL — только SELECT / WITH / EXPLAIN и без запретных ключевых слов.
+
+    Защита от: multi-statement (';' outside literals), SQL-комментариев
+    ('/* */' и '--'), которые могут скрывать write-keywords.
+    """
+    raw = sql.strip()
+    if not raw:
+        return False
+    # Валидация «одного завершённого statement» через sqlite3.
+    # complete_statement ожидает trailing ';' — добавляем если нет.
+    probe = raw if raw.endswith(";") else raw + ";"
+    if not _sqlite3.complete_statement(probe):
+        return False
+    # Strip trailing ';' и проверяем что нет других ';' вне литералов.
+    body = raw.rstrip(";").strip()
+    if not body:
+        return False
+    if _has_semicolon_outside_literals(body):
+        return False
+    # Убираем комментарии ДО проверки head / write-keywords (иначе bypass).
+    stripped = _strip_sql_comments(body).strip()
+    if not stripped:
+        return False
+    head_parts = stripped.split(None, 1)
+    if not head_parts:
+        return False
+    head = head_parts[0].upper()
+    if head not in ("SELECT", "WITH", "EXPLAIN"):
+        return False
+    for kw in _FORBIDDEN_SQL_KEYWORDS:
+        if _re.search(rf"\b{kw}\b", stripped, _re.IGNORECASE):
+            return False
+    if _PRAGMA_WRITE_RE.search(stripped):
+        return False
+    return True
+
+
+class _DbQueryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sql: str = Field(..., min_length=1, max_length=10_000, description="SELECT / WITH / EXPLAIN")
+    db_name: str = Field(default="archive", description="archive | memory")
+    limit: int = Field(default=100, ge=1, le=500, description="Max rows (cap 500)")
+
+
+def _run_db_query_sync(sql: str, db_path: Path, limit: int, timeout_sec: float = 10.0) -> dict:
+    """Синхронный executor — вызывается через asyncio.to_thread для timeout."""
+    conn = _sqlite3.connect(
+        f"file:{db_path}?mode=ro",
+        uri=True,
+        timeout=timeout_sec,
+        isolation_level=None,
+    )
+    try:
+        # Пытаемся подгрузить sqlite-vec (для vec_* tables). Best-effort.
+        try:
+            import sqlite_vec  # type: ignore
+
+            conn.enable_load_extension(True)
+            sqlite_vec.load(conn)
+            conn.enable_load_extension(False)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Busy timeout — чтобы не зависнуть надолго.
+        conn.execute(f"PRAGMA busy_timeout = {int(timeout_sec * 1000)};")
+
+        cur = conn.execute(sql)
+        rows_raw = cur.fetchmany(limit)
+        columns = [d[0] for d in (cur.description or [])]
+        rows = [list(r) for r in rows_raw]
+        return {"columns": columns, "rows": rows, "row_count": len(rows)}
+    finally:
+        try:
+            conn.close()
+        except _sqlite3.Error:
+            pass
+
+
+@mcp.tool(
+    name="db_query",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def db_query(params: _DbQueryInput) -> str:
+    """READ-ONLY SQL query к whitelisted БД (archive/memory).
+
+    Разрешены только SELECT / WITH / EXPLAIN. sqlite-vec extension подгружается
+    автоматически для запросов по vec_* таблицам.
+    """
+    # 1) read-only statement check.
+    if not _is_read_only_sql(params.sql):
+        return json.dumps({"ok": False, "error": "not_read_only_statement"}, ensure_ascii=False)
+
+    # 2) whitelisted db_name check.
+    db_path = _DB_WHITELIST.get(params.db_name)
+    if db_path is None:
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "db_not_whitelisted",
+                "allowed": sorted(_DB_WHITELIST.keys()),
+            },
+            ensure_ascii=False,
+        )
+
+    # 3) limit cap (хотя pydantic уже ограничил, страхуемся).
+    limit = min(max(1, int(params.limit)), 500)
+
+    # 4) execute с timeout через asyncio.
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(_run_db_query_sync, params.sql, db_path, limit),
+            timeout=10.0,
+        )
+    except asyncio.TimeoutError:
+        return json.dumps({"ok": False, "error": "timeout"}, ensure_ascii=False)
+    except _sqlite3.Error as exc:
+        return json.dumps(
+            {"ok": False, "error": "sql_error", "detail": str(exc)}, ensure_ascii=False
+        )
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps(
+            {"ok": False, "error": "sql_error", "detail": str(exc)}, ensure_ascii=False
+        )
+
+    return json.dumps(
+        {
+            "ok": True,
+            "db_name": params.db_name,
+            "columns": result["columns"],
+            "rows": result["rows"],
+            "row_count": result["row_count"],
+        },
+        ensure_ascii=False,
+        default=str,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── APPLE NATIVE TOOLS (Notes / iMessage / Reminders / Calendar) ─────────────
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Reuse: src.integrations.macos_automation.MacOSAutomationService (osascript).
+# iMessage read — прямой read-only доступ к chat.db (sqlite3), это быстрее и
+# стабильнее чем osascript. Write-операции заблокированы env-флагом.
+#
+# TCC permissions (выдать один раз в System Settings → Privacy & Security):
+#   - Automation: Notes.app      для notes_*
+#   - Automation: Reminders.app  для reminders_*
+#   - Automation: Calendar.app   для calendar_*
+#   - Full Disk Access           для чтения ~/Library/Messages/chat.db
+# Если доступ не выдан — возвращаем structured {"ok": false, "error":
+# "permission_denied", "tcc_required": ...}.
+
+
+def _apple_write_enabled() -> bool:
+    """Разрешён ли write в Apple-app'ы. Gate на KRAB_MCP_APPLE_WRITE_ENABLED=1."""
+    return os.getenv("KRAB_MCP_APPLE_WRITE_ENABLED", "").strip() in {"1", "true", "yes"}
+
+
+def _detect_tcc_denied(err_text: str) -> bool:
+    """Эвристика: osascript-ошибка похожа на TCC denial?"""
+    lowered = (err_text or "").lower()
+    markers = (
+        "not authorized",
+        "not allowed",
+        "erraeventnotpermitted",
+        "-1743",
+        "privacy",
+        "is not allowed assistive access",
+    )
+    return any(m in lowered for m in markers)
+
+
+def _tcc_error(app_name: str, raw_error: str) -> dict[str, Any]:
+    """Формирует единый permission_denied ответ."""
+    return {
+        "ok": False,
+        "error": "permission_denied",
+        "tcc_required": f"Automation: {app_name}.app",
+        "detail": (raw_error or "")[:200],
+    }
+
+
+def _get_macos_service():
+    """Лениво импортирует MacOSAutomationService (sys.path уже настроен)."""
+    from src.integrations.macos_automation import (  # type: ignore
+        MacOSAutomationError,
+        MacOSAutomationService,
+    )
+
+    return MacOSAutomationService(), MacOSAutomationError
+
+
+# ── Input models ────────────────────────────────────────────────────────────
+
+
+class _NotesListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    folder: str = Field(default="", description="Имя папки Notes (пусто = все)")
+    limit: int = Field(default=20, ge=1, le=100, description="Лимит (1–100)")
+
+
+class _NotesGetInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    note_id: str = Field(..., min_length=1, description="id заметки или её title")
+
+
+class _NotesSearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(..., min_length=1, max_length=255)
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+class _NotesCreateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(..., min_length=1, max_length=255)
+    body: str = Field(..., min_length=1, max_length=50_000)
+    folder: str = Field(default="")
+
+
+class _IMessageSearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(..., min_length=1, max_length=255)
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class _IMessageUnreadInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class _IMessageHistoryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id_or_handle: str = Field(
+        ..., min_length=1, description="ROWID чата или phone/email (handle.id)"
+    )
+    limit: int = Field(default=30, ge=1, le=200)
+
+
+class _RemindersListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    list_name: str = Field(default="", description="Имя списка Reminders (пусто = все)")
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class _RemindersCreateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(..., min_length=1, max_length=255)
+    due_date: str = Field(default="", description="ISO 8601 datetime (пусто = без due)")
+    list_name: str = Field(default="")
+
+
+class _CalendarEventsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start_date: str = Field(default="", description="ISO 8601 (default=сейчас)")
+    end_date: str = Field(default="", description="ISO 8601 (default=+7 дней)")
+    calendar_name: str = Field(default="")
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class _CalendarCreateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(..., min_length=1, max_length=255)
+    start: str = Field(..., min_length=1, description="ISO 8601 datetime начала")
+    end: str = Field(..., min_length=1, description="ISO 8601 datetime окончания")
+    calendar_name: str = Field(default="")
+    notes: str = Field(default="", max_length=10_000)
+
+
+# ── Apple Notes ─────────────────────────────────────────────────────────────
+
+
+@mcp.tool(
+    name="notes_list",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def notes_list(params: _NotesListInput) -> str:
+    """Список заметок Apple Notes (account/folder/title).
+
+    Требует TCC: Automation: Notes.app.
+    """
+    svc, err_cls = _get_macos_service()
+    try:
+        rows = await svc.list_notes(limit=params.limit)
+        if params.folder:
+            rows = [r for r in rows if r.get("folder_name") == params.folder]
+        return json.dumps({"ok": True, "notes": rows, "count": len(rows)}, ensure_ascii=False)
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Notes", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="notes_get",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def notes_get(params: _NotesGetInput) -> str:
+    """Полный текст заметки по id или title (первое совпадение).
+
+    Требует TCC: Automation: Notes.app.
+    """
+    svc, err_cls = _get_macos_service()
+    script = (
+        "\non run argv\n"
+        "    set needle to item 1 of argv\n"
+        '    tell application "Notes"\n'
+        "        repeat with acc in accounts\n"
+        "            repeat with folderRef in folders of acc\n"
+        "                repeat with noteRef in notes of folderRef\n"
+        "                    try\n"
+        "                        if (id of noteRef as text) is needle or (name of noteRef as text) is needle then\n"
+        '                            return ((name of noteRef as text) & "\\n---\\n" & (body of noteRef as text))\n'
+        "                        end if\n"
+        "                    end try\n"
+        "                end repeat\n"
+        "            end repeat\n"
+        "        end repeat\n"
+        "    end tell\n"
+        '    return ""\n'
+        "end run\n"
+    )
+    try:
+        output = await svc._run_osascript(script, params.note_id)
+        if not output:
+            return json.dumps({"ok": False, "error": "not_found"}, ensure_ascii=False)
+        title, _, body = output.partition("\n---\n")
+        return json.dumps({"ok": True, "title": title, "body": body}, ensure_ascii=False)
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Notes", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="notes_search",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def notes_search(params: _NotesSearchInput) -> str:
+    """Поиск по title/body Apple Notes (substring).
+
+    Требует TCC: Automation: Notes.app.
+    """
+    svc, err_cls = _get_macos_service()
+    script = (
+        "\non run argv\n"
+        "    set needle to item 1 of argv\n"
+        "    set maxItems to (item 2 of argv as integer)\n"
+        "    set outLines to {}\n"
+        '    tell application "Notes"\n'
+        "        repeat with acc in accounts\n"
+        "            repeat with folderRef in folders of acc\n"
+        "                repeat with noteRef in notes of folderRef\n"
+        "                    try\n"
+        "                        set nt to name of noteRef as text\n"
+        "                        set bd to body of noteRef as text\n"
+        "                        if (nt contains needle) or (bd contains needle) then\n"
+        '                            set end of outLines to ((id of noteRef as text) & "||" & nt & "||" & (name of folderRef as text))\n'
+        "                            if (count of outLines) is greater than or equal to maxItems then exit repeat\n"
+        "                        end if\n"
+        "                    end try\n"
+        "                end repeat\n"
+        "                if (count of outLines) is greater than or equal to maxItems then exit repeat\n"
+        "            end repeat\n"
+        "            if (count of outLines) is greater than or equal to maxItems then exit repeat\n"
+        "        end repeat\n"
+        "    end tell\n"
+        "    set AppleScript's text item delimiters to linefeed\n"
+        "    return outLines as text\n"
+        "end run\n"
+    )
+    try:
+        output = await svc._run_osascript(script, params.query, str(params.limit))
+        results: list[dict[str, str]] = []
+        for line in (output or "").splitlines():
+            parts = line.split("||", 2)
+            if len(parts) == 3:
+                results.append({"id": parts[0], "title": parts[1], "folder": parts[2]})
+        return json.dumps(
+            {"ok": True, "results": results, "count": len(results)}, ensure_ascii=False
+        )
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Notes", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="notes_create",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
+async def notes_create(params: _NotesCreateInput) -> str:
+    """Создать заметку. Gate: KRAB_MCP_APPLE_WRITE_ENABLED=1.
+
+    Требует TCC: Automation: Notes.app.
+    """
+    if not _apple_write_enabled():
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "write_disabled",
+                "hint": "set KRAB_MCP_APPLE_WRITE_ENABLED=1",
+            },
+            ensure_ascii=False,
+        )
+    svc, err_cls = _get_macos_service()
+    try:
+        res = await svc.create_note(title=params.title, body=params.body, folder_name=params.folder)
+        return json.dumps({"ok": True, **res}, ensure_ascii=False)
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Notes", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+# ── iMessage (read-only via chat.db) ────────────────────────────────────────
+#
+# chat.db.date — COCOA epoch (2001-01-01 UTC), наносекунды с macOS High Sierra.
+# Формула: unix_ts = date / 1e9 + 978307200.
+
+_CHAT_DB_PATH = Path(os.getenv("KRAB_MCP_IMESSAGE_DB", "~/Library/Messages/chat.db")).expanduser()
+
+
+def _open_chat_db():
+    """Открывает chat.db read-only. Возвращает (conn, None) или (None, err_dict)."""
+    import sqlite3
+
+    if not _CHAT_DB_PATH.exists():
+        return None, {
+            "ok": False,
+            "error": "chat_db_not_found",
+            "path": str(_CHAT_DB_PATH),
+        }
+    try:
+        conn = sqlite3.connect(
+            f"file:{_CHAT_DB_PATH}?mode=ro",
+            uri=True,
+            timeout=5.0,
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute("SELECT 1 FROM message LIMIT 1").fetchone()
+        return conn, None
+    except sqlite3.OperationalError as exc:
+        msg = str(exc)
+        lowered = msg.lower()
+        if "authorization" in lowered or "unable to open" in lowered or "permission" in lowered:
+            err = _tcc_error("Messages", msg)
+            err["tcc_required"] = "Full Disk Access (for MCP runtime process)"
+            return None, err
+        return None, {"ok": False, "error": msg}
+
+
+def _cocoa_to_iso(cocoa_ns: int | None) -> str:
+    """Конвертирует COCOA-timestamp (ns since 2001-01-01 UTC) в ISO 8601."""
+    if not cocoa_ns:
+        return ""
+    import datetime as _dt
+
+    try:
+        unix = (cocoa_ns / 1_000_000_000) + 978_307_200
+        return _dt.datetime.fromtimestamp(unix, tz=_dt.timezone.utc).isoformat()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+@mcp.tool(
+    name="imessage_search",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def imessage_search(params: _IMessageSearchInput) -> str:
+    """Поиск по тексту сообщений в ~/Library/Messages/chat.db.
+
+    Требует TCC: Full Disk Access (для процесса MCP-сервера).
+    """
+    conn, err = _open_chat_db()
+    if err:
+        return json.dumps(err, ensure_ascii=False)
+    try:
+        rows = conn.execute(
+            """
+            SELECT m.ROWID as id, m.text, m.date, m.is_from_me,
+                   h.id as handle,
+                   c.ROWID as chat_rowid, c.display_name as chat_name
+              FROM message m
+              LEFT JOIN handle h ON m.handle_id = h.ROWID
+              LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+              LEFT JOIN chat c ON c.ROWID = cmj.chat_id
+             WHERE m.text LIKE ?
+             ORDER BY m.date DESC
+             LIMIT ?
+            """,
+            (f"%{params.query}%", params.limit),
+        ).fetchall()
+        results = [
+            {
+                "id": r["id"],
+                "text": r["text"] or "",
+                "date": _cocoa_to_iso(r["date"]),
+                "is_from_me": bool(r["is_from_me"]),
+                "handle": r["handle"] or "",
+                "chat_id": r["chat_rowid"],
+                "chat_name": r["chat_name"] or "",
+            }
+            for r in rows
+        ]
+        return json.dumps(
+            {"ok": True, "results": results, "count": len(results)}, ensure_ascii=False
+        )
+    finally:
+        conn.close()
+
+
+@mcp.tool(
+    name="imessage_unread",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def imessage_unread(params: _IMessageUnreadInput) -> str:
+    """Непрочитанные iMessage (is_read=0 AND is_from_me=0)."""
+    conn, err = _open_chat_db()
+    if err:
+        return json.dumps(err, ensure_ascii=False)
+    try:
+        rows = conn.execute(
+            """
+            SELECT m.ROWID as id, m.text, m.date, h.id as handle,
+                   c.display_name as chat_name
+              FROM message m
+              LEFT JOIN handle h ON m.handle_id = h.ROWID
+              LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+              LEFT JOIN chat c ON c.ROWID = cmj.chat_id
+             WHERE m.is_read = 0 AND m.is_from_me = 0
+             ORDER BY m.date DESC
+             LIMIT ?
+            """,
+            (params.limit,),
+        ).fetchall()
+        results = [
+            {
+                "id": r["id"],
+                "text": r["text"] or "",
+                "date": _cocoa_to_iso(r["date"]),
+                "handle": r["handle"] or "",
+                "chat_name": r["chat_name"] or "",
+            }
+            for r in rows
+        ]
+        return json.dumps(
+            {"ok": True, "results": results, "count": len(results)}, ensure_ascii=False
+        )
+    finally:
+        conn.close()
+
+
+@mcp.tool(
+    name="imessage_history",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def imessage_history(params: _IMessageHistoryInput) -> str:
+    """История сообщений одного чата. chat_id_or_handle = ROWID чата ИЛИ handle.id."""
+    conn, err = _open_chat_db()
+    if err:
+        return json.dumps(err, ensure_ascii=False)
+    target = params.chat_id_or_handle.strip()
+    try:
+        chat_rowid: int | None = None
+        try:
+            chat_rowid = int(target)
+        except ValueError:
+            pass
+
+        if chat_rowid is not None:
+            sql = """
+                SELECT m.ROWID as id, m.text, m.date, m.is_from_me, h.id as handle
+                  FROM message m
+                  LEFT JOIN handle h ON m.handle_id = h.ROWID
+                  JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+                 WHERE cmj.chat_id = ?
+                 ORDER BY m.date DESC
+                 LIMIT ?
+            """
+            args: tuple[Any, ...] = (chat_rowid, params.limit)
+        else:
+            sql = """
+                SELECT m.ROWID as id, m.text, m.date, m.is_from_me, h.id as handle
+                  FROM message m
+                  JOIN handle h ON m.handle_id = h.ROWID
+                 WHERE h.id = ?
+                 ORDER BY m.date DESC
+                 LIMIT ?
+            """
+            args = (target, params.limit)
+
+        rows = conn.execute(sql, args).fetchall()
+        results = [
+            {
+                "id": r["id"],
+                "text": r["text"] or "",
+                "date": _cocoa_to_iso(r["date"]),
+                "is_from_me": bool(r["is_from_me"]),
+                "handle": r["handle"] or "",
+            }
+            for r in rows
+        ]
+        return json.dumps(
+            {"ok": True, "results": results, "count": len(results)}, ensure_ascii=False
+        )
+    finally:
+        conn.close()
+
+
+# ── Reminders ───────────────────────────────────────────────────────────────
+
+
+@mcp.tool(
+    name="reminders_list",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def reminders_list(params: _RemindersListInput) -> str:
+    """Список незавершённых reminder'ов (с фильтром по list_name).
+
+    Требует TCC: Automation: Reminders.app.
+    """
+    svc, err_cls = _get_macos_service()
+    try:
+        rows = await svc.list_reminders(limit=params.limit)
+        if params.list_name:
+            rows = [r for r in rows if r.get("list_name") == params.list_name]
+        return json.dumps({"ok": True, "reminders": rows, "count": len(rows)}, ensure_ascii=False)
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Reminders", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="reminders_create",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
+async def reminders_create(params: _RemindersCreateInput) -> str:
+    """Создать reminder. Gate: KRAB_MCP_APPLE_WRITE_ENABLED=1.
+
+    due_date — ISO 8601. Требует TCC: Automation: Reminders.app.
+    """
+    if not _apple_write_enabled():
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "write_disabled",
+                "hint": "set KRAB_MCP_APPLE_WRITE_ENABLED=1",
+            },
+            ensure_ascii=False,
+        )
+    svc, err_cls = _get_macos_service()
+    due_at = None
+    if params.due_date:
+        from datetime import datetime as _dt
+
+        try:
+            due_at = _dt.fromisoformat(params.due_date)
+        except ValueError:
+            return json.dumps({"ok": False, "error": "invalid_due_date_iso"}, ensure_ascii=False)
+    try:
+        res = await svc.create_reminder(
+            title=params.title, due_at=due_at, list_name=params.list_name
+        )
+        return json.dumps({"ok": True, **res}, ensure_ascii=False)
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Reminders", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+# ── Calendar ─────────────────────────────────────────────────────────────────
+
+
+@mcp.tool(
+    name="calendar_events",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def calendar_events(params: _CalendarEventsInput) -> str:
+    """Ближайшие события Calendar (окно start_date..end_date).
+
+    Без дат — [сейчас, +7 дней]. Требует TCC: Automation: Calendar.app.
+    """
+    svc, err_cls = _get_macos_service()
+    days_ahead = 7
+    if params.end_date:
+        from datetime import datetime as _dt
+
+        try:
+            end_dt = _dt.fromisoformat(params.end_date)
+            start_dt = (
+                _dt.fromisoformat(params.start_date)
+                if params.start_date
+                else _dt.now().astimezone()
+            )
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.astimezone()
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.astimezone()
+            days_ahead = max(1, (end_dt - start_dt).days)
+        except ValueError:
+            return json.dumps({"ok": False, "error": "invalid_date_iso"}, ensure_ascii=False)
+    try:
+        rows = await svc.list_upcoming_calendar_events(limit=params.limit, days_ahead=days_ahead)
+        if params.calendar_name:
+            rows = [r for r in rows if r.get("calendar_name") == params.calendar_name]
+        return json.dumps({"ok": True, "events": rows, "count": len(rows)}, ensure_ascii=False)
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Calendar", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="calendar_create_event",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
+async def calendar_create_event(params: _CalendarCreateInput) -> str:
+    """Создать событие в Calendar. Gate: KRAB_MCP_APPLE_WRITE_ENABLED=1.
+
+    start/end — ISO 8601. Требует TCC: Automation: Calendar.app.
+    Примечание: поле notes пока не пробрасывается (базовый helper не принимает).
+    """
+    if not _apple_write_enabled():
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "write_disabled",
+                "hint": "set KRAB_MCP_APPLE_WRITE_ENABLED=1",
+            },
+            ensure_ascii=False,
+        )
+    svc, err_cls = _get_macos_service()
+    from datetime import datetime as _dt
+
+    try:
+        start_dt = _dt.fromisoformat(params.start)
+        end_dt = _dt.fromisoformat(params.end)
+    except ValueError:
+        return json.dumps({"ok": False, "error": "invalid_iso_datetime"}, ensure_ascii=False)
+    duration_min = max(1, int((end_dt - start_dt).total_seconds() // 60))
+    try:
+        res = await svc.create_calendar_event(
+            title=params.title,
+            start_at=start_dt,
+            duration_minutes=duration_min,
+            calendar_name=params.calendar_name,
+        )
+        return json.dumps({"ok": True, **res}, ensure_ascii=False)
+    except err_cls as exc:
+        msg = str(exc)
+        if _detect_tcc_denied(msg):
+            return json.dumps(_tcc_error("Calendar", msg), ensure_ascii=False)
+        return json.dumps({"ok": False, "error": msg}, ensure_ascii=False)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ── DEV-LOOP TOOLS (Sentry / E2E / Log tail / Deploy) ────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Эти инструменты позволяют Claude-агенту закрывать dev-loop самостоятельно:
+#   - проверить Sentry на свежие ошибки
+#   - резолвить issue'ы после фикса
+#   - запустить e2e smoke против живого Краба
+#   - посмотреть хвост launchd-логов (с фильтрами)
+#   - выполнить push → restart → health-wait → e2e одной командой
+#
+# SECURITY: krab_sentry_resolve и krab_deploy_and_verify — destructive.
+# Логируем user-intent через _dev_logger.warning(), graceful degradation
+# при отсутствии env/CLI.
+
+_SENTRY_API_BASE = "https://de.sentry.io/api/0"
+_SENTRY_ORG = os.getenv("SENTRY_ORG_SLUG", "po-zm")
+_DEFAULT_SENTRY_PROJECTS = ("python-fastapi", "krab-ear-agent", "krab-ear-backend")
+_KRAB_LAUNCHD_LOG = _PROJECT_ROOT / "logs" / "krab_launchd.out.log"
+_E2E_SMOKE_SCRIPT = _PROJECT_ROOT / "scripts" / "e2e_mcp_smoke.py"
+_START_LAUNCHER = Path("/Users/pablito/Antigravity_AGENTS/new start_krab.command")
+_STOP_LAUNCHER = Path("/Users/pablito/Antigravity_AGENTS/new Stop Krab.command")
+_ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+
+def _strip_ansi(line: str) -> str:
+    return _ANSI_RE.sub("", line)
+
+
+class _SentryStatusInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project: str = Field(
+        default="",
+        description="Slug проекта Sentry. Пусто → прогон по default-списку (python-fastapi, krab-ear-agent, krab-ear-backend).",
+    )
+    statsPeriod: str = Field(  # noqa: N815 — keep Sentry API naming
+        default="24h", description="Окно статистики (например 1h, 24h, 7d)."
+    )
+    limit: int = Field(default=10, ge=1, le=100, description="Максимум issue'ов на проект.")
+
+
+class _SentryResolveInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    shortIds: list[str] = Field(  # noqa: N815 — keep Sentry API naming
+        ..., min_length=1, description="Список shortId (например ['PYTHON-FASTAPI-1'])."
+    )
+    project: str = Field(
+        default="", description="Slug проекта; если пусто — пробуем дефолтный список."
+    )
+
+
+class _RunE2EInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: int = Field(default=312322764, description="Owner chat_id для smoke (info-only).")
+    force: bool = Field(default=True, description="Передать --force в skрипт если он поддержан.")
+
+
+class _LogTailInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pattern: str = Field(default=".*", description="Regex-фильтр по строке.")
+    level: str = Field(
+        default="warn+error",
+        description="'all' | 'warn' | 'error' | 'warn+error' — уровни включения.",
+    )
+    n: int = Field(default=50, ge=1, le=500, description="Сколько последних совпадений вернуть.")
+
+
+class _DeployVerifyInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    skip_tests: bool = Field(default=False, description="Не запускать e2e после рестарта.")
+
+
+async def _sentry_get_issues(
+    client: httpx.AsyncClient, project: str, stats_period: str, limit: int, token: str
+) -> tuple[int, list[dict[str, Any]]]:
+    url = f"{_SENTRY_API_BASE}/projects/{_SENTRY_ORG}/{project}/issues/"
+    params = {"statsPeriod": stats_period, "query": "is:unresolved", "limit": str(limit)}
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = await client.get(url, params=params, headers=headers, timeout=15.0)
+    resp.raise_for_status()
+    data = resp.json() or []
+    return resp.status_code, data
+
+
+@mcp.tool(
+    name="krab_sentry_status",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def krab_sentry_status(params: _SentryStatusInput) -> str:
+    """Сводка unresolved issue'ов из Sentry (org po-zm) за указанный период.
+
+    Если `project` не задан — пробегается по дефолтному списку
+    (python-fastapi, krab-ear-agent, krab-ear-backend) и агрегирует результаты.
+
+    Args:
+        params.project: slug проекта (опционально)
+        params.statsPeriod: окно (default 24h)
+        params.limit: сколько топ-issue на проект (default 10)
+
+    Returns:
+        str: JSON {"ok", "count_total", "by_project": {...}, "top": [...]}
+    """
+    token = os.getenv("SENTRY_AUTH_TOKEN", "").strip()
+    if not token:
+        return json.dumps(
+            {"ok": False, "error": "SENTRY_AUTH_TOKEN_missing", "hint": "добавь токен в .env"},
+            ensure_ascii=False,
+        )
+
+    projects = (params.project,) if params.project else _DEFAULT_SENTRY_PROJECTS
+    by_project: dict[str, dict[str, Any]] = {}
+    top: list[dict[str, Any]] = []
+    count_total = 0
+
+    try:
+        async with httpx.AsyncClient() as client:
+            for proj in projects:
+                try:
+                    _, issues = await _sentry_get_issues(
+                        client, proj, params.statsPeriod, params.limit, token
+                    )
+                except httpx.HTTPStatusError as exc:
+                    by_project[proj] = {"error": f"HTTP {exc.response.status_code}"}
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    by_project[proj] = {"error": str(exc)}
+                    continue
+                by_project[proj] = {"count": len(issues)}
+                count_total += len(issues)
+                for issue in issues:
+                    top.append(
+                        {
+                            "project": proj,
+                            "shortId": issue.get("shortId"),
+                            "count": issue.get("count"),
+                            "title": issue.get("title"),
+                            "culprit": issue.get("culprit"),
+                            "permalink": issue.get("permalink"),
+                        }
+                    )
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    # top sorted by count desc, bounded
+    top.sort(key=lambda x: int(x.get("count") or 0), reverse=True)
+    top = top[: params.limit]
+    return json.dumps(
+        {
+            "ok": True,
+            "count_total": count_total,
+            "by_project": by_project,
+            "top": top,
+            "statsPeriod": params.statsPeriod,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+@mcp.tool(
+    name="krab_sentry_resolve",
+    annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True},
+)
+async def krab_sentry_resolve(params: _SentryResolveInput) -> str:
+    """Резолвит указанные Sentry issue'ы (шаг shortId → numeric id → PUT status=resolved).
+
+    ВНИМАНИЕ: destructive. Действие закрывает issue'ы в production-аккаунте.
+    Логируется через logger.warning для аудит-трейла.
+
+    Args:
+        params.shortIds: список shortId (например ['PYTHON-FASTAPI-42']).
+        params.project: опционально slug — иначе пробуем в дефолтном списке.
+
+    Returns:
+        str: JSON {"ok", "resolved_count", "resolved": [...], "failed": [...]}
+    """
+    _dev_logger.warning(
+        "krab_sentry_resolve invoked user-intent: project=%s shortIds=%s",
+        params.project or "auto",
+        params.shortIds,
+    )
+    token = os.getenv("SENTRY_AUTH_TOKEN", "").strip()
+    if not token:
+        return json.dumps({"ok": False, "error": "SENTRY_AUTH_TOKEN_missing"}, ensure_ascii=False)
+
+    projects = (params.project,) if params.project else _DEFAULT_SENTRY_PROJECTS
+    target = {sid.strip().upper(): None for sid in params.shortIds if sid.strip()}
+    resolved: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            # 1) находим numeric id для каждого shortId
+            # Sentry иногда возвращает 400 для старых issues при слишком широком окне —
+            # пробуем 14d сначала, потом 90d как fallback для ненайденных.
+            for proj in projects:
+                if all(v is not None for v in target.values()):
+                    break
+                for period in ("14d", "90d"):
+                    if all(v is not None for v in target.values()):
+                        break
+                    try:
+                        _, issues = await _sentry_get_issues(client, proj, period, 100, token)
+                    except Exception as exc:  # noqa: BLE001
+                        _dev_logger.warning(
+                            "sentry list failed for %s period=%s: %s", proj, period, exc
+                        )
+                        continue
+                    for issue in issues:
+                        sid = (issue.get("shortId") or "").upper()
+                        if sid in target and target[sid] is None:
+                            target[sid] = {"id": issue.get("id"), "project": proj}
+
+            # 2) группируем по project + bulk resolve
+            by_proj: dict[str, list[str]] = {}
+            for sid, meta in target.items():
+                if not meta or not meta.get("id"):
+                    failed.append({"shortId": sid, "error": "not_found"})
+                else:
+                    by_proj.setdefault(meta["project"], []).append(meta["id"])
+
+            for proj, ids in by_proj.items():
+                url = f"{_SENTRY_API_BASE}/projects/{_SENTRY_ORG}/{proj}/issues/"
+                query = [("id", i) for i in ids]
+                try:
+                    resp = await client.put(
+                        url,
+                        params=query,
+                        headers=headers,
+                        json={"status": "resolved"},
+                    )
+                    if 200 <= resp.status_code < 300:
+                        for i in ids:
+                            # найдём shortId обратно
+                            sid = next(
+                                (s for s, m in target.items() if m and m.get("id") == i),
+                                i,
+                            )
+                            resolved.append({"shortId": sid, "project": proj})
+                    else:
+                        failed.append(
+                            {"project": proj, "error": f"HTTP {resp.status_code}", "ids": ids}
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    failed.append({"project": proj, "error": str(exc), "ids": ids})
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    return json.dumps(
+        {
+            "ok": not failed or bool(resolved),
+            "resolved_count": len(resolved),
+            "resolved": resolved,
+            "failed": failed,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def _parse_e2e_output(output: str) -> dict[str, Any]:
+    """Извлекает из stdout e2e_mcp_smoke счётчики и список кейсов."""
+    passed = failed = 0
+    cases: list[dict[str, str]] = []
+    # pattern "PASS  name" / "FAIL  name"
+    for line in output.splitlines():
+        clean = _strip_ansi(line).strip()
+        m = re.match(r"^(PASS|FAIL)\s+([\w\-_.]+)", clean)
+        if m:
+            status = m.group(1).lower()
+            cases.append({"name": m.group(2), "status": status})
+            if status == "pass":
+                passed += 1
+            else:
+                failed += 1
+        # summary "Итого: 8/10 passed" (fallback)
+        ms = re.search(r"Итого:\s+(\d+)/(\d+)\s+passed", clean)
+        if ms and passed == 0:
+            passed = int(ms.group(1))
+            failed = int(ms.group(2)) - passed
+    return {"passed": passed, "failed": failed, "cases": cases}
+
+
+@mcp.tool(
+    name="krab_run_e2e",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False},
+)
+async def krab_run_e2e(params: _RunE2EInput) -> str:
+    """Запускает scripts/e2e_mcp_smoke.py против живого Краба.
+
+    Использует venv/bin/python, hard timeout 300s. Парсит stdout
+    и возвращает счётчики passed/failed + список кейсов + путь к отчёту.
+
+    Args:
+        params.chat_id: owner chat_id (info-only; скрипт фиксирован на 312322764).
+        params.force: если True — попытаемся передать --force (игнорируется, если скрипт не поддерживает).
+
+    Returns:
+        str: JSON {"ok", "passed", "failed", "duration_s", "cases": [...], "report_path"}
+    """
+    if not _E2E_SMOKE_SCRIPT.exists():
+        return json.dumps(
+            {"ok": False, "error": f"script not found: {_E2E_SMOKE_SCRIPT}"},
+            ensure_ascii=False,
+        )
+    python_bin = _PROJECT_ROOT / "venv" / "bin" / "python"
+    cmd = [str(python_bin), str(_E2E_SMOKE_SCRIPT), "--verbose"]
+    # chat_id / force прокидываем только если их знает CLI (best-effort).
+    # Текущий e2e_mcp_smoke.py их не поддерживает → оставляем как info-поля.
+
+    t0 = time.monotonic()
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                cmd, capture_output=True, text=True, timeout=300, cwd=str(_PROJECT_ROOT)
+            ),
+        )
+    except subprocess.TimeoutExpired:
+        return json.dumps(
+            {"ok": False, "error": "timeout_300s", "duration_s": 300.0}, ensure_ascii=False
+        )
+    except FileNotFoundError as exc:
+        return json.dumps({"ok": False, "error": f"python not found: {exc}"}, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    duration = round(time.monotonic() - t0, 2)
+    output = (result.stdout or "") + "\n" + (result.stderr or "")
+    parsed = _parse_e2e_output(output)
+    report_path = _PROJECT_ROOT / "docs" / "E2E_RESULTS_LATEST.md"
+    payload: dict[str, Any] = {
+        "ok": result.returncode == 0,
+        "exit_code": result.returncode,
+        "passed": parsed["passed"],
+        "failed": parsed["failed"],
+        "duration_s": duration,
+        "cases": parsed["cases"],
+        "report_path": str(report_path) if report_path.exists() else "",
+        "chat_id": params.chat_id,
+    }
+    # Если Краб не поднят — e2e смок выдаёт exit_code=2 и лог "Krab not healthy".
+    # Подсказываем оператору как это починить.
+    if result.returncode == 2 or "not healthy" in output.lower():
+        payload["suggestion"] = (
+            "Start Krab via 'new start_krab.command' и повтори запрос"
+        )
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+@mcp.tool(
+    name="krab_log_tail",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
+)
+async def krab_log_tail(params: _LogTailInput) -> str:
+    """Грепает хвост logs/krab_launchd.out.log с фильтром по уровню + regex.
+
+    Level flags:
+      - 'all': всё
+      - 'warn': только WARNING/WARN
+      - 'error': только ERROR/CRITICAL/Traceback
+      - 'warn+error' (default): оба
+
+    Args:
+        params.pattern: regex-подстрока (default '.*').
+        params.level: 'all' | 'warn' | 'error' | 'warn+error'.
+        params.n: сколько последних совпадений (1–500, default 50).
+
+    Returns:
+        str: JSON {"ok", "log_path", "lines": [...], "count": N}
+    """
+    log_path = _KRAB_LAUNCHD_LOG
+    if not log_path.exists():
+        return json.dumps({"ok": False, "error": f"log not found: {log_path}"}, ensure_ascii=False)
+    try:
+        pattern_re = re.compile(params.pattern, re.IGNORECASE)
+    except re.error as exc:
+        return json.dumps({"ok": False, "error": f"invalid regex: {exc}"}, ensure_ascii=False)
+
+    level = params.level.lower()
+    want_warn = level in ("warn", "warn+error", "all")
+    want_error = level in ("error", "warn+error", "all")
+    want_all = level == "all"
+
+    level_markers_warn = ("WARNING", "WARN ")
+    level_markers_error = ("ERROR", "CRITICAL", "Traceback", "Exception")
+
+    try:
+        content = log_path.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    matched: list[str] = []
+    for raw in content.splitlines():
+        line = _strip_ansi(raw)
+        if not pattern_re.search(line):
+            continue
+        if want_all:
+            matched.append(line)
+            continue
+        hit_warn = want_warn and any(m in line for m in level_markers_warn)
+        hit_error = want_error and any(m in line for m in level_markers_error)
+        if hit_warn or hit_error:
+            matched.append(line)
+
+    tail = matched[-params.n :]
+    return json.dumps(
+        {
+            "ok": True,
+            "log_path": str(log_path),
+            "level": level,
+            "pattern": params.pattern,
+            "count": len(tail),
+            "lines": tail,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+async def _git_push_current_branch() -> dict[str, Any]:
+    """Делает git push origin <current-branch>, возвращает metadata."""
+    try:
+        proc = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=str(_PROJECT_ROOT),
+            ),
+        )
+        branch = proc.stdout.strip() or "unknown"
+        push = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                ["git", "push", "origin", branch],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=str(_PROJECT_ROOT),
+            ),
+        )
+        return {
+            "branch": branch,
+            "exit_code": push.returncode,
+            "output": (push.stdout + push.stderr).strip()[-800:],
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc)}
+
+
+async def _run_launcher(path: Path, timeout: int = 60) -> dict[str, Any]:
+    if not path.exists():
+        return {"ok": False, "error": f"launcher missing: {path}"}
+    try:
+        proc = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                ["/bin/bash", str(path)], capture_output=True, text=True, timeout=timeout
+            ),
+        )
+        return {
+            "ok": proc.returncode == 0,
+            "exit_code": proc.returncode,
+            "output": (proc.stdout + proc.stderr).strip()[-400:],
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+async def _wait_for_up(max_seconds: int = 120) -> dict[str, Any]:
+    url = f"{_KRAB_WEB_BASE}/api/health/lite"
+    t0 = time.monotonic()
+    async with httpx.AsyncClient(timeout=3.0) as client:
+        while time.monotonic() - t0 < max_seconds:
+            try:
+                r = await client.get(url)
+                if r.status_code == 200:
+                    return {"ok": True, "elapsed_s": round(time.monotonic() - t0, 1)}
+            except Exception:
+                pass
+            await asyncio.sleep(2.0)
+    return {"ok": False, "error": "timeout", "waited_s": max_seconds}
+
+
+@mcp.tool(
+    name="krab_deploy_and_verify",
+    annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False},
+)
+async def krab_deploy_and_verify(params: _DeployVerifyInput) -> str:
+    """One-shot deploy: git push → Stop Krab → start Krab → wait UP → e2e (опц.).
+
+    ВНИМАНИЕ: destructive. Рестартует production-userbot. Логируется.
+    Graceful: при отсутствии launcher/CLI возвращает partial report (не падает).
+
+    Args:
+        params.skip_tests: пропустить e2e после рестарта.
+
+    Returns:
+        str: JSON {"ok", "push", "stop", "start", "health", "e2e", "suggestions"}
+    """
+    _dev_logger.warning(
+        "krab_deploy_and_verify invoked user-intent: skip_tests=%s", params.skip_tests
+    )
+
+    report: dict[str, Any] = {"suggestions": []}
+    report["push"] = await _git_push_current_branch()
+    report["stop"] = await _run_launcher(_STOP_LAUNCHER, timeout=60)
+    # маленькая пауза между stop и start чтобы launchd отпустил порт
+    await asyncio.sleep(3.0)
+    report["start"] = await _run_launcher(_START_LAUNCHER, timeout=60)
+    report["health"] = await _wait_for_up(max_seconds=120)
+
+    if params.skip_tests:
+        report["e2e"] = {"skipped": True}
+    else:
+        if not report["health"].get("ok"):
+            report["e2e"] = {"skipped": True, "reason": "health_not_up"}
+            report["suggestions"].append(
+                "Health не поднялся за 120s — проверь logs/krab_launchd.out.log через krab_log_tail"
+            )
+        else:
+            e2e_raw = await krab_run_e2e(_RunE2EInput())
+            try:
+                e2e_data = json.loads(e2e_raw)
+            except Exception:
+                e2e_data = {"ok": False, "error": "parse_failed"}
+            report["e2e"] = e2e_data
+            if not e2e_data.get("ok"):
+                report["suggestions"].append(
+                    "e2e failed — смотри cases[].status=fail и report_path для деталей"
+                )
+
+    ok = (
+        report["push"].get("exit_code") == 0
+        and report["start"].get("ok")
+        and report["health"].get("ok")
+        and (report["e2e"].get("skipped") or report["e2e"].get("ok"))
+    )
+    report["ok"] = bool(ok)
+    return json.dumps(report, ensure_ascii=False, indent=2)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

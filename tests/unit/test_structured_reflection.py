@@ -254,8 +254,12 @@ def test_flush_tomorrow_format() -> None:
 
     assert count == 1
     call_kwargs = mock_queue.add_time_reminder.call_args.kwargs
-    # fire_at должен быть завтра → > now + 12 часов как минимум
-    assert call_kwargs["fire_at"] > int(time.time()) + 12 * 3600
+    # fire_at должен быть в будущем и не позже завтрашнего вечера
+    # (Wave 13: убираем `+ 12 * 3600` — ломает тест если now > 21:00 локально,
+    # т.к. tomorrow 09:00 будет уже < 12h.)
+    now_int = int(time.time())
+    assert call_kwargs["fire_at"] > now_int
+    assert call_kwargs["fire_at"] < now_int + 36 * 3600
 
 
 def test_flush_manual_items_skipped() -> None:

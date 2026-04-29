@@ -2,37 +2,39 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!--
-        Krab Daily Maintenance (launchd, FREE)
-
-        Runs daily at 02:07 local time:
-          1. Archive.db backup (keep last 7 days)
-          2. Log rotation (openclaw.log, gateway.log > 100 MB → .gz)
-
-        Install:
-          launchctl bootstrap gui/501 \
-            /Users/pablito/Antigravity_AGENTS/Краб/scripts/launchagents/ai.krab.daily-maintenance.plist
-    -->
     <key>Label</key>
-    <string>ai.krab.daily-maintenance</string>
+    <string>ai.krab.workspace-backup</string>
+
+    <key>Comment</key>
+    <string>Krab Daily Workspace Backup — tar.gz workspace+runtime_state+models.json, 30-day rotation. Runs daily at 04:00 local.</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
-        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/krab_daily_maintenance.py</string>
+        <string>/bin/bash</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/workspace_backup.sh</string>
     </array>
-
-    <!-- Runs daily at 02:07 (avoid :00) -->
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>2</integer>
-        <key>Minute</key>
-        <integer>7</integer>
-    </dict>
 
     <key>WorkingDirectory</key>
     <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/krab_backup.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/krab_backup.err.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
@@ -41,17 +43,5 @@
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
-
-    <key>StandardErrorPath</key>
-    <string>/tmp/krab_daily_maintenance_stderr.log</string>
-
-    <key>KeepAlive</key>
-    <false/>
-
-    <key>LowPriorityIO</key>
-    <true/>
-
-    <key>ProcessType</key>
-    <string>Background</string>
 </dict>
 </plist>

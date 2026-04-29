@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import sqlite3
 import struct
+import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from structlog import get_logger
@@ -170,8 +172,20 @@ class MemoryEmbedder:
         self._batch_size = max(1, int(batch_size))
         self._dim = int(dim)
 
-        # Lazy-init. БД открываем только при первом embed_*.
-        self._conn: sqlite3.Connection | None = None
+        # Thread-local connection cache: SQLite connection объекты нельзя
+        # разделять между потоками (sqlite3.Connection created in a thread
+        # can only be used in that same thread). Каждый поток — свой
+        # connection, открывается лениво при первом _ensure_connection().
+        # Список открытых connections (для close()) защищаем отдельным
+        # lock'ом, т.к. tracking может идти из любого потока.
+        self._tls: threading.local = threading.local()
+        self._conns_lock: threading.Lock = threading.Lock()
+        self._all_conns: list[sqlite3.Connection] = []
+        # Writes в vec_chunks идут INSERT/DELETE из разных потоков
+        # (asyncio.to_thread создаёт новый worker для каждого вызова).
+        # SQLite одиночной БД: сериализуем write'ы через lock, чтобы
+        # исключить "database is locked" при конкурентных embed'ах.
+        self._write_lock: threading.Lock = threading.Lock()
         # Если модель инжектирована (тесты) — загрузка пропускается.
         self._model: Any | None = _model
         # Фиксируем флаг, чтобы model_load_sec в тестах был 0.
@@ -207,6 +221,10 @@ class MemoryEmbedder:
         chunks_skipped = total - len(rows)
 
         stats = self._process_rows(rows, model_load_sec=model_load_sec)
+        # C7: фиксируем metadata только если что-то реально проиндексировано.
+        # Идемпотентный no-op не перезаписывает indexed_at timestamp.
+        if stats.chunks_processed > 0:
+            self._write_vec_meta(conn)
         return EmbedStats(
             chunks_processed=stats.chunks_processed,
             chunks_skipped=chunks_skipped,
@@ -251,14 +269,18 @@ class MemoryEmbedder:
         row_ids = [r[0] for r in rows]
         if row_ids:
             del_placeholders = ",".join("?" * len(row_ids))
-            conn.execute(
-                f"DELETE FROM vec_chunks WHERE rowid IN ({del_placeholders});",
-                row_ids,
-            )
-            conn.commit()
+            with self._write_lock:
+                conn.execute(
+                    f"DELETE FROM vec_chunks WHERE rowid IN ({del_placeholders});",
+                    row_ids,
+                )
+                conn.commit()
 
         chunks_skipped = len(ids) - len(rows)
         stats = self._process_rows(rows, model_load_sec=model_load_sec)
+        # C7: обновляем metadata если хотя бы один chunk был re-indexed.
+        if stats.chunks_processed > 0:
+            self._write_vec_meta(conn)
         return EmbedStats(
             chunks_processed=stats.chunks_processed,
             chunks_skipped=chunks_skipped,
@@ -284,30 +306,106 @@ class MemoryEmbedder:
         return self.embed_all_unindexed()
 
     def close(self) -> None:
-        """Закрыть connection. Безопасно вызывать повторно."""
-        if self._conn is not None:
+        """Закрыть connections (все потоки). Безопасно вызывать повторно."""
+        with self._conns_lock:
+            conns = list(self._all_conns)
+            self._all_conns.clear()
+        for conn in conns:
             try:
-                self._conn.close()
+                conn.close()
             except sqlite3.Error:
                 pass
-            self._conn = None
+        # Сбросим TLS-кеш текущего потока, чтобы следующий вызов
+        # _ensure_connection() открыл fresh connection.
+        if hasattr(self._tls, "conn"):
+            try:
+                delattr(self._tls, "conn")
+            except AttributeError:
+                pass
 
     # ------------------------------------------------------------------
     # Внутренние помощники.
     # ------------------------------------------------------------------
 
+    @property
+    def _conn(self) -> sqlite3.Connection | None:
+        """
+        Backcompat: старый код/тесты читали ``embedder._conn`` напрямую.
+
+        Возвращает connection текущего потока (или ``None``, если в этом
+        потоке ещё не вызывали ``_ensure_connection()``). Set-атрибута
+        больше нет — если нужно инвалидировать connection, зовите ``close()``.
+        """
+        return getattr(self._tls, "conn", None)
+
     def _ensure_connection(self) -> sqlite3.Connection:
-        """Открыть БД и гарантировать наличие vec_chunks."""
-        if self._conn is not None:
-            return self._conn
+        """
+        Открыть БД в текущем потоке и гарантировать наличие vec_chunks.
+
+        Thread-local: каждый поток получает свой собственный connection,
+        потому что SQLite запрещает делить connection между потоками
+        ("SQLite objects created in a thread can only be used in that
+        same thread"). asyncio.to_thread каждый раз может стартовать
+        новый worker-thread, поэтому lazy-init на уровне TLS.
+        """
+        conn = getattr(self._tls, "conn", None)
+        if conn is not None:
+            return conn
         # open_archive создаст файл если его нет; для embedder'а это ок —
         # он всегда работает с уже существующей схемой (создаётся bootstrap'ом
         # или create_schema).
         conn = open_archive(self._paths, read_only=False)
         # vec-таблица создаётся отдельно — схема archive.py её не трогает.
         create_vec_table(conn, dim=self._dim)
-        self._conn = conn
+        self._tls.conn = conn
+        with self._conns_lock:
+            self._all_conns.append(conn)
         return conn
+
+    def _write_vec_meta(self, conn: sqlite3.Connection) -> None:
+        """
+        C7: записывает метаданные текущей embedding-модели в vec_chunks_meta.
+
+        Таблица создаётся в create_schema() (memory_archive.py). Если её
+        нет (legacy-БД, bootstrap не прогонялся) — пытаемся создать и
+        повторить INSERT; любая ошибка проглатывается (retrieval-layer
+        graceful fallback в FTS-only режим).
+        """
+        rows = [
+            ("model_name", str(self._model_name)),
+            ("model_dim", str(self._dim)),
+            ("indexed_at", datetime.now(timezone.utc).isoformat()),
+        ]
+        try:
+            with self._write_lock:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO vec_chunks_meta(key, value) VALUES (?, ?);",
+                    rows,
+                )
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            # Таблица ещё не создана — пробуем создать и повторить.
+            try:
+                with self._write_lock:
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS vec_chunks_meta (
+                            key   TEXT PRIMARY KEY,
+                            value TEXT NOT NULL
+                        ) WITHOUT ROWID;
+                        """
+                    )
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO vec_chunks_meta(key, value) VALUES (?, ?);",
+                        rows,
+                    )
+                    conn.commit()
+            except sqlite3.Error as exc2:  # noqa: BLE001
+                logger.warning(
+                    "embedder_vec_meta_write_failed",
+                    error=str(exc),
+                    error_retry=str(exc2),
+                )
 
     def _ensure_model_loaded(self) -> float:
         """
@@ -356,7 +454,7 @@ class MemoryEmbedder:
                 model_load_sec=model_load_sec,
             )
 
-        conn = self._conn
+        conn = getattr(self._tls, "conn", None)
         assert conn is not None  # _ensure_connection был вызван выше
         assert self._model is not None  # _ensure_model_loaded был вызван выше
 
@@ -400,7 +498,8 @@ class MemoryEmbedder:
         numpy-массив shape (N, dim). Для cosine distance vec0 сам нормализует,
         так что можно передавать не-нормализованные векторы.
         """
-        assert self._conn is not None
+        conn = getattr(self._tls, "conn", None)
+        assert conn is not None
         assert self._model is not None
 
         texts = [r[2] for r in rows]
@@ -411,8 +510,12 @@ class MemoryEmbedder:
         for i, row in enumerate(rows):
             payload.append((row[0], serialize_f32(vecs[i])))
 
-        self._conn.executemany(
-            "INSERT INTO vec_chunks(rowid, vector) VALUES (?, ?);",
-            payload,
-        )
-        self._conn.commit()
+        # Сериализуем write в vec_chunks между потоками — SQLite-уровень
+        # single-writer, избегаем "database is locked" при конкурентных
+        # embed'ах из разных asyncio.to_thread воркеров.
+        with self._write_lock:
+            conn.executemany(
+                "INSERT INTO vec_chunks(rowid, vector) VALUES (?, ?);",
+                payload,
+            )
+            conn.commit()

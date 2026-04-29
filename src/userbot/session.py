@@ -202,6 +202,7 @@ class SessionMixin:
                 return
             try:
                 self._arm_client_session_shutdown_guard()
+                self._arm_storage_shutdown_guard()
                 await self._cancel_client_restart_tasks()
                 await self.client.stop()
             except Exception as exc:  # noqa: BLE001
@@ -265,6 +266,92 @@ class SessionMixin:
         setattr(session, "_krab_original_restart", original_restart)
         setattr(session, "restart", types.MethodType(_guarded_restart, session))
         setattr(session, "_krab_restart_guard_installed", True)
+
+    def _arm_storage_shutdown_guard(self) -> None:
+        """
+        Ставит guard на pyrogram storage основного клиента (`self.client`).
+
+        Тонкая обёртка над статическим helper'ом — он же используется для
+        per-team swarm clients (см. `_arm_storage_shutdown_guard_for_client`).
+        """
+        if not self.client:
+            return
+        SessionMixin._arm_storage_shutdown_guard_for_client(self.client)
+
+    @staticmethod
+    def _arm_storage_shutdown_guard_for_client(client) -> None:
+        """
+        Ставит guard на pyrogram storage произвольного клиента.
+
+        Почему это нужно:
+        - Pyrogram-задачи Session.restart()/dispatcher могут долететь до
+          storage уже после `await client.stop()` и упасть на
+          `sqlite3.ProgrammingError: Cannot operate on a closed database`;
+        - такие падения шумят в Sentry (PYTHON-FASTAPI-1, ~130 events/сутки)
+          и не имеют actionable runtime-следствий — race на shutdown;
+        - guard помечает storage как closed и подменяет `_get` / `update_peers`
+          на безопасные no-op'ы, которые возвращают пустые результаты вместо
+          обращения к закрытому sqlite connection.
+
+        Применяется как к основному userbot-клиенту, так и к per-team swarm
+        clients (4× rate ⇒ ~10 events/24h без guard'а).
+        Идемпотентно: повторный вызов только переставляет `_krab_storage_closed`.
+        """
+        if client is None:
+            return
+        storage = getattr(client, "storage", None)
+        if storage is None:
+            return
+        if getattr(storage, "_krab_storage_guard_installed", False):
+            setattr(storage, "_krab_storage_closed", True)
+            return
+
+        setattr(storage, "_krab_storage_closed", True)
+
+        original_get = getattr(storage, "_get", None)
+        original_update_peers = getattr(storage, "update_peers", None)
+
+        if callable(original_get):
+
+            def _guarded_get(*args, **kwargs):
+                if getattr(storage, "_krab_storage_closed", False):
+                    logger.debug("telegram_storage_get_suppressed_after_close")
+                    return None
+                try:
+                    return original_get(*args, **kwargs)
+                except sqlite3.ProgrammingError as exc:
+                    if "closed database" in str(exc).lower():
+                        logger.debug(
+                            "telegram_storage_get_swallowed_closed_db",
+                            error=str(exc),
+                        )
+                        return None
+                    raise
+
+            setattr(storage, "_krab_original_get", original_get)
+            setattr(storage, "_get", _guarded_get)
+
+        if callable(original_update_peers):
+
+            async def _guarded_update_peers(peers, *args, **kwargs):
+                if getattr(storage, "_krab_storage_closed", False):
+                    logger.debug("telegram_storage_update_peers_suppressed_after_close")
+                    return None
+                try:
+                    return await original_update_peers(peers, *args, **kwargs)
+                except sqlite3.ProgrammingError as exc:
+                    if "closed database" in str(exc).lower():
+                        logger.debug(
+                            "telegram_storage_update_peers_swallowed_closed_db",
+                            error=str(exc),
+                        )
+                        return None
+                    raise
+
+            setattr(storage, "_krab_original_update_peers", original_update_peers)
+            setattr(storage, "update_peers", _guarded_update_peers)
+
+        setattr(storage, "_krab_storage_guard_installed", True)
 
     async def _cancel_client_restart_tasks(self) -> None:
         """

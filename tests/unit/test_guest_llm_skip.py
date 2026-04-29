@@ -195,7 +195,13 @@ class TestGuestGroupLlmSkip:
     """
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        # Wave 11: создаём свежий event loop — старый pattern asyncio.get_event_loop()
+        # ломается в full-suite, когда соседний тест закрыл текущий loop.
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
 
     def _call_process(
         self,

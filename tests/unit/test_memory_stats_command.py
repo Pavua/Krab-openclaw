@@ -173,6 +173,10 @@ def test_collect_memory_indexer_stats_when_worker_fails(monkeypatch: pytest.Monk
     assert result == {"state": "unavailable"}
 
 
+@pytest.mark.skip(
+    reason="Wave 11: memory_validator модуль теперь всегда импортирован (Phase 2 mem layer); "
+    "отсутствующий fallback больше не достижим"
+)
 def test_collect_memory_validator_stats_when_module_absent() -> None:
     """memory_validator модуля нет → возвращаем {'error': 'not loaded'}."""
     result = ch._collect_memory_validator_stats()

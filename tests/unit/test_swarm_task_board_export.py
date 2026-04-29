@@ -12,6 +12,34 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.core.swarm_task_board import SwarmTask
+from src.modules.web_app import WebApp
+
+
+class _DummyRouter:
+    """Минимальный роутер-заглушка для инициализации WebApp."""
+
+    def get_model_info(self):
+        return {}
+
+
+def _make_client() -> TestClient:
+    """Создаёт TestClient с минимальным набором зависимостей."""
+    deps = {
+        "router": _DummyRouter(),
+        "openclaw_client": None,
+        "black_box": None,
+        "health_service": None,
+        "provisioning_service": None,
+        "ai_runtime": None,
+        "reaction_engine": None,
+        "voice_gateway_client": None,
+        "krab_ear_client": None,
+        "perceptor": None,
+        "watchdog": None,
+        "queue": None,
+    }
+    app = WebApp(deps, port=18080, host="127.0.0.1")
+    return TestClient(app.app)
 
 
 @pytest.fixture
@@ -51,17 +79,12 @@ def sample_tasks():
     ]
 
 
-@pytest.mark.asyncio
-async def test_export_json_format(sample_tasks):
+def test_export_json_format(sample_tasks):
     """Test JSON export format."""
-    with patch("src.modules.web_app.swarm_task_board") as mock_board:
+    with patch("src.core.swarm_task_board.swarm_task_board") as mock_board:
         mock_board.list_tasks.return_value = sample_tasks
 
-        from src.modules.web_app import WebApp
-
-        app = WebApp()
-        client = TestClient(app.app)
-
+        client = _make_client()
         response = client.get("/api/swarm/task-board/export?format=json")
 
         assert response.status_code == 200
@@ -73,17 +96,12 @@ async def test_export_json_format(sample_tasks):
         assert data["tasks"][0]["status"] == "in_progress"
 
 
-@pytest.mark.asyncio
-async def test_export_csv_format(sample_tasks):
+def test_export_csv_format(sample_tasks):
     """Test CSV export format with proper headers."""
-    with patch("src.modules.web_app.swarm_task_board") as mock_board:
+    with patch("src.core.swarm_task_board.swarm_task_board") as mock_board:
         mock_board.list_tasks.return_value = sample_tasks
 
-        from src.modules.web_app import WebApp
-
-        app = WebApp()
-        client = TestClient(app.app)
-
+        client = _make_client()
         response = client.get("/api/swarm/task-board/export?format=csv")
 
         assert response.status_code == 200
@@ -114,16 +132,12 @@ async def test_export_csv_format(sample_tasks):
         assert rows[1][1] == "traders"
 
 
-@pytest.mark.asyncio
-async def test_export_empty_board():
+def test_export_empty_board():
     """Test export with empty board."""
-    with patch("src.modules.web_app.swarm_task_board") as mock_board:
+    with patch("src.core.swarm_task_board.swarm_task_board") as mock_board:
         mock_board.list_tasks.return_value = []
 
-        from src.modules.web_app import WebApp
-
-        app = WebApp()
-        client = TestClient(app.app)
+        client = _make_client()
 
         # JSON
         response = client.get("/api/swarm/task-board/export?format=json")
@@ -139,17 +153,12 @@ async def test_export_empty_board():
         assert len(lines) == 1  # Only headers
 
 
-@pytest.mark.asyncio
-async def test_export_default_format_is_csv():
+def test_export_default_format_is_csv():
     """Test that default format is CSV when not specified."""
-    with patch("src.modules.web_app.swarm_task_board") as mock_board:
+    with patch("src.core.swarm_task_board.swarm_task_board") as mock_board:
         mock_board.list_tasks.return_value = []
 
-        from src.modules.web_app import WebApp
-
-        app = WebApp()
-        client = TestClient(app.app)
-
+        client = _make_client()
         response = client.get("/api/swarm/task-board/export")
 
         assert response.status_code == 200

@@ -255,6 +255,56 @@ def test_stats_with_pending():
     assert s["total_pending"] == 1
 
 
+@pytest.mark.asyncio
+async def test_no_drop_message_arriving_mid_processing():
+    """
+    Регрессия: сообщения, прилетевшие во время LLM processing, не должны теряться.
+
+    Старый баг (line 297): после await processor(...) делалось `batch.pending = []`
+    безусловно — buffered messages, попавшие в pending пока шёл processor,
+    дропались, и has_pending становился False, поэтому flush не планировался.
+    """
+    from src.core.message_batcher import MessageBatcher, PendingMessage
+
+    b = MessageBatcher()
+    processed: list[str] = []
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def processor(chat_id, combined):
+        processed.append(combined)
+        if not first_started.is_set():
+            first_started.set()
+            await release_first.wait()
+        return "ok"
+
+    # 1) первое сообщение — стартует и зависает на release_first
+    task1 = asyncio.create_task(
+        b.try_add_or_flush("c1", PendingMessage(text="msg1", sender_id="u1"), processor)
+    )
+    await first_started.wait()
+
+    # 2) второе сообщение прилетает MID-processing → должно буферизоваться
+    status2, _ = await b.try_add_or_flush(
+        "c1", PendingMessage(text="msg2", sender_id="u1"), processor
+    )
+    assert status2 == "buffered"
+
+    # 3) отпускаем первый processor → должен auto-flush msg2 (а не дропнуть)
+    release_first.set()
+    await task1
+
+    # ждём фоновый flush
+    for _ in range(50):
+        if len(processed) >= 2:
+            break
+        await asyncio.sleep(0.02)
+
+    assert len(processed) == 2, f"msg2 потерян, processed={processed}"
+    assert "msg1" in processed[0]
+    assert "msg2" in processed[1]
+
+
 def test_get_batch_str_coerce():
     """chat_id всегда приводится к str."""
     from src.core.message_batcher import MessageBatcher

@@ -192,8 +192,12 @@ def test_ops_timeline_passes_params() -> None:
     fake_timeline = MagicMock()
     fake_timeline.get_events.return_value = []
 
-    # Патчим timeline в пространстве имён web_app, где он уже импортирован
-    with patch("src.modules.web_app.timeline", fake_timeline):
+    # Патчим timeline и в web_app namespace, и в core.observability (после Wave E
+    # endpoint вынесен в monitoring_router и берёт timeline из core.observability).
+    with (
+        patch("src.modules.web_app.timeline", fake_timeline),
+        patch("src.core.observability.timeline", fake_timeline),
+    ):
         client = _make_client()
         client.get("/api/ops/timeline?limit=5&min_severity=warn&channel=cloud")
 

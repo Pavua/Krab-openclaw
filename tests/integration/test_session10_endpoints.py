@@ -232,3 +232,45 @@ def test_session10_summary_generated_at_is_epoch(client: TestClient) -> None:
     d = client.get("/api/session10/summary").json()
     assert isinstance(d["generated_at"], int)
     assert d["generated_at"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 Wave TT (Session 25) — дополнительные тесты после extraction
+# /api/session10/summary в system_router.py.
+# ---------------------------------------------------------------------------
+
+
+def test_session10_summary_extracted_route_in_system_router_tag(client: TestClient) -> None:
+    """Wave TT: после extraction endpoint должен быть зарегистрирован
+    в `system` router (а не как inline route на app)."""
+    from src.modules.web_app import WebApp  # noqa: F401
+
+    app = client.app
+    found = False
+    for route in app.routes:
+        if getattr(route, "path", "") == "/api/session10/summary":
+            found = True
+            tags = getattr(route, "tags", []) or []
+            assert "system" in tags, f"Expected 'system' tag, got {tags}"
+            break
+    assert found, "Endpoint /api/session10/summary not registered"
+
+
+def test_session10_summary_session_12_present_when_health_service(client: TestClient) -> None:
+    """Wave TT: session_12 ключ присутствует даже без health_service deps."""
+    d = client.get("/api/session10/summary").json()
+    assert "session_12" in d
+    assert isinstance(d["session_12"], dict)
+
+
+def test_session10_summary_memory_indexer_state_helper_used() -> None:
+    """Wave TT: indexer_state приходит через ctx-helper, late-bound через lambda."""
+    from unittest.mock import patch
+
+    with patch(
+        "src.modules.web_app._resolve_memory_indexer_state",
+        return_value="running",
+    ):
+        c = _build_client()
+        d = c.get("/api/session10/summary").json()
+        assert d["memory_archive"]["indexer_state"] == "running"

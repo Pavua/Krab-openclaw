@@ -7,7 +7,7 @@ import sys
 
 from src.core.logger import get_logger, setup_logger
 
-from .bootstrap import run_app, validate_config
+from .bootstrap import init_sentry, run_app, validate_config
 
 setup_logger(level="INFO")
 logger = get_logger(__name__)
@@ -56,13 +56,9 @@ async def _run_with_retry() -> None:
 
 
 async def main() -> None:
-    """Запуск приложения: валидация конфига → Sentry init → retry-обёрнутый runtime."""
+    """Запуск приложения: валидация конфига → Sentry → retry-обёрнутый runtime."""
     if not validate_config():
         sys.exit(1)
-    # Sentry подключается ДО run_app чтобы ловить ошибки bootstrap.
-    # Если DSN не задан — безопасный skip, runtime продолжает работу.
-    from src.core.sentry_integration import init_sentry
-
     init_sentry()
     await _run_with_retry()
 

@@ -59,8 +59,10 @@ class TestIsTranslatorActiveForChat:
         assert bot._is_translator_active_for_chat(12345) is False
 
     def test_active_session_no_chat_filter(self) -> None:
+        # Семантика opt-in: пустой active_chats → translator неактивен (Wave 11).
+        # Ранее был fallback "активен для всех" — он нарушал opt-in и убран.
         bot = _make_bot_stub(session_status="active")
-        assert bot._is_translator_active_for_chat(12345) is True
+        assert bot._is_translator_active_for_chat(12345) is False
 
     def test_active_session_chat_in_list(self) -> None:
         bot = _make_bot_stub(session_status="active", active_chats=["12345"])

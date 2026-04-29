@@ -22,6 +22,7 @@ from typing import Any, Callable
 from .logger import get_logger
 from .swarm_channels import swarm_channels
 from .swarm_memory import swarm_memory
+from .swarm_tool_scope import format_tool_hint
 
 logger = get_logger(__name__)
 
@@ -187,31 +188,19 @@ class AgentRoom:
                     accumulated_context += intervention
                     logger.info("agent_room_intervention_applied", team=_team_name, role=name)
 
-            # Tool awareness: первая роль ОБЯЗАНА использовать web_search для актуальных данных,
-            # остальные роли могут использовать по необходимости
-            _extra_tools = ""
+            # Tool awareness: per-team tool scoping через swarm_tool_scope
+            _tor_enabled = False
             try:
                 from ..config import config as _cfg  # noqa: PLC0415
 
-                if getattr(_cfg, "TOR_ENABLED", False):
-                    _extra_tools = ", tor_fetch (анонимный HTTP через Tor)"
+                _tor_enabled = getattr(_cfg, "TOR_ENABLED", False)
             except Exception:  # noqa: BLE001
                 pass
-            _base_tools = (
-                f"web_search (поиск в интернете), peekaboo (скриншот экрана){_extra_tools}"
+            tool_hint = format_tool_hint(
+                _team_name or "default",
+                tor_enabled=_tor_enabled,
+                role_idx=role_idx,
             )
-            if role_idx == 0:
-                tool_hint = (
-                    f"\n\nУ тебя есть доступ к инструментам: {_base_tools}. "
-                    "ВАЖНО: ты ОБЯЗАН начать с вызова web_search чтобы получить актуальные данные "
-                    "(цены, курсы, новости, факты). Твои знания устарели — без web_search твой анализ "
-                    "будет основан на старых данных и бесполезен. Сначала поиск, потом анализ."
-                )
-            else:
-                tool_hint = (
-                    f"\n\nУ тебя есть доступ к инструментам: {_base_tools}. "
-                    "Используй web_search если нужны дополнительные данные."
-                )
 
             if accumulated_context:
                 prompt = (

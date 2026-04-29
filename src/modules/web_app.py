@@ -7,14 +7,12 @@ Web App Module (Phase 15+).
 from __future__ import annotations
 
 import asyncio
-import copy
+import base64
 import hashlib
 import io
 import json
-import mimetypes
 import os
 import re
-import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -22,21 +20,25 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .web_routers._context import RouterContext
 
 import httpx
 import structlog
 import uvicorn
-from fastapi import Body, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi.responses import Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.config import config  # noqa: E402
-from src.core.access_control import (  # noqa: E402
+from src.core.access_control import (  # noqa: E402, F401
     PARTIAL_ACCESS_COMMANDS,
-    get_effective_owner_label,
-    get_effective_owner_subjects,
-    load_acl_runtime_state,
-    update_acl_subject,
+    get_effective_owner_label,  # re-exported для admin_router (test-patch surface)
+    get_effective_owner_subjects,  # re-exported для admin_router (test-patch surface)
+    load_acl_runtime_state,  # re-exported для admin_router (test-patch surface)
+    update_acl_subject,  # re-exported для admin_router (test-patch surface)
 )
 from src.core.auth_recovery_readiness import (  # noqa: E402
     build_auth_recovery_readiness_snapshot,
@@ -49,8 +51,6 @@ from src.core.capability_registry import (  # noqa: E402
     build_policy_matrix,
     build_system_control_snapshot,
 )
-from src.core.chat_window_manager import chat_window_manager  # noqa: E402
-from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
 from src.core.inbox_service import inbox_service  # noqa: E402
 from src.core.lm_studio_auth import build_lm_studio_auth_headers  # noqa: E402
 from src.core.mcp_registry import (  # noqa: E402
@@ -62,19 +62,12 @@ from src.core.mcp_registry import (  # noqa: E402
 from src.core.model_aliases import (  # noqa: E402
     MODEL_FRIENDLY_ALIASES,
     normalize_model_alias,
-    parse_model_set_request,
-    render_model_presets_text,
 )
-from src.core.observability import (  # noqa: E402
+from src.core.observability import (  # noqa: E402, F401
     build_ops_response,
     get_observability_snapshot,
-    metrics,
-    timeline,
-)
-from src.core.openclaw_cli_budget import (  # noqa: E402
-    get_global_semaphore,
-    get_sync_semaphore,
-    terminate_and_reap,
+    metrics,  # F401: re-exported для патчинга в legacy тестах (dual-patch).
+    timeline,  # F401: re-exported для патчинга в legacy тестах (dual-patch).
 )
 from src.core.openclaw_runtime_signal_truth import (  # noqa: E402
     discover_gateway_signal_log,
@@ -83,8 +76,8 @@ from src.core.openclaw_runtime_signal_truth import (  # noqa: E402
 from src.core.openclaw_workspace import build_workspace_state_snapshot  # noqa: E402
 from src.core.operator_identity import current_account_id, current_operator_id  # noqa: E402
 from src.core.runtime_policy import current_runtime_mode, provider_runtime_policy  # noqa: E402
-from src.core.shared_worktree_permissions import (  # noqa: E402
-    normalize_shared_worktree_permissions,
+from src.core.shared_worktree_permissions import (  # noqa: E402, F401
+    normalize_shared_worktree_permissions,  # экспортируется в module namespace для system_router helper-injection (Wave QQ)
     sample_non_writable_shared_items,
 )
 from src.core.translator_live_trial_preflight import (  # noqa: E402
@@ -97,6 +90,74 @@ from src.core.voice_gateway_control_plane import VoiceGatewayControlPlane  # noq
 from src.integrations.voice_gateway_subscriber import VoiceGatewayEventSubscriber  # noqa: E402
 
 logger = structlog.get_logger("WebApp")
+
+
+# ── Кэш subprocess CLI-вызовов (openclaw models list / status) ────────────────
+# TTL 60s — данные практически статичны между запросами, устраняет hot-path lag.
+
+_SUBPROCESS_CACHE: dict[tuple[str, ...], tuple[float, str | None]] = {}
+_SUBPROCESS_CACHE_TTL_SEC: float = 60.0
+
+
+def _cached_subprocess_run(
+    args: tuple[str, ...],
+    *,
+    cwd: str,
+    timeout: float = 20.0,
+) -> str | None:
+    """Запускает subprocess с TTL-кэшем. None = timeout/error или returncode != 0.
+
+    legacy — async preferred для hot-path (future: _async_subprocess_check)
+    """
+    cache_key = args + (cwd,)
+    now = time.monotonic()
+    cached = _SUBPROCESS_CACHE.get(cache_key)
+    if cached is not None:
+        ts, result = cached
+        if now - ts < _SUBPROCESS_CACHE_TTL_SEC:
+            return result
+    # Результат из кэша истёк или отсутствует — выполняем subprocess
+    try:
+        proc = subprocess.run(
+            list(args),
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+        result = proc.stdout if proc.returncode == 0 else None
+    except Exception:
+        # Fallback: отдать истёкший кэш если есть
+        result = cached[1] if cached is not None else None
+    _SUBPROCESS_CACHE[cache_key] = (now, result)
+    return result
+
+
+async def _async_subprocess_check(
+    *args: str,
+    timeout_sec: float = 20.0,
+) -> str | None:
+    """Async wrapper для openclaw CLI calls. None = timeout/error/returncode!=0.
+
+    Предпочтительный вариант для async callers — не блокирует event loop.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
+            if proc.returncode == 0:
+                return stdout.decode("utf-8", errors="ignore")
+            return None
+        except asyncio.TimeoutError:
+            proc.kill()
+            return None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # ── Хелперы memory_indexer для health/lite ────────────────────────────────────
@@ -125,6 +186,136 @@ def _resolve_memory_indexer_queue_size() -> int:
         return get_indexer().get_stats().queue_size
     except Exception:
         return 0
+
+
+def _run_openclaw_model_autoswitch(
+    *,
+    dry_run: bool,
+    profile: str = "",
+    toggle: bool = False,
+) -> dict:
+    """
+    Запускает autoswitch-утилиту OpenClaw.
+    dry_run=True: только диагностика, без изменения конфигурации.
+
+    Module-level версия для helper injection (Phase 2 Wave EE, Session 25).
+    Используется и из openclaw_router (через ctx.get_dep), и из inline
+    POST endpoint /api/openclaw/model-autoswitch/apply в web_app.py.
+    """
+    project_root = Path(__file__).resolve().parents[2]
+    script_path = project_root / "scripts" / "openclaw_model_autoswitch.py"
+    if not script_path.exists():
+        raise HTTPException(status_code=500, detail="openclaw_model_autoswitch_script_missing")
+
+    # Единый venv (Py 3.13) в приоритете; legacy .venv — фолбек.
+    python_bin = project_root / "venv" / "bin" / "python"
+    if not python_bin.exists():
+        python_bin = project_root / ".venv" / "bin" / "python"
+    if not python_bin.exists():
+        python_bin = Path(sys.executable or "python3")
+
+    cmd = [str(python_bin), str(script_path)]
+    requested_profile = str(profile or "").strip().lower()
+    if toggle:
+        requested_profile = "toggle"
+    elif not requested_profile:
+        requested_profile = "current" if dry_run else "local-first"
+    if requested_profile:
+        cmd.extend(["--profile", requested_profile])
+    if dry_run:
+        cmd.append("--dry-run")
+
+    proc = subprocess.run(
+        cmd,
+        cwd=str(project_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"openclaw_model_autoswitch_failed: {stderr or stdout or proc.returncode}",
+        )
+
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    if not lines:
+        raise HTTPException(status_code=500, detail="openclaw_model_autoswitch_empty_output")
+    try:
+        payload = json.loads(lines[-1])
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"openclaw_model_autoswitch_invalid_json: {exc}",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="openclaw_model_autoswitch_invalid_payload")
+    return payload
+
+
+def _run_openclaw_model_compat_probe(
+    *,
+    model: str = "",
+    reasoning: str = "high",
+    skip_reasoning: bool = False,
+) -> dict:
+    """
+    Запускает read-only probe совместимости target-модели в OpenClaw runtime.
+
+    Module-level версия для helper injection (Phase 2 Wave EE, Session 25).
+    """
+    project_root = Path(__file__).resolve().parents[2]
+    script_path = project_root / "scripts" / "openclaw_model_compat_probe.py"
+    if not script_path.exists():
+        raise HTTPException(status_code=500, detail="openclaw_model_compat_probe_script_missing")
+
+    # Единый venv (Py 3.13) в приоритете; legacy .venv — фолбек.
+    python_bin = project_root / "venv" / "bin" / "python"
+    if not python_bin.exists():
+        python_bin = project_root / ".venv" / "bin" / "python"
+    if not python_bin.exists():
+        python_bin = Path(sys.executable or "python3")
+
+    cmd = [str(python_bin), str(script_path)]
+    normalized_model = str(model or "").strip()
+    normalized_reasoning = str(reasoning or "high").strip().lower() or "high"
+    if normalized_model:
+        cmd.extend(["--model", normalized_model])
+    if normalized_reasoning:
+        cmd.extend(["--reasoning", normalized_reasoning])
+    if skip_reasoning:
+        cmd.append("--skip-reasoning")
+
+    proc = subprocess.run(
+        cmd,
+        cwd=str(project_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"openclaw_model_compat_probe_failed: {stderr or stdout or proc.returncode}",
+        )
+
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    if not lines:
+        raise HTTPException(status_code=500, detail="openclaw_model_compat_probe_empty_output")
+    try:
+        payload = json.loads(lines[-1])
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"openclaw_model_compat_probe_invalid_json: {exc}",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="openclaw_model_compat_probe_invalid_payload")
+    return payload
 
 
 class WebApp:
@@ -156,11 +347,19 @@ class WebApp:
         # поэтому write-path панели использует отдельный короткий cache.
         self._model_catalog_cache: tuple[float, dict[str, Any]] | None = None
         self._vg_subscriber: VoiceGatewayEventSubscriber | None = None
-        # Глобальный лимит параллельных openclaw CLI subprocess'ов.
-        # Защита от утечек при одновременных polling запросах.
-        _cli_budget = int(os.getenv("OPENCLAW_CLI_SPAWN_BUDGET", "3"))
-        self._openclaw_cli_sem = asyncio.Semaphore(_cli_budget)
-        logger.info("openclaw_cli_semaphore_init", budget=_cli_budget)
+        self._setup_basic_auth_middleware()
+        self._setup_bcrypt_auth_middleware()
+        # Hard-require SENTRY_WEBHOOK_SECRET: генерируем и persist-им в .env
+        # при первом старте, чтобы /api/hooks/sentry никогда не работал
+        # в "open" режиме (любой знающий URL не должен пройти HMAC).
+        try:
+            from src.bootstrap.sentry_webhook_secret import (
+                ensure_sentry_webhook_secret,
+            )
+
+            ensure_sentry_webhook_secret()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("sentry_webhook_secret_bootstrap_failed", error=str(exc))
         self._setup_routes()
 
     @property
@@ -168,20 +367,134 @@ class WebApp:
         """Быстрый доступ к kraab_userbot через deps."""
         return self.deps.get("kraab_userbot")
 
+    def _setup_basic_auth_middleware(self) -> None:
+        """
+        Опциональный HTTP Basic Auth middleware для всей панели.
+
+        Активируется переменной окружения:
+            PANEL_BASIC_AUTH=username:password
+
+        Если переменная не задана — middleware пропускается (поведение без изменений).
+        Исключение: /api/health/lite всегда доступен без auth (для watchdog/мониторинга).
+
+        Пример использования через VPN reverse proxy:
+            Установите PANEL_BASIC_AUTH в env Краба, тогда даже при проксировании
+            через nginx без htpasswd панель не будет открыта без пароля.
+        """
+        raw = os.getenv("PANEL_BASIC_AUTH", "").strip()
+        if not raw or ":" not in raw:
+            return
+
+        username, _, password = raw.partition(":")
+        if not username or not password:
+            return
+
+        expected = base64.b64encode(f"{username}:{password}".encode()).decode()
+        # Пути, доступные без auth (мониторинг / healthcheck)
+        _NO_AUTH_PATHS = frozenset({"/api/health/lite", "/api/v1/health"})  # noqa: N806
+
+        class BasicAuthMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+                if request.url.path in _NO_AUTH_PATHS:
+                    return await call_next(request)
+                auth_header = request.headers.get("Authorization", "")
+                if auth_header.startswith("Basic "):
+                    provided = auth_header[len("Basic ") :]
+                    if provided == expected:
+                        return await call_next(request)
+                return Response(
+                    content="Unauthorized",
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="Krab Panel"'},
+                )
+
+        self.app.add_middleware(BasicAuthMiddleware)
+
+    def _setup_bcrypt_auth_middleware(self) -> None:
+        """
+        Опциональный bcrypt-based HTTP Basic Auth middleware.
+
+        Активируется переменной окружения KRAB_PANEL_AUTH=1.
+        Дополнительно требует:
+            KRAB_PANEL_USERNAME  — логин (по умолчанию "krab")
+            KRAB_PANEL_PASSWORD_HASH — bcrypt-хэш пароля ($2b$...)
+
+        Генерация хэша:
+            python -c "import bcrypt; print(bcrypt.hashpw(b'pass', bcrypt.gensalt()).decode())"
+
+        Или через Telegram-команду (owner-only): !setpanelauth <user> <pass>
+
+        Исключения из auth (мониторинг):
+            /api/health/lite, /api/v1/health
+        """
+        if os.getenv("KRAB_PANEL_AUTH", "").strip() != "1":
+            return
+
+        _username = os.getenv("KRAB_PANEL_USERNAME", "krab").strip()
+        _password_hash = os.getenv("KRAB_PANEL_PASSWORD_HASH", "").strip()
+
+        if not _password_hash:
+            logger.warning(
+                "KRAB_PANEL_AUTH=1 но KRAB_PANEL_PASSWORD_HASH не задан — bcrypt auth пропущен"
+            )
+            return
+
+        try:
+            import bcrypt as _bcrypt
+        except ImportError:
+            logger.warning("KRAB_PANEL_AUTH=1 но bcrypt не установлен — auth пропущен")
+            return
+
+        _hash_bytes = _password_hash.encode()
+        _NO_AUTH_PATHS = frozenset({"/api/health/lite", "/api/v1/health"})  # noqa: N806
+
+        class BcryptAuthMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+                if request.url.path in _NO_AUTH_PATHS:
+                    return await call_next(request)
+                auth_header = request.headers.get("Authorization", "")
+                if auth_header.startswith("Basic "):
+                    try:
+                        decoded = base64.b64decode(auth_header[len("Basic ") :]).decode(
+                            "utf-8", errors="replace"
+                        )
+                        provided_user, _, provided_pass = decoded.partition(":")
+                        if provided_user == _username and provided_pass:
+                            if _bcrypt.checkpw(provided_pass.encode(), _hash_bytes):
+                                return await call_next(request)
+                    except Exception:
+                        pass
+                return Response(
+                    content="Unauthorized",
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="Krab Panel"'},
+                )
+
+        self.app.add_middleware(BcryptAuthMiddleware)
+        logger.info("Bcrypt auth middleware активирован", username=_username)
+
     def _public_base_url(self) -> str:
-        """Возвращает внешний base URL панели."""
-        explicit = os.getenv("WEB_PUBLIC_BASE_URL", "").strip().rstrip("/")
-        if explicit:
-            return explicit
-        display_host = os.getenv("WEB_HOST", "127.0.0.1").strip() or "127.0.0.1"
-        return f"http://{display_host}:{self.port}"
+        """Возвращает внешний base URL панели (delegates → _helpers)."""
+        from .web_routers._helpers import get_public_base_url
+
+        return get_public_base_url(default_port=self.port)
 
     def _web_api_key(self) -> str:
-        """Возвращает API-ключ web write-endpoints (может быть пустым)."""
-        return os.getenv("WEB_API_KEY", "").strip()
+        """Возвращает API-ключ web write-endpoints (delegates → _helpers).
+
+        Wrapper сохранён: тесты используют ``patch.object(WebApp, "_web_api_key", ...)``.
+        """
+        from .web_routers._helpers import get_web_api_key
+
+        return get_web_api_key()
 
     def _assert_write_access(self, header_key: str, token: str) -> None:
-        """Проверяет доступ к write-эндпоинтам web API."""
+        """Проверяет доступ к write-эндпоинтам web API.
+
+        Wrapper использует ``self._web_api_key()`` (не helper напрямую),
+        чтобы тесты могли monkeypatch ``WebApp._web_api_key`` для имитации
+        настроенного ключа.
+        """
         expected = self._web_api_key()
         if not expected:
             return
@@ -192,26 +505,565 @@ class WebApp:
 
     @staticmethod
     def _project_root() -> Path:
-        """Возвращает корень проекта Krab."""
-        return Path(__file__).resolve().parents[2]
+        """Возвращает корень проекта Krab (delegates → _helpers).
+
+        Wrapper сохранён: тесты используют ``monkeypatch.setattr(WebApp, "_project_root", ...)``.
+        """
+        from .web_routers._helpers import project_root
+
+        return project_root()
+
+    def _openclaw_runtime_config_snapshot(self) -> dict[str, Any]:
+        """[Wave DD] Snapshot runtime-конфига OpenClaw для openclaw_router.
+
+        Возвращает данные для GET /api/openclaw/runtime-config без секретов.
+        Контракт сохранён 1:1 с inline definition (был в web_app.py).
+        """
+        base_url = (
+            str(getattr(config, "OPENCLAW_URL", "") or "http://127.0.0.1:18789").strip().rstrip("/")
+        )
+        raw_key = str(self._openclaw_gateway_token_from_config() or "").strip()
+        key_present = False
+        key_masked = ""
+        key_kind = "missing"
+        if raw_key:
+            key_present = True
+            if raw_key.startswith("{"):
+                key_kind = "tiered_json"
+                key_masked = "tiered-json-configured"
+            else:
+                key_kind = "plain"
+                key_masked = self._mask_secret(raw_key)
+
+        return {
+            "ok": True,
+            "openclaw_base_url": base_url,
+            "gateway_token_present": key_present,
+            "gateway_token_masked": key_masked,
+            "gateway_token_kind": key_kind,
+            "gateway_auth_state": "configured" if key_present else "missing",
+            "runtime_policy": {
+                "force_cloud": bool(getattr(config, "FORCE_CLOUD", False)),
+                "local_fallback_enabled": bool(getattr(config, "LOCAL_FALLBACK_ENABLED", True)),
+                "native_reasoning_mode": str(
+                    getattr(config, "LM_STUDIO_NATIVE_REASONING_MODE", "off") or "off"
+                )
+                .strip()
+                .lower(),
+                "photo_force_cloud": bool(getattr(config, "USERBOT_FORCE_CLOUD_FOR_PHOTO", True)),
+                "output_tokens": {
+                    "text": int(getattr(config, "USERBOT_MAX_OUTPUT_TOKENS", 1200) or 1200),
+                    "photo": int(getattr(config, "USERBOT_PHOTO_MAX_OUTPUT_TOKENS", 420) or 420),
+                },
+                "history_budget": {
+                    "dialog_messages": int(getattr(config, "HISTORY_WINDOW_MESSAGES", 50) or 50),
+                    "dialog_max_chars": getattr(config, "HISTORY_WINDOW_MAX_CHARS", None),
+                    "local_messages": int(
+                        getattr(config, "LOCAL_HISTORY_WINDOW_MESSAGES", 18) or 18
+                    ),
+                    "local_max_chars": getattr(config, "LOCAL_HISTORY_WINDOW_MAX_CHARS", None),
+                    "retry_messages": int(getattr(config, "RETRY_HISTORY_WINDOW_MESSAGES", 8) or 8),
+                    "retry_max_chars": int(
+                        getattr(config, "RETRY_HISTORY_WINDOW_MAX_CHARS", 4000) or 4000
+                    ),
+                    "retry_message_max_chars": int(
+                        getattr(config, "RETRY_MESSAGE_MAX_CHARS", 1200) or 1200
+                    ),
+                },
+                "timeouts_sec": {
+                    "chunk": float(getattr(config, "OPENCLAW_CHUNK_TIMEOUT_SEC", 180.0) or 180.0),
+                    "first_chunk": float(
+                        getattr(config, "OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC", 420.0) or 420.0
+                    ),
+                    "photo_first_chunk": float(
+                        getattr(config, "OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", 540.0) or 540.0
+                    ),
+                },
+            },
+        }
+
+    def _make_router_context(self) -> "RouterContext":
+        """Factory для RouterContext — Phase 2 advanced extractions (Session 25).
+
+        Используется при include_router для передачи WebApp deps + helpers
+        в extracted router-модули без зависимости от WebApp class.
+        """
+        from .web_routers._context import RouterContext
+
+        # Shared mutable holder для boot_ts (Phase 2 Wave F).
+        # Reuse on second call чтобы router и WebApp видели одно значение.
+        # Также seed-им holder из self._boot_ts если уже был установлен
+        # (например, dashboard_summary мог вызваться первым).
+        if not hasattr(self, "_boot_ts_holder"):
+            self._boot_ts_holder: list[float] = []
+        if getattr(self, "_boot_ts", None) and not self._boot_ts_holder:
+            self._boot_ts_holder.append(float(self._boot_ts))
+
+        # Phase 2 Wave Q (Session 25): inject translator snapshot helpers
+        # как deps так чтобы router'ы могли их вызвать без self-bind на WebApp.
+        deps_dict = dict(getattr(self, "deps", {}) or {})
+        # Phase 2 Wave XX: pages_router читает _index_path / _nano_theme_path
+        # лениво через webapp ref (поддержка тестов, патчащих attrs после init).
+        deps_dict.setdefault("webapp", self)
+        deps_dict.setdefault("translator_readiness_snapshot", self._translator_readiness_snapshot)
+        deps_dict.setdefault(
+            "translator_control_plane_snapshot", self._translator_control_plane_snapshot
+        )
+        deps_dict.setdefault(
+            "translator_session_inspector_snapshot",
+            self._translator_session_inspector_snapshot,
+        )
+        deps_dict.setdefault(
+            "translator_mobile_readiness_snapshot",
+            self._translator_mobile_readiness_snapshot,
+        )
+        deps_dict.setdefault(
+            "translator_delivery_matrix_snapshot",
+            self._translator_delivery_matrix_snapshot,
+        )
+        # Phase 2 Wave PP (Session 25): inject preflight/onboarding snapshot helpers
+        # для extracted aggregator endpoints (bootstrap, live-trial-preflight,
+        # mobile/onboarding) в translator_router.py.
+        deps_dict.setdefault(
+            "translator_live_trial_preflight_snapshot",
+            self._translator_live_trial_preflight_snapshot,
+        )
+        deps_dict.setdefault(
+            "translator_mobile_onboarding_snapshot",
+            self._translator_mobile_onboarding_snapshot,
+        )
+
+        # Phase 2 Wave R (Session 25): inject capability/channel snapshot helpers
+        # для capabilities_router (без self-bind на WebApp).
+        deps_dict.setdefault(
+            "capability_registry_snapshot_helper",
+            self._capability_registry_snapshot,
+        )
+        deps_dict.setdefault(
+            "channel_capabilities_snapshot_helper",
+            self._channel_capabilities_snapshot,
+        )
+
+        # Phase 2 Wave V (Session 25): inject assistant-router helpers
+        # (capabilities snapshot + attachment pipeline) без self-bind на WebApp.
+        deps_dict.setdefault(
+            "assistant_capabilities_snapshot_helper",
+            self._assistant_capabilities_snapshot,
+        )
+        deps_dict.setdefault(
+            "assistant_attachment_max_bytes_helper",
+            self._web_attachment_max_bytes,
+        )
+        deps_dict.setdefault(
+            "assistant_attachment_sanitize_name_helper",
+            self._sanitize_attachment_name,
+        )
+        deps_dict.setdefault(
+            "assistant_attachment_build_prompt_helper",
+            self._build_attachment_prompt,
+        )
+
+        # Phase 2 Wave W (Session 25): inject admin_router deps —
+        # idempotency cache (shared с WebApp instance) и ACL helpers.
+        # ACL helpers резолвятся через текущий module namespace
+        # (``src.modules.web_app``), чтобы существующие тесты, патчащие
+        # ``src.modules.web_app.load_acl_runtime_state`` / ``get_effective_owner_*``
+        # / ``update_acl_subject``, продолжали работать без изменений.
+        import sys as _sys
+
+        _wam = _sys.modules.get(__name__)
+        deps_dict.setdefault("idempotency_get", self._idempotency_get)
+        deps_dict.setdefault("idempotency_set", self._idempotency_set)
+        deps_dict.setdefault(
+            "acl_load_state_helper",
+            lambda: getattr(_wam, "load_acl_runtime_state")(),
+        )
+        deps_dict.setdefault(
+            "acl_owner_label_helper",
+            lambda: getattr(_wam, "get_effective_owner_label")(),
+        )
+        deps_dict.setdefault(
+            "acl_owner_subjects_helper",
+            lambda: getattr(_wam, "get_effective_owner_subjects")(),
+        )
+        deps_dict.setdefault(
+            "acl_update_subject_helper",
+            lambda level, subject, add: getattr(_wam, "update_acl_subject")(
+                level, subject, add=add
+            ),
+        )
+        deps_dict.setdefault("acl_partial_commands", PARTIAL_ACCESS_COMMANDS)
+        deps_dict.setdefault("acl_file_path", str(config.USERBOT_ACL_FILE))
+
+        # Phase 2 Wave Y (Session 25): inject system_router helpers
+        # (runtime/operator-profile, /api/stats, /api/system/diagnostics)
+        # без self-bind на WebApp.
+        deps_dict.setdefault(
+            "runtime_operator_profile_helper",
+            self._runtime_operator_profile,
+        )
+        deps_dict.setdefault(
+            "build_stats_router_payload_helper",
+            self._build_stats_router_payload,
+        )
+        deps_dict.setdefault(
+            "resolve_local_runtime_truth_helper",
+            # Late-bound: позволяет тестам монкей-патчить
+            # WebApp._resolve_local_runtime_truth после init.
+            lambda *args, **kwargs: self._resolve_local_runtime_truth(*args, **kwargs),
+        )
+
+        # Phase 2 Wave DD (Session 25): inject openclaw helpers для cron/status,
+        # cron/jobs, runtime-config endpoints в openclaw_router. Late-bound через
+        # lambda чтобы существующие тесты, патчащие
+        # ``WebApp._collect_openclaw_cron_snapshot`` или
+        # ``app._collect_openclaw_cron_snapshot`` после инициализации,
+        # продолжали работать без изменений.
+        deps_dict.setdefault(
+            "openclaw_cron_snapshot_helper",
+            lambda *args, **kwargs: self._collect_openclaw_cron_snapshot(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_runtime_config_snapshot_helper",
+            lambda *args, **kwargs: self._openclaw_runtime_config_snapshot(*args, **kwargs),
+        )
+
+        # Phase 2 Wave EE (Session 25): inject openclaw model/routing helpers для
+        # /api/openclaw/model-routing/status и /api/openclaw/model-compat/probe.
+        # Late-bound через lambda — позволяет тестам монкей-патчить
+        # WebApp._build_openclaw_model_routing_status и module-level
+        # _run_openclaw_model_compat_probe после init.
+        deps_dict.setdefault(
+            "openclaw_model_routing_helper",
+            lambda: self._build_openclaw_model_routing_status(),
+        )
+        deps_dict.setdefault(
+            "openclaw_model_routing_overlay_helper",
+            lambda *args, **kwargs: self._overlay_live_route_on_openclaw_model_routing_status(
+                *args, **kwargs
+            ),
+        )
+        deps_dict.setdefault(
+            "openclaw_model_compat_probe_helper",
+            lambda **kwargs: _sys.modules[__name__]._run_openclaw_model_compat_probe(**kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_model_autoswitch_helper",
+            lambda **kwargs: _sys.modules[__name__]._run_openclaw_model_autoswitch(**kwargs),
+        )
+
+        # Phase 2 Wave JJ (Session 25): inject openclaw CLI runner helper для
+        # POST endpoints cron/jobs/{create,toggle,remove}. Late-bound через
+        # lambda — позволяет тестам монкей-патчить WebApp._run_openclaw_cli
+        # после инициализации.
+        deps_dict.setdefault(
+            "openclaw_cli_runner_helper",
+            lambda *args, **kwargs: self._run_openclaw_cli(*args, **kwargs),
+        )
+
+        # Phase 2 Wave LL (Session 25): inject openclaw browser/smoke helpers
+        # для /api/openclaw/browser-smoke, /api/openclaw/photo-smoke,
+        # /api/openclaw/browser/open-owner-chrome. Late-bound через lambda —
+        # позволяет тестам монкей-патчить WebApp methods после init.
+        deps_dict.setdefault(
+            "openclaw_browser_smoke_helper",
+            lambda *args, **kwargs: self._collect_openclaw_browser_smoke_report(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_photo_smoke_helper",
+            lambda *args, **kwargs: self._collect_openclaw_photo_smoke_payload(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_launch_owner_chrome_helper",
+            lambda: self._launch_owner_chrome_remote_debugging(),
+        )
+
+        # Phase 2 Wave MM (Session 25): inject openclaw browser readiness/start
+        # helpers для /api/openclaw/browser-mcp-readiness, /api/openclaw/browser/start.
+        # Late-bound через lambda — позволяет тестам монкей-патчить методы WebApp.
+        deps_dict.setdefault(
+            "openclaw_probe_owner_chrome_helper",
+            lambda *args, **kwargs: self._probe_owner_chrome_devtools(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_collect_stable_browser_cli_runtime_helper",
+            lambda *args, **kwargs: self._collect_stable_browser_cli_runtime(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_classify_browser_stage_helper",
+            lambda *args, **kwargs: self._classify_browser_stage(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_build_mcp_readiness_snapshot_helper",
+            lambda *args, **kwargs: self._build_mcp_readiness_snapshot(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_build_browser_access_paths_helper",
+            lambda *args, **kwargs: self._build_browser_access_paths(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_run_cli_json_helper",
+            lambda *args, **kwargs: self._run_openclaw_cli_json(*args, **kwargs),
+        )
+
+        # Phase 2 Wave NN (Session 25): inject openclaw helpers для оставшихся
+        # HARD endpoints — channels/status, routing/effective, cloud/runtime-check,
+        # cloud/switch-tier. Late-bound через lambda — позволяет тестам монкей-патчить
+        # WebApp methods и static helpers после init.
+        deps_dict.setdefault(
+            "openclaw_cli_env_helper",
+            lambda: WebApp._openclaw_cli_env(),
+        )
+        deps_dict.setdefault(
+            "openclaw_parse_channels_probe_helper",
+            lambda raw_output: WebApp._parse_openclaw_channels_probe(raw_output),
+        )
+        # Mutates WebApp instance attribute, чтобы существующие тесты, проверяющие
+        # ``app._runtime_lite_cache is None`` после endpoint'а, продолжали работать.
+        deps_dict.setdefault(
+            "runtime_lite_cache_invalidator_helper",
+            lambda: setattr(self, "_runtime_lite_cache", None),
+        )
+
+        # Phase 2 Wave GG (Session 25): inject helpers для thinking/depth + model
+        # provider-action / local load-default+unload в model_router.
+        # Late-bound через lambda — позволяет тестам монкей-патчить
+        # WebApp methods после init (existing тесты уже это делают через
+        # patch.object(WebApp, "_build_openclaw_runtime_controls", ...)).
+        deps_dict.setdefault(
+            "openclaw_runtime_controls_build_helper",
+            lambda *args, **kwargs: self._build_openclaw_runtime_controls(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "openclaw_runtime_controls_apply_helper",
+            lambda *args, **kwargs: self._apply_openclaw_runtime_controls(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "thinking_normalize_helper",
+            lambda *args, **kwargs: self._normalize_thinking_mode(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "lmstudio_snapshot_invalidate_helper",
+            lambda: self._invalidate_lmstudio_snapshot_cache(),
+        )
+        deps_dict.setdefault(
+            "provider_ui_metadata_helper",
+            lambda provider_name: self._provider_ui_metadata(provider_name),
+        )
+        deps_dict.setdefault(
+            "provider_repair_helper_path_helper",
+            lambda provider_name: self._provider_repair_helper_path(provider_name),
+        )
+        deps_dict.setdefault(
+            "launch_local_app_helper",
+            lambda target_path: self._launch_local_app(target_path),
+        )
+
+        # Phase 2 Wave OO (Session 25): inject helpers для extracted
+        # /api/model/catalog + /api/model/apply в model_router.py.
+        # Late-bound через lambda — позволяет тестам монкей-патчить
+        # WebApp methods и black_box dep после init.
+        deps_dict.setdefault(
+            "model_catalog_get_cache_helper",
+            lambda: self._get_model_catalog_cache(),
+        )
+        deps_dict.setdefault(
+            "model_catalog_store_cache_helper",
+            lambda payload: self._store_model_catalog_cache(payload),
+        )
+        deps_dict.setdefault(
+            "model_catalog_build_helper",
+            lambda router_obj: self._build_model_catalog_method(router_obj),
+        )
+        deps_dict.setdefault(
+            "model_catalog_build_fallback_helper",
+            lambda *args, **kwargs: self._build_model_catalog_fallback(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "model_apply_catalog_timeout_helper",
+            lambda: self._model_apply_catalog_timeout_sec(),
+        )
+        deps_dict.setdefault(
+            "runtime_quick_presets_build_helper",
+            lambda *args, **kwargs: self._build_runtime_quick_presets(*args, **kwargs),
+        )
+        # ``black_box`` уже в self.deps (если есть) — но добавляем явно для
+        # extracted endpoint'а чтобы он мог использовать ctx.deps.get("black_box").
+        if "black_box" not in deps_dict and "black_box" in (self.deps or {}):
+            deps_dict["black_box"] = self.deps["black_box"]
+
+        # Phase 2 Part 2D (Session 27): inject /api/assistant/query helpers.
+        # Late-bound: позволяет тестам монкей-патчить _enforce_assistant_rate_limit
+        # / _idempotency_get / _idempotency_set после инициализации.
+        deps_dict.setdefault(
+            "assistant_rate_limit_helper",
+            lambda client_key: self._enforce_assistant_rate_limit(client_key),
+        )
+        # idempotency_get/set уже инжектятся выше (line ~610) для admin_router.
+        # router уже доступен через self.deps["router"] — реэкспортируем явно.
+        if "router" not in deps_dict and "router" in (self.deps or {}):
+            deps_dict["router"] = self.deps["router"]
+
+        # Phase 2 Wave HH (Session 25): inject translator session POST helpers
+        # для extraction /api/translator/session/{start,policy,action,runtime-tune,
+        # quick-phrase,summary} в translator_router.py. Late-bound через lambda —
+        # позволяет тестам монкей-патчить методы WebApp после init.
+        deps_dict.setdefault(
+            "translator_gateway_client_helper",
+            lambda: self._translator_gateway_client_or_raise(),
+        )
+        deps_dict.setdefault(
+            "translator_resolve_session_context_helper",
+            lambda *args, **kwargs: self._translator_resolve_session_context(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "translator_action_response_helper",
+            lambda *args, **kwargs: self._translator_action_response(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "translator_gateway_error_detail_helper",
+            lambda *args, **kwargs: self._translator_gateway_error_detail(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "vg_subscriber_start_helper",
+            lambda *args, **kwargs: self._start_vg_subscriber(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "vg_subscriber_stop_helper",
+            lambda *args, **kwargs: self._stop_vg_subscriber(*args, **kwargs),
+        )
+
+        # Phase 2 Wave II (Session 25): inject translator/mobile POST helpers
+        # для extraction /api/translator/mobile/{register,bind,remove} и
+        # /api/translator/session/escalate в translator_router.py.
+        deps_dict.setdefault(
+            "translator_mobile_action_response_helper",
+            lambda *args, **kwargs: self._translator_mobile_action_response(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "translator_mobile_gateway_error_detail_helper",
+            lambda *args, **kwargs: self._translator_mobile_gateway_error_detail(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "inbox_service_upsert_owner_task_helper",
+            lambda **kwargs: getattr(_wam, "inbox_service").upsert_owner_task(**kwargs),
+        )
+        deps_dict.setdefault(
+            "inbox_service_get_summary_helper",
+            lambda: getattr(_wam, "inbox_service").get_summary(),
+        )
+
+        # Phase 2 Wave RR (Session 25): inject helpers для extraction
+        # /api/translator/mobile/onboarding/export (translator_router.py) и
+        # /api/diagnostics/smoke + /api/notify (misc_router.py).
+        deps_dict.setdefault(
+            "write_json_file_helper",
+            lambda path, payload: WebApp._write_json_file(path, payload),
+        )
+
+        # Phase 2 Wave QQ (Session 25): inject runtime recover/repair helpers
+        # для extraction /api/runtime/repair-active-shared-permissions и
+        # /api/runtime/recover в system_router.py. Late-bound через lambda —
+        # позволяет тестам монкей-патчить методы WebApp после init.
+        deps_dict.setdefault(
+            "active_shared_root_helper",
+            lambda: WebApp._active_shared_root(),
+        )
+        deps_dict.setdefault(
+            "active_shared_permission_health_helper",
+            lambda: self._active_shared_permission_health_snapshot(),
+        )
+        deps_dict.setdefault(
+            "normalize_shared_worktree_permissions_helper",
+            lambda root: getattr(_wam, "normalize_shared_worktree_permissions")(root),
+        )
+        deps_dict.setdefault(
+            "run_project_python_script_helper",
+            lambda *args, **kwargs: self._run_project_python_script(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "bool_env_helper",
+            lambda value, default=False: WebApp._bool_env(value, default),
+        )
+
+        # Phase 2 Wave TT (Session 25): inject helper для extraction
+        # /api/session10/summary в system_router. Late-bound через lambda —
+        # позволяет тестам монкей-патчить module-level _resolve_memory_indexer_state
+        # после init.
+        deps_dict.setdefault(
+            "memory_indexer_state_helper",
+            lambda: _resolve_memory_indexer_state(),
+        )
+
+        # Phase 2 Wave SS (Session 25): inject helpers для extraction
+        # /api/krab/restart_userbot в system_router. Stateful timestamp
+        # (`_last_restart_userbot_ts`) хранится на WebApp instance —
+        # тесты читают/сбрасывают его напрямую (`web_app._last_restart_userbot_ts = 0`),
+        # поэтому через late-bound get/set helpers сохраняем backwards-compat.
+        deps_dict.setdefault(
+            "restart_userbot_get_last_ts_helper",
+            lambda: getattr(self, "_last_restart_userbot_ts", 0),
+        )
+        deps_dict.setdefault(
+            "restart_userbot_set_last_ts_helper",
+            lambda ts: setattr(self, "_last_restart_userbot_ts", ts),
+        )
+
+        # Phase 2 Wave UU (Session 25): inject helpers для extraction
+        # /api/runtime/handoff aggregator в system_router.py. Late-bound через
+        # lambda — позволяет тестам монкей-патчить методы WebApp после init.
+        deps_dict.setdefault(
+            "runtime_handoff_safe_client_health_helper",
+            lambda *args, **kwargs: self._safe_client_health_summary(*args, **kwargs),
+        )
+        deps_dict.setdefault(
+            "runtime_handoff_latest_path_by_glob_helper",
+            lambda pattern: self._latest_path_by_glob(pattern),
+        )
+        deps_dict.setdefault(
+            "runtime_handoff_git_snapshot_helper",
+            lambda: self._git_snapshot(),
+        )
+        deps_dict.setdefault(
+            "runtime_handoff_mask_secret_helper",
+            lambda value: WebApp._mask_secret(value),
+        )
+
+        # Phase 2 Part 2A (Session 27): inject helper для context_router.
+        # Late-bound через lambda — позволяет тестам монкей-патчить
+        # WebApp._run_local_script после init.
+        deps_dict.setdefault(
+            "context_run_local_script_helper",
+            lambda script_path, timeout_seconds: self._run_local_script(
+                script_path, timeout_seconds=timeout_seconds
+            ),
+        )
+
+        return RouterContext(
+            deps=deps_dict,
+            project_root=self._project_root(),
+            web_api_key_fn=self._web_api_key,
+            assert_write_access_fn=self._assert_write_access,
+            rate_state={},
+            idempotency_state={},
+            default_port=self.port,
+            boot_ts_holder=self._boot_ts_holder,
+            runtime_lite_provider=self._collect_runtime_lite_snapshot,
+        )
 
     @staticmethod
     def _tail_text(text: str, max_chars: int = 2000) -> str:
-        """Возвращает хвост текста с ограничением длины."""
-        payload = str(text or "")
-        if len(payload) <= max_chars:
-            return payload
-        return payload[-max_chars:]
+        """Возвращает хвост текста (delegates → _helpers.tail_text)."""
+        from .web_routers._helpers import tail_text
+
+        return tail_text(text, max_chars)
 
     @staticmethod
     def _mask_secret(value: str) -> str:
-        """Маскирует секрет для UI/логов: видны только префикс и суффикс."""
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        if len(text) <= 6:
-            return "*" * len(text)
-        return f"{text[:3]}...{text[-3:]}"
+        """Маскирует секрет (delegates → _helpers.mask_secret)."""
+        from .web_routers._helpers import mask_secret
+
+        return mask_secret(value)
 
     @staticmethod
     def _openclaw_gateway_token_from_config() -> str:
@@ -685,47 +1537,16 @@ class WebApp:
         Нужен, чтобы owner UI опирался на тот же auth/runtime view,
         который уже считает сам OpenClaw, а не на самодельный разбор текста.
         """
-        timeout_sec = cls._float_env(
-            "KRAB_WEB_OPENCLAW_MODELS_STATUS_TIMEOUT_SEC",
-            2.5,
-            min_value=0.2,
-            max_value=15.0,
+        cwd = str(cls._project_root())
+        raw = _cached_subprocess_run(
+            ("openclaw", "models", "status", "--json"),
+            cwd=cwd,
+            timeout=15.0,
         )
-        try:
-            # Семафор ограничивает одновременные openclaw probe'ы из sync callsites.
-            with get_sync_semaphore():
-                # Не используем subprocess.run(timeout=...): `openclaw models status`
-                # может породить дочерний `codex login status`, и при зависании
-                # простой timeout оставляет сироту, который держит web-запрос.
-                # Отдельная process group позволяет погасить весь probe целиком.
-                proc = subprocess.Popen(
-                    ["openclaw", "models", "status", "--json"],
-                    cwd=str(cls._project_root()),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    start_new_session=True,
-                )
-                try:
-                    stdout, _stderr = proc.communicate(timeout=timeout_sec)
-                except subprocess.TimeoutExpired:
-                    # Диагностический probe не должен блокировать owner-панель.
-                    # Лучше вернуть деградированный срез, чем повесить event loop.
-                    try:
-                        os.killpg(proc.pid, 15)
-                        proc.communicate(timeout=1.0)
-                    except Exception:
-                        try:
-                            os.killpg(proc.pid, 9)
-                        except Exception:
-                            pass
-                    return {}
-        except Exception:
-            return {}
-        if proc.returncode != 0:
+        if raw is None:
             return {}
         try:
-            payload = json.loads(str(stdout or "{}"))
+            payload = json.loads(raw or "{}")
         except (TypeError, ValueError):
             return {}
 
@@ -789,43 +1610,16 @@ class WebApp:
     @classmethod
     def _openclaw_models_full_catalog(cls) -> dict[str, Any]:
         """Читает `openclaw models list --all --json` и группирует модели по provider."""
-        timeout_sec = cls._float_env(
-            "KRAB_WEB_OPENCLAW_MODELS_LIST_TIMEOUT_SEC",
-            3.0,
-            min_value=0.2,
-            max_value=20.0,
+        cwd = str(cls._project_root())
+        raw = _cached_subprocess_run(
+            ("openclaw", "models", "list", "--all", "--json"),
+            cwd=cwd,
+            timeout=20.0,
         )
-        try:
-            # Семафор ограничивает одновременные openclaw probe'ы из sync callsites.
-            with get_sync_semaphore():
-                # Этот probe обслуживает только UI-каталог. Если CLI или вложенный
-                # provider-probe зависнет, нельзя блокировать весь web event loop.
-                proc = subprocess.Popen(
-                    ["openclaw", "models", "list", "--all", "--json"],
-                    cwd=str(cls._project_root()),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    start_new_session=True,
-                )
-                try:
-                    stdout, _stderr = proc.communicate(timeout=timeout_sec)
-                except subprocess.TimeoutExpired:
-                    try:
-                        os.killpg(proc.pid, 15)
-                        proc.communicate(timeout=1.0)
-                    except Exception:
-                        try:
-                            os.killpg(proc.pid, 9)
-                        except Exception:
-                            pass
-                    return {"count": 0, "providers": {}}
-        except Exception:
-            return {"count": 0, "providers": {}}
-        if proc.returncode != 0:
+        if raw is None:
             return {"count": 0, "providers": {}}
         try:
-            payload = json.loads(str(stdout or "{}"))
+            payload = json.loads(raw or "{}")
         except (TypeError, ValueError):
             return {"count": 0, "providers": {}}
 
@@ -2389,8 +3183,11 @@ class WebApp:
             status_snapshot=status_snapshot,
         )
 
+        # 27.04.2026: harness "codex-cli" больше не registered в OpenClaw 2026.4.24
+        # (правильный — "codex"). Модель swapped на gpt-5.5 + harness rename.
+        # См. recovery 5-layers в Session 27 handoff.
         target_primary = str(
-            os.getenv("OPENCLAW_TARGET_PRIMARY_MODEL", "codex-cli/gpt-5.4") or ""
+            os.getenv("OPENCLAW_TARGET_PRIMARY_MODEL", "codex/gpt-5.5") or ""
         ).strip()
         target_provider = (
             str(target_primary.split("/", 1)[0] if "/" in target_primary else "").strip().lower()
@@ -2686,9 +3483,13 @@ class WebApp:
         - тестам удобнее подменять один seam, чем мокать subprocess по всему модулю;
         - owner-панель получает truthful state ровно из того же CLI-контура,
           который пользователь может вызвать вручную.
+        Вызов защищён семафором openclaw_cli_budget (budget=3).
         """
-        async with self._openclaw_cli_sem:
-            try:
+        from ..core.openclaw_cli_budget import acquire as _cli_acquire
+        from ..core.openclaw_cli_budget import terminate_and_reap as _reap
+
+        try:
+            async with _cli_acquire():
                 proc = await asyncio.create_subprocess_exec(
                     "openclaw",
                     *args,
@@ -2699,27 +3500,7 @@ class WebApp:
                 try:
                     stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
                 except asyncio.TimeoutError:
-                    if proc.returncode is None:
-                        try:
-                            proc.terminate()
-                        except ProcessLookupError:
-                            pass
-                        else:
-                            # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
-                            try:
-                                await asyncio.wait_for(proc.wait(), timeout=2.0)
-                            except asyncio.TimeoutError:
-                                try:
-                                    proc.kill()
-                                except ProcessLookupError:
-                                    pass
-                                try:
-                                    await asyncio.wait_for(proc.wait(), timeout=1.0)
-                                except asyncio.TimeoutError:
-                                    logger.warning(
-                                        "openclaw_cli_force_killed_but_no_reap",
-                                        pid=proc.pid,
-                                    )
+                    await _reap(proc)
                     return {
                         "ok": False,
                         "error": "openclaw_timeout",
@@ -2727,31 +3508,31 @@ class WebApp:
                         "exit_code": None,
                         "raw": "",
                     }
-            except Exception as exc:
-                return {
-                    "ok": False,
-                    "error": "openclaw_exec_failed",
-                    "detail": str(exc),
-                    "exit_code": None,
-                    "raw": "",
-                }
-
-            raw_output = stdout.decode("utf-8", errors="replace")
-            result: dict[str, Any] = {
-                "ok": proc.returncode == 0,
-                "exit_code": proc.returncode,
-                "raw": raw_output,
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": "openclaw_exec_failed",
+                "detail": str(exc),
+                "exit_code": None,
+                "raw": "",
             }
-            if not expect_json:
-                return result
 
-            try:
-                result["data"] = json.loads(raw_output or "{}")
-            except Exception as exc:
-                result["ok"] = False
-                result["error"] = "openclaw_json_parse_failed"
-                result["detail"] = f"Не удалось распарсить JSON ответа openclaw: {exc}"
+        raw_output = stdout.decode("utf-8", errors="replace")
+        result: dict[str, Any] = {
+            "ok": proc.returncode == 0,
+            "exit_code": proc.returncode,
+            "raw": raw_output,
+        }
+        if not expect_json:
             return result
+
+        try:
+            result["data"] = json.loads(raw_output or "{}")
+        except Exception as exc:
+            result["ok"] = False
+            result["error"] = "openclaw_json_parse_failed"
+            result["detail"] = f"Не удалось распарсить JSON ответа openclaw: {exc}"
+        return result
 
     @staticmethod
     def _normalize_openclaw_cron_job(job: dict[str, Any]) -> dict[str, Any]:
@@ -2867,31 +3648,24 @@ class WebApp:
 
     @staticmethod
     def _clone_jsonish_dict(payload: dict[str, Any]) -> dict[str, Any]:
-        """Возвращает безопасственную неглубокую копию dict/list payload для runtime-cache."""
-        cloned: dict[str, Any] = {}
-        for key, value in dict(payload or {}).items():
-            if isinstance(value, list):
-                cloned[key] = list(value)
-            elif isinstance(value, dict):
-                cloned[key] = dict(value)
-            else:
-                cloned[key] = value
-        return cloned
+        """Неглубокая копия dict/list payload (delegates → _helpers)."""
+        from .web_routers._helpers import clone_jsonish_dict
+
+        return clone_jsonish_dict(payload)
 
     @staticmethod
     def _clone_jsonish_payload(payload: Any) -> Any:
-        """Возвращает глубокую копию JSON-подобного payload для cache/fallback ответов."""
-        return copy.deepcopy(payload)
+        """Глубокая копия JSON-подобного payload (delegates → _helpers)."""
+        from .web_routers._helpers import clone_jsonish_payload
+
+        return clone_jsonish_payload(payload)
 
     @staticmethod
     def _float_env(name: str, default: float, *, min_value: float, max_value: float) -> float:
-        """Читает float из env с безопасным clamp и без размазывания try/except по коду."""
-        raw = str(os.getenv(name, str(default)) or str(default)).strip()
-        try:
-            value = float(raw)
-        except Exception:
-            value = float(default)
-        return max(float(min_value), min(float(value), float(max_value)))
+        """Читает float из env с clamp (delegates → _helpers.float_env)."""
+        from .web_routers._helpers import float_env
+
+        return float_env(name, default, min_value=min_value, max_value=max_value)
 
     def _model_catalog_cache_ttl_sec(self) -> float:
         """TTL короткого cache каталога owner UI."""
@@ -2979,6 +3753,311 @@ class WebApp:
         catalog["catalog_refresh_degraded"] = True
         catalog["catalog_refresh_reason"] = str(degraded_reason or "catalog_refresh_degraded")
         return catalog
+
+    @staticmethod
+    def _normalize_force_mode_static(force_mode: str) -> str:
+        """Pure-функция нормализации force_* режимов в UI-вид: auto/local/cloud.
+
+        Идентична внутреннему ``_normalize_force_mode`` closure внутри
+        ``_setup_routes``. Hoisted на класс для использования из extracted
+        endpoints (Wave OO) и helper-injection.
+        """
+        normalized = str(force_mode or "").strip().lower()
+        if normalized in {"force_local", "local"}:
+            return "local"
+        if normalized in {"force_cloud", "cloud"}:
+            return "cloud"
+        return "auto"
+
+    async def _build_model_catalog_method(self, router_obj) -> dict:
+        """Promotion of ``_build_model_catalog`` closure из ``_setup_routes``.
+
+        Используется helper-injection (Wave OO, Session 25) для extracted
+        endpoints в ``model_router.py`` (``/api/model/catalog`` +
+        ``/api/model/apply``). Логика 1:1 с inline closure.
+        """
+        try:
+            return await self._build_model_catalog_inner_method(router_obj)
+        except Exception as exc:  # noqa: BLE001
+            import logging as _logging
+
+            _logging.getLogger(__name__).warning(
+                "_build_model_catalog failed (cold start?): %s", exc
+            )
+            return {
+                "force_mode": "auto",
+                "slots": [],
+                "cloud_slots": {},
+                "local_engine": "",
+                "local_available": False,
+                "local_active_model": "",
+                "local_models": [],
+                "local_models_error": str(exc),
+                "cloud_presets": [],
+                "cloud_inventory": [],
+                "cloud_provider_groups": [],
+                "aliases": [],
+                "quick_presets": [],
+                "runtime_model_count": 0,
+                "cloud_inventory_count": 0,
+                "runtime_registry_source": "fallback_empty",
+                "router_usage": {},
+                "routing_status": {},
+                "runtime_controls": {},
+                "parallelism_truth": {},
+                "auth_recovery": {},
+                "catalog_guidance": {},
+                "_error": str(exc),
+            }
+
+    async def _build_model_catalog_inner_method(self, router_obj) -> dict:
+        """Promotion of ``_build_model_catalog_inner`` closure.
+
+        См. docstring ``_build_model_catalog_method``.
+        """
+        cloud_slots_raw = getattr(router_obj, "models", {}) or {}
+        cloud_slots = (
+            {str(k): str(v) for k, v in cloud_slots_raw.items()}
+            if isinstance(cloud_slots_raw, dict)
+            else {}
+        )
+        slot_list = (
+            sorted(cloud_slots.keys()) if cloud_slots else ["chat", "thinking", "pro", "coding"]
+        )
+        force_mode = self._normalize_force_mode_static(getattr(router_obj, "force_mode", "auto"))
+        local_truth = await self._resolve_local_runtime_truth(router_obj)
+        local_engine = str(
+            local_truth.get("engine") or getattr(router_obj, "local_engine", "") or ""
+        )
+        local_active_model = str(local_truth.get("active_model") or "")
+        local_available = bool(local_truth.get("runtime_reachable"))
+        loaded_model_ids = {
+            str(item).strip()
+            for item in (local_truth.get("loaded_models") or [])
+            if str(item or "").strip()
+        }
+
+        local_models: list[dict] = []
+        local_models_error = ""
+        if hasattr(router_obj, "list_local_models_verbose"):
+            try:
+                raw_local_models = await router_obj.list_local_models_verbose()
+                if isinstance(raw_local_models, list):
+                    for item in raw_local_models:
+                        if not isinstance(item, dict):
+                            continue
+                        model_id = str(item.get("id", "")).strip()
+                        if not model_id:
+                            continue
+                        local_models.append(
+                            {
+                                "id": model_id,
+                                "loaded": bool(
+                                    model_id == local_active_model
+                                    or model_id in loaded_model_ids
+                                    or item.get("loaded", False)
+                                ),
+                                "type": str(item.get("type", "llm")),
+                                "size_human": str(item.get("size_human", "n/a")),
+                            }
+                        )
+            except Exception as exc:  # noqa: BLE001
+                local_models_error = str(exc)
+
+        if local_active_model and not any(
+            str(item.get("id")) == local_active_model for item in local_models
+        ):
+            local_models.insert(
+                0,
+                {
+                    "id": local_active_model,
+                    "loaded": True,
+                    "type": "llm",
+                    "size_human": "n/a",
+                },
+            )
+
+        cloud_inventory: list[dict[str, Any]] = []
+        cloud_presets: list[dict[str, Any]] = []
+        alias_items: list[dict[str, str]] = []
+        try:
+            cloud_inventory = self._build_runtime_cloud_presets(cloud_slots)
+            cloud_presets = [
+                item for item in cloud_inventory if bool(item.get("configured_runtime", True))
+            ]
+            runtime_model_ids = {
+                str(item.get("id", "")).strip()
+                for item in cloud_presets
+                if str(item.get("id", "")).strip()
+            }
+            for alias_key in sorted(MODEL_FRIENDLY_ALIASES.keys()):
+                resolved_id, _ = normalize_model_alias(alias_key)
+                if resolved_id not in runtime_model_ids:
+                    continue
+                alias_items.append(
+                    {
+                        "alias": alias_key,
+                        "model": resolved_id,
+                    }
+                )
+        except Exception:
+            cloud_inventory = []
+            cloud_presets = []
+            alias_items = []
+
+        if not cloud_inventory:
+            cloud_inventory = self._build_runtime_cloud_presets({})
+        if not cloud_presets:
+            cloud_presets = [
+                item for item in cloud_inventory if bool(item.get("configured_runtime", True))
+            ]
+        if not cloud_presets:
+            cloud_presets = list(cloud_inventory)
+
+        local_override = (
+            local_active_model
+            or str(
+                getattr(router_obj, "active_local_model", "")
+                or getattr(config, "LOCAL_PREFERRED_MODEL", "")
+                or ""
+            ).strip()
+        )
+        if not local_override:
+            local_override = "nvidia/nemotron-3-nano"
+
+        quick_presets_map = self._build_runtime_quick_presets(
+            current_slots=cloud_slots,
+            local_override=local_override,
+        )
+        quick_presets = [
+            {
+                "id": preset_id,
+                "title": str(preset_payload.get("title", preset_id)),
+                "description": str(preset_payload.get("description", "")),
+            }
+            for preset_id, preset_payload in quick_presets_map.items()
+        ]
+        openclaw = self.deps.get("openclaw_client")
+        last_runtime_route: dict[str, Any] = {}
+        if openclaw and hasattr(openclaw, "get_last_runtime_route"):
+            try:
+                last_runtime_route = dict(openclaw.get_last_runtime_route() or {})
+            except Exception:
+                last_runtime_route = {}
+        routing_status = self._overlay_live_route_on_openclaw_model_routing_status(
+            routing=self._build_openclaw_model_routing_status(),
+            last_runtime_route=last_runtime_route,
+        )
+        cloud_inventory = self._overlay_routing_provider_truth_on_cloud_inventory(
+            cloud_inventory=cloud_inventory,
+            routing_status=routing_status,
+        )
+        runtime_controls = self._build_openclaw_runtime_controls()
+        auth_recovery = build_auth_recovery_readiness_snapshot(
+            project_root=self._project_root(),
+            status_payload=self._openclaw_models_status_snapshot().get("raw"),
+            auth_profiles_payload=self._load_openclaw_auth_profiles(),
+            runtime_models_payload=self._load_openclaw_runtime_models(),
+            runtime_config_payload=self._load_openclaw_runtime_config(),
+        )
+
+        router_usage_summary = {}
+        if hasattr(router_obj, "get_usage_summary"):
+            try:
+                router_usage_summary = dict(router_obj.get_usage_summary() or {})
+            except Exception:
+                router_usage_summary = {}
+
+        cloud_provider_groups_map: dict[str, dict[str, Any]] = {}
+        for item in cloud_inventory:
+            provider_name = str(item.get("provider", "") or "").strip()
+            if not provider_name:
+                continue
+            group = cloud_provider_groups_map.setdefault(
+                provider_name,
+                {
+                    "provider": provider_name,
+                    "provider_label": str(item.get("provider_label", provider_name)),
+                    "provider_auth": str(item.get("provider_auth", "unknown")),
+                    "provider_readiness": str(item.get("provider_readiness", "unknown")),
+                    "provider_readiness_label": str(
+                        item.get("provider_readiness_label", "Configured")
+                    ),
+                    "provider_detail": str(item.get("provider_detail", "")),
+                    "provider_quota_state": str(item.get("provider_quota_state", "unknown")),
+                    "provider_quota_label": str(item.get("provider_quota_label", "")),
+                    "provider_effective_kind": str(item.get("provider_effective_kind", "")),
+                    "provider_effective_detail": str(item.get("provider_effective_detail", "")),
+                    "provider_oauth_status": str(item.get("provider_oauth_status", "")),
+                    "provider_oauth_remaining_human": str(
+                        item.get("provider_oauth_remaining_human", "")
+                    ),
+                    "provider_auth_recovery": dict(item.get("provider_auth_recovery") or {}),
+                    "provider_ui": dict(item.get("provider_ui") or {}),
+                    "legacy": bool(item.get("legacy")),
+                    "models": [],
+                },
+            )
+            group["models"].append(item)
+
+        cloud_provider_groups = [
+            {
+                **group,
+                "model_count": len(group["models"]),
+                "configured_model_count": sum(
+                    1 for model in group["models"] if bool(model.get("configured_runtime"))
+                ),
+                "catalog_only_model_count": sum(
+                    1 for model in group["models"] if not bool(model.get("configured_runtime"))
+                ),
+                "active_count": sum(
+                    1 for model in group["models"] if bool(model.get("active_runtime"))
+                ),
+                "selected_slots": sorted(
+                    {
+                        slot_name
+                        for model in group["models"]
+                        for slot_name in (model.get("selected_slots") or [])
+                        if str(slot_name or "").strip()
+                    }
+                ),
+            }
+            for group in sorted(
+                cloud_provider_groups_map.values(),
+                key=lambda item: self._provider_sort_rank(str(item.get("provider") or "")),
+            )
+        ]
+        parallelism_truth = self._build_openclaw_parallelism_truth()
+
+        payload = {
+            "force_mode": force_mode,
+            "slots": slot_list,
+            "cloud_slots": cloud_slots,
+            "local_engine": local_engine,
+            "local_available": local_available,
+            "local_active_model": local_active_model,
+            "local_models": local_models,
+            "local_models_error": local_models_error,
+            "cloud_presets": cloud_presets,
+            "cloud_inventory": cloud_inventory,
+            "cloud_provider_groups": cloud_provider_groups,
+            "aliases": alias_items,
+            "quick_presets": quick_presets,
+            "runtime_model_count": len(cloud_presets),
+            "cloud_inventory_count": len(cloud_inventory),
+            "runtime_registry_source": "openclaw_models_json+openclaw_models_list_all",
+            "router_usage": router_usage_summary,
+            "routing_status": routing_status,
+            "runtime_controls": runtime_controls,
+            "parallelism_truth": parallelism_truth,
+            "auth_recovery": auth_recovery,
+            "catalog_guidance": {
+                "primary_flow": "Сначала выбери режим и пресет. Точный слот меняй только в advanced override.",
+                "openai_manual_only": False,
+            },
+        }
+        self._store_model_catalog_cache(payload)
+        return payload
 
     @classmethod
     def _lmstudio_snapshot_ttl_sec(cls) -> float:
@@ -3257,11 +4336,10 @@ class WebApp:
 
     @staticmethod
     def _bool_env(value: str, default: bool = False) -> bool:
-        """Безопасно нормализует булево значение из env/строки."""
-        raw = str(value or "").strip().lower()
-        if not raw:
-            return default
-        return raw in {"1", "true", "yes", "on"}
+        """Нормализует булево значение (delegates → _helpers.bool_env)."""
+        from .web_routers._helpers import bool_env
+
+        return bool_env(value, default)
 
     def _git_snapshot(self) -> dict[str, Any]:
         """Снимает минимальный git-срез (ветка/head/short status) для handoff."""
@@ -3532,7 +4610,13 @@ class WebApp:
         *,
         runtime_lite: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Собирает policy matrix поверх ACL и live runtime-lite truth."""
+        """Собирает policy matrix поверх ACL и live runtime-lite truth.
+
+        Phase 2 Wave H (Session 25): тело осталось inline для backwards-compat
+        с тестами, которые патчат ``src.modules.web_app.load_acl_runtime_state``.
+        Promoted module-level вариант — ``web_routers._helpers.collect_policy_matrix_snapshot``
+        — предназначен для router-модулей extracted в Wave I+.
+        """
         return build_policy_matrix(
             operator_id=current_operator_id(),
             account_id=current_account_id(),
@@ -6202,8 +7286,15 @@ class WebApp:
         *,
         timeout_sec: float = 12.0,
     ) -> tuple[dict[str, Any], str]:
-        """Запускает `openclaw ... --json` и безопасно возвращает `(payload, error)`."""
-        async with self._openclaw_cli_sem:
+        """Запускает `openclaw ... --json` и безопасно возвращает `(payload, error)`.
+
+        Вызов защищён семафором openclaw_cli_budget (budget=3) — предотвращает
+        накопление transient CLI-процессов при параллельных запросах owner-панели.
+        """
+        from ..core.openclaw_cli_budget import acquire as _cli_acquire
+        from ..core.openclaw_cli_budget import terminate_and_reap as _reap
+
+        async with _cli_acquire():
             try:
                 proc = await asyncio.create_subprocess_exec(
                     "openclaw",
@@ -6218,27 +7309,7 @@ class WebApp:
             try:
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
             except asyncio.TimeoutError:
-                if proc.returncode is None:
-                    try:
-                        proc.terminate()
-                    except ProcessLookupError:
-                        pass
-                    else:
-                        # SIGTERM → 2с grace → SIGKILL → предотвращаем orphan
-                        try:
-                            await asyncio.wait_for(proc.wait(), timeout=2.0)
-                        except asyncio.TimeoutError:
-                            try:
-                                proc.kill()
-                            except ProcessLookupError:
-                                pass
-                            try:
-                                await asyncio.wait_for(proc.wait(), timeout=1.0)
-                            except asyncio.TimeoutError:
-                                logger.warning(
-                                    "openclaw_cli_force_killed_but_no_reap",
-                                    pid=proc.pid,
-                                )
+                await _reap(proc)
                 return {}, "cli_timeout"
 
             stdout_text = stdout.decode("utf-8", errors="replace").strip()
@@ -6319,25 +7390,28 @@ class WebApp:
         gateway_detail = ""
 
         try:
-            async with get_global_semaphore():
-                proc = await asyncio.create_subprocess_exec(
-                    "openclaw",
-                    "gateway",
-                    "probe",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    env=self._openclaw_cli_env(),
-                )
-                try:
-                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=12.0)
-                    gateway_probe_raw = stdout.decode("utf-8", errors="replace")
-                    parsed_probe = self._parse_openclaw_gateway_probe(gateway_probe_raw)
-                    gateway_reachable = bool(parsed_probe.get("gateway_reachable"))
-                    local_target = str(parsed_probe.get("local_target") or "")
-                    gateway_detail = str(parsed_probe.get("detail") or "")
-                except asyncio.TimeoutError:
-                    await terminate_and_reap(proc)
-                    gateway_probe_error = "gateway_probe_timeout"
+            proc = await asyncio.create_subprocess_exec(
+                "openclaw",
+                "gateway",
+                "probe",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=self._openclaw_cli_env(),
+            )
+            try:
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=12.0)
+                gateway_probe_raw = stdout.decode("utf-8", errors="replace")
+                parsed_probe = self._parse_openclaw_gateway_probe(gateway_probe_raw)
+                gateway_reachable = bool(parsed_probe.get("gateway_reachable"))
+                local_target = str(parsed_probe.get("local_target") or "")
+                gateway_detail = str(parsed_probe.get("detail") or "")
+            except asyncio.TimeoutError:
+                if proc.returncode is None:
+                    try:
+                        proc.terminate()
+                    except ProcessLookupError:
+                        pass
+                gateway_probe_error = "gateway_probe_timeout"
         except Exception as exc:
             gateway_probe_error = f"gateway_probe_failed: {exc}"
 
@@ -7458,201 +8532,175 @@ class WebApp:
                 "Expires": "0",
             }
 
-        @self.app.get("/", response_class=HTMLResponse)
-        async def index():
-            # Если есть кастомный index.html — отдаём его (для обратной совместимости).
-            if self._index_path.exists():
-                return FileResponse(self._index_path, headers=_no_store_headers())
-            # Иначе — Gemini-generated landing page с навигацией по sub-dashboards.
-            from .web_app_landing_page import LANDING_PAGE_HTML
-
-            return HTMLResponse(
-                LANDING_PAGE_HTML,
-                headers=_no_store_headers(),
-            )
-
-        @self.app.get("/nano_theme.css")
-        @self.app.get("/prototypes/nano/nano_theme.css")
-        async def nano_theme_css():
-            """
-            Отдает основной CSS web-панели.
-
-            Дублируем оба URL, чтобы панель стабильно работала и при открытии
-            через локальный HTTP, и при старых ссылках после обновлений.
-            """
-            if self._nano_theme_path.exists():
-                return FileResponse(
-                    self._nano_theme_path,
-                    media_type="text/css",
-                    headers=_no_store_headers(),
-                )
-            raise HTTPException(status_code=404, detail="nano_theme_css_not_found")
-
-        @self.app.post("/api/notify")
-        async def notify(
+        @self.app.post("/api/hooks/sentry")
+        async def sentry_webhook(
             payload: dict[str, Any] = Body(default_factory=dict),
+            request: Request = None,
         ):
-            """Отправляет Telegram-сообщение от Краба владельцу.
+            """Приём webhook-ов от Sentry Alert Rules → Telegram Saved Messages.
 
-            Используется внутренними сервисами (inbox watcher, hotkey) для уведомлений.
-            Localhost-only, без auth (rate-limited через ThrottleInterval LaunchAgent).
+            Аутентификация: `X-Sentry-Signature-256` HMAC-SHA256 от raw body
+            с секретом `SENTRY_WEBHOOK_SECRET`. Secret обязателен —
+            если не задан, endpoint отвечает 503 и ничего не доставляет
+            (иначе любой, кто знает публичный URL, мог бы спамить owner).
+
+            Форматирование: `format_sentry_alert(payload)` — лаконичный
+            markdown с level, title, env, events, users, permalink.
+            Доставка: в чат `OPENCLAW_ALERT_TARGET` или owner (OWNER_USER_IDS[0]).
             """
-            text = str(payload.get("text") or "").strip()
+            import hashlib
+            import hmac
+
+            from ..core.sentry_webhook_formatter import format_sentry_alert
+
+            # Hard-require secret: пустой секрет == endpoint отключён.
+            secret = os.getenv("SENTRY_WEBHOOK_SECRET", "").strip()
+            if not secret:
+                logger.warning(
+                    "sentry_webhook_not_configured",
+                    hint=(
+                        "SENTRY_WEBHOOK_SECRET env is empty; endpoint rejects all "
+                        "requests until a secret is set (auto-generated at boot)."
+                    ),
+                )
+                raise HTTPException(status_code=503, detail="webhook_not_configured")
+
+            if request is None:
+                # Невозможно без Request: нет raw body для HMAC.
+                raise HTTPException(status_code=400, detail="request_required")
+
+            raw_body = await request.body()
+            received_sig = (
+                request.headers.get("x-sentry-signature-256")
+                or request.headers.get("sentry-hook-signature")
+                or ""
+            ).strip()
+            if not received_sig:
+                raise HTTPException(status_code=401, detail="signature_missing")
+
+            expected = hmac.new(
+                secret.encode("utf-8"),
+                raw_body,
+                hashlib.sha256,
+            ).hexdigest()
+            if not hmac.compare_digest(received_sig, expected):
+                raise HTTPException(status_code=401, detail="bad_signature")
+
+            text = format_sentry_alert(payload)
             if not text:
-                raise HTTPException(status_code=400, detail="text_required")
-            chat_id = str(payload.get("chat_id") or "").strip() or os.getenv(
-                "OPENCLAW_ALERT_TARGET", ""
-            )
+                return {"ok": True, "skipped": "unsupported_payload"}
+
+            # Куда слать: env OPENCLAW_ALERT_TARGET → owner → error
+            chat_id = (os.getenv("OPENCLAW_ALERT_TARGET") or "").strip()
             if not chat_id:
-                raise HTTPException(status_code=400, detail="chat_id_required")
+                owner_ids = getattr(config, "OWNER_USER_IDS", []) or []
+                if owner_ids:
+                    chat_id = str(owner_ids[0])
+            if not chat_id:
+                raise HTTPException(status_code=503, detail="no_alert_target")
+
             userbot = self.deps.get("kraab_userbot")
             if userbot is None or not getattr(userbot, "client", None):
-                raise HTTPException(status_code=503, detail="userbot_not_ready")
+                # Fallback: сохраняем в log — alert не пропадёт совсем.
+                # Возвращаем JSONResponse напрямую (не raise), чтобы Sentry
+                # не ловил это как ошибку во время startup.
+                logger.warning("sentry_webhook_no_userbot", text_preview=text[:200])
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "ok": False,
+                        "error": "userbot_not_ready",
+                        "detail": "userbot_not_ready",
+                    },
+                    headers={"Retry-After": "10"},
+                )
+
             try:
                 await userbot.client.send_message(chat_id, text)
-                return {"ok": True, "chat_id": chat_id}
+                logger.info(
+                    "sentry_webhook_delivered",
+                    chat_id=chat_id,
+                    level=payload.get("data", {}).get("event", {}).get("level"),
+                )
+                return {"ok": True, "chat_id": chat_id, "length": len(text)}
             except Exception as exc:
+                logger.error("sentry_webhook_send_failed", error=str(exc))
                 raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        @self.app.get("/api/stats")
-        async def get_stats():
-            router = self.deps["router"]
-            black_box = self.deps.get("black_box")
-            rag = router.rag if hasattr(router, "rag") else None
-            return {
-                "router": await self._build_stats_router_payload(router),
-                "black_box": black_box.get_stats()
-                if black_box and hasattr(black_box, "get_stats")
-                else {"enabled": False},
-                "rag": rag.get_stats()
-                if rag and hasattr(rag, "get_stats")
-                else {"enabled": False, "count": 0},
-            }
+        @self.app.post("/api/hooks/sentry/secret/rotate")
+        async def sentry_webhook_secret_rotate(request: Request):
+            """Регенерирует SENTRY_WEBHOOK_SECRET (owner-only, loopback).
 
-        @self.app.get("/api/message_batcher/stats")
-        async def batcher_stats():
-            """Статистика per-chat message batcher (backpressure буфер)."""
-            from ..core.message_batcher import message_batcher
+            Доступ разрешён только с 127.0.0.1 / ::1 — endpoint не требует
+            токена (панель всё равно не слушает извне), но проверяет
+            `request.client.host` для защиты от внешнего доступа через
+            reverse-proxy / Cloudflare tunnel.
+            """
+            client_host = request.client.host if request.client else ""
+            if client_host not in {"127.0.0.1", "::1", "localhost"}:
+                raise HTTPException(status_code=403, detail="loopback_only")
 
-            return {"ok": True, **message_batcher.stats()}
-
-        @self.app.get("/api/chat_windows/stats")
-        async def chat_windows_stats():
-            """Статистика per-chat ChatWindow LRU manager (Chado blueprint)."""
-            try:
-                from ..core.chat_window_manager import chat_window_manager
-
-                return {"ok": True, **chat_window_manager.stats()}
-            except Exception as exc:  # noqa: BLE001
-                return {"ok": False, "error": str(exc)}
-
-        @self.app.get("/api/health")
-        async def get_health():
-            """Единый health статусов для web-панели."""
-            router = self.deps["router"]
-            openclaw = self.deps.get("openclaw_client")
-            voice_gateway = self.deps.get("voice_gateway_client")
-            krab_ear = self.deps.get("krab_ear_client")
-            lite_snapshot = await self._collect_runtime_lite_snapshot()
-            lm_state = str(lite_snapshot.get("lmstudio_model_state") or "unknown").strip().lower()
-            local_ok = lm_state in {"loaded", "idle"}
-            ecosystem = EcosystemHealthService(
-                router=router,
-                openclaw_client=openclaw,
-                voice_gateway_client=voice_gateway,
-                krab_ear_client=krab_ear,
-                local_health_override={
-                    "ok": local_ok,
-                    "status": "ok" if local_ok else (lm_state or "down"),
-                    "degraded": not local_ok,
-                    "latency_ms": 0,
-                    "source": "web_app.lite_snapshot",
-                },
+            from src.bootstrap.sentry_webhook_secret import (
+                rotate_sentry_webhook_secret,
             )
-            report = await ecosystem.collect()
+
+            new_secret = rotate_sentry_webhook_secret()
             return {
-                "status": "ok",
-                "checks": {
-                    "openclaw": bool(report["checks"]["openclaw"]["ok"]),
-                    "local_lm": local_ok,
-                    "voice_gateway": bool(report["checks"]["voice_gateway"]["ok"]),
-                    "krab_ear": bool(report["checks"]["krab_ear"]["ok"]),
-                },
-                "degradation": str(report["degradation"]),
-                "risk_level": str(report["risk_level"]),
-                "chain": report["chain"],
-            }
-
-        @self.app.get("/api/health/lite")
-        async def get_health_lite():
-            """
-            Быстрый liveness-check web-панели.
-
-            Важно:
-            - не тянет deep ecosystem probes;
-            - используется daemon-скриптами и uptime-watch для проверки
-              «жив ли HTTP-процесс», а не «все ли внешние зависимости сейчас быстрые».
-            """
-            runtime = await self._collect_runtime_lite_snapshot()
-            # B.7 (session 4): telegram_rate_limiter stats для /stats dashboard.
-            try:
-                from ..core.telegram_rate_limiter import telegram_rate_limiter as _trl
-
-                _rate_limiter_stats = _trl.stats()
-            except Exception:
-                _rate_limiter_stats = None
-            result = {
                 "ok": True,
-                "status": "up",
-                "telegram_session_state": runtime.get("telegram_session_state"),
-                "telegram_userbot_state": (
-                    (runtime.get("telegram_userbot") or {}).get("startup_state")
+                "secret_preview": f"{new_secret[:6]}…{new_secret[-4:]}",
+                "note": (
+                    "Обнови secret в Sentry Internal Integration (Settings → Developer Settings)."
                 ),
-                "telegram_userbot_client_connected": (
-                    (runtime.get("telegram_userbot") or {}).get("client_connected")
-                ),
-                "telegram_userbot_error_code": (
-                    (runtime.get("telegram_userbot") or {}).get("startup_error_code")
-                ),
-                "lmstudio_model_state": runtime.get("lmstudio_model_state"),
-                "openclaw_auth_state": runtime.get("openclaw_auth_state"),
-                "last_runtime_route": runtime.get("last_runtime_route"),
-                "scheduler_enabled": runtime.get("scheduler_enabled"),
-                "inbox_summary": runtime.get("inbox_summary"),
-                "voice_gateway_configured": runtime.get("voice_gateway_configured"),
-                "memory_indexer_state": _resolve_memory_indexer_state(),
-                "memory_indexer_queue_size": _resolve_memory_indexer_queue_size(),
             }
-            if _rate_limiter_stats is not None:
-                result["telegram_rate_limiter"] = _rate_limiter_stats
-            return result
-
-        @self.app.get("/api/health/deep")
-        async def get_health_deep():
-            """Расширенная диагностика Краба — структурированный JSON для Dashboard V4.
-
-            Зеркало !health deep (Wave 29-EE), но возвращает dict вместо markdown.
-            Включает: krab process, openclaw, lm_studio, archive_db,
-            reminders, memory_validator, sigterm_recent_count, system.
-            """
-            from ..core.health_deep_collector import collect_health_deep
-
-            userbot = self.deps.get("userbot")
-            session_start = getattr(userbot, "_session_start_time", None) if userbot else None
-            return await collect_health_deep(session_start_time=session_start)
 
         # ── Prometheus metrics ───────────────────────────────────────────────
 
         @self.app.get("/metrics")
         async def prometheus_metrics():
-            """Prometheus scraping endpoint (text format, version=0.0.4)."""
+            """Prometheus scraping endpoint (text format, version=0.0.4).
+
+            W32 fix: ранее endpoint отдавал только ручной `collect_metrics()`
+            text, игнорируя default REGISTRY из prometheus_client (где живут
+            новые Counter/Histogram — `krab_memory_retrieval_*`,
+            `krab_error_digest_fired_total`, `krab_swarm_tool_blocked_total`).
+            Теперь конкатенируем ручные метрики + `generate_latest()` из
+            prometheus_client default registry. Ensure все модули с counters
+            импортированы при boot — иначе Collector'ы не зарегистрированы.
+            """
             from fastapi.responses import PlainTextResponse
 
             from ..core.prometheus_metrics import collect_metrics
 
             try:
+                manual_text = collect_metrics()
+                # Force import модулей с новыми Prometheus counters — иначе
+                # regustry пустой если модули ещё не импортировались в рантайме.
+                try:
+                    import importlib
+
+                    for _mod in (
+                        "src.core.proactive_watch",  # krab_error_digest_fired_total
+                        "src.core.swarm_tool_allowlist",  # krab_swarm_tool_blocked_total
+                        "src.core.prometheus_metrics",  # memory retrieval
+                        "src.core.auto_restart_policy",  # krab_auto_restart_attempts_total
+                        "src.core.llm_latency_tracker",  # krab_llm_route_latency_seconds
+                    ):
+                        try:
+                            importlib.import_module(_mod)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    from prometheus_client import REGISTRY, generate_latest
+
+                    prom_text = generate_latest(REGISTRY).decode("utf-8")
+                except ImportError:
+                    prom_text = ""
+                combined = manual_text
+                if prom_text:
+                    combined = f"{manual_text}\n{prom_text}"
                 return PlainTextResponse(
-                    collect_metrics(),
+                    combined,
                     media_type="text/plain; version=0.0.4",
                 )
             except Exception as e:
@@ -7661,3226 +8709,61 @@ class WebApp:
 
         # ── Memory Indexer API (phase 4) ─────────────────────────────────────
 
-        @self.app.get("/api/memory/indexer")
-        async def memory_indexer_stats():
-            """Снимок IndexerStats для owner panel."""
-            try:
-                from ..core.memory_indexer_worker import get_indexer
-            except ImportError:
-                return {"error": "indexer_unavailable"}
-            stats = get_indexer().get_stats()
-            return {
-                "is_running": stats.is_running,
-                "started_at": stats.started_at.isoformat() if stats.started_at else None,
-                "queue_size": stats.queue_size,
-                "queue_maxsize": stats.queue_maxsize,
-                "enqueued_total": stats.enqueued_total,
-                "processed_total": stats.processed_total,
-                "chunks_committed": stats.chunks_committed,
-                "embeddings_committed": stats.embeddings_committed,
-                "skipped": dict(stats.skipped),
-                "dropped_queue_full": stats.dropped_queue_full,
-                "failed": dict(stats.failed),
-                "last_flush_at": stats.last_flush_at.isoformat() if stats.last_flush_at else None,
-                "last_flush_duration_sec": stats.last_flush_duration_sec,
-                "builders_active": stats.builders_active,
-                "restarts": stats.restarts,
-                "embed_disabled": stats.embed_disabled,
-            }
+        from .web_routers.memory_router import build_memory_router as _build_memory_router
 
-        @self.app.post("/api/memory/indexer/flush")
-        async def memory_indexer_flush():
-            """Принудительный flush (debug/owner tool)."""
-            try:
-                from ..core.memory_indexer_worker import get_indexer
-            except ImportError:
-                return {"error": "indexer_unavailable"}
-            stats = get_indexer().get_stats()
-            return {
-                "ack": True,
-                "queue_size": stats.queue_size,
-                "note": "flush будет выполнен в течение batch_timeout_sec",
-            }
-
-        @self.app.post("/api/memory/indexer/backfill")
-        async def memory_indexer_backfill(
-            batch: int = 1000,
-            dry_run: bool = False,
-        ):
-            """
-            Enqueue backfill для chunk'ов без embedding в vec_chunks.
-
-            Параметры (query params):
-              batch: сколько chunk_id обработать за один вызов (default 1000).
-              dry_run: если true — только подсчитать, не запускать embed.
-
-            Returns:
-              unencoded_total — найдено chunk'ов без вектора до старта.
-              queued          — chunk_id отправлено в embedder (0 при dry_run).
-              embedded        — реально проэмбеддено (0 при dry_run).
-              elapsed_sec     — время выполнения.
-            """
-            try:
-                import asyncio as _asyncio  # noqa: PLC0415
-
-                from scripts.force_memory_backfill import run_backfill  # noqa: PLC0415
-            except ImportError as exc:
-                return {"error": f"backfill_unavailable: {exc}"}
-
-            result = await _asyncio.to_thread(
-                run_backfill,
-                batch,
-                dry_run,
-            )
-            return result
-
-        @self.app.get("/api/memory/search")
-        async def memory_search(
-            q: str = "",
-            mode: str = "hybrid",
-            limit: int = 10,
-            chat_id: Optional[str] = None,
-        ):
-            """
-            Поиск в Memory Layer archive.db (FTS5 + semantic + hybrid).
-
-            Phase 2 retrieval: использует ``HybridRetriever``, который внутри
-            делает FTS5 BM25, опционально vector similarity через sqlite-vec,
-            и Reciprocal Rank Fusion.
-
-            Параметры:
-              q: поисковый запрос (обязателен).
-              mode: ``fts`` | ``semantic`` | ``hybrid`` (default ``hybrid``).
-                    ``fts`` — только BM25 путь.
-                    ``semantic`` — только vec0 путь; если sqlite-vec не доступен,
-                    вернёт ``count=0``.
-                    ``hybrid`` — RRF fusion обоих (текущий default Retriever'а).
-              limit: сколько результатов вернуть (default 10, max 50).
-              chat_id: опциональный фильтр по чату.
-
-            Returns: ``{ok, query, mode, count, results: [...]}``.
-            Результат содержит ``chunk_id`` (совпадает с ``message_id`` retriever'а),
-            ``text`` (truncated 300 chars), ``score`` (float 0..1),
-            ``mode`` (выбранный режим), ``timestamp``, ``chat_id``.
-            """
-            query = (q or "").strip()
-            if not query:
-                return {"ok": False, "error": "empty_query"}
-
-            mode_normalized = (mode or "hybrid").strip().lower()
-            if mode_normalized not in {"fts", "semantic", "hybrid"}:
-                return {"ok": False, "error": "invalid_mode", "mode": mode}
-
-            try:
-                limit_val = max(1, min(50, int(limit)))
-            except (TypeError, ValueError):
-                limit_val = 10
-
-            try:
-                from ..core.memory_archive import ArchivePaths
-                from ..core.memory_retrieval import HybridRetriever
-            except ImportError:
-                return {"ok": False, "error": "memory_layer_unavailable"}
-
-            paths = ArchivePaths.default()
-            if not paths.db.exists():
-                return {"ok": False, "error": "archive_db_missing"}
-
-            # Для режима semantic мы не можем форсировать внутри retriever'а
-            # чистый vec-only путь — публичный API HybridRetriever всегда
-            # идёт через FTS. Поэтому для semantic возвращаем hybrid (при
-            # наличии sqlite-vec дадут те же результаты, отсортированные по
-            # vec-ранку; при отсутствии — FTS-only, что честно отразим в ответе).
-            try:
-                retriever = HybridRetriever(archive_paths=paths)
-                raw_results = await asyncio.to_thread(
-                    retriever.search,
-                    query,
-                    chat_id=chat_id,
-                    top_k=limit_val,
-                )
-                effective_mode = mode_normalized
-                if mode_normalized == "semantic" and not getattr(
-                    retriever, "_vec_available", False
-                ):
-                    # Semantic не доступен → честно помечаем как "fts" fallback.
-                    effective_mode = "fts"
-                retriever.close()
-            except Exception as exc:  # noqa: BLE001 — endpoint не должен падать
-                logger.warning("memory_search_failed", error=str(exc))
-                return {"ok": False, "error": "search_failed", "detail": str(exc)}
-
-            results = []
-            for sr in raw_results:
-                text = sr.text_redacted or ""
-                preview = text if len(text) <= 300 else text[:300] + "..."
-                results.append(
-                    {
-                        "chunk_id": sr.message_id,
-                        "chat_id": sr.chat_id,
-                        "text": preview,
-                        "score": float(sr.score),
-                        "timestamp": sr.timestamp.isoformat() if sr.timestamp else None,
-                        "mode": effective_mode,
-                    }
-                )
-
-            return {
-                "ok": True,
-                "query": query,
-                "mode": effective_mode,
-                "requested_mode": mode_normalized,
-                "count": len(results),
-                "results": results,
-            }
-
-        # ── Memory Heatmap (Dashboard V4 — chat × time density) ─────────────
-
-        @self.app.get("/api/memory/heatmap")
-        async def memory_heatmap(
-            bucket_hours: int = 24,
-            top_chats: int = 20,
-        ):
-            """
-            Плотность сообщений по чатам и дням для Dashboard V4 (heatmap).
-
-            Params:
-              bucket_hours: размер bucket в часах (default 24 = daily)
-              top_chats: сколько топ-чатов включить (default 20)
-
-            Returns:
-              { bucket_hours, chats: [{chat_id, chat_title, buckets: [{ts, count}]}], generated_at }
-            """
-            import sqlite3 as _sqlite3
-            from datetime import datetime, timezone
-            from pathlib import Path
-
-            db_path = Path("~/.openclaw/krab_memory/archive.db").expanduser()
-
-            if not db_path.exists():
-                from fastapi.responses import JSONResponse
-
-                return JSONResponse(
-                    status_code=503,
-                    content={"error": f"archive.db not found: {db_path}"},
-                )
-
-            try:
-                uri = f"file:{db_path}?mode=ro"
-                conn = _sqlite3.connect(uri, uri=True)
-            except _sqlite3.OperationalError as exc:
-                from fastapi.responses import JSONResponse
-
-                return JSONResponse(
-                    status_code=503,
-                    content={"error": f"archive.db open failed: {exc}"},
-                )
-
-            try:
-                # Определяем топ-чаты по общему количеству сообщений
-                try:
-                    top_rows = conn.execute(
-                        """
-                        SELECT chat_id, COUNT(*) as cnt
-                        FROM messages
-                        GROUP BY chat_id
-                        ORDER BY cnt DESC
-                        LIMIT ?
-                        """,
-                        (max(1, top_chats),),
-                    ).fetchall()
-                except _sqlite3.DatabaseError as exc:
-                    from fastapi.responses import JSONResponse
-
-                    return JSONResponse(
-                        status_code=503,
-                        content={"error": f"archive.db malformed: {exc}"},
-                    )
-
-                if not top_rows:
-                    return {
-                        "bucket_hours": bucket_hours,
-                        "chats": [],
-                        "generated_at": datetime.now(timezone.utc).isoformat(),
-                    }
-
-                top_chat_ids = [r[0] for r in top_rows]
-
-                # Загружаем title из chats (если есть)
-                chat_titles: dict[str, str] = {}
-                try:
-                    placeholders = ",".join("?" * len(top_chat_ids))
-                    title_rows = conn.execute(
-                        f"SELECT chat_id, title FROM chats WHERE chat_id IN ({placeholders})",
-                        top_chat_ids,
-                    ).fetchall()
-                    chat_titles = {r[0]: r[1] for r in title_rows if r[1]}
-                except _sqlite3.DatabaseError:
-                    pass  # chats table может отсутствовать — fallback к chat_id
-
-                # Агрегируем по (chat_id, день) — strftime('%Y-%m-%d', timestamp)
-                try:
-                    placeholders = ",".join("?" * len(top_chat_ids))
-                    density_rows = conn.execute(
-                        f"""
-                        SELECT chat_id,
-                               strftime('%Y-%m-%d', timestamp) AS day,
-                               COUNT(*) AS cnt
-                        FROM messages
-                        WHERE chat_id IN ({placeholders})
-                        GROUP BY chat_id, day
-                        ORDER BY chat_id, day
-                        """,
-                        top_chat_ids,
-                    ).fetchall()
-                except _sqlite3.DatabaseError as exc:
-                    from fastapi.responses import JSONResponse
-
-                    return JSONResponse(
-                        status_code=503,
-                        content={"error": f"archive.db malformed on density query: {exc}"},
-                    )
-
-                # Группируем в словарь chat_id → [{ts, count}]
-                from collections import defaultdict
-
-                buckets_by_chat: dict[str, list[dict]] = defaultdict(list)
-                for chat_id, day, cnt in density_rows:
-                    buckets_by_chat[chat_id].append({"ts": day, "count": cnt})
-
-                chats_out = []
-                for chat_id in top_chat_ids:
-                    chats_out.append(
-                        {
-                            "chat_id": chat_id,
-                            "chat_title": chat_titles.get(chat_id, chat_id),
-                            "buckets": buckets_by_chat.get(chat_id, []),
-                        }
-                    )
-
-                return {
-                    "bucket_hours": bucket_hours,
-                    "chats": chats_out,
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                }
-
-            finally:
-                conn.close()
+        self.app.include_router(_build_memory_router(self._make_router_context()))
 
         # ── Stats Dashboard (session 4+, Gemini 3.1 Pro frontend) ──────────
 
-        @self.app.get("/api/stats/caches")
-        async def get_stats_caches():
-            """
-            Агрегированные cache-метрики для /stats dashboard.
+        from .web_routers.pages_router import build_pages_router as _build_pages_router
 
-            Возвращает counts для chat_ban_cache, chat_capability_cache
-            и voice_reply_blocked_chats. Dashboard делает один fetch сюда
-            вместо трёх отдельных вызовов.
-            """
-            try:
-                from ..core.chat_ban_cache import chat_ban_cache as _cbc
-
-                ban_entries = _cbc.list_entries()
-                ban_count = len(ban_entries)
-            except Exception:
-                ban_entries = []
-                ban_count = 0
-
-            try:
-                from ..core.chat_capability_cache import chat_capability_cache as _ccc
-
-                cap_entries = _ccc.list_entries()
-                cap_count = len(cap_entries)
-                voice_disallowed = sum(1 for e in cap_entries if e.get("voice_allowed") is False)
-                slow_mode = sum(
-                    1
-                    for e in cap_entries
-                    if isinstance(e.get("slow_mode_seconds"), (int, float))
-                    and e["slow_mode_seconds"] > 0
-                )
-            except Exception:
-                cap_count = 0
-                voice_disallowed = 0
-                slow_mode = 0
-
-            try:
-                userbot = self.deps.get("kraab_userbot")
-                blocked = userbot.get_voice_blocked_chats() if userbot else []
-                voice_blocked_count = len(blocked)
-            except Exception:
-                voice_blocked_count = 0
-
-            return {
-                "ban_cache_count": ban_count,
-                "capability_cache_count": cap_count,
-                "voice_blocked_count": voice_blocked_count,
-                "capability_voice_disallowed": voice_disallowed,
-                "capability_slow_mode": slow_mode,
-            }
-
-        @self.app.get("/stats", response_class=HTMLResponse)
-        async def stats_dashboard():
-            """Runtime stats dashboard (Gemini 3.1 Pro frontend)."""
-            from .web_app_stats_dashboard import STATS_DASHBOARD_HTML
-
-            return HTMLResponse(
-                STATS_DASHBOARD_HTML,
-                headers=_no_store_headers(),
-            )
-
-        @self.app.get("/inbox", response_class=HTMLResponse)
-        async def inbox_dashboard():
-            """Inbox items dashboard (Gemini 3.1 Pro generated)."""
-            page = config.BASE_DIR / "src" / "web" / "inbox_v2.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Inbox page not found</h1>", headers=_no_store_headers())
-
-        @self.app.get("/costs", response_class=HTMLResponse)
-        async def costs_dashboard():
-            """Cost analytics dashboard (Gemini 3.1 Pro generated)."""
-            page = config.BASE_DIR / "src" / "web" / "costs_v2.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Costs page not found</h1>", headers=_no_store_headers())
-
-        @self.app.get("/swarm", response_class=HTMLResponse)
-        async def swarm_dashboard():
-            """Swarm multi-agent dashboard (Gemini 3.1 Pro generated)."""
-            page = config.BASE_DIR / "src" / "web" / "swarm_v2.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Swarm page not found</h1>", headers=_no_store_headers())
-
-        @self.app.get("/prototypes/{page}", response_class=HTMLResponse)
-        async def prototype_page(page: str):
-            """Доступ к Gemini-generated prototype pages."""
-            safe_page = page.replace("..", "").replace("/", "")
-            proto = config.BASE_DIR / "src" / "web" / "prototypes" / f"{safe_page}.html"
-            if proto.exists():
-                return FileResponse(proto, headers=_no_store_headers())
-            # Попробуем с _v1 суффиксом
-            proto_v1 = config.BASE_DIR / "src" / "web" / "prototypes" / f"{safe_page}_v1.html"
-            if proto_v1.exists():
-                return FileResponse(proto_v1, headers=_no_store_headers())
-            return HTMLResponse(f"<h1>Prototype '{page}' not found</h1>", status_code=404)
-
-        @self.app.get("/translator", response_class=HTMLResponse)
-        async def translator_dashboard():
-            """Translator dashboard (Gemini 3.1 Pro generated)."""
-            page = config.BASE_DIR / "src" / "web" / "translator_v2.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>Translator page not found</h1>", headers=_no_store_headers())
-
-        # ── V4 Dashboard (Liquid Glass) ────────────────────────────────
-
-        @self.app.get("/v4", response_class=HTMLResponse)
-        @self.app.get("/v4/", response_class=HTMLResponse)
-        async def v4_index():
-            """V4 Liquid Glass dashboard — главная страница."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "index.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/v4/chat", response_class=HTMLResponse)
-        async def v4_chat():
-            """V4 Liquid Glass dashboard — AI Chat."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "chat.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Chat not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/v4/costs", response_class=HTMLResponse)
-        async def v4_costs():
-            """V4 Liquid Glass dashboard — Costs."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "costs.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Costs not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/v4/inbox", response_class=HTMLResponse)
-        async def v4_inbox():
-            """V4 Liquid Glass dashboard — Inbox."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "inbox.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Inbox not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/v4/swarm", response_class=HTMLResponse)
-        async def v4_swarm():
-            """V4 Liquid Glass dashboard — Swarm."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "swarm.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Swarm not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/v4/translator", response_class=HTMLResponse)
-        async def v4_translator():
-            """V4 Liquid Glass dashboard — Translator."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "translator.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Translator not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/v4/ops", response_class=HTMLResponse)
-        async def v4_ops():
-            """V4 Liquid Glass dashboard — Operations Center."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "ops.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Ops not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/v4/research", response_class=HTMLResponse)
-        async def v4_research():
-            """V4 Liquid Glass dashboard — Swarm Research Pipeline."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "research.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Research not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/v4/settings", response_class=HTMLResponse)
-        async def v4_settings():
-            """V4 Liquid Glass dashboard — Settings editor."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "settings.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Settings not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/v4/commands", response_class=HTMLResponse)
-        async def v4_commands():
-            """V4 Liquid Glass dashboard — Commands catalog."""
-            page = config.BASE_DIR / "src" / "web" / "v4" / "commands.html"
-            if page.exists():
-                return FileResponse(page, headers=_no_store_headers())
-            return HTMLResponse("<h1>V4 Commands not ready</h1>", headers=_no_store_headers())
-
-        @self.app.get("/v4/liquid-glass.css")
-        async def v4_css():
-            """V4 Liquid Glass — общий CSS."""
-            css = config.BASE_DIR / "src" / "web" / "v4" / "liquid-glass.css"
-            if css.exists():
-                return FileResponse(css, media_type="text/css", headers=_no_store_headers())
-            return HTMLResponse("/* not found */", media_type="text/css")
-
-        @self.app.get("/v4/theme-toggle.js")
-        async def v4_theme_toggle():
-            """V4 — скрипт dark/light theme toggle с localStorage."""
-            js = config.BASE_DIR / "src" / "web" / "v4" / "theme-toggle.js"
-            if js.exists():
-                return FileResponse(
-                    js, media_type="application/javascript", headers=_no_store_headers()
-                )
-            return HTMLResponse("// not found", media_type="application/javascript")
+        self.app.include_router(_build_pages_router(self._make_router_context()))
 
         # ── Costs + Swarm API endpoints (backend для Gemini dashboards) ────
 
-        @self.app.get("/api/costs/report")
-        async def get_costs_report():
-            """Отчёт по расходам для /costs dashboard (Gemini field names)."""
-            try:
-                from ..core.cost_analytics import cost_analytics as _ca
+        # Phase 2 Wave YY (Session 26): costs cluster extracted в costs_router.
+        # Endpoints: /api/costs/{report,budget,history,hourly,by_chat,codex-quota,by-tier}
+        from .web_routers.costs_router import build_costs_router as _build_costs
 
-                raw = _ca.build_usage_report_dict()
-                # Адаптируем поля под Gemini JS dashboard naming convention.
-                total_cost = float(raw.get("cost_session_usd") or 0)
-                budget = float(raw.get("monthly_budget_usd") or 0) or 50.0
-                total_calls = sum(m.get("calls", 0) for m in (raw.get("by_model") or {}).values())
-                report = {
-                    "total_cost_usd": total_cost,
-                    "total_calls": total_calls,
-                    "budget_monthly_usd": budget,
-                    "budget_remaining_usd": budget - total_cost,
-                    "budget_used_pct": round(total_cost / budget * 100, 2) if budget else 0,
-                    "by_model": raw.get("by_model", {}),
-                    "period_start": "2026-04-01T00:00:00Z",
-                    "period_end": __import__("datetime")
-                    .datetime.now(__import__("datetime").timezone.utc)
-                    .isoformat(),
-                    "input_tokens": raw.get("input_tokens", 0),
-                    "output_tokens": raw.get("output_tokens", 0),
-                    # FinOps поля для dashboard migration
-                    "total_tool_calls": raw.get("total_tool_calls", 0),
-                    "total_fallbacks": raw.get("total_fallbacks", 0),
-                    "total_context_tokens": raw.get("total_context_tokens", 0),
-                    "avg_context_tokens": raw.get("avg_context_tokens", 0),
-                    "by_channel": raw.get("by_channel", {}),
-                }
-                return {"ok": True, "report": report}
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
+        self.app.include_router(_build_costs(self._make_router_context()))
 
-        @self.app.get("/api/costs/budget")
-        async def get_costs_budget():
-            """Состояние бюджета: лимит, потрачено, осталось, статус."""
-            try:
-                from ..core.cost_analytics import cost_analytics as _ca
+        # /api/swarm/{status,memory} перенесены в swarm_router (Wave ZZ, Session 26).
 
-                budget = _ca.get_monthly_budget_usd()
-                spent = _ca.get_monthly_cost_usd()
-                remaining = _ca.get_remaining_budget_usd()
-                return {
-                    "ok": True,
-                    "budget": {
-                        "monthly_limit_usd": budget if budget > 0 else None,
-                        "spent_usd": round(spent, 6),
-                        "remaining_usd": round(remaining, 6) if remaining is not None else None,
-                        "budget_ok": _ca.check_budget_ok(),
-                        "used_pct": round(spent / budget * 100, 2) if budget > 0 else None,
-                        "forecast_calls": _ca.monthly_calls_forecast(),
-                    },
-                }
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
+        # ── Browser Bridge API + Dedicated Chrome ───────────────────────────
+        # Перенесено в ``web_routers.browser_router`` (Phase 2 Wave U,
+        # Session 25). См. include_router ниже после блока /api/chrome/.
 
-        @self.app.get("/api/costs/history")
-        async def get_costs_history(limit: int = 20, channel: str = ""):
-            """История вызовов модели: последние N записей, опционально фильтр по channel."""
-            try:
-                from ..core.cost_analytics import cost_analytics as _ca
+        from .web_routers.inbox_router import build_inbox_router as _build_inbox_router
 
-                calls = list(_ca._calls)
-                # Фильтр по каналу если задан
-                if channel:
-                    calls = [r for r in calls if r.channel == channel]
-                # Самые последние первыми
-                calls = calls[-limit:][::-1]
-                return {
-                    "ok": True,
-                    "total_records": len(_ca._calls),
-                    "returned": len(calls),
-                    "history": [
-                        {
-                            "model_id": r.model_id,
-                            "input_tokens": r.input_tokens,
-                            "output_tokens": r.output_tokens,
-                            "cost_usd": round(r.cost_usd, 6),
-                            "timestamp": r.timestamp,
-                            "channel": r.channel,
-                            "is_fallback": r.is_fallback,
-                            "tool_calls_count": r.tool_calls_count,
-                        }
-                        for r in calls
-                    ],
-                }
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
+        self.app.include_router(_build_inbox_router(self._make_router_context()))
 
-        @self.app.get("/api/swarm/status")
-        async def get_swarm_status():
-            """Статус мультиагентного свёрма для /swarm dashboard."""
-            try:
-                from ..core.swarm_channels import swarm_channels as _sc
-                from ..core.swarm_memory import swarm_memory as _sm
-                from ..core.swarm_scheduler import swarm_scheduler as _ss
+        # /api/context/{checkpoint,transition-pack,latest} — extracted в
+        # context_router.py (Phase 2 Part 2A, Session 27).
+        from .web_routers.context_router import build_context_router as _build_context_router
 
-                teams_data = {}
-                for team_name in ["traders", "coders", "analysts", "creative"]:
-                    is_active = (
-                        _sc.is_round_active(team_name) if hasattr(_sc, "is_round_active") else False
-                    )
-                    teams_data[team_name] = {
-                        "active": bool(is_active),
-                        "rounds_total": 0,
-                    }
+        self.app.include_router(_build_context_router(self._make_router_context()))
 
-                memory_count = 0
-                try:
-                    for team_name in teams_data:
-                        entries = _sm.recall(team_name) if hasattr(_sm, "recall") else []
-                        memory_count += len(entries) if entries else 0
-                except Exception:
-                    pass
-
-                scheduler_jobs = 0
-                try:
-                    if hasattr(_ss, "list_jobs"):
-                        scheduler_jobs = len(_ss.list_jobs() or [])
-                except Exception:
-                    pass
-
-                return {
-                    "ok": True,
-                    "teams": teams_data,
-                    "memory_entries": memory_count,
-                    "scheduler_jobs": scheduler_jobs,
-                }
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
-
-        @self.app.get("/api/swarm/memory")
-        async def get_swarm_memory(team: str = "traders", limit: int = 5):
-            """Последние записи памяти свёрма для конкретной команды."""
-            try:
-                from ..core.swarm_memory import swarm_memory as _sm
-
-                entries = _sm.recall(team, limit=limit) if hasattr(_sm, "recall") else []
-                return {
-                    "ok": True,
-                    "entries": [
-                        {
-                            "topic": str(e.get("topic", "")),
-                            "summary": str(e.get("summary", e.get("content", "")))[:300],
-                            "timestamp": str(e.get("timestamp", "")),
-                        }
-                        for e in (entries or [])[:limit]
-                    ]
-                    if entries
-                    else [],
-                }
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
-
-        @self.app.get("/api/swarm/channels/status")
-        async def get_swarm_channels_status():
-            """Снапшот состояния Forum Topics свёрма (read-only, для Dashboard)."""
-            try:
-                from ..core.swarm_channels import swarm_channels as _sc
-
-                if not hasattr(_sc, "get_channels_status"):
-                    from fastapi.responses import JSONResponse
-
-                    return JSONResponse(
-                        status_code=503,
-                        content={
-                            "ok": False,
-                            "error": "SwarmChannels.get_channels_status unavailable",
-                        },
-                    )
-                data = _sc.get_channels_status()
-                return {"ok": True, **data}
-            except Exception as exc:
-                from fastapi.responses import JSONResponse
-
-                return JSONResponse(
-                    status_code=503,
-                    content={"ok": False, "error": str(exc)},
-                )
-
-        # ── Browser Bridge API ──────────────────────────────────────────────
-        from ..integrations.browser_bridge import browser_bridge as _browser_bridge
-
-        browser_bridge_timeout_sec = 8.0
-
-        @self.app.get("/api/browser/status")
-        async def browser_status():
-            try:
-                attached = await asyncio.wait_for(
-                    _browser_bridge.is_attached(), timeout=browser_bridge_timeout_sec
-                )
-                tabs = (
-                    await asyncio.wait_for(
-                        _browser_bridge.list_tabs(), timeout=browser_bridge_timeout_sec
-                    )
-                    if attached
-                    else []
-                )
-            except Exception as exc:
-                return {
-                    "ok": False,
-                    "error": "browser_timeout",
-                    "detail": str(exc),
-                    "attached": False,
-                    "tab_count": 0,
-                    "active_url": None,
-                }
-            active_url = tabs[-1]["url"] if tabs else None
-            return {
-                "ok": True,
-                "attached": attached,
-                "tab_count": len(tabs),
-                "active_url": active_url,
-            }
-
-        @self.app.get("/api/browser/tabs")
-        async def browser_tabs():
-            try:
-                tabs = await asyncio.wait_for(
-                    _browser_bridge.list_tabs(), timeout=browser_bridge_timeout_sec
-                )
-            except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "tabs": []}
-            return tabs
-
-        @self.app.post("/api/browser/navigate")
-        async def browser_navigate(body: dict = Body(...)):
-            url = str(body.get("url") or "").strip()
-            if not url:
-                raise HTTPException(status_code=400, detail="url required")
-            try:
-                current_url = await asyncio.wait_for(
-                    _browser_bridge.navigate(url), timeout=browser_bridge_timeout_sec
-                )
-            except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
-            return {"ok": True, "current_url": current_url}
-
-        @self.app.post("/api/browser/screenshot")
-        async def browser_screenshot():
-            try:
-                data = await asyncio.wait_for(
-                    _browser_bridge.screenshot_base64(), timeout=browser_bridge_timeout_sec
-                )
-            except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
-            if data is None:
-                return {"ok": False, "error": "screenshot_failed"}
-            return {"ok": True, "data": data}
-
-        @self.app.post("/api/browser/read")
-        async def browser_read():
-            try:
-                text = await asyncio.wait_for(
-                    _browser_bridge.get_page_text(), timeout=browser_bridge_timeout_sec
-                )
-            except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "text": ""}
-            return {"ok": True, "text": text}
-
-        @self.app.post("/api/browser/js")
-        async def browser_js(body: dict = Body(...)):
-            code = str(body.get("code") or "").strip()
-            if not code:
-                raise HTTPException(status_code=400, detail="code required")
-            try:
-                result = await asyncio.wait_for(
-                    _browser_bridge.execute_js(code), timeout=browser_bridge_timeout_sec
-                )
-            except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
-            return {"ok": True, "result": result}
-
-        # ────────────────────────────────────────────────────────────────────
-
-        @self.app.get("/api/transcriber/status")
-        async def transcriber_status():
-            """
-            Операционный статус транскрибатора.
-            Нужен для быстрого понимания: жив ли voice-контур и включена ли crash-защита STT.
-            """
-            openclaw = self.deps.get("openclaw_client")
-            voice_gateway = self.deps.get("voice_gateway_client")
-            krab_ear = self.deps.get("krab_ear_client")
-            perceptor = self.deps.get("perceptor")
-            kraab_userbot = self.deps.get("kraab_userbot")
-
-            openclaw_ok = False
-            voice_gateway_ok = False
-            krab_ear_ok = False
-            try:
-                openclaw_ok = bool(await openclaw.health_check()) if openclaw else False
-            except Exception:
-                openclaw_ok = False
-            try:
-                voice_gateway_ok = (
-                    bool(await voice_gateway.health_check()) if voice_gateway else False
-                )
-            except Exception:
-                voice_gateway_ok = False
-            try:
-                krab_ear_ok = bool(await krab_ear.health_check()) if krab_ear else False
-            except Exception:
-                krab_ear_ok = False
-
-            def _env_on(key: str, default: str = "0") -> bool:
-                return str(os.getenv(key, default)).strip().lower() in {"1", "true", "yes", "on"}
-
-            stt_isolated_worker = _env_on("STT_ISOLATED_WORKER", "1")
-            perceptor_ready = bool(perceptor) and hasattr(perceptor, "transcribe")
-            perceptor_isolated_worker = bool(
-                getattr(perceptor, "stt_isolated_worker", stt_isolated_worker)
-            )
-            stt_worker_timeout = int(
-                str(os.getenv("STT_WORKER_TIMEOUT_SECONDS", "240")).strip() or "240"
-            )
-            voice_stack_ready = bool(voice_gateway_ok and krab_ear_ok)
-            voice_profile = {}
-            if kraab_userbot and hasattr(kraab_userbot, "get_voice_runtime_profile"):
-                try:
-                    voice_profile = dict(kraab_userbot.get_voice_runtime_profile() or {})
-                except Exception:
-                    voice_profile = {}
-            live_voice_ready = bool(
-                perceptor_ready and voice_stack_ready and voice_profile.get("enabled")
-            )
-
-            if perceptor_ready and perceptor_isolated_worker and voice_stack_ready:
-                readiness = "ready"
-            elif perceptor_ready:
-                readiness = "degraded"
-            else:
-                readiness = "down"
-            recommendations: list[str] = []
-            if not perceptor_ready:
-                recommendations.append(
-                    "Perceptor/STT не подключён: voice notes не будут транскрибироваться"
-                )
-                recommendations.append("Запусти ./transcriber_doctor.command --heal")
-            if perceptor_ready and not perceptor_isolated_worker:
-                recommendations.append("Включи STT_ISOLATED_WORKER=1 и перезапусти Krab")
-            if not voice_gateway_ok:
-                recommendations.append(
-                    "Voice Gateway недоступен: звонки и live voice-stream будут ограничены"
-                )
-            if not krab_ear_ok:
-                recommendations.append(
-                    "Krab Ear недоступен: wake/call-часть voice-контура деградировала"
-                )
-            if voice_profile:
-                if not bool(voice_profile.get("enabled")):
-                    recommendations.append(
-                        "Voice replies выключены: входящий voice ingress готов, но ответы голосом отключены"
-                    )
-                elif live_voice_ready:
-                    recommendations.append(
-                        "Voice replies включены: foundation для live voice готова"
-                    )
-            if not recommendations:
-                recommendations.append("Система транскрибации в рабочем режиме")
-
-            return {
-                "ok": True,
-                "status": {
-                    "readiness": readiness,
-                    "openclaw_ok": openclaw_ok,
-                    "voice_gateway_ok": voice_gateway_ok,
-                    "krab_ear_ok": krab_ear_ok,
-                    "perceptor_ready": perceptor_ready,
-                    "stt_isolated_worker": perceptor_isolated_worker,
-                    "stt_worker_timeout_seconds": stt_worker_timeout,
-                    "voice_gateway_url": os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090"),
-                    "whisper_model": str(getattr(perceptor, "whisper_model", "")),
-                    "audio_warmup_enabled": _env_on("PERCEPTOR_AUDIO_WARMUP", "0"),
-                    "voice_profile": voice_profile,
-                    "live_voice_ready": live_voice_ready,
-                    "recommendations": recommendations,
-                },
-            }
-
-        @self.app.get("/api/voice/runtime")
-        async def voice_runtime_status():
-            """
-            Возвращает сводку по voice-runtime userbot.
-
-            Держим endpoint отдельно от transcriber/status, потому что owner UI и
-            будущий live-voice контур должны видеть не только health входящего STT,
-            но и текущий профиль доставки ответов.
-            """
-            kraab_userbot = self.deps.get("kraab_userbot")
-            if not kraab_userbot or not hasattr(kraab_userbot, "get_voice_runtime_profile"):
-                return {
-                    "ok": False,
-                    "error": "voice_runtime_not_available",
-                }
-            profile = dict(kraab_userbot.get_voice_runtime_profile() or {})
-            return {
-                "ok": True,
-                "voice": profile,
-            }
-
-        @self.app.post("/api/voice/runtime/update")
-        async def voice_runtime_update(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Обновляет voice-runtime profile userbot через owner web-key."""
-            self._assert_write_access(x_krab_web_key, token)
-            kraab_userbot = self.deps.get("kraab_userbot")
-            if not kraab_userbot or not hasattr(kraab_userbot, "update_voice_runtime_profile"):
-                raise HTTPException(status_code=503, detail="voice_runtime_not_available")
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="voice_update_body_required")
-            profile = dict(
-                kraab_userbot.update_voice_runtime_profile(
-                    enabled=body.get("enabled") if "enabled" in body else None,
-                    speed=body.get("speed") if "speed" in body else None,
-                    voice=body.get("voice") if "voice" in body else None,
-                    delivery=body.get("delivery") if "delivery" in body else None,
-                    persist=True,
-                )
-                or {}
-            )
-            return {
-                "ok": True,
-                "voice": profile,
-            }
-
-        @self.app.get("/api/krab_ear/status")
-        async def krab_ear_status():
-            """KrabEar STT diarization status and readiness."""
-            krab_ear = self.deps.get("krab_ear_client")
-            if not krab_ear:
-                return {
-                    "ok": False,
-                    "status": "unavailable",
-                    "error": "krab_ear_client_not_available",
-                }
-            try:
-                report = await krab_ear.health_report()
-                return {
-                    "ok": report.get("ok", False),
-                    "status": report.get("status", "unknown"),
-                    "latency_ms": report.get("latency_ms"),
-                    "source": report.get("source"),
-                    "detail": report.get("detail"),
-                }
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("krab_ear_status_failed", error=str(exc))
-                return {
-                    "ok": False,
-                    "status": "error",
-                    "error": str(exc),
-                }
-
-        @self.app.get("/api/openclaw/cron/status")
-        async def openclaw_cron_status():
-            """Возвращает truthful snapshot scheduler и recurring jobs из OpenClaw CLI."""
-            # Верхний guard: если CLI не отвечает — не зависаем бесконечно.
-            try:
-                snapshot = await asyncio.wait_for(
-                    self._collect_openclaw_cron_snapshot(include_all=True),
-                    timeout=5.0,
-                )
-            except asyncio.TimeoutError:
-                return {
-                    "ok": False,
-                    "error": "OpenClaw timeout (5s)",
-                    "detail": "gateway not responding",
-                }
-            if not snapshot.get("ok"):
-                return snapshot
-            return snapshot
-
-        @self.app.get("/api/openclaw/cron/jobs")
-        async def openclaw_cron_jobs(include_all: bool = Query(default=True)):
-            """Возвращает recurring jobs для owner UI без дублирования cron-движка."""
-            # Верхний guard: если CLI не отвечает — не зависаем бесконечно.
-            try:
-                snapshot = await asyncio.wait_for(
-                    self._collect_openclaw_cron_snapshot(include_all=bool(include_all)),
-                    timeout=5.0,
-                )
-            except asyncio.TimeoutError:
-                return {
-                    "ok": False,
-                    "error": "OpenClaw timeout (5s)",
-                    "detail": "gateway not responding",
-                }
-            if not snapshot.get("ok"):
-                return snapshot
-            return {
-                "ok": True,
-                "summary": snapshot.get("summary") or {},
-                "jobs": snapshot.get("jobs") or [],
-            }
-
-        @self.app.get("/api/inbox/status")
-        async def inbox_status():
-            """Возвращает persisted summary owner-visible inbox/escalation слоя."""
-            workflow = inbox_service.get_workflow_snapshot()
-            return {
-                "ok": True,
-                "summary": workflow.get("summary") or {},
-                "workflow": workflow,
-            }
-
-        @self.app.get("/api/inbox/items")
-        async def inbox_items(
-            status: str = Query(default="open"),
-            kind: str = Query(default=""),
-            limit: int = Query(default=20),
-        ):
-            """Возвращает inbox items с простыми фильтрами для owner UI/API."""
-            return {
-                "ok": True,
-                "items": inbox_service.list_items(status=status, kind=kind, limit=limit),
-            }
-
-        @self.app.post("/api/inbox/update")
-        async def inbox_update(
-            payload: dict[str, Any] = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Позволяет owner UI подтверждать или закрывать inbox item."""
-            self._assert_write_access(x_krab_web_key, token)
-            item_id = str(payload.get("item_id") or "").strip()
-            status = str(payload.get("status") or "").strip().lower()
-            note = str(payload.get("note") or "").strip()
-            actor = str(payload.get("actor") or "owner-ui").strip().lower() or "owner-ui"
-            if not item_id:
-                raise HTTPException(status_code=400, detail="inbox_empty_item_id")
-            try:
-                if status in {"approved", "rejected"}:
-                    result = inbox_service.resolve_approval(
-                        item_id,
-                        approved=(status == "approved"),
-                        actor=actor,
-                        note=note,
-                    )
-                else:
-                    result = inbox_service.set_item_status(
-                        item_id,
-                        status=status,
-                        actor=actor,
-                        note=note,
-                    )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            if not result.get("ok"):
-                error = str(result.get("error") or "inbox_item_not_found")
-                if error == "inbox_item_not_approval":
-                    raise HTTPException(status_code=400, detail=error)
-                raise HTTPException(status_code=404, detail=error)
-            return {
-                "ok": True,
-                "result": result,
-            }
-
-        @self.app.get("/api/inbox/stale-processing")
-        async def inbox_stale_processing(
-            kind: str = Query(default="owner_request"),
-            limit: int = Query(default=20),
-        ):
-            """Возвращает stale `acked` item-ы для owner remediation runbook."""
-            items = inbox_service.list_stale_processing_items(kind=kind, limit=limit)
-            return {
-                "ok": True,
-                "kind": str(kind or "").strip().lower(),
-                "count": len(items),
-                "items": items,
-            }
-
-        @self.app.get("/api/inbox/stale-open")
-        async def inbox_stale_open(
-            kind: str = Query(default="owner_request"),
-            limit: int = Query(default=20),
-        ):
-            """Возвращает старые `open` item-ы для owner remediation runbook."""
-            items = inbox_service.list_stale_open_items(kind=kind, limit=limit)
-            return {
-                "ok": True,
-                "kind": str(kind or "").strip().lower(),
-                "count": len(items),
-                "items": items,
-            }
-
-        @self.app.post("/api/inbox/stale-processing/remediate")
-        async def inbox_stale_processing_remediate(
-            payload: dict[str, Any] = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Выполняет безопасный bulk-action только по реально stale `acked` item-ам.
-
-            Endpoint намеренно ограничен финальными статусами `done/cancelled`,
-            чтобы owner UI не мог случайно массово прогнать небезопасные
-            approval- или произвольные status-переходы.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            kind = str(payload.get("kind") or "owner_request").strip().lower() or "owner_request"
-            final_status = str(payload.get("status") or "cancelled").strip().lower() or "cancelled"
-            note = str(payload.get("note") or "").strip()
-            actor = str(payload.get("actor") or "owner-ui").strip().lower() or "owner-ui"
-            limit = max(1, min(int(payload.get("limit") or 20), 50))
-            if final_status not in {"done", "cancelled"}:
-                raise HTTPException(status_code=400, detail="inbox_invalid_bulk_stale_status")
-
-            stale_items = inbox_service.list_stale_processing_items(kind=kind, limit=limit)
-            result = inbox_service.bulk_update_status(
-                item_ids=[str(item.get("item_id") or "").strip() for item in stale_items],
-                status=final_status,
-                actor=actor,
-                note=note or f"bulk_stale_processing_{final_status}",
-            )
-            if not result.get("ok"):
-                error = str(result.get("error") or "inbox_bulk_stale_remediation_failed")
-                raise HTTPException(status_code=400, detail=error)
-            workflow = inbox_service.get_workflow_snapshot()
-            return {
-                "ok": True,
-                "kind": kind,
-                "status": final_status,
-                "count": len(stale_items),
-                "items": stale_items,
-                "result": result,
-                "summary": workflow.get("summary") or {},
-            }
-
-        @self.app.post("/api/inbox/stale-open/remediate")
-        async def inbox_stale_open_remediate(
-            payload: dict[str, Any] = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Выполняет безопасный bulk-action только по реально старым `open` item-ам.
-
-            Нужен для legacy-open owner_request/mention, которые уже нельзя
-            считать fresh inbox, но которые не ушли в processing.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            kind = str(payload.get("kind") or "owner_request").strip().lower() or "owner_request"
-            final_status = str(payload.get("status") or "cancelled").strip().lower() or "cancelled"
-            note = str(payload.get("note") or "").strip()
-            actor = str(payload.get("actor") or "owner-ui").strip().lower() or "owner-ui"
-            limit = max(1, min(int(payload.get("limit") or 20), 50))
-            if final_status not in {"done", "cancelled"}:
-                raise HTTPException(status_code=400, detail="inbox_invalid_bulk_stale_open_status")
-
-            stale_items = inbox_service.list_stale_open_items(kind=kind, limit=limit)
-            result = inbox_service.bulk_update_status(
-                item_ids=[str(item.get("item_id") or "").strip() for item in stale_items],
-                status=final_status,
-                actor=actor,
-                note=note or f"bulk_stale_open_{final_status}",
-            )
-            if not result.get("ok"):
-                error = str(result.get("error") or "inbox_bulk_stale_open_remediation_failed")
-                raise HTTPException(status_code=400, detail=error)
-            workflow = inbox_service.get_workflow_snapshot()
-            return {
-                "ok": True,
-                "kind": kind,
-                "status": final_status,
-                "count": len(stale_items),
-                "items": stale_items,
-                "result": result,
-                "summary": workflow.get("summary") or {},
-            }
-
-        @self.app.post("/api/inbox/create")
-        async def inbox_create(
-            payload: dict[str, Any] = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Позволяет owner UI создавать owner-task или approval-request."""
-            self._assert_write_access(x_krab_web_key, token)
-            kind = str(payload.get("kind") or "").strip().lower()
-            title = str(payload.get("title") or "").strip()
-            body = str(payload.get("body") or "").strip()
-            if kind not in {"owner_task", "approval_request"}:
-                raise HTTPException(status_code=400, detail="inbox_create_invalid_kind")
-            if not title or not body:
-                raise HTTPException(status_code=400, detail="inbox_create_title_body_required")
-
-            severity = str(payload.get("severity") or "info").strip().lower() or "info"
-            source = str(payload.get("source") or "owner-ui").strip().lower() or "owner-ui"
-            channel_id = str(payload.get("channel_id") or "").strip()
-            team_id = str(payload.get("team_id") or "").strip()
-            source_item_id = str(payload.get("source_item_id") or "").strip()
-            metadata = dict(payload.get("metadata") or {})
-
-            try:
-                if kind == "owner_task":
-                    if source_item_id:
-                        result = inbox_service.escalate_item_to_owner_task(
-                            source_item_id=source_item_id,
-                            title=title,
-                            body=body,
-                            task_key=str(payload.get("task_key") or "").strip(),
-                            source=source,
-                            severity=severity,
-                            metadata=metadata,
-                        )
-                    else:
-                        result = inbox_service.upsert_owner_task(
-                            title=title,
-                            body=body,
-                            task_key=str(payload.get("task_key") or "").strip(),
-                            source=source,
-                            severity=severity,
-                            channel_id=channel_id,
-                            team_id=team_id,
-                            trace_id=str(payload.get("trace_id") or "").strip(),
-                            metadata=metadata,
-                        )
-                else:
-                    if source_item_id:
-                        result = inbox_service.escalate_item_to_approval_request(
-                            source_item_id=source_item_id,
-                            title=title,
-                            body=body,
-                            request_key=str(payload.get("request_key") or "").strip(),
-                            source=source,
-                            severity=str(payload.get("severity") or "warning").strip().lower()
-                            or "warning",
-                            approval_scope=str(payload.get("approval_scope") or "owner").strip()
-                            or "owner",
-                            requested_action=str(payload.get("requested_action") or "").strip(),
-                            metadata=metadata,
-                        )
-                    else:
-                        result = inbox_service.upsert_approval_request(
-                            title=title,
-                            body=body,
-                            request_key=str(payload.get("request_key") or "").strip(),
-                            source=source,
-                            severity=str(payload.get("severity") or "warning").strip().lower()
-                            or "warning",
-                            channel_id=channel_id,
-                            team_id=team_id,
-                            trace_id=str(payload.get("trace_id") or "").strip(),
-                            approval_scope=str(payload.get("approval_scope") or "owner").strip()
-                            or "owner",
-                            requested_action=str(payload.get("requested_action") or "").strip(),
-                            metadata=metadata,
-                        )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            if not result.get("ok"):
-                raise HTTPException(
-                    status_code=404, detail=str(result.get("error") or "inbox_item_not_found")
-                )
-
-            return {
-                "ok": True,
-                "result": result,
-            }
-
-        @self.app.get("/api/notifications/count")
-        async def notification_count():
-            """Количество уведомлений для badge в UI."""
-            try:
-                items = inbox_service.list_items(status="open", limit=100)
-                attention = [i for i in items if i.get("severity") in ("error", "warning")]
-                return {"ok": True, "total": len(items), "attention": len(attention)}
-            except Exception:
-                return {"ok": True, "total": 0, "attention": 0}
-
-        @self.app.post("/api/openclaw/cron/jobs/create")
-        async def openclaw_cron_job_create(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Создаёт recurring cron job через нативный `openclaw cron add`."""
-            self._assert_write_access(x_krab_web_key, token)
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="cron_create_body_required")
-
-            name = str(body.get("name") or "").strip()
-            every = str(body.get("every") or "").strip()
-            task_kind = str(body.get("task_kind") or "system").strip().lower()
-            payload_text = str(body.get("payload_text") or "").strip()
-            session_target = str(body.get("session_target") or "main").strip().lower()
-            wake_mode = str(body.get("wake_mode") or "now").strip().lower()
-            agent_id = str(body.get("agent_id") or "main").strip()
-            thinking = str(body.get("thinking") or "").strip().lower()
-            model = str(body.get("model") or "").strip()
-            description = str(body.get("description") or "").strip()
-
-            if not name:
-                raise HTTPException(status_code=400, detail="cron_name_required")
-            if not every:
-                raise HTTPException(status_code=400, detail="cron_every_required")
-            if not payload_text:
-                raise HTTPException(status_code=400, detail="cron_payload_required")
-            if task_kind not in {"system", "agent"}:
-                raise HTTPException(status_code=400, detail="cron_task_kind_invalid")
-            if session_target not in {"main", "isolated"}:
-                raise HTTPException(status_code=400, detail="cron_session_target_invalid")
-            if wake_mode not in {"now", "next-heartbeat"}:
-                raise HTTPException(status_code=400, detail="cron_wake_mode_invalid")
-
-            command: list[str] = [
-                "cron",
-                "add",
-                "--json",
-                "--name",
-                name,
-                "--every",
-                every,
-                "--session",
-                session_target,
-                "--wake",
-                wake_mode,
-            ]
-            if description:
-                command.extend(["--description", description])
-            if bool(body.get("disabled")):
-                command.append("--disabled")
-            if bool(body.get("announce")):
-                command.append("--announce")
-            if task_kind == "agent":
-                command.extend(["--agent", agent_id or "main", "--message", payload_text])
-                if thinking:
-                    command.extend(["--thinking", thinking])
-                if model:
-                    command.extend(["--model", model])
-            else:
-                command.extend(["--system-event", payload_text])
-
-            create_result = await self._run_openclaw_cli(
-                *command,
-                timeout=45.0,
-                expect_json=True,
-            )
-            if not create_result.get("ok"):
-                return {
-                    "ok": False,
-                    "error": create_result.get("error") or "cron_create_failed",
-                    "detail": create_result.get("detail")
-                    or create_result.get("raw")
-                    or "Не удалось создать recurring job",
-                }
-
-            snapshot = await self._collect_openclaw_cron_snapshot(include_all=True)
-            if not snapshot.get("ok"):
-                return snapshot
-            return {
-                "ok": True,
-                "created": create_result.get("data") or {},
-                "summary": snapshot.get("summary") or {},
-                "jobs": snapshot.get("jobs") or [],
-                "status": snapshot.get("status") or {},
-            }
-
-        @self.app.post("/api/openclaw/cron/jobs/toggle")
-        async def openclaw_cron_job_toggle(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Включает или выключает recurring job через OpenClaw CLI."""
-            self._assert_write_access(x_krab_web_key, token)
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="cron_toggle_body_required")
-            job_id = str(body.get("id") or "").strip()
-            enabled = body.get("enabled")
-            if not job_id:
-                raise HTTPException(status_code=400, detail="cron_id_required")
-            if not isinstance(enabled, bool):
-                raise HTTPException(status_code=400, detail="cron_enabled_bool_required")
-
-            command = ["cron", "enable" if enabled else "disable", job_id]
-            toggle_result = await self._run_openclaw_cli(
-                *command,
-                timeout=35.0,
-                expect_json=False,
-            )
-            if not toggle_result.get("ok"):
-                return {
-                    "ok": False,
-                    "error": toggle_result.get("error") or "cron_toggle_failed",
-                    "detail": toggle_result.get("detail")
-                    or toggle_result.get("raw")
-                    or "Не удалось изменить состояние recurring job",
-                }
-
-            snapshot = await self._collect_openclaw_cron_snapshot(include_all=True)
-            if not snapshot.get("ok"):
-                return snapshot
-            return {
-                "ok": True,
-                "detail": toggle_result.get("raw") or "",
-                "summary": snapshot.get("summary") or {},
-                "jobs": snapshot.get("jobs") or [],
-                "status": snapshot.get("status") or {},
-            }
-
-        @self.app.post("/api/openclaw/cron/jobs/remove")
-        async def openclaw_cron_job_remove(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Удаляет recurring job через OpenClaw CLI."""
-            self._assert_write_access(x_krab_web_key, token)
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="cron_remove_body_required")
-            job_id = str(body.get("id") or "").strip()
-            if not job_id:
-                raise HTTPException(status_code=400, detail="cron_id_required")
-
-            remove_result = await self._run_openclaw_cli(
-                "cron",
-                "rm",
-                "--json",
-                job_id,
-                timeout=35.0,
-                expect_json=True,
-            )
-            if not remove_result.get("ok"):
-                return {
-                    "ok": False,
-                    "error": remove_result.get("error") or "cron_remove_failed",
-                    "detail": remove_result.get("detail")
-                    or remove_result.get("raw")
-                    or "Не удалось удалить recurring job",
-                }
-
-            snapshot = await self._collect_openclaw_cron_snapshot(include_all=True)
-            if not snapshot.get("ok"):
-                return snapshot
-            return {
-                "ok": True,
-                "removed": remove_result.get("data") or {},
-                "summary": snapshot.get("summary") or {},
-                "jobs": snapshot.get("jobs") or [],
-                "status": snapshot.get("status") or {},
-            }
-
-        @self.app.get("/api/policy")
-        async def get_policy():
-            """Возвращает runtime-политику AI (queue/guardrails/reactions)."""
-            ai_runtime = self.deps.get("ai_runtime")
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            policy_matrix = self._policy_matrix_snapshot(runtime_lite=runtime_lite)
-            if not ai_runtime:
-                return {
-                    "ok": False,
-                    "error": "ai_runtime_not_configured",
-                    "policy_matrix": policy_matrix,
-                }
-            return {
-                "ok": True,
-                "policy": ai_runtime.get_policy_snapshot(),
-                "policy_matrix": policy_matrix,
-            }
-
-        @self.app.get("/api/policy/matrix")
-        async def get_policy_matrix():
-            """Возвращает unified policy matrix для owner/full/partial/guest."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            return {
-                "ok": True,
-                "policy_matrix": self._policy_matrix_snapshot(runtime_lite=runtime_lite),
-            }
-
-        @self.app.get("/api/queue")
-        async def get_queue():
-            """Возвращает состояние per-chat очередей автообработки."""
-            ai_runtime = self.deps.get("ai_runtime")
-            if not ai_runtime or not hasattr(ai_runtime, "queue_manager"):
-                return {"ok": False, "error": "queue_not_configured"}
-            return {"ok": True, "queue": ai_runtime.queue_manager.get_stats()}
-
-        @self.app.get("/api/ctx")
-        async def get_ctx(chat_id: int | None = Query(default=None)):
-            """Snapshot контекста последнего запроса (по чату или все чаты)."""
-            ai_runtime = self.deps.get("ai_runtime")
-            if not ai_runtime:
-                return {"ok": False, "error": "ai_runtime_not_configured"}
-            if chat_id is None:
-                if not hasattr(ai_runtime, "get_context_snapshots"):
-                    return {"ok": False, "error": "ctx_not_supported"}
-                return {"ok": True, "contexts": ai_runtime.get_context_snapshots()}
-            return {"ok": True, "context": ai_runtime.get_context_snapshot(int(chat_id))}
-
-        @self.app.get("/api/reactions/stats")
-        async def get_reactions_stats(chat_id: int | None = Query(default=None)):
-            """Сводка по реакциям (общая или по чату)."""
-            reaction_engine = self.deps.get("reaction_engine")
-            if not reaction_engine:
-                return {"ok": False, "error": "reaction_engine_not_configured"}
-            return {"ok": True, "stats": reaction_engine.get_reaction_stats(chat_id=chat_id)}
-
-        @self.app.get("/api/mood/{chat_id}")
-        async def get_chat_mood(chat_id: int):
-            """Возвращает mood-профиль конкретного чата."""
-            reaction_engine = self.deps.get("reaction_engine")
-            if not reaction_engine:
-                return {"ok": False, "error": "reaction_engine_not_configured"}
-            return {"ok": True, "mood": reaction_engine.get_chat_mood(chat_id)}
-
-        @self.app.get("/api/links")
-        async def get_links():
-            """Ссылки по экосистеме в одном месте."""
-            base = self._public_base_url()
-            return {
-                "dashboard": base,
-                "stats_api": f"{base}/api/stats",
-                "health_api": f"{base}/api/health",
-                "health_lite_api": f"{base}/api/health/lite",
-                "ecosystem_health_api": f"{base}/api/ecosystem/health",
-                "links_api": f"{base}/api/links",
-                "openclaw_cloud_api": f"{base}/api/openclaw/cloud",
-                "runtime_handoff_api": f"{base}/api/runtime/handoff",
-                "runtime_recover_api": f"{base}/api/runtime/recover",
-                "context_checkpoint_api": f"{base}/api/context/checkpoint",
-                "context_transition_pack_api": f"{base}/api/context/transition-pack",
-                "context_latest_api": f"{base}/api/context/latest",
-                "voice_gateway": os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090"),
-                "openclaw": os.getenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789"),
-            }
-
-        @self.app.get("/api/openclaw/runtime-config")
-        async def openclaw_runtime_config():
-            """
-            Runtime-конфиг OpenClaw для UI.
-            Важно: секрет не отдаём целиком, только masked + флаг присутствия.
-            """
-            base_url = (
-                str(getattr(config, "OPENCLAW_URL", "") or "http://127.0.0.1:18789")
-                .strip()
-                .rstrip("/")
-            )
-            raw_key = str(self._openclaw_gateway_token_from_config() or "").strip()
-            key_present = False
-            key_masked = ""
-            key_kind = "missing"
-            if raw_key:
-                key_present = True
-                if raw_key.startswith("{"):
-                    key_kind = "tiered_json"
-                    key_masked = "tiered-json-configured"
-                else:
-                    key_kind = "plain"
-                    key_masked = self._mask_secret(raw_key)
-
-            return {
-                "ok": True,
-                "openclaw_base_url": base_url,
-                "gateway_token_present": key_present,
-                "gateway_token_masked": key_masked,
-                "gateway_token_kind": key_kind,
-                "gateway_auth_state": "configured" if key_present else "missing",
-                "runtime_policy": {
-                    "force_cloud": bool(getattr(config, "FORCE_CLOUD", False)),
-                    "local_fallback_enabled": bool(getattr(config, "LOCAL_FALLBACK_ENABLED", True)),
-                    "native_reasoning_mode": str(
-                        getattr(config, "LM_STUDIO_NATIVE_REASONING_MODE", "off") or "off"
-                    )
-                    .strip()
-                    .lower(),
-                    "photo_force_cloud": bool(
-                        getattr(config, "USERBOT_FORCE_CLOUD_FOR_PHOTO", True)
-                    ),
-                    "output_tokens": {
-                        "text": int(getattr(config, "USERBOT_MAX_OUTPUT_TOKENS", 1200) or 1200),
-                        "photo": int(
-                            getattr(config, "USERBOT_PHOTO_MAX_OUTPUT_TOKENS", 420) or 420
-                        ),
-                    },
-                    "history_budget": {
-                        "dialog_messages": int(
-                            getattr(config, "HISTORY_WINDOW_MESSAGES", 50) or 50
-                        ),
-                        "dialog_max_chars": getattr(config, "HISTORY_WINDOW_MAX_CHARS", None),
-                        "local_messages": int(
-                            getattr(config, "LOCAL_HISTORY_WINDOW_MESSAGES", 18) or 18
-                        ),
-                        "local_max_chars": getattr(config, "LOCAL_HISTORY_WINDOW_MAX_CHARS", None),
-                        "retry_messages": int(
-                            getattr(config, "RETRY_HISTORY_WINDOW_MESSAGES", 8) or 8
-                        ),
-                        "retry_max_chars": int(
-                            getattr(config, "RETRY_HISTORY_WINDOW_MAX_CHARS", 4000) or 4000
-                        ),
-                        "retry_message_max_chars": int(
-                            getattr(config, "RETRY_MESSAGE_MAX_CHARS", 1200) or 1200
-                        ),
-                    },
-                    "timeouts_sec": {
-                        "chunk": float(
-                            getattr(config, "OPENCLAW_CHUNK_TIMEOUT_SEC", 180.0) or 180.0
-                        ),
-                        "first_chunk": float(
-                            getattr(config, "OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC", 420.0) or 420.0
-                        ),
-                        "photo_first_chunk": float(
-                            getattr(config, "OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", 540.0)
-                            or 540.0
-                        ),
-                    },
-                },
-            }
-
-        @self.app.post("/api/context/checkpoint")
-        async def context_checkpoint(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Создает checkpoint для перехода в новый чат (anti-413).
-            Вызывает one-click скрипт и возвращает путь к свежему артефакту.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            script_path = self._project_root() / "new_chat_checkpoint.command"
-            run = self._run_local_script(script_path, timeout_seconds=120)
-            if not bool(run.get("ok")):
-                detail = str(run.get("error") or f"exit_code={run.get('exit_code', 1)}")
-                raise HTTPException(status_code=500, detail=f"context_checkpoint_failed:{detail}")
-
-            artifact = self._latest_path_by_glob("artifacts/context_checkpoints/checkpoint_*.md")
-            if artifact is None:
-                raise HTTPException(status_code=500, detail="context_checkpoint_failed:no_artifact")
-
-            return {
-                "ok": True,
-                "artifact_type": "checkpoint",
-                "artifact_path": str(artifact),
-                "stdout_tail": str(run.get("stdout_tail") or ""),
-                "exit_code": int(run.get("exit_code", 0)),
-            }
-
-        @self.app.post("/api/context/transition-pack")
-        async def context_transition_pack(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Собирает transition-pack для восстановления состояния в новом чате.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            script_path = self._project_root() / "build_transition_pack.command"
-            run = self._run_local_script(script_path, timeout_seconds=180)
-            if not bool(run.get("ok")):
-                detail = str(run.get("error") or f"exit_code={run.get('exit_code', 1)}")
-                raise HTTPException(
-                    status_code=500, detail=f"context_transition_pack_failed:{detail}"
-                )
-
-            pack_dir = self._latest_path_by_glob("artifacts/context_transition/pack_*")
-            if pack_dir is None:
-                raise HTTPException(
-                    status_code=500, detail="context_transition_pack_failed:no_pack_dir"
-                )
-
-            transfer_prompt = pack_dir / "TRANSFER_PROMPT_RU.md"
-            files_to_attach = pack_dir / "FILES_TO_ATTACH.txt"
-            return {
-                "ok": True,
-                "artifact_type": "transition_pack",
-                "pack_dir": str(pack_dir),
-                "transfer_prompt_path": str(transfer_prompt) if transfer_prompt.exists() else None,
-                "files_to_attach_path": str(files_to_attach) if files_to_attach.exists() else None,
-                "stdout_tail": str(run.get("stdout_tail") or ""),
-                "exit_code": int(run.get("exit_code", 0)),
-            }
-
-        @self.app.get("/api/context/latest")
-        async def context_latest():
-            """
-            Возвращает ссылки на последние anti-413 артефакты.
-            """
-            checkpoint = self._latest_path_by_glob("artifacts/context_checkpoints/checkpoint_*.md")
-            pack_dir = self._latest_path_by_glob("artifacts/context_transition/pack_*")
-            transfer_prompt = (pack_dir / "TRANSFER_PROMPT_RU.md") if pack_dir else None
-            files_to_attach = (pack_dir / "FILES_TO_ATTACH.txt") if pack_dir else None
-            return {
-                "ok": True,
-                "latest_checkpoint_path": str(checkpoint) if checkpoint else None,
-                "latest_pack_dir": str(pack_dir) if pack_dir else None,
-                "latest_transfer_prompt_path": str(transfer_prompt)
-                if transfer_prompt and transfer_prompt.exists()
-                else None,
-                "latest_files_to_attach_path": str(files_to_attach)
-                if files_to_attach and files_to_attach.exists()
-                else None,
-            }
-
-        @self.app.get("/api/runtime/operator-profile")
-        async def runtime_operator_profile():
-            """Возвращает machine-readable профиль текущей учётки/runtime для multi-account handoff."""
-            return {
-                "ok": True,
-                "profile": self._runtime_operator_profile(),
-            }
-
-        @self.app.post("/api/runtime/repair-active-shared-permissions")
-        async def runtime_repair_active_shared_permissions(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Нормализует group-write права в `Краб-active` через owner web-key."""
-            self._assert_write_access(x_krab_web_key, token)
-            active_shared_root = self._active_shared_root()
-            repair_summary = normalize_shared_worktree_permissions(active_shared_root)
-            permission_health = self._active_shared_permission_health_snapshot()
-            return {
-                "ok": bool(repair_summary.get("ok")),
-                "repair": repair_summary,
-                "active_shared_permission_health": permission_health,
-            }
-
-        @self.app.get("/api/capabilities/registry")
-        async def capability_registry():
-            """Возвращает единый capability registry поверх truthful runtime-срезов."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            return await self._capability_registry_snapshot(runtime_lite=runtime_lite)
-
-        @self.app.get("/api/channels/capabilities")
-        async def channel_capabilities():
-            """Возвращает unified channel capability parity snapshot."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            policy_matrix = self._policy_matrix_snapshot(runtime_lite=runtime_lite)
-            return {
-                "ok": True,
-                "channel_capabilities": self._channel_capabilities_snapshot(
-                    runtime_lite=runtime_lite,
-                    policy_matrix=policy_matrix,
-                ),
-            }
-
-        @self.app.get("/api/translator/readiness")
-        async def translator_readiness():
-            """Возвращает truthful readiness translator-контура внутри экосистемы Краба."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            snapshot = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            snapshot["capability_registry_endpoint"] = "/api/capabilities/registry"
-            snapshot["policy_matrix_endpoint"] = "/api/policy/matrix"
-            return snapshot
-
-        @self.app.get("/api/translator/status")
-        async def translator_status():
-            """Лёгкий status endpoint для dashboard /translator page."""
-            try:
-                profile = self.kraab.get_translator_runtime_profile()
-                session = self.kraab.get_translator_session_state()
-                return {"ok": True, "profile": profile, "session": session}
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
-
-        @self.app.post("/api/translator/session/toggle")
-        async def translator_session_toggle(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Start/stop translator session через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            state = self.kraab.get_translator_session_state()
-            if state.get("session_status") == "active":
-                self.kraab.update_translator_session_state(
-                    session_status="idle",
-                    active_chats=[],
-                    last_event="session_stopped_api",
-                    persist=True,
-                )
-                return {"ok": True, "action": "stopped", "status": "idle"}
-            profile = self.kraab.get_translator_runtime_profile()
-            chat_id = str(payload.get("chat_id") or "").strip()
-            active_chats = [chat_id] if chat_id else []
-            self.kraab.update_translator_session_state(
-                session_status="active",
-                active_chats=active_chats,
-                last_language_pair=profile.get("language_pair"),
-                last_event="session_started_api",
-                persist=True,
-            )
-            return {
-                "ok": True,
-                "action": "started",
-                "status": "active",
-                "active_chats": active_chats,
-            }
-
-        @self.app.post("/api/translator/auto")
-        async def translator_auto(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Switch to auto-detect mode via API."""
-            self._assert_write_access(x_krab_web_key, token)
-            self.kraab.update_translator_runtime_profile(language_pair="auto-detect", persist=True)
-            return {"ok": True, "language_pair": "auto-detect"}
-
-        @self.app.post("/api/translator/lang")
-        async def translator_set_lang(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Сменить языковую пару через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            from ..core.translator_runtime_profile import ALLOWED_LANGUAGE_PAIRS
-
-            pair = str(payload.get("language_pair") or "").strip().lower()
-            if pair not in ALLOWED_LANGUAGE_PAIRS:
-                return {
-                    "ok": False,
-                    "error": f"invalid pair, use: {sorted(ALLOWED_LANGUAGE_PAIRS)}",
-                }
-            self.kraab.update_translator_runtime_profile(language_pair=pair, persist=True)
-            return {"ok": True, "language_pair": pair}
-
-        @self.app.get("/api/translator/history")
-        async def translator_history(n: int = 20):
-            """История переводов и статистика. ?n=N — последние N записей (default 20)."""
-            try:
-                state = self.kraab.get_translator_session_state()
-                stats = state.get("stats") or {}
-                total = stats.get("total_translations", 0)
-                history: list[dict] = list(state.get("history") or [])
-                # Ограничиваем выборку по параметру n
-                n_clamped = max(1, min(20, n))
-                recent = history[-n_clamped:] if history else []
-                return {
-                    "ok": True,
-                    "total_translations": total,
-                    "total_latency_ms": stats.get("total_latency_ms", 0),
-                    "avg_latency_ms": round(stats.get("total_latency_ms", 0) / max(1, total)),
-                    "last_pair": state.get("last_language_pair", ""),
-                    "last_original": state.get("last_translated_original", ""),
-                    "last_translation": state.get("last_translated_translation", ""),
-                    "history": list(reversed(recent)),  # новые первыми
-                    "history_count": len(history),
-                }
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
-
-        @self.app.post("/api/translator/translate")
-        async def translator_translate(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Прямой перевод текста через API (без voice note)."""
-            self._assert_write_access(x_krab_web_key, token)
-            text = str(payload.get("text") or "").strip()
-            if not text:
-                return {"ok": False, "error": "text required"}
-            src_lang = str(payload.get("src_lang") or "").strip()
-            tgt_lang = str(payload.get("tgt_lang") or "ru").strip()
-            try:
-                from ..core.language_detect import detect_language, resolve_translation_pair
-                from ..core.translator_engine import translate_text
-                from ..openclaw_client import openclaw_client as _oc
-
-                if not src_lang:
-                    src_lang = detect_language(text)
-                if not src_lang:
-                    return {"ok": False, "error": "language not detected"}
-                profile = self.kraab.get_translator_runtime_profile()
-                if not tgt_lang or tgt_lang == "auto":
-                    src_lang, tgt_lang = resolve_translation_pair(
-                        src_lang, profile.get("language_pair", "es-ru")
-                    )
-                result = await translate_text(text, src_lang, tgt_lang, openclaw_client=_oc)
-                return {
-                    "ok": True,
-                    "original": result.original,
-                    "translated": result.translated,
-                    "src_lang": result.src_lang,
-                    "tgt_lang": result.tgt_lang,
-                    "latency_ms": result.latency_ms,
-                    "model": result.model_id,
-                }
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
-
-        @self.app.get("/api/translator/bootstrap")
-        async def translator_bootstrap():
-            """
-            Возвращает единый bootstrap payload для first-paint translator-карточки.
-
-            Это снижает cold-load стоимость owner panel:
-            - один HTTP roundtrip вместо каскада отдельных fetch;
-            - повторно используем уже собранные snapshot'ы, а не пересчитываем
-              readiness/control/mobile по кругу в соседних endpoint'ах.
-            """
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            readiness["capability_registry_endpoint"] = "/api/capabilities/registry"
-            readiness["policy_matrix_endpoint"] = "/api/policy/matrix"
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            session_inspector = await self._translator_session_inspector_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-            mobile_readiness = await self._translator_mobile_readiness_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-            delivery_matrix = await self._translator_delivery_matrix_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-            )
-            live_trial_preflight = await self._translator_live_trial_preflight_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_delivery_matrix=delivery_matrix,
-                current_mobile_readiness=mobile_readiness,
-            )
-            mobile_onboarding = await self._translator_mobile_onboarding_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-                current_delivery_matrix=delivery_matrix,
-                current_live_trial_preflight=live_trial_preflight,
-            )
-            return {
-                "ok": True,
-                "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "readiness": readiness,
-                "control_plane": control_plane,
-                "session_inspector": session_inspector,
-                "mobile_readiness": mobile_readiness,
-                "delivery_matrix": delivery_matrix,
-                "live_trial_preflight": live_trial_preflight,
-                "mobile_onboarding": mobile_onboarding,
-            }
-
-        @self.app.get("/api/translator/control-plane")
-        async def translator_control_plane():
-            """Возвращает session/policy truth translator-контура через control-plane Краба."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            return await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-
-        @self.app.get("/api/translator/session-inspector")
-        async def translator_session_inspector():
-            """Возвращает why-report, timeline digest и escalation context для translator session."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            return await self._translator_session_inspector_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-
-        @self.app.get("/api/translator/mobile-readiness")
-        async def translator_mobile_readiness():
-            """Возвращает readiness iPhone companion/mobile device слоя переводчика."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            return await self._translator_mobile_readiness_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-
-        @self.app.get("/api/translator/delivery-matrix")
-        async def translator_delivery_matrix():
-            """Возвращает product truth по ordinary/internet call tracks переводчика."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            mobile_readiness = await self._translator_mobile_readiness_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-            return await self._translator_delivery_matrix_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-            )
-
-        @self.app.get("/api/translator/live-trial-preflight")
-        async def translator_live_trial_preflight():
-            """Возвращает one-shot truthful preflight для ordinary-call live trial."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            mobile_readiness = await self._translator_mobile_readiness_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-            delivery_matrix = await self._translator_delivery_matrix_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-            )
-            return await self._translator_live_trial_preflight_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_delivery_matrix=delivery_matrix,
-                current_mobile_readiness=mobile_readiness,
-            )
-
-        @self.app.get("/api/translator/mobile/onboarding")
-        async def translator_mobile_onboarding():
-            """Возвращает onboarding packet для реального iPhone companion trial."""
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            mobile_readiness = await self._translator_mobile_readiness_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-            delivery_matrix = await self._translator_delivery_matrix_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-            )
-            live_trial_preflight = await self._translator_live_trial_preflight_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_delivery_matrix=delivery_matrix,
-                current_mobile_readiness=mobile_readiness,
-            )
-            return await self._translator_mobile_onboarding_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-                current_delivery_matrix=delivery_matrix,
-                current_live_trial_preflight=live_trial_preflight,
-            )
-
-        @self.app.post("/api/translator/mobile/onboarding/export")
-        async def translator_mobile_onboarding_export(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Собирает и пишет onboarding packet в ops artifacts одним owner-вызовом."""
-            self._assert_write_access(x_krab_web_key, token)
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            mobile_readiness = await self._translator_mobile_readiness_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-            delivery_matrix = await self._translator_delivery_matrix_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-            )
-            live_trial_preflight = await self._translator_live_trial_preflight_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_delivery_matrix=delivery_matrix,
-                current_mobile_readiness=mobile_readiness,
-            )
-            onboarding = await self._translator_mobile_onboarding_snapshot(
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-                current_control_plane=control_plane,
-                current_mobile_readiness=mobile_readiness,
-                current_delivery_matrix=delivery_matrix,
-                current_live_trial_preflight=live_trial_preflight,
-            )
-            ops_dir = self._project_root() / "artifacts" / "ops"
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
-            versioned_path = ops_dir / f"translator_mobile_onboarding_{stamp}.json"
-            latest_path = ops_dir / "translator_mobile_onboarding_latest.json"
-            self._write_json_file(versioned_path, onboarding)
-            latest_written = False
-            latest_error = ""
-            effective_latest_path = latest_path
-            try:
-                self._write_json_file(latest_path, onboarding)
-                latest_written = True
-            except OSError as exc:
-                latest_error = str(exc)
-                raw_user = str(os.getenv("USER") or Path.home().name or "user").strip().lower()
-                safe_user = re.sub(r"[^a-z0-9_-]+", "_", raw_user) or "user"
-                fallback_latest_path = (
-                    ops_dir / f"translator_mobile_onboarding_latest_{safe_user}.json"
-                )
-                try:
-                    self._write_json_file(fallback_latest_path, onboarding)
-                    effective_latest_path = fallback_latest_path
-                    latest_written = True
-                except OSError as fallback_exc:
-                    latest_error = f"{latest_error}; fallback_failed: {fallback_exc}"
-            return {
-                "ok": True,
-                "action": "export_mobile_onboarding_packet",
-                "artifacts": {
-                    "latest_path": str(latest_path),
-                    "latest_path_effective": str(effective_latest_path),
-                    "latest_written": latest_written,
-                    "latest_write_error": latest_error,
-                    "versioned_path": str(versioned_path),
-                },
-                "onboarding": onboarding,
-            }
-
-        @self.app.post("/api/translator/session/start")
-        async def translator_session_start(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Создаёт translator session из owner panel без прямого доступа UI к Voice Gateway."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(
-                    status_code=400, detail="translator_session_start_body_required"
-                )
-
-            source = str(body.get("source") or "mic").strip() or "mic"
-            translation_mode = (
-                str(body.get("translation_mode") or "auto_to_ru").strip() or "auto_to_ru"
-            )
-            notify_mode = str(body.get("notify_mode") or "auto_on").strip() or "auto_on"
-            tts_mode = str(body.get("tts_mode") or "hybrid").strip() or "hybrid"
-            src_lang = str(body.get("src_lang") or "auto").strip() or "auto"
-            tgt_lang = str(body.get("tgt_lang") or "ru").strip() or "ru"
-            label = str(body.get("label") or "").strip()
-            meta = dict(body.get("meta") or {}) if isinstance(body.get("meta"), dict) else {}
-            meta["initiated_by"] = "owner_panel"
-            meta["operator_id"] = current_operator_id()
-            meta["account_id"] = current_account_id()
-            if label:
-                meta["session_label"] = label
-
-            result = await voice_gateway.start_session(
-                source=source,
-                translation_mode=translation_mode,
-                notify_mode=notify_mode,
-                tts_mode=tts_mode,
-                src_lang=src_lang,
-                tgt_lang=tgt_lang,
-                meta=meta,
-            )
-            if not result.get("ok"):
-                status_code, detail = self._translator_gateway_error_detail(
-                    result,
-                    fallback="translator_session_start_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-
-            # E4.2: Запускаем WS-подписчик для LLM reasoning
-            new_session_id = str(result.get("session_id") or "").strip()
-            if new_session_id:
-                await self._start_vg_subscriber(new_session_id, voice_gateway)
-
-            return await self._translator_action_response(
-                action="start_session", gateway_result=result
-            )
-
-        @self.app.post("/api/translator/session/policy")
-        async def translator_session_policy_update(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Обновляет policy текущей translator session через owner panel."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(
-                    status_code=400, detail="translator_session_policy_body_required"
-                )
-
-            (
-                session_id,
-                runtime_lite,
-                _control_plane,
-            ) = await self._translator_resolve_session_context(
-                requested_session_id=str(body.get("session_id") or "").strip()
-            )
-            patch: dict[str, Any] = {}
-            for key in ("translation_mode", "notify_mode", "tts_mode", "src_lang", "tgt_lang"):
-                value = body.get(key)
-                if value is not None:
-                    clean = str(value).strip()
-                    if clean:
-                        patch[key] = clean
-            if not patch:
-                raise HTTPException(
-                    status_code=400, detail="translator_session_policy_patch_required"
-                )
-
-            result = await voice_gateway.patch_session(session_id, **patch)
-            if not result.get("ok"):
-                status_code, detail = self._translator_gateway_error_detail(
-                    result,
-                    fallback="translator_session_policy_update_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-            return await self._translator_action_response(
-                action="update_session_policy",
-                gateway_result=result,
-                runtime_lite=runtime_lite,
-            )
-
-        @self.app.post("/api/translator/session/action")
-        async def translator_session_action(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Выполняет lifecycle-действие над translator session: pause/resume/stop."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(
-                    status_code=400, detail="translator_session_action_body_required"
-                )
-
-            action = str(body.get("action") or "").strip().lower()
-            if action not in {"pause", "resume", "stop"}:
-                raise HTTPException(status_code=400, detail="translator_session_action_invalid")
-
-            (
-                session_id,
-                runtime_lite,
-                _control_plane,
-            ) = await self._translator_resolve_session_context(
-                requested_session_id=str(body.get("session_id") or "").strip()
-            )
-            if action == "stop":
-                await self._stop_vg_subscriber()
-                result = await voice_gateway.stop_session(session_id)
-            else:
-                target_status = "paused" if action == "pause" else "running"
-                result = await voice_gateway.patch_session(session_id, status=target_status)
-
-            if not result.get("ok"):
-                status_code, detail = self._translator_gateway_error_detail(
-                    result,
-                    fallback=f"translator_session_{action}_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-            return await self._translator_action_response(
-                action=f"{action}_session",
-                gateway_result=result,
-                runtime_lite=runtime_lite,
-            )
-
-        @self.app.post("/api/translator/session/runtime-tune")
-        async def translator_session_runtime_tune(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Обновляет runtime tuning текущей translator session."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="translator_runtime_tune_body_required")
-
-            (
-                session_id,
-                runtime_lite,
-                _control_plane,
-            ) = await self._translator_resolve_session_context(
-                requested_session_id=str(body.get("session_id") or "").strip()
-            )
-            buffering_mode = str(body.get("buffering_mode") or "").strip() or None
-            target_latency_raw = body.get("target_latency_ms")
-            vad_raw = body.get("vad_sensitivity")
-
-            target_latency_ms = None
-            if target_latency_raw not in (None, ""):
-                try:
-                    target_latency_ms = int(target_latency_raw)
-                except (TypeError, ValueError) as exc:
-                    raise HTTPException(
-                        status_code=400, detail="translator_target_latency_invalid"
-                    ) from exc
-
-            vad_sensitivity = None
-            if vad_raw not in (None, ""):
-                try:
-                    vad_sensitivity = float(vad_raw)
-                except (TypeError, ValueError) as exc:
-                    raise HTTPException(
-                        status_code=400, detail="translator_vad_sensitivity_invalid"
-                    ) from exc
-
-            if buffering_mode is None and target_latency_ms is None and vad_sensitivity is None:
-                raise HTTPException(
-                    status_code=400, detail="translator_runtime_tune_patch_required"
-                )
-
-            result = await voice_gateway.tune_runtime(
-                session_id,
-                buffering_mode=buffering_mode,
-                target_latency_ms=target_latency_ms,
-                vad_sensitivity=vad_sensitivity,
-            )
-            if not result.get("ok"):
-                status_code, detail = self._translator_gateway_error_detail(
-                    result,
-                    fallback="translator_runtime_tune_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-            return await self._translator_action_response(
-                action="runtime_tune_session",
-                gateway_result=result,
-                runtime_lite=runtime_lite,
-            )
-
-        @self.app.post("/api/translator/session/quick-phrase")
-        async def translator_session_quick_phrase(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Публикует quick-phrase в текущую translator session через owner panel."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="translator_quick_phrase_body_required")
-
-            (
-                session_id,
-                runtime_lite,
-                control_plane,
-            ) = await self._translator_resolve_session_context(
-                requested_session_id=str(body.get("session_id") or "").strip()
-            )
-            text = str(body.get("text") or "").strip()
-            if not text:
-                raise HTTPException(status_code=400, detail="translator_quick_phrase_text_required")
-
-            defaults = (
-                ((control_plane.get("operator_actions") or {}).get("draft_defaults") or {})
-                if isinstance(control_plane.get("operator_actions"), dict)
-                else {}
-            )
-            source_lang = (
-                str(
-                    body.get("source_lang") or defaults.get("quick_phrase_source_lang") or "ru"
-                ).strip()
-                or "ru"
-            )
-            target_lang = (
-                str(
-                    body.get("target_lang") or defaults.get("quick_phrase_target_lang") or "es"
-                ).strip()
-                or "es"
-            )
-            voice = (
-                str(body.get("voice") or defaults.get("quick_phrase_voice") or "default").strip()
-                or "default"
-            )
-            style = (
-                str(body.get("style") or defaults.get("quick_phrase_style") or "neutral").strip()
-                or "neutral"
-            )
-
-            result = await voice_gateway.send_quick_phrase(
-                session_id,
-                text=text,
-                source_lang=source_lang,
-                target_lang=target_lang,
-                voice=voice,
-                style=style,
-            )
-            if not result.get("ok"):
-                status_code, detail = self._translator_gateway_error_detail(
-                    result,
-                    fallback="translator_quick_phrase_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-            return await self._translator_action_response(
-                action="quick_phrase_session",
-                gateway_result=result,
-                runtime_lite=runtime_lite,
-            )
-
-        @self.app.post("/api/translator/session/summary")
-        async def translator_session_summary(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Принудительно пересобирает session summary через Voice Gateway."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(
-                    status_code=400, detail="translator_session_summary_body_required"
-                )
-            (
-                session_id,
-                runtime_lite,
-                _control_plane,
-            ) = await self._translator_resolve_session_context(
-                requested_session_id=str(body.get("session_id") or "").strip()
-            )
-            max_items_raw = body.get("max_items", 20)
-            try:
-                max_items = int(max_items_raw)
-            except (TypeError, ValueError) as exc:
-                raise HTTPException(
-                    status_code=400, detail="translator_summary_max_items_invalid"
-                ) from exc
-            result = await voice_gateway.build_summary(session_id, max_items=max_items)
-            if not result.get("ok"):
-                status_code, detail = self._translator_gateway_error_detail(
-                    result,
-                    fallback="translator_session_summary_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-            return await self._translator_action_response(
-                action="build_session_summary",
-                gateway_result=result,
-                runtime_lite=runtime_lite,
-            )
-
-        @self.app.post("/api/translator/session/escalate")
-        async def translator_session_escalate(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Эскалирует diagnostics текущей translator session в owner inbox."""
-            self._assert_write_access(x_krab_web_key, token)
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(
-                    status_code=400, detail="translator_session_escalate_body_required"
-                )
-
-            (
-                session_id,
-                runtime_lite,
-                control_plane,
-            ) = await self._translator_resolve_session_context(
-                requested_session_id=str(body.get("session_id") or "").strip()
-            )
-            inspector = await self._translator_session_inspector_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-            escalation = (
-                dict(inspector.get("escalation") or {})
-                if isinstance(inspector.get("escalation"), dict)
-                else {}
-            )
-            title = str(body.get("title") or escalation.get("suggested_title") or "").strip()
-            summary_body = str(body.get("body") or escalation.get("suggested_body") or "").strip()
-            if not title or not summary_body:
-                raise HTTPException(
-                    status_code=400, detail="translator_session_escalation_title_body_required"
-                )
-
-            why_items = (
-                [
-                    str(item).strip()
-                    for item in ((inspector.get("why_report") or {}).get("items") or [])
-                    if str(item).strip()
-                ]
-                if isinstance(inspector.get("why_report"), dict)
-                else []
-            )
-            severity = (
-                "warning"
-                if why_items or str(inspector.get("status") or "") == "gateway_unavailable"
-                else "info"
-            )
-            task_key = str(
-                body.get("task_key") or f"translator-session:{session_id}:diagnostics"
-            ).strip()
-            result = inbox_service.upsert_owner_task(
-                title=title,
-                body=summary_body,
-                task_key=task_key,
-                source="translator-ui",
-                severity=severity,
-                team_id="translator",
-                trace_id=f"translator-session:{session_id}",
-                metadata={
-                    "translator_session_id": session_id,
-                    "translator_session_status": str(inspector.get("session_status") or "").strip(),
-                    "translator_gateway_status": str(inspector.get("gateway_status") or "").strip(),
-                    "translator_why_items": why_items,
-                    "translator_timeline_stats": (
-                        ((inspector.get("timeline") or {}).get("stats") or {})
-                        if isinstance(inspector.get("timeline"), dict)
-                        else {}
-                    ),
-                    "source_surface": "owner_panel_translator",
-                },
-            )
-            if not result.get("ok"):
-                raise HTTPException(
-                    status_code=500,
-                    detail=str(result.get("error") or "translator_session_escalation_failed"),
-                )
-            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            return {
-                "ok": True,
-                "action": "escalate_session",
-                "session_id": session_id,
-                "inbox_result": result.get("item")
-                if isinstance(result.get("item"), dict)
-                else result,
-                "readiness": readiness,
-                "control_plane": control_plane,
-                "session_inspector": inspector,
-                "inbox_summary": inbox_service.get_summary(),
-            }
-
-        @self.app.post("/api/translator/mobile/register")
-        async def translator_mobile_register(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Регистрирует/обновляет iPhone companion через owner panel."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(
-                    status_code=400, detail="translator_mobile_register_body_required"
-                )
-
-            result = await voice_gateway.register_mobile_device(
-                device_id=str(body.get("device_id") or "").strip(),
-                voip_push_token=str(body.get("voip_push_token") or "").strip(),
-                apns_environment=str(body.get("apns_environment") or "development").strip()
-                or "development",
-                app_version=str(body.get("app_version") or "").strip(),
-                locale=str(body.get("locale") or "ru").strip() or "ru",
-                preferred_source_lang=str(body.get("preferred_source_lang") or "auto").strip()
-                or "auto",
-                preferred_target_lang=str(body.get("preferred_target_lang") or "ru").strip()
-                or "ru",
-                notify_default=bool(body.get("notify_default", True)),
-            )
-            if not result.get("ok"):
-                status_code, detail = self._translator_mobile_gateway_error_detail(
-                    result,
-                    fallback="translator_mobile_register_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            return await self._translator_mobile_action_response(
-                action="register_mobile_device",
-                gateway_result=result,
-                runtime_lite=runtime_lite,
-            )
-
-        @self.app.post("/api/translator/mobile/trial-prep")
-        async def translator_mobile_trial_prep(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Подготавливает companion-trial в один controlled owner flow.
-
-            Сценарий:
-            1) берём device из body или из текущего mobile snapshot;
-            2) при необходимости делаем upsert регистрации;
-            3) если active session ещё нет, создаём `mobile` session;
-            4) привязываем device к session;
-            5) отдаём единый truthful snapshot после orchestration.
-
-            Важно:
-            - без device id endpoint не создаёт session "впустую";
-            - это owner-driven orchestration, а не скрытая background automation.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(
-                    status_code=400, detail="translator_mobile_trial_prep_body_required"
-                )
-
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            mobile_readiness = await self._translator_mobile_readiness_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-
-            requested_device_id = str(body.get("device_id") or "").strip().lower()
-            selected_device_id = (
-                str(((mobile_readiness.get("devices") or {}).get("selected_device_id") or ""))
-                .strip()
-                .lower()
-            )
-            device_id = requested_device_id or selected_device_id
-            if not device_id:
-                raise HTTPException(status_code=400, detail="device_id_required_for_trial_prep")
-
-            existing_devices = (
-                [
-                    dict(item)
-                    for item in ((mobile_readiness.get("devices") or {}).get("items") or [])
-                    if isinstance(item, dict)
-                ]
-                if isinstance(mobile_readiness.get("devices"), dict)
-                else []
-            )
-            known_device = next(
-                (
-                    item
-                    for item in existing_devices
-                    if str(item.get("device_id") or "").strip().lower() == device_id
-                ),
-                None,
-            )
-
-            performed_steps: list[str] = []
-            last_gateway_result: dict[str, Any] = {
-                "ok": True,
-                "device_id": device_id,
-            }
-
-            if requested_device_id or known_device is None:
-                register_result = await voice_gateway.register_mobile_device(
-                    device_id=device_id,
-                    voip_push_token=str(body.get("voip_push_token") or "").strip(),
-                    apns_environment=str(body.get("apns_environment") or "development").strip()
-                    or "development",
-                    app_version=str(body.get("app_version") or "").strip(),
-                    locale=str(body.get("locale") or "ru").strip() or "ru",
-                    preferred_source_lang=str(body.get("preferred_source_lang") or "auto").strip()
-                    or "auto",
-                    preferred_target_lang=str(body.get("preferred_target_lang") or "ru").strip()
-                    or "ru",
-                    notify_default=bool(body.get("notify_default", True)),
-                )
-                if not register_result.get("ok"):
-                    status_code, detail = self._translator_mobile_gateway_error_detail(
-                        register_result,
-                        fallback="translator_mobile_trial_register_failed",
-                    )
-                    raise HTTPException(status_code=status_code, detail=detail)
-                last_gateway_result = register_result
-                performed_steps.append("device_registered")
-
-            session_id = (
-                str(body.get("session_id") or "").strip()
-                or str(
-                    ((control_plane.get("sessions") or {}).get("current_session_id") or "")
-                ).strip()
-            )
-            if not session_id:
-                start_result = await voice_gateway.start_session(
-                    source=str(body.get("source") or "mobile").strip() or "mobile",
-                    translation_mode=str(body.get("translation_mode") or "auto_to_ru").strip()
-                    or "auto_to_ru",
-                    notify_mode=str(body.get("notify_mode") or "auto_on").strip() or "auto_on",
-                    tts_mode=str(body.get("tts_mode") or "hybrid").strip() or "hybrid",
-                    src_lang=str(body.get("src_lang") or "auto").strip() or "auto",
-                    tgt_lang=str(body.get("tgt_lang") or "ru").strip() or "ru",
-                    meta={
-                        "label": str(body.get("label") or "Companion Trial").strip()
-                        or "Companion Trial",
-                        "prepared_via": "owner_mobile_trial_prep",
-                        "device_id": device_id,
-                    },
-                )
-                if not start_result.get("ok"):
-                    status_code, detail = self._translator_gateway_error_detail(
-                        start_result,
-                        fallback="translator_mobile_trial_start_failed",
-                    )
-                    raise HTTPException(status_code=status_code, detail=detail)
-                session_id = str(start_result.get("session_id") or "").strip()
-                last_gateway_result = {
-                    "ok": True,
-                    "device_id": device_id,
-                    "session_id": session_id,
-                    "result": start_result.get("result")
-                    if isinstance(start_result.get("result"), dict)
-                    else {},
-                }
-                performed_steps.append("session_created")
-
-            bind_result = await voice_gateway.bind_mobile_device(device_id, session_id=session_id)
-            if not bind_result.get("ok"):
-                status_code, detail = self._translator_mobile_gateway_error_detail(
-                    bind_result,
-                    fallback="translator_mobile_trial_bind_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-            last_gateway_result = bind_result
-            performed_steps.append("device_bound")
-
-            response = await self._translator_mobile_action_response(
-                action="prepare_mobile_trial",
-                gateway_result=last_gateway_result,
-                runtime_lite=runtime_lite,
-                current_readiness=readiness,
-            )
-            response["performed_steps"] = performed_steps
-            return response
-
-        @self.app.post("/api/translator/mobile/bind")
-        async def translator_mobile_bind(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Привязывает companion-device к активной translator session через owner panel."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="translator_mobile_bind_body_required")
-
-            device_id = str(body.get("device_id") or "").strip().lower()
-            if not device_id:
-                raise HTTPException(status_code=400, detail="device_id_required")
-            (
-                session_id,
-                runtime_lite,
-                control_plane,
-            ) = await self._translator_resolve_session_context(
-                requested_session_id=str(body.get("session_id") or "").strip()
-            )
-            result = await voice_gateway.bind_mobile_device(device_id, session_id=session_id)
-            if not result.get("ok"):
-                status_code, detail = self._translator_mobile_gateway_error_detail(
-                    result,
-                    fallback="translator_mobile_bind_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-
-            refreshed_control_plane = await self._translator_control_plane_snapshot(
-                runtime_lite=runtime_lite
-            )
-            return await self._translator_mobile_action_response(
-                action="bind_mobile_device",
-                gateway_result={
-                    "ok": True,
-                    "device_id": device_id,
-                    "session_id": session_id,
-                    "result": result.get("result")
-                    if isinstance(result.get("result"), dict)
-                    else {},
-                },
-                runtime_lite=runtime_lite,
-                current_control_plane=refreshed_control_plane,
-            )
-
-        @self.app.post("/api/translator/mobile/remove")
-        async def translator_mobile_remove(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Удаляет companion-device из registry через owner panel."""
-            self._assert_write_access(x_krab_web_key, token)
-            voice_gateway = self._translator_gateway_client_or_raise()
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(
-                    status_code=400, detail="translator_mobile_remove_body_required"
-                )
-
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-            mobile_readiness = await self._translator_mobile_readiness_snapshot(
-                runtime_lite=runtime_lite,
-                current_control_plane=control_plane,
-            )
-            device_id = (
-                str(body.get("device_id") or "").strip().lower()
-                or str(((mobile_readiness.get("devices") or {}).get("selected_device_id") or ""))
-                .strip()
-                .lower()
-            )
-            if not device_id:
-                raise HTTPException(status_code=400, detail="device_id_required")
-
-            result = await voice_gateway.delete_mobile_device(device_id)
-            if not result.get("ok"):
-                status_code, detail = self._translator_mobile_gateway_error_detail(
-                    result,
-                    fallback="translator_mobile_remove_failed",
-                )
-                raise HTTPException(status_code=status_code, detail=detail)
-
-            refreshed_control_plane = await self._translator_control_plane_snapshot(
-                runtime_lite=runtime_lite
-            )
-            return await self._translator_mobile_action_response(
-                action="remove_mobile_device",
-                gateway_result={
-                    "ok": True,
-                    "device_id": device_id,
-                    "session_id": str(
-                        (
-                            (refreshed_control_plane.get("sessions") or {}).get(
-                                "current_session_id"
-                            )
-                            or ""
-                        )
-                    ).strip(),
-                    "result": result.get("result")
-                    if isinstance(result.get("result"), dict)
-                    else {},
-                },
-                runtime_lite=runtime_lite,
-                current_control_plane=refreshed_control_plane,
-            )
-
-        @self.app.get("/api/runtime/handoff")
-        async def runtime_handoff(probe_cloud_runtime: str = Query(default="1")):
-            """
-            Единый runtime-снимок для безопасной миграции в новый чат (Anti-413).
-
-            Формат intentionally machine-readable, чтобы его можно было:
-            - сохранить в артефакты;
-            - приложить в новый диалог без ручной реконструкции контекста.
-            """
-            openclaw = self.deps.get("openclaw_client")
-            voice_gateway = self.deps.get("voice_gateway_client")
-            krab_ear = self.deps.get("krab_ear_client")
-
-            runtime_lite = await self._collect_runtime_lite_snapshot()
-            operator_profile = self._runtime_operator_profile()
-            translator_snapshot = await self._translator_readiness_snapshot(
-                runtime_lite=runtime_lite
-            )
-            capability_registry = await self._capability_registry_snapshot(
-                runtime_lite=runtime_lite
-            )
-            openclaw_health = await self._safe_client_health_summary(
-                openclaw,
-                source="openclaw",
-                timeout_sec=3.0,
-            )
-            voice_health = await self._safe_client_health_summary(
-                voice_gateway,
-                source="voice_gateway",
-                timeout_sec=3.0,
-            )
-            krab_ear_health = await self._safe_client_health_summary(
-                krab_ear,
-                source="krab_ear",
-                timeout_sec=3.0,
-            )
-
-            should_probe_cloud_runtime = self._bool_env(str(probe_cloud_runtime or "1"), True)
-
-            cloud_runtime: dict[str, Any]
-            if not should_probe_cloud_runtime:
-                cloud_runtime = {"available": False, "skipped": True, "reason": "probe_disabled"}
-            elif openclaw and hasattr(openclaw, "get_cloud_runtime_check"):
-                try:
-                    cloud_report = await asyncio.wait_for(
-                        openclaw.get_cloud_runtime_check(), timeout=18.0
-                    )
-                    cloud_runtime = {"available": True, "report": cloud_report}
-                    # После cloud-probe `openclaw_client` может обновить tier/auth truth.
-                    # Переснимаем lightweight runtime, чтобы handoff не уносил stale
-                    # `configured/free` сразу после restart, когда probe уже увидел real state.
-                    runtime_lite = await self._collect_runtime_lite_snapshot(force_refresh=True)
-                except asyncio.TimeoutError:
-                    cloud_runtime = {"available": False, "error": "timeout"}
-                except Exception as exc:
-                    cloud_runtime = {"available": False, "error": str(exc)}
-            else:
-                cloud_runtime = {"available": False, "error": "not_supported"}
-
-            latest_bundle = self._latest_path_by_glob("artifacts/handoff_*")
-            latest_checkpoint = self._latest_path_by_glob(
-                "artifacts/context_checkpoints/checkpoint_*.md"
-            )
-            latest_pack_dir = self._latest_path_by_glob("artifacts/context_transition/pack_*")
-            latest_transfer_prompt = (
-                str(latest_pack_dir / "TRANSFER_PROMPT_RU.md")
-                if latest_pack_dir and (latest_pack_dir / "TRANSFER_PROMPT_RU.md").exists()
-                else None
-            )
-            operator_workflow = inbox_service.get_workflow_snapshot()
-
-            return {
-                "ok": True,
-                "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "project_root": str(self._project_root()),
-                "git": self._git_snapshot(),
-                "health_lite": {
-                    "ok": True,
-                    "status": "up",
-                    "telegram_session_state": runtime_lite.get("telegram_session_state"),
-                    "lmstudio_model_state": runtime_lite.get("lmstudio_model_state"),
-                    "openclaw_auth_state": runtime_lite.get("openclaw_auth_state"),
-                    "workspace_attached": bool(
-                        (
-                            (runtime_lite.get("workspace_state") or {})
-                            if isinstance(runtime_lite, dict)
-                            else {}
-                        ).get("shared_workspace_attached")
-                    ),
-                    "last_runtime_route": runtime_lite.get("last_runtime_route"),
-                    "inbox_summary": operator_workflow.get("summary")
-                    or runtime_lite.get("inbox_summary"),
-                },
-                "runtime": runtime_lite,
-                "inbox_summary": operator_workflow.get("summary") or {},
-                "operator_workflow": operator_workflow,
-                "operator_profile": operator_profile,
-                "capability_registry_summary": capability_registry.get("summary") or {},
-                "policy_matrix_summary": (capability_registry.get("policy_matrix") or {}).get(
-                    "summary"
-                )
-                or {},
-                "channel_capabilities_summary": (
-                    (capability_registry.get("contours") or {}).get("channels", {}).get("summary")
-                    or {}
-                ),
-                "translator_readiness": translator_snapshot,
-                "services": {
-                    "openclaw": openclaw_health,
-                    "voice_gateway": voice_health,
-                    "krab_ear": krab_ear_health,
-                },
-                "cloud_runtime": cloud_runtime,
-                "masked_secrets": {
-                    "openclaw_token": self._mask_secret(
-                        os.getenv(
-                            "OPENCLAW_GATEWAY_TOKEN",
-                            os.getenv("OPENCLAW_TOKEN", os.getenv("OPENCLAW_API_KEY", "")),
-                        )
-                    ),
-                    "web_api_key": self._mask_secret(os.getenv("WEB_API_KEY", "")),
-                    "gemini_free": self._mask_secret(os.getenv("GEMINI_API_KEY_FREE", "")),
-                    "gemini_paid": self._mask_secret(os.getenv("GEMINI_API_KEY_PAID", "")),
-                    "openai_api_key": self._mask_secret(os.getenv("OPENAI_API_KEY", "")),
-                },
-                "artifacts": {
-                    "latest_handoff_bundle_dir": str(latest_bundle) if latest_bundle else None,
-                    "latest_context_checkpoint": str(latest_checkpoint)
-                    if latest_checkpoint
-                    else None,
-                    "latest_transition_pack_dir": str(latest_pack_dir) if latest_pack_dir else None,
-                    "latest_transfer_prompt": latest_transfer_prompt,
-                    "master_plan_doc": str(
-                        self._project_root() / "docs" / "MASTER_PLAN_VNEXT_RU.md"
-                    ),
-                    "translator_audit_doc": str(
-                        self._project_root() / "docs" / "CALL_TRANSLATOR_AUDIT_RU.md"
-                    ),
-                    "multi_account_doc": str(
-                        self._project_root() / "docs" / "MULTI_ACCOUNT_SWITCHOVER_RU.md"
-                    ),
-                    "parallel_dialog_doc": str(
-                        self._project_root() / "docs" / "PARALLEL_DIALOG_PROTOCOL_RU.md"
-                    ),
-                },
-            }
-
-        @self.app.post("/api/krab/restart_userbot")
-        async def restart_userbot(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Перезапускает только Telegram userbot без полного runtime switchover.
-
-            Зачем нужен отдельный endpoint:
-            - legacy watchdog уже умеет дёргать именно этот маршрут;
-            - перезапуск userbot легче и безопаснее, чем полный restart всего Krab;
-            - это закрывает split-state, когда web panel жива, но transport userbot деградировал.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            kraab_userbot = self.deps.get("kraab_userbot")
-            if (
-                not kraab_userbot
-                or not hasattr(kraab_userbot, "start")
-                or not hasattr(kraab_userbot, "stop")
-            ):
-                return {
-                    "ok": False,
-                    "error": "userbot_restart_unavailable",
-                    "detail": "kraab_userbot не поддерживает start/stop для restart endpoint",
-                }
-
-            before_state = {}
-            if hasattr(kraab_userbot, "get_runtime_state"):
-                try:
-                    before_state = dict(kraab_userbot.get_runtime_state() or {})
-                except Exception:
-                    before_state = {}
-
-            try:
-                if hasattr(kraab_userbot, "restart"):
-                    await kraab_userbot.restart(reason="web_api_restart_userbot")
-                else:
-                    await kraab_userbot.stop()
-                    await kraab_userbot.start()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("runtime_restart_userbot_failed", error=str(exc))
-                return {
-                    "ok": False,
-                    "error": "restart_failed",
-                    "detail": str(exc),
-                    "before": before_state,
-                }
-
-            after_state = {}
-            if hasattr(kraab_userbot, "get_runtime_state"):
-                try:
-                    after_state = dict(kraab_userbot.get_runtime_state() or {})
-                except Exception:
-                    after_state = {}
-
-            return {
-                "ok": True,
-                "action": "restart_userbot",
-                "before": before_state,
-                "after": after_state,
-            }
+        # /api/capabilities/registry + /api/channels/capabilities: extracted
+        # в capabilities_router.py (Phase 2 Wave R, Session 25).
+        # См. include_router рядом с policy_router.
 
         # Phase 2: Command API parity — все owner controls через REST, не только Telegram
 
-        @self.app.post("/api/voice/toggle")
-        async def voice_toggle(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Toggle voice mode через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            current = bool(self.kraab.voice_mode)
-            new_state = bool(payload.get("enabled", not current))
-            self.kraab.voice_mode = new_state
-            return {"ok": True, "voice_enabled": new_state}
+        # /api/swarm/* — 8 read-only (Wave C, Session 25) + 12 leaked
+        # (Wave ZZ, Session 26: status/memory/reports/export/delegations/
+        # events + write tasks/listeners/artifacts) вынесены в
+        # src/modules/web_routers/swarm_router.py через factory.
+        from .web_routers.swarm_router import build_swarm_router as _build_swarm_router
 
-        @self.app.get("/api/translator/languages")
-        async def translator_languages():
-            """Доступные языковые пары."""
-            from ..core.translator_runtime_profile import ALLOWED_LANGUAGE_PAIRS
+        self.app.include_router(_build_swarm_router(self._make_router_context()))
 
-            profile = self.kraab.get_translator_runtime_profile()
-            return {
-                "ok": True,
-                "current": profile.get("language_pair", "es-ru"),
-                "available": sorted(ALLOWED_LANGUAGE_PAIRS),
-            }
+        from .web_routers.system_router import build_system_router as _build_system_router
 
-        @self.app.get("/api/swarm/teams")
-        async def swarm_teams_list():
-            """Список swarm команд с ролями."""
-            from ..core.swarm_bus import TEAM_REGISTRY
+        self.app.include_router(_build_system_router(self._make_router_context()))
 
-            return {
-                "ok": True,
-                "teams": {
-                    team: [
-                        {
-                            "name": r["name"],
-                            "title": r.get("title", ""),
-                            "emoji": r.get("emoji", ""),
-                        }
-                        for r in roles
-                    ]
-                    for team, roles in TEAM_REGISTRY.items()
-                },
-            }
+        from .web_routers.commands_router import router as _commands_router
 
-        @self.app.get("/api/v1/health")
-        async def health_v1():
-            """Versioned health endpoint для внешних мониторов."""
-            try:
-                health = await self._collect_runtime_lite_snapshot()
-                return {
-                    "ok": True,
-                    "version": "1",
-                    "status": health.get("status", "unknown"),
-                    "telegram": health.get("telegram_userbot_state", "unknown"),
-                    "gateway": health.get("openclaw_auth_state", "unknown"),
-                    "uptime_probe": "pass",
-                }
-            except Exception as exc:
-                return {"ok": False, "version": "1", "error": str(exc)}
-
-        @self.app.get("/api/runtime/summary")
-        async def runtime_summary():
-            """Единый summary endpoint — полное состояние Краба одним запросом."""
-            from ..core.cost_analytics import cost_analytics as _ca
-            from ..core.silence_mode import silence_manager
-            from ..core.swarm_task_board import swarm_task_board
-            from ..core.swarm_team_listener import is_listeners_enabled
-            from ..openclaw_client import openclaw_client as _oc
-
-            try:
-                health = await self._collect_runtime_lite_snapshot()
-            except Exception:
-                health = {}
-            return {
-                "ok": True,
-                "health": health,
-                "route": _oc.get_last_runtime_route(),
-                "costs": _ca.build_usage_report_dict(),
-                "translator": {
-                    "profile": self.kraab.get_translator_runtime_profile(),
-                    "session": self.kraab.get_translator_session_state(),
-                },
-                "swarm": {
-                    "task_board": swarm_task_board.get_board_summary(),
-                    "listeners_enabled": is_listeners_enabled(),
-                },
-                "silence": silence_manager.status(),
-                "notify_enabled": bool(getattr(config, "TOOL_NARRATION_ENABLED", True)),
-            }
-
-        @self.app.get("/api/commands")
-        async def list_commands():
-            """Полный список команд с метаданными из command_registry."""
-            from ..core.command_registry import registry as _reg
-
-            return _reg.to_api_response()
-
-        @self.app.get("/api/commands/usage")
-        async def get_command_usage():
-            """Статистика вызовов команд (отсортировано по убыванию)."""
-            from ..core.command_registry import get_usage as _get_usage
-
-            usage = _get_usage()
-            return {
-                "ok": True,
-                "total_calls": sum(usage.values()),
-                "unique_commands": len(usage),
-                "usage": usage,
-            }
-
-        @self.app.get("/api/commands/usage/top")
-        async def get_command_usage_top(limit: int = 10):
-            """Топ-N команд по количеству вызовов (count DESC, name ASC при ничьей)."""
-            from ..core.command_registry import get_usage as _get_usage
-
-            raw = _get_usage()
-            clamped = max(1, min(limit, 100))
-            sorted_items = sorted(raw.items(), key=lambda x: (-x[1], x[0]))
-            top = [{"command": cmd, "count": cnt} for cmd, cnt in sorted_items[:clamped]]
-            return {
-                "ok": True,
-                "top": top,
-                "total_commands": len(raw),
-            }
-
-        @self.app.get("/api/commands/{name}")
-        async def get_command(name: str):
-            """Детальная информация о конкретной команде."""
-            from ..core.command_registry import registry as _reg
-
-            cmd = _reg.get(name)
-            if cmd is None:
-                from fastapi import HTTPException
-
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Команда '{name}' не найдена",
-                )
-            return {"ok": True, "command": cmd.to_dict()}
-
-        @self.app.get("/api/model/status")
-        async def model_status():
-            """Текущий статус модели и маршрутизации."""
-            from ..model_manager import model_manager as _mm
-            from ..openclaw_client import openclaw_client as _oc
-
-            route = _oc.get_last_runtime_route()
-            return {
-                "ok": True,
-                "route": route,
-                "provider": _mm.format_status() if hasattr(_mm, "format_status") else str(_mm),
-                "active_model": str(
-                    getattr(_mm, "active_model_id", None) or route.get("model", "")
-                ),
-            }
+        self.app.include_router(_commands_router)
 
         @self.app.get("/api/endpoints")
         async def list_endpoints():
@@ -10897,4357 +8780,266 @@ class WebApp:
                 "endpoints": sorted(routes, key=lambda r: r["path"]),
             }
 
-        @self.app.get("/api/version")
-        async def version_info():
-            """Версия Краба и session info."""
-            return {
-                "ok": True,
-                "version": "session5",
-                "commits": 113,
-                "tests": 2043,
-                "api_endpoints": 184,
-                "features": [
-                    "translator_mvp",
-                    "swarm_execution",
-                    "channel_parity",
-                    "finops",
-                    "hammerspoon_mcp",
-                ],
-            }
+        from .web_routers.version_router import router as _version_router
 
-        @self.app.get("/api/uptime")
-        async def uptime():
-            """Uptime Краба в секундах."""
-            import time as _t
+        self.app.include_router(_version_router)
 
-            boot = getattr(self, "_boot_ts", None)
-            if not boot:
-                self._boot_ts = _t.time()
-                boot = self._boot_ts
-            return {"ok": True, "uptime_sec": round(_t.time() - boot), "boot_ts": boot}
+        from .web_routers.extras_router import build_extras_router as _build_extras
 
-        @self.app.get("/api/system/info")
-        async def system_info():
-            """Системная информация о хосте."""
-            import platform
+        self.app.include_router(_build_extras(self._make_router_context()))
 
-            import psutil
+        from .web_routers.runtime_inspect_router import (
+            build_runtime_inspect_router as _build_runtime_inspect,
+        )
 
-            return {
-                "ok": True,
-                "hostname": platform.node(),
-                "platform": platform.platform(),
-                "python": platform.python_version(),
-                "cpu_count": psutil.cpu_count(),
-                "ram_total_gb": round(psutil.virtual_memory().total / (1024**3), 1),
-                "ram_used_pct": psutil.virtual_memory().percent,
-                "disk_used_pct": psutil.disk_usage("/").percent,
-            }
+        self.app.include_router(_build_runtime_inspect(self._make_router_context()))
 
-        @self.app.get("/api/memory/stats")
-        async def memory_stats():
-            """Статистика Memory Layer для Dashboard V4."""
-            from ..core.memory_stats import collect_memory_stats
+        from .web_routers.policy_router import build_policy_router as _build_policy
 
-            return collect_memory_stats()
+        self.app.include_router(_build_policy(self._make_router_context()))
 
-        @self.app.get("/api/memory/coverage-audit")
-        async def memory_coverage_audit(
-            threshold: int = Query(default=100, ge=1, le=100000),
-        ):
-            """Аудит покрытия чатов в archive.db.
+        from .web_routers.capabilities_router import (
+            build_capabilities_router as _build_capabilities,
+        )
 
-            Сравнивает количество сообщений в archive.db с реальным числом
-            в Telegram (если pyrogram доступен) или флагует чаты < threshold.
+        self.app.include_router(_build_capabilities(self._make_router_context()))
 
-            Params:
-              threshold: порог «мало сообщений» (default 100)
+        from .web_routers.write_router import build_write_router as _build_write
 
-            Returns:
-              { generated_at, db_path, threshold, total_chats,
-                total_db_messages, under_threshold_count, rows }
+        self.app.include_router(_build_write(self._make_router_context()))
+
+        # VPN Phase B: /api/vpn/help — endpoint для @pablito_vpn_bot.
+        from .web_routers.vpn_brain_router import build_vpn_brain_router as _build_vpn_brain
+
+        self.app.include_router(_build_vpn_brain(self._make_router_context()))
+
+        # /api/translator/{languages,status,history,test} — Wave K extraction;
+        # /api/translator/{readiness,control-plane,session-inspector,mobile-readiness,
+        # delivery-matrix} — Wave Q extraction (через ctx.collect_runtime_lite() +
+        # translator_*_snapshot helpers, инжектированные в deps в _make_router_context).
+        # HARD endpoints (bootstrap, live-trial-preflight, mobile/onboarding) пока
+        # inline — bootstrap агрегирует все snapshot'ы, live-trial-preflight требует
+        # дополнительный helper, а mobile/onboarding имеет POST.
+        from .web_routers.translator_router import (
+            build_translator_router as _build_translator,
+        )
+
+        self.app.include_router(_build_translator(self._make_router_context()))
+
+        # Phase 2 Wave L (Session 25): voice/krab_ear endpoints через RouterContext.
+        from .web_routers.voice_router import build_voice_router as _build_voice
+
+        self.app.include_router(_build_voice(self._make_router_context()))
+
+        # Phase 2 Wave M (Session 25): простые openclaw GET endpoints через RouterContext.
+        from .web_routers.openclaw_router import build_openclaw_router as _build_openclaw
+
+        self.app.include_router(_build_openclaw(self._make_router_context()))
+
+        # Phase 2 Wave FF (Session 25): model management endpoints (status, switch,
+        # recommend, preflight, explain, feedback GET+POST, local/status) через
+        # RouterContext. HARD endpoints (catalog, apply, provider-action,
+        # local/load-default, local/unload, thinking/depth) пока inline.
+        from .web_routers.model_router import build_model_router as _build_model
+
+        self.app.include_router(_build_model(self._make_router_context()))
+
+        @self.app.get("/api/memory/phase2/status")
+        async def memory_phase2_status():
+            """Memory Phase 2 status: flag + Model2Vec + vec_chunks + retrieval breakdown.
+
+            Источники:
+              • env KRAB_RAG_PHASE2_ENABLED / KRAB_RAG_PHASE2_SHADOW — flag
+              • core.memory_stats.collect_memory_stats() — vec_chunks, JOIN%
+              • grep shadow-логов — retrieval mode counts, latency, shadow delta
+
+            Всегда возвращает 200 (graceful) с полем flag=disabled если Phase 2 выключен.
             """
-            from pathlib import Path as _Path
+            import os as _os
+            import pathlib as _pl
+            import re as _re
+            import time as _time
+            from collections import Counter
 
-            from scripts.audit_chat_coverage import run_audit  # type: ignore[import]
+            shadow_on = _os.environ.get("KRAB_RAG_PHASE2_SHADOW", "0") in ("1", "true", "True")
+            enabled = _os.environ.get("KRAB_RAG_PHASE2_ENABLED", "0") in ("1", "true", "True")
+            flag = "enabled" if enabled else ("shadow" if shadow_on else "disabled")
 
-            db_path = _Path("~/.openclaw/krab_memory/archive.db").expanduser()
-
+            # Model2Vec state
+            model_loaded: bool | None = None
+            model_dim = 0
             try:
-                result = run_audit(
-                    db_path=db_path,
-                    threshold=threshold,
-                    skip_telegram=True,  # web endpoint: не блокируем на TG API
-                    output=None,  # не перезаписывать MD при каждом GET
-                )
-                return result
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("coverage_audit_failed", error=str(exc))
-                from fastapi.responses import JSONResponse
+                from ..core import memory_phase2_model as _m2v  # type: ignore
 
-                return JSONResponse(
-                    status_code=503,
-                    content={"ok": False, "error": str(exc)},
-                )
+                model_loaded = bool(getattr(_m2v, "is_loaded", lambda: False)())
+                model_dim = int(getattr(_m2v, "dim", lambda: 256)())
+            except Exception:  # noqa: BLE001
+                model_loaded = None
+                model_dim = 256
 
-        @self.app.get("/api/memory/doctor")
-        async def memory_doctor_get():
-            """Диагностика Memory Layer — 6 проверок без side-effects.
-
-            Returns:
-              ok: bool, checks: dict, failed/warnings: list, summary: str
-            """
-            from ..core.memory_doctor import run_diagnostics
-
-            return await run_diagnostics()
-
-        @self.app.post("/api/memory/doctor/fix")
-        async def memory_doctor_fix():
-            """Диагностика + авто-ремонт Memory Layer.
-
-            Действия: WAL checkpoint, backfill embeddings (если ratio < 50%),
-            перезапуск MCP yung-nagato (если недоступен).
-
-            Returns:
-              diagnostics: dict, repairs: list[dict], ok: bool
-            """
-            from ..core.memory_doctor import run_diagnostics, run_repairs
-
-            diag = await run_diagnostics()
-            repair_result = await run_repairs(checks=diag.get("checks"))
-            return {"diagnostics": diag, **repair_result}
-
-        @self.app.get("/api/system/clock_drift")
-        async def system_clock_drift():
-            """Дрейф системных часов относительно NTP (диагностика Pyrogram msg_id)."""
-            from ..core.clock_drift_check import check_clock_drift
-
-            result = await check_clock_drift()
-            return {
-                "local_ts": result.local_ts,
-                "ntp_offset_sec": result.ntp_offset_sec,
-                "status": result.status,
-                "message": result.message,
-            }
-
-        @self.app.get("/api/dashboard/summary")
-        async def dashboard_summary():
-            """Агрегатор для Dashboard V4 — один запрос вместо 15.
-
-            Собирает uptime, version, service status, archive/memory stats,
-            activity counters и alerts. Graceful fallback — при ошибке любого
-            источника поле возвращается null, 500 не выбрасывается.
-            """
-            # boot_ts ленится так же, как в /api/uptime
-            import time as _t
-
-            from ..core.dashboard_summary import collect_dashboard_summary
-
-            boot = getattr(self, "_boot_ts", None)
-            if not boot:
-                self._boot_ts = _t.time()
-                boot = self._boot_ts
-
-            router = self.deps.get("router")
-            return collect_dashboard_summary(boot_ts=boot, router=router)
-
-        @self.app.get("/api/translator/test")
-        async def translator_test_api(text: str = Query(default=""), tgt: str = Query(default="")):
-            """Тестовый перевод через API (GET для простоты)."""
-            if not text:
-                return {"ok": False, "error": "?text=Buenos+dias+amigo required"}
+            # vec_chunks + JOIN match
+            vec_chunks = 0
+            vec_join_pct: float | None = None
             try:
-                from ..core.language_detect import detect_language, resolve_translation_pair
-                from ..core.translator_engine import translate_text
-                from ..openclaw_client import openclaw_client as _oc
+                from ..core.memory_stats import collect_memory_stats
 
-                detected = detect_language(text)
-                if not detected:
-                    return {"ok": False, "error": "language not detected"}
-                profile = self.kraab.get_translator_runtime_profile()
-                src, tgt_lang = resolve_translation_pair(
-                    detected, profile.get("language_pair", "es-ru")
-                )
-                if tgt:
-                    tgt_lang = tgt
-                result = await translate_text(text, src, tgt_lang, openclaw_client=_oc)
-                return {
-                    "ok": True,
-                    "src": src,
-                    "tgt": tgt_lang,
-                    "original": result.original,
-                    "translated": result.translated,
-                    "latency_ms": result.latency_ms,
-                }
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
+                mstats = collect_memory_stats() or {}
+                archive = mstats.get("archive") or {}
+                vec_chunks = int(archive.get("vec") or archive.get("vec_chunks") or 0)
+                chunks = int(archive.get("chunks") or 0)
+                if chunks:
+                    vec_join_pct = round(100.0 * vec_chunks / chunks, 1)
+            except Exception:  # noqa: BLE001
+                pass
 
-        @self.app.post("/api/model/switch")
-        async def model_switch(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Переключить модель через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            from ..model_manager import model_manager as _mm
-
-            model = str(payload.get("model") or "").strip()
-            if not model:
-                return {
-                    "ok": False,
-                    "error": "model required (e.g. 'auto', 'local', 'cloud', model_id)",
-                }
-            if model == "auto":
-                _mm.set_provider("auto")
-            elif model == "local":
-                _mm.set_provider("local")
-            elif model == "cloud":
-                _mm.set_provider("cloud")
-            else:
-                _mm.set_model(model)
-            return {
-                "ok": True,
-                "model": model,
-                "active": str(getattr(_mm, "active_model_id", model)),
-            }
-
-        @self.app.get("/api/notify/status")
-        async def notify_status():
-            """Статус tool narration toggle."""
-            return {"ok": True, "enabled": bool(getattr(config, "TOOL_NARRATION_ENABLED", True))}
-
-        @self.app.post("/api/notify/toggle")
-        async def notify_toggle(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Toggle tool narration через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            enabled = bool(
-                payload.get("enabled", not getattr(config, "TOOL_NARRATION_ENABLED", True))
+            # Parse last hour of logs for retrieval mode + latency + shadow delta
+            modes: Counter = Counter()
+            lat_fts: list[float] = []
+            lat_vec: list[float] = []
+            lat_mmr: list[float] = []
+            lat_total: list[float] = []
+            shadow_changed = 0
+            shadow_total = 0
+            log_path = _pl.Path(
+                _os.environ.get("KRAB_LOG_PATH", _os.path.expanduser("~/.openclaw/logs/krab.log"))
             )
-            config.update_setting("TOOL_NARRATION_ENABLED", "1" if enabled else "0")
-            return {"ok": True, "enabled": enabled}
-
-        @self.app.get("/api/voice/profile")
-        async def voice_profile():
-            """Голосовой профиль runtime."""
-            return {"ok": True, "profile": self.kraab.get_voice_runtime_profile()}
-
-        @self.app.get("/api/swarm/task-board")
-        async def swarm_task_board_status():
-            """Сводка task board."""
-            from ..core.swarm_task_board import swarm_task_board
-
-            return {"ok": True, "summary": swarm_task_board.get_board_summary()}
-
-        @self.app.get("/api/swarm/tasks")
-        async def swarm_tasks_list(team: str = Query(default=""), limit: int = Query(default=20)):
-            """Список задач task board."""
-            from ..core.swarm_task_board import swarm_task_board
-
-            tasks = swarm_task_board.list_tasks(team=team or None, limit=limit)
-            return {
-                "ok": True,
-                "tasks": [
-                    {
-                        "task_id": t.task_id,
-                        "team": t.team,
-                        "title": t.title,
-                        "status": t.status,
-                        "priority": t.priority,
-                        "created_at": t.created_at,
-                    }
-                    for t in tasks
-                ],
-            }
-
-        @self.app.get("/api/swarm/artifacts")
-        async def swarm_artifacts_list(
-            team: str = Query(default=""), limit: int = Query(default=10)
-        ):
-            """Список swarm artifacts."""
-            from ..core.swarm_artifact_store import swarm_artifact_store
-
-            arts = swarm_artifact_store.list_artifacts(team=team or None, limit=limit)
-            return {
-                "ok": True,
-                "artifacts": [
-                    {
-                        "team": a.get("team"),
-                        "topic": a.get("topic"),
-                        "timestamp_iso": a.get("timestamp_iso"),
-                        "duration_sec": a.get("duration_sec"),
-                        "result_preview": (a.get("result") or "")[:200],
-                    }
-                    for a in arts
-                ],
-            }
-
-        @self.app.get("/api/swarm/task/{task_id}")
-        async def swarm_task_detail(task_id: str):
-            """Детальная инфо о задаче."""
-            from ..core.swarm_task_board import swarm_task_board
-
-            all_tasks = swarm_task_board.list_tasks(limit=500)
-            match = next((t for t in all_tasks if t.task_id.startswith(task_id)), None)
-            if not match:
-                return {"ok": False, "error": f"task '{task_id}' not found"}
-            return {
-                "ok": True,
-                "task": {
-                    "task_id": match.task_id,
-                    "team": match.team,
-                    "title": match.title,
-                    "description": match.description,
-                    "status": match.status,
-                    "priority": match.priority,
-                    "created_by": match.created_by,
-                    "assigned_to": match.assigned_to,
-                    "created_at": match.created_at,
-                    "updated_at": match.updated_at,
-                    "result": match.result,
-                    "artifacts": match.artifacts,
-                    "parent_task_id": match.parent_task_id,
-                },
-            }
-
-        @self.app.post("/api/swarm/tasks/create")
-        async def swarm_task_create(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Создать task в swarm board через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            from ..core.swarm_task_board import swarm_task_board
-
-            team = str(payload.get("team") or "").strip()
-            title = str(payload.get("title") or "").strip()
-            if not team or not title:
-                return {"ok": False, "error": "team and title required"}
-            task = swarm_task_board.create_task(
-                team=team,
-                title=title,
-                description=str(payload.get("description") or ""),
-                priority=str(payload.get("priority") or "medium"),
-                created_by=str(payload.get("created_by") or "api"),
-            )
-            return {"ok": True, "task_id": task.task_id, "team": task.team, "title": task.title}
-
-        @self.app.get("/api/swarm/team/{team_name}")
-        async def swarm_team_info(team_name: str):
-            """Детальная инфо о команде."""
-            from ..core.swarm_artifact_store import swarm_artifact_store
-            from ..core.swarm_bus import TEAM_REGISTRY, resolve_team_name
-            from ..core.swarm_task_board import swarm_task_board
-
-            resolved = resolve_team_name(team_name)
-            if not resolved:
-                return {"ok": False, "error": f"team '{team_name}' not found"}
-            roles = TEAM_REGISTRY.get(resolved, [])
-            tasks = swarm_task_board.list_tasks(team=resolved, limit=10)
-            arts = swarm_artifact_store.list_artifacts(team=resolved, limit=5)
-            return {
-                "ok": True,
-                "team": resolved,
-                "roles": [
-                    {"name": r["name"], "title": r.get("title", ""), "emoji": r.get("emoji", "")}
-                    for r in roles
-                ],
-                "tasks": [
-                    {"task_id": t.task_id, "title": t.title, "status": t.status} for t in tasks
-                ],
-                "artifacts": [
-                    {"topic": a.get("topic"), "timestamp_iso": a.get("timestamp_iso")} for a in arts
-                ],
-            }
-
-        @self.app.get("/api/swarm/stats")
-        async def swarm_stats():
-            """Сводная статистика по всем командам."""
-            from ..core.swarm_artifact_store import swarm_artifact_store
-            from ..core.swarm_task_board import swarm_task_board
-            from ..core.swarm_team_listener import is_listeners_enabled
-
-            board = swarm_task_board.get_board_summary()
-            arts = swarm_artifact_store.list_artifacts(limit=100)
-            return {
-                "ok": True,
-                "board": board,
-                "artifacts_count": len(arts),
-                "listeners_enabled": is_listeners_enabled(),
-            }
-
-        @self.app.get("/api/swarm/reports")
-        async def swarm_reports_list(limit: int = Query(default=10)):
-            """Список markdown reports."""
-            from pathlib import Path as _P  # noqa: N814
-
-            report_dir = _P.home() / ".openclaw" / "krab_runtime_state" / "reports"
-            if not report_dir.exists():
-                return {"ok": True, "reports": []}
-            files = sorted(report_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)[
-                :limit
-            ]
-            return {
-                "ok": True,
-                "reports": [
-                    {
-                        "name": f.stem,
-                        "size_kb": round(f.stat().st_size / 1024, 1),
-                        "modified": f.stat().st_mtime,
-                    }
-                    for f in files
-                ],
-            }
-
-        @self.app.post("/api/swarm/task/{task_id}/update")
-        async def swarm_task_update(
-            task_id: str,
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Обновить task status/result через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            from ..core.swarm_task_board import swarm_task_board
-
-            status = str(payload.get("status") or "").strip()
-            result = str(payload.get("result") or "").strip()
-            if status == "done" and result:
-                swarm_task_board.complete_task(task_id, result=result)
-            elif status == "failed":
-                swarm_task_board.fail_task(task_id, reason=result or "via API")
-            elif status:
-                swarm_task_board.update_task(task_id, status=status)
-            else:
-                return {"ok": False, "error": "status required"}
-            return {"ok": True, "task_id": task_id, "new_status": status}
-
-        @self.app.delete("/api/swarm/task/{task_id}")
-        async def swarm_task_delete(
-            task_id: str,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Удалить task из board."""
-            self._assert_write_access(x_krab_web_key, token)
-            from ..core.swarm_task_board import swarm_task_board
-
-            # Помечаем как failed для FIFO cleanup
-            try:
-                swarm_task_board.fail_task(task_id, reason="deleted via API")
-                return {"ok": True, "deleted": task_id}
-            except Exception as exc:
-                return {"ok": False, "error": str(exc)}
-
-        @self.app.post("/api/swarm/task/{task_id}/priority")
-        async def swarm_task_priority(
-            task_id: str,
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Change task priority via API."""
-            self._assert_write_access(x_krab_web_key, token)
-            from ..core.swarm_task_board import swarm_task_board
-
-            level = str(payload.get("priority") or "").strip().lower()
-            if level not in {"low", "medium", "high", "critical"}:
-                return {"ok": False, "error": "priority must be low/medium/high/critical"}
-            swarm_task_board.update_task(task_id, priority=level)
-            return {"ok": True, "task_id": task_id, "priority": level}
-
-        @self.app.get("/api/swarm/task-board/export")
-        async def swarm_task_board_export(format: str = Query(default="csv")):
-            """Export full task board as CSV or JSON."""
-            from ..core.swarm_task_board import swarm_task_board
-
-            tasks = swarm_task_board.list_tasks(limit=500)
-
-            if format == "json":
-                from fastapi.responses import JSONResponse
-
-                return JSONResponse(
-                    {
-                        "ok": True,
-                        "tasks": [
-                            {
-                                "task_id": t.task_id,
-                                "team": t.team,
-                                "title": t.title,
-                                "description": t.description,
-                                "status": t.status,
-                                "priority": t.priority,
-                                "created_by": t.created_by,
-                                "assigned_to": t.assigned_to,
-                                "created_at": t.created_at,
-                                "updated_at": t.updated_at,
-                                "result": t.result,
-                                "artifacts": t.artifacts,
-                                "parent_task_id": t.parent_task_id,
-                            }
-                            for t in tasks
-                        ],
-                    }
-                )
-
-            # CSV export
-            import csv
-            import io
-
-            from fastapi.responses import PlainTextResponse
-
-            buf = io.StringIO()
-            writer = csv.writer(buf)
-            writer.writerow(
-                [
-                    "task_id",
-                    "team",
-                    "title",
-                    "status",
-                    "priority",
-                    "created_by",
-                    "assigned_to",
-                    "created_at",
-                    "updated_at",
-                ]
-            )
-            for t in tasks:
-                writer.writerow(
-                    [
-                        t.task_id,
-                        t.team,
-                        t.title,
-                        t.status,
-                        t.priority,
-                        t.created_by,
-                        t.assigned_to,
-                        t.created_at,
-                        t.updated_at,
-                    ]
-                )
-
-            return PlainTextResponse(
-                buf.getvalue(),
-                media_type="text/csv",
-                headers={"Content-Disposition": "attachment; filename=task_board.csv"},
-            )
-
-        @self.app.post("/api/swarm/listeners/toggle")
-        async def swarm_listeners_toggle(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Toggle team listeners через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            from ..core.swarm_team_listener import is_listeners_enabled, set_listeners_enabled
-
-            enabled = bool(payload.get("enabled", not is_listeners_enabled()))
-            set_listeners_enabled(enabled)
-            return {"ok": True, "listeners_enabled": enabled}
-
-        @self.app.post("/api/swarm/artifacts/cleanup")
-        async def swarm_artifacts_cleanup(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Очистка старых артефактов."""
-            self._assert_write_access(x_krab_web_key, token)
-            from ..core.swarm_artifact_store import swarm_artifact_store
-
-            removed = swarm_artifact_store.cleanup_old(max_files=50)
-            return {"ok": True, "removed": removed}
-
-        @self.app.get("/api/swarm/listeners")
-        async def swarm_listeners_status():
-            """Статус team listeners."""
-            from ..core.swarm_team_listener import is_listeners_enabled
-
-            return {"ok": True, "listeners_enabled": is_listeners_enabled()}
-
-        @self.app.get("/api/silence/status")
-        async def silence_status():
-            """Текущий статус тишины."""
-            from ..core.silence_mode import silence_manager
-
-            return {"ok": True, **silence_manager.status()}
-
-        @self.app.post("/api/silence/toggle")
-        async def silence_toggle(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Toggle silence mode через API."""
-            self._assert_write_access(x_krab_web_key, token)
-            from ..core.silence_mode import silence_manager
-
-            chat_id = str(payload.get("chat_id") or "").strip()
-            minutes = int(payload.get("minutes") or 30)
-            global_mode = bool(payload.get("global", False))
-            if global_mode:
-                if silence_manager.is_global_muted():
-                    silence_manager.unmute_global()
-                    return {"ok": True, "action": "unmuted_global"}
-                silence_manager.mute_global(minutes=minutes)
-                return {"ok": True, "action": "muted_global", "minutes": minutes}
-            if not chat_id:
-                return {"ok": False, "error": "chat_id required for per-chat silence"}
-            if silence_manager.is_silenced(chat_id):
-                silence_manager.unmute(chat_id)
-                return {"ok": True, "action": "unmuted", "chat_id": chat_id}
-            silence_manager.mute(chat_id, minutes=minutes)
-            return {"ok": True, "action": "muted", "chat_id": chat_id, "minutes": minutes}
-
-        @self.app.post("/api/runtime/recover")
-        async def runtime_recover(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Безопасный recovery-плейбук для runtime-контуров.
-
-            Что делает:
-            1) `openclaw_runtime_repair.command` (по умолчанию включен),
-            2) `sync_openclaw_models.command` (по умолчанию включен),
-            3) optional manual tier switch (`force_tier=free|paid`),
-            4) optional cloud runtime probe (`probe_cloud_runtime=true`),
-            5) возвращает post-check снимок.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            data = payload or {}
-            run_repair = (
-                data.get("run_openclaw_runtime_repair", True)
-                if isinstance(data.get("run_openclaw_runtime_repair", True), bool)
-                else self._bool_env(str(data.get("run_openclaw_runtime_repair", "1")), True)
-            )
-            run_sync = (
-                data.get("run_sync_openclaw_models", True)
-                if isinstance(data.get("run_sync_openclaw_models", True), bool)
-                else self._bool_env(str(data.get("run_sync_openclaw_models", "1")), True)
-            )
-            probe_cloud = (
-                data.get("probe_cloud_runtime", False)
-                if isinstance(data.get("probe_cloud_runtime", False), bool)
-                else self._bool_env(str(data.get("probe_cloud_runtime", "0")), False)
-            )
-            force_tier = str(data.get("force_tier", "") or "").strip().lower()
-
-            steps: list[dict[str, Any]] = []
-
-            if run_repair:
-                repair_result = self._run_project_python_script(
-                    self._project_root() / "scripts" / "openclaw_runtime_repair.py",
-                    timeout_seconds=120,
-                )
-                steps.append(
-                    {
-                        "step": "openclaw_runtime_repair",
-                        "ok": bool(repair_result.get("ok")),
-                        "exit_code": int(repair_result.get("exit_code", 1)),
-                        "error": str(repair_result.get("error") or ""),
-                        "stdout_tail": str(repair_result.get("stdout_tail") or ""),
-                    }
-                )
-            else:
-                steps.append({"step": "openclaw_runtime_repair", "ok": True, "skipped": True})
-
-            if run_sync:
-                sync_result = self._run_project_python_script(
-                    self._project_root() / "scripts" / "sync_openclaw_models.py",
-                    timeout_seconds=120,
-                )
-                steps.append(
-                    {
-                        "step": "sync_openclaw_models",
-                        "ok": bool(sync_result.get("ok")),
-                        "exit_code": int(sync_result.get("exit_code", 1)),
-                        "error": str(sync_result.get("error") or ""),
-                        "stdout_tail": str(sync_result.get("stdout_tail") or ""),
-                    }
-                )
-            else:
-                steps.append({"step": "sync_openclaw_models", "ok": True, "skipped": True})
-
-            openclaw = self.deps.get("openclaw_client")
-            if force_tier in {"free", "paid"}:
-                if not openclaw or not hasattr(openclaw, "switch_cloud_tier"):
-                    steps.append(
-                        {
-                            "step": "switch_cloud_tier",
-                            "ok": False,
-                            "error": "switch_cloud_tier_not_supported",
-                            "requested_tier": force_tier,
-                        }
+            if log_path.exists():
+                try:
+                    with log_path.open("rb") as fh:
+                        fh.seek(0, 2)
+                        size = fh.tell()
+                        fh.seek(max(0, size - 5 * 1024 * 1024))
+                        tail = fh.read().decode("utf-8", errors="ignore")
+                    _ = _time.time()
+                    mode_rx = _re.compile(r"retrieval_mode=(fts|vec|hybrid|none)")
+                    lat_rx = _re.compile(
+                        r"fts_ms=(\d+\.?\d*).*?vec_ms=(\d+\.?\d*).*?mmr_ms=(\d+\.?\d*).*?total_ms=(\d+\.?\d*)"
                     )
-                else:
-                    try:
-                        tier_result = await openclaw.switch_cloud_tier(force_tier)
-                        steps.append(
-                            {
-                                "step": "switch_cloud_tier",
-                                "ok": bool(tier_result.get("ok")),
-                                "requested_tier": force_tier,
-                                "result": tier_result,
-                            }
-                        )
-                    except Exception as exc:
-                        steps.append(
-                            {
-                                "step": "switch_cloud_tier",
-                                "ok": False,
-                                "requested_tier": force_tier,
-                                "error": str(exc),
-                            }
-                        )
+                    shadow_rx = _re.compile(r"shadow_top5_changed=(true|false|1|0)")
+                    for line in tail.splitlines()[-5000:]:
+                        m = mode_rx.search(line)
+                        if m:
+                            modes[m.group(1)] += 1
+                        lm = lat_rx.search(line)
+                        if lm:
+                            try:
+                                lat_fts.append(float(lm.group(1)))
+                                lat_vec.append(float(lm.group(2)))
+                                lat_mmr.append(float(lm.group(3)))
+                                lat_total.append(float(lm.group(4)))
+                            except Exception:  # noqa: BLE001
+                                pass
+                        sm = shadow_rx.search(line)
+                        if sm:
+                            shadow_total += 1
+                            if sm.group(1) in ("true", "1"):
+                                shadow_changed += 1
+                except Exception:  # noqa: BLE001
+                    pass
 
-            cloud_runtime: dict[str, Any] | None = None
-            if probe_cloud:
-                if not openclaw or not hasattr(openclaw, "get_cloud_runtime_check"):
-                    cloud_runtime = {
-                        "available": False,
-                        "error": "cloud_runtime_check_not_supported",
-                    }
-                else:
-                    try:
-                        probe = await asyncio.wait_for(
-                            openclaw.get_cloud_runtime_check(), timeout=18.0
-                        )
-                        cloud_runtime = {"available": True, "report": probe}
-                    except asyncio.TimeoutError:
-                        cloud_runtime = {"available": False, "error": "timeout"}
-                    except Exception as exc:
-                        cloud_runtime = {"available": False, "error": str(exc)}
+            def _avg(xs: list[float]) -> int:
+                return int(sum(xs) / len(xs)) if xs else 0
 
-            runtime_after = await self._collect_runtime_lite_snapshot()
-            ok = all(bool(item.get("ok")) for item in steps)
+            latency_avg = {
+                "fts": _avg(lat_fts),
+                "vec": _avg(lat_vec),
+                "mmr": _avg(lat_mmr),
+                "total": _avg(lat_total),
+            }
+            retrieval_mode_hour = {
+                "fts": modes.get("fts", 0),
+                "vec": modes.get("vec", 0),
+                "hybrid": modes.get("hybrid", 0),
+                "none": modes.get("none", 0),
+            }
+            shadow_delta_pct: float | None = None
+            if shadow_total:
+                shadow_delta_pct = round(100.0 * shadow_changed / shadow_total, 1)
+
             return {
-                "ok": ok,
-                "steps": steps,
-                "runtime_after": runtime_after,
-                "cloud_runtime": cloud_runtime,
+                "flag": flag,
+                "model_loaded": model_loaded,
+                "model_dim": model_dim,
+                "vec_chunks_count": vec_chunks,
+                "vec_join_pct": vec_join_pct,
+                "retrieval_mode_hour": retrieval_mode_hour,
+                "latency_avg": latency_avg,
+                "shadow_delta_pct": shadow_delta_pct,
             }
 
-        @self.app.post("/api/runtime/chat-session/clear")
-        async def runtime_chat_session_clear(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Очищает runtime chat-session по chat_id через owner-only web endpoint.
+        from .web_routers.meta_router import router as _meta_router
 
-            Зачем это нужно:
-            - `!clear` в Telegram полезен, но требует ручного сообщения из owner-чата;
-            - для recover/handoff/ops нам нужен тот же эффект из owner panel/CLI без похода в Telegram;
-            - endpoint чистит и in-memory историю, и persisted `history_cache.db` через общий
-              `openclaw_client.clear_session`, не дублируя логику в web-слое.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            data = payload or {}
-            chat_id = str(data.get("chat_id") or "").strip()
-            if not chat_id:
-                raise HTTPException(status_code=400, detail="chat_id_required")
+        self.app.include_router(_meta_router)
 
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw or not hasattr(openclaw, "clear_session"):
-                raise HTTPException(status_code=503, detail="chat_session_clear_not_supported")
+        # Wave D: 4 stateless GET status endpoints (silence/notify/batcher/chat_windows).
+        from .web_routers.runtime_status_router import router as _runtime_status_router
 
-            note = str(data.get("note") or "").strip()
-            try:
-                openclaw.clear_session(chat_id)
-            except Exception as exc:  # noqa: BLE001
-                raise HTTPException(
-                    status_code=500, detail=f"chat_session_clear_failed: {exc}"
-                ) from exc
+        self.app.include_router(_runtime_status_router)
 
-            runtime_after = await self._collect_runtime_lite_snapshot()
-            return {
-                "ok": True,
-                "action": "clear_chat_session",
-                "chat_id": chat_id,
-                "note": note,
-                "runtime_after": runtime_after,
-            }
+        # Wave E + Wave T: monitoring + ops endpoints
+        # Wave E: sla, ops/metrics, ops/timeline + alias /api/timeline, archive/growth, reactions/incoming
+        # Wave T: ops/usage, ops/cost-report, ops/runway, ops/executive-summary,
+        #         ops/report, ops/alerts, ops/history (factory pattern, ctx.deps["router"]).
+        from .web_routers.monitoring_router import (
+            build_monitoring_router as _build_monitoring_router,
+        )
 
-        @self.app.get("/api/openclaw/channels/status")
-        async def openclaw_channels_status():
-            """
-            Выполняет 'openclaw channels status --probe' и возвращает
-            сырой вывод + распарсенные предупреждения.
-            """
+        self.app.include_router(_build_monitoring_router(self._make_router_context()))
 
-            async def _inner() -> dict:
-                # [R9] Безопасный запуск через asyncio subprocess с таймаутом.
-                async with get_global_semaphore():
-                    proc = await asyncio.create_subprocess_exec(
-                        "openclaw",
-                        "channels",
-                        "status",
-                        "--probe",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                        env=self._openclaw_cli_env(),
-                    )
-                    try:
-                        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=45.0)
-                    except asyncio.TimeoutError:
-                        await terminate_and_reap(proc)
-                        return {
-                            "ok": False,
-                            "error": "openclaw_timeout",
-                            "detail": "Запрос статуса каналов превысил 45 сек.",
-                        }
-
-                raw_output = stdout.decode("utf-8", errors="replace")
-
-                parsed = self._parse_openclaw_channels_probe(raw_output)
-                warnings = list(parsed.get("warnings") or [])
-                if not warnings:
-                    # Дополнительно ищем строки с WARN вне блока Warnings.
-                    for line in raw_output.splitlines():
-                        if "WARN" in line.upper():
-                            warnings.append(line.strip())
-
-                return {
-                    "ok": proc.returncode == 0,
-                    "raw": raw_output,
-                    "warnings": warnings,
-                    "exit_code": proc.returncode,
-                    "channels": parsed.get("channels") or [],
-                    "gateway_reachable": bool(parsed.get("gateway_reachable")),
-                }
-
-            # Верхний guard: не зависаем если CLI не стартует.
-            try:
-                return await asyncio.wait_for(_inner(), timeout=5.0)
-            except asyncio.TimeoutError:
-                return {
-                    "ok": False,
-                    "error": "OpenClaw timeout (5s)",
-                    "detail": "gateway not responding",
-                }
-            except Exception as exc:
-                logger.error("openclaw_status_failed", error=str(exc))
-                return {
-                    "ok": False,
-                    "error": "system_error",
-                    "detail": f"Не удалось выполнить openclaw: {exc}",
-                }
-
-        @self.app.post("/api/openclaw/channels/runtime-repair")
-        async def openclaw_runtime_repair(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Запуск скрипта восстановления рантайма OpenClaw.
-            Требует WEB_API_KEY.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            script_path = str(self._project_root() / "openclaw_runtime_repair.command")
-
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    script_path,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
-                output = stdout.decode("utf-8", errors="replace")
-                return {
-                    "ok": proc.returncode == 0,
-                    "output": output,
-                    "exit_code": proc.returncode,
-                }
-            except asyncio.TimeoutError:
-                return {
-                    "ok": False,
-                    "error": "timeout",
-                    "detail": "Скрипт выполнялся слишком долго (60с)",
-                }
-            except Exception as exc:
-                return {"ok": False, "error": "system_error", "detail": str(exc)}
-
-        @self.app.post("/api/openclaw/channels/signal-guard-run")
-        async def openclaw_signal_guard_run(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Однократный запуск Ops Guard для проверки сигналов.
-            Требует WEB_API_KEY.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            script_path = "/Users/pablito/Antigravity_AGENTS/Краб/scripts/signal_ops_guard.py"
-
-            try:
-                # Запускаем с флагом --once для разовой проверки
-                proc = await asyncio.create_subprocess_exec(
-                    sys.executable,
-                    script_path,
-                    "--once",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
-                output = stdout.decode("utf-8", errors="replace")
-                return {
-                    "ok": proc.returncode == 0,
-                    "output": output,
-                    "exit_code": proc.returncode,
-                }
-            except asyncio.TimeoutError:
-                return {
-                    "ok": False,
-                    "error": "timeout",
-                    "detail": "Signal Guard выполнялся слишком долго (60с)",
-                }
-            except Exception as exc:
-                return {"ok": False, "error": "system_error", "detail": str(exc)}
-
-        @self.app.get("/api/ecosystem/health")
-        async def ecosystem_health():
-            """[R11] Расширенный health-отчет 3-проектной экосистемы с метриками ресурсов."""
-            health_service = self.deps.get("health_service")
-            if not health_service:
-                # Fallback для совместимости, если сервис не в депсах
-                router = self.deps["router"]
-                openclaw = self.deps.get("openclaw_client")
-                voice_gateway = self.deps.get("voice_gateway_client")
-                krab_ear = self.deps.get("krab_ear_client")
-                health_service = EcosystemHealthService(
-                    router=router,
-                    openclaw_client=openclaw,
-                    voice_gateway_client=voice_gateway,
-                    krab_ear_client=krab_ear,
-                )
-            report = await health_service.collect()
-            return {"ok": True, "report": report}
-
-        @self.app.get("/api/ecosystem/health/debug")
-        async def ecosystem_health_debug(section: str = ""):
-            """Raw health collector output + full dict для diagnose.
-
-            Query params:
-            - section: filter one section (session_10, session_12, runtime_route, etc.)
-            """
-            try:
-                health_svc = self.deps.get("health_service")
-                if health_svc is None:
-                    router = self.deps.get("router")
-                    if router is None:
-                        return {"error": "router_not_found_in_deps"}
-                    from ..core.ecosystem_health import EcosystemHealthService
-
-                    health_svc = EcosystemHealthService(router=router)
-                direct = health_svc._collect_session_12_stats()
-                full = await health_svc.collect()
-
-                response = {
-                    "direct": direct,
-                    "full_has_session_12": "session_12" in full,
-                    "full_keys": list(full.keys()),
-                }
-
-                if section:
-                    response["section_filter"] = section
-                    response["full_section"] = full.get(section)
-                else:
-                    response["full_session_12"] = full.get("session_12")
-
-                return response
-            except Exception as exc:
-                import traceback
-
-                return {"error": str(exc), "trace": traceback.format_exc()[:500]}
+        # /api/swarm/{tasks/create,reports,task/*,task-board/export,
+        # listeners/toggle,artifacts/cleanup,delegations/active} перенесены
+        # в swarm_router (Wave ZZ, Session 26).
 
         @self.app.get("/api/ecosystem/capabilities")
         async def ecosystem_capabilities():
             """Возвращает capability-срез по control plane и внешним voice/audio сервисам."""
             return await self._ecosystem_capabilities_snapshot()
 
-        @self.app.get("/api/session10/summary")
-        async def session10_summary():
-            """
-            Aggregated Session 10 features stats для V4 Dashboard Hub.
+        # /api/ops/{diagnostics, runtime_snapshot, models, report/export,
+        # bundle, bundle/export, openclaw-procs} — extracted в
+        # monitoring_router.py (Phase 2 Part 2B, Session 27).
+        # Удалено _system_diagnostics_inline + 7 endpoints inline.
 
-            Делает один запрос вместо N — фронтенду не нужно дёргать
-            отдельные endpoints для memory_validator/archive/chrome/restart/observability.
+        from .web_routers.assistant_router import build_assistant_router as _build_assistant
 
-            Каждая секция обёрнута в try/except: при отсутствии модуля возвращаем
-            defaults, endpoint не падает в 500.
-            """
-            # ── session_info (статический + dynamic commits через git) ─────
-            session_info: dict[str, Any] = {
-                "name": "Session 10",
-                "date": "2026-04-17",
-                "status": "closed",
-                "new_tests_count": 155,
-            }
-            try:
-                # Подсчитаем commits за последние 24ч как приближение к session scope.
-                result = subprocess.run(
-                    ["git", "rev-list", "--count", "--since=1 day", "HEAD"],
-                    capture_output=True,
-                    text=True,
-                    timeout=2.0,
-                )
-                if result.returncode == 0:
-                    session_info["commits_count"] = int(result.stdout.strip() or 0)
-            except Exception as exc:
-                logger.debug("session10_commits_count_failed", error=str(exc))
+        self.app.include_router(_build_assistant(self._make_router_context()))
 
-            # ── memory_validator (модуль пока не существует → defaults) ─────
-            memory_validator: dict[str, Any] = {
-                "enabled": False,
-                "safe_total": 0,
-                "injection_blocked_total": 0,
-                "confirmed_total": 0,
-                "confirm_failed_total": 0,
-                "pending_count": 0,
-            }
-            try:
-                from ..core import memory_validator as _mv  # type: ignore[attr-defined]
+        # /api/assistant/query — extracted в assistant_router.py
+        # (Phase 2 Part 2D, Session 27). Helpers инжектятся через deps:
+        #   idempotency_get/set, assistant_rate_limit_helper, router, black_box.
 
-                if hasattr(_mv, "get_validator_stats"):
-                    mv_stats = _mv.get_validator_stats()
-                    if isinstance(mv_stats, dict):
-                        memory_validator.update(mv_stats)
-                        memory_validator.setdefault("enabled", True)
-            except ImportError:
-                pass
-            except Exception as exc:
-                logger.warning("session10_memory_validator_failed", error=str(exc))
+        # /api/assistant/stream — extracted в assistant_router.py
+        # (Phase 2 Part 2C, Session 27). /api/assistant/query остаётся
+        # inline (HARD: ~310 LOC pipeline + idempotency cache + rate limit).
 
-            # ── memory_archive (archive.db file-level stats + indexer state) ─
-            memory_archive: dict[str, Any] = {
-                "exists": False,
-                "size_bytes": 0,
-                "size_mb": 0.0,
-                "message_count": 0,
-                "chats_count": 0,
-                "chunks_count": 0,
-                "indexer_state": "stopped",
-            }
-            try:
-                from ..core.memory_archive import DEFAULT_ARCHIVE_PATH
+        # /api/swarm/events перенесён в swarm_router (Wave ZZ, Session 26).
 
-                archive_path = DEFAULT_ARCHIVE_PATH
-                if archive_path.exists():
-                    size_bytes = archive_path.stat().st_size
-                    memory_archive["exists"] = True
-                    memory_archive["size_bytes"] = size_bytes
-                    memory_archive["size_mb"] = round(size_bytes / (1024 * 1024), 2)
-                    # Считаем rows через read-only connection
-                    try:
-                        conn = sqlite3.connect(f"file:{archive_path}?mode=ro", uri=True)
-                        try:
-                            cursor = conn.cursor()
-                            for table, key in (
-                                ("messages", "message_count"),
-                                ("chats", "chats_count"),
-                                ("chunks", "chunks_count"),
-                            ):
-                                try:
-                                    cursor.execute(f"SELECT COUNT(*) FROM {table}")
-                                    memory_archive[key] = int(cursor.fetchone()[0])
-                                except sqlite3.Error:
-                                    pass
-                        finally:
-                            conn.close()
-                    except sqlite3.Error as exc:
-                        logger.debug("session10_archive_query_failed", error=str(exc))
-            except Exception as exc:
-                logger.warning("session10_memory_archive_failed", error=str(exc))
+        # /api/chrome/dedicated/* перенесены в web_routers.browser_router
+        # (Phase 2 Wave U, Session 25). См. include_router ниже.
+        from .web_routers.browser_router import build_browser_router as _build_browser
 
-            # Переиспользуем existing helper для indexer state.
-            memory_archive["indexer_state"] = _resolve_memory_indexer_state()
+        self.app.include_router(_build_browser(self._make_router_context()))
 
-            # ── dedicated_chrome (env-driven; модуль пока optional) ─────────
-            dedicated_chrome: dict[str, Any] = {
-                "enabled": bool(os.environ.get("KRAB_DEDICATED_CHROME_ENABLED", "") == "1"),
-                "running": False,
-                "port": int(os.environ.get("KRAB_DEDICATED_CHROME_PORT") or 9222),
-            }
-            try:
-                # Быстрая проверка порта через httpx /json/version (Chrome DevTools)
-                probe_url = f"http://127.0.0.1:{dedicated_chrome['port']}/json/version"
-                async with httpx.AsyncClient(timeout=0.5) as probe_client:
-                    probe_resp = await probe_client.get(probe_url)
-                    dedicated_chrome["running"] = probe_resp.status_code == 200
-            except Exception:
-                # Порт закрыт / chrome не запущен — это не ошибка.
-                pass
+        from .web_routers.admin_router import build_admin_router as _build_admin
 
-            # ── auto_restart (services_tracked + attempts из watchdog deps) ──
-            auto_restart: dict[str, Any] = {
-                "enabled": False,
-                "services_tracked": [],
-                "total_attempts_last_hour": 0,
-            }
-            try:
-                watchdog = self.deps.get("watchdog")
-                if watchdog is not None:
-                    auto_restart["enabled"] = True
-                    recoveries = getattr(watchdog, "last_recovery_attempt", {}) or {}
-                    if isinstance(recoveries, dict):
-                        auto_restart["services_tracked"] = sorted(recoveries.keys())
-                        # Фильтруем попытки за последний час
-                        cutoff = time.time() - 3600
-                        attempts = 0
-                        for rec in recoveries.values():
-                            if isinstance(rec, dict):
-                                ts = rec.get("ts") or rec.get("timestamp") or 0
-                                if isinstance(ts, (int, float)) and ts >= cutoff:
-                                    attempts += 1
-                        auto_restart["total_attempts_last_hour"] = attempts
-            except Exception as exc:
-                logger.warning("session10_auto_restart_failed", error=str(exc))
+        self.app.include_router(_build_admin(self._make_router_context()))
 
-            # ── observability (env-driven флаги + stagnation threshold) ─────
-            try:
-                stagnation_threshold = int(os.environ.get("LLM_STAGNATION_THRESHOLD_SEC") or 120)
-            except (TypeError, ValueError):
-                stagnation_threshold = 120
+        from .web_routers.health_router import build_health_router as _build_health
 
-            observability = {
-                "correlation_id_active": True,
-                "tool_indicator_enabled": True,
-                "stagnation_threshold_sec": stagnation_threshold,
-            }
+        self.app.include_router(_build_health(self._make_router_context()))
 
-            # ── new_commands (статический список Session 10 debut-команд) ───
-            new_commands = [
-                {
-                    "name": "!confirm",
-                    "description": "Подтвердить persistent memory write (owner)",
-                },
-                {
-                    "name": "!reset",
-                    "description": "Aggressive очистка 4 слоёв истории",
-                },
-                {
-                    "name": "!memory stats",
-                    "description": "Memory Layer статистика",
-                },
-            ]
+        from .web_routers.misc_router import build_misc_router as _build_misc
 
-            # ── known_issues (резолв по commit hash'ам; конфиг через env) ──
-            known_issues: list[str] = []
-            # PII false-positives исправлены в 09dd4d0 — не включаем в активные issues.
-            # Chrome prompts from extension — отслеживается как open; флаг через env.
-            if os.environ.get("KRAB_KNOWN_ISSUE_CHROME_PROMPTS") == "1":
-                known_issues.append("chrome_prompts_from_extension")
+        self.app.include_router(_build_misc(self._make_router_context()))
 
-            # ── session_12 (Wave 16 Chado-inspired modules) ──────────────────
-            health_svc = self.deps.get("health_service")
-            if health_svc is None:
-                router = self.deps.get("router")
-                if router is not None:
-                    health_svc = EcosystemHealthService(router=router)
-            session_12: dict[str, Any] = {}
-            if health_svc is not None:
-                try:
-                    session_12 = health_svc._collect_session_12_stats()
-                except Exception as exc:
-                    logger.debug("session12_stats_failed", error=str(exc))
+        # Smart Routing Phase 4 (Session 26) — per-chat response policies
+        from .web_routers.chat_policy_router import (
+            build_chat_policy_router as _build_chat_policy,
+        )
 
-            return {
-                "ok": True,
-                "generated_at": int(time.time()),
-                "session_info": session_info,
-                "memory_validator": memory_validator,
-                "memory_archive": memory_archive,
-                "new_commands": new_commands,
-                "dedicated_chrome": dedicated_chrome,
-                "auto_restart": auto_restart,
-                "observability": observability,
-                "known_issues": known_issues,
-                "session_12": session_12,
-            }
-
-        @self.app.get("/api/system/diagnostics")
-        async def system_diagnostics():
-            """[R11] Глубокая диагностика сервера (RAM, CPU, Бюджет, Локальные LLM)."""
-            router = self.deps.get("router")
-            if not router:
-                return {"ok": False, "error": "router_not_found"}
-
-            # Получаем свежие данные через health_service
-            health_service = self.deps.get("health_service")
-            if not health_service:
-                health_service = EcosystemHealthService(router=router)
-
-            health_data = await health_service.collect()
-            local_truth = await self._resolve_local_runtime_truth(router)
-
-            status = "ok"
-            if not bool(local_truth.get("runtime_reachable")):
-                status = "degraded"
-                if getattr(router, "active_tier", "") == "default":
-                    status = "failed"
-            elif getattr(router, "active_tier", "") == "paid":
-                status = "degraded"
-
-            return {
-                "ok": True,
-                "status": status,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "resources": health_data.get("resources", {}),
-                "budget": health_data.get("budget", {}),
-                "local_ai": {
-                    "engine": local_truth.get("engine", getattr(router, "local_engine", "unknown")),
-                    "model": local_truth.get("active_model", ""),
-                    "available": bool(local_truth.get("runtime_reachable")),
-                    "loaded_models": local_truth.get("loaded_models", []),
-                },
-                "watchdog": {
-                    "last_recoveries": getattr(
-                        self.deps.get("watchdog"), "last_recovery_attempt", {}
-                    )
-                },
-            }
-
-        @self.app.get("/api/ops/diagnostics")
-        async def ops_diagnostics():
-            """[R12] Унифицированный операционный отчет (алиас system/diagnostics с расширением)."""
-            return await system_diagnostics()
-
-        @self.app.get("/api/ops/metrics")
-        async def ops_metrics():
-            """Export internal metrics — flat fields для V4 ops dashboard sparklines."""
-            snap = metrics.get_snapshot()
-            counters = snap.get("counters", {})
-            latencies = snap.get("latencies", {})
-
-            # Производные метрики для V4 ops.html sparklines
-            success = counters.get("llm_success", 0)
-            errors = counters.get("llm_error", 0)
-            total = success + errors
-            error_rate = (errors / total * 100) if total > 0 else 0.0
-
-            return {
-                "ok": True,
-                "metrics": snap,
-                # Плоские поля для V4 ops dashboard
-                "latency_p50": latencies.get("p50_ms", 0),
-                "latency_p95": latencies.get("p95_ms", 0),
-                "latency_p99": 0,  # LatencyTracker считает p50/p95; p99 зарезервирован
-                "error_rate": round(error_rate, 2),
-                "throughput": total,
-            }
-
-        @self.app.get("/api/ops/timeline")
-        @self.app.get("/api/timeline")
-        async def ops_timeline(
-            limit: int = 200, min_severity: Optional[str] = None, channel: Optional[str] = None
-        ):
-            """Export recent event timeline."""
-            return {
-                "ok": True,
-                "events": timeline.get_events(
-                    limit=limit, min_severity=min_severity, channel=channel
-                ),
-            }
-
-        @self.app.get("/api/sla")
-        async def get_sla_metrics():
-            """Returns dynamic SLA metrics for the NOC-lite UI (Latency p50/p95, Success Rate)."""
-            snap = metrics.get_snapshot()
-            counters = snap.get("counters", {})
-            latencies = snap.get("latencies", {"p50_ms": 0.0, "p95_ms": 0.0})
-
-            # Calculate basic success rate based on counters (this is a simplified sliding window approximation).
-            total_success = counters.get("local_success", 0) + counters.get("cloud_success", 0)
-            total_fail = counters.get("local_failures", 0) + counters.get("cloud_failures", 0)
-            total = total_success + total_fail
-            success_rate = (total_success / total * 100.0) if total > 0 else 100.0
-
-            fail_fast_count = counters.get("force_cloud_failfast_total", 0)
-
-            return {
-                "ok": True,
-                "latency_p50_ms": latencies.get("p50_ms", 0.0),
-                "latency_p95_ms": latencies.get("p95_ms", 0.0),
-                "success_rate_pct": round(success_rate, 2),
-                "fail_fast_count": fail_fast_count,
-            }
-
-        @self.app.get("/api/ops/runtime_snapshot")
-        async def ops_runtime_snapshot():
-            """Deep observability snapshot linking all states."""
-            router = self.deps.get("router")
-            if not router:
-                return {"ok": False, "error": "router_not_found"}
-            local_truth = await self._resolve_local_runtime_truth(router)
-
-            task_queue = self.deps.get("queue")
-            queue_stats = (
-                task_queue.get_metrics() if getattr(task_queue, "get_metrics", None) else {}
-            )
-
-            openclaw = router.openclaw_client
-            tier_state = (
-                openclaw.get_tier_state_export()
-                if getattr(openclaw, "get_tier_state_export", None)
-                else {}
-            )
-            operator_workflow = inbox_service.get_workflow_snapshot()
-            workspace_state = build_workspace_state_snapshot()
-
-            return {
-                "ok": True,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "router_state": {
-                    "is_local_available": bool(local_truth.get("runtime_reachable")),
-                    "active_local_model": local_truth.get("active_model", ""),
-                    "loaded_local_models": local_truth.get("loaded_models", []),
-                    "active_tier": getattr(router, "active_tier", "default"),
-                    "local_failures": router._stats.get("local_failures", 0),
-                    "cloud_failures": router._stats.get("cloud_failures", 0),
-                },
-                "tier_state": tier_state,
-                "breaker_state": {
-                    "preflight_cache": {
-                        k: {"expires_in": v[0] - time.time(), "error": v[1]}
-                        for k, v in getattr(router, "_preflight_cache", {}).items()
-                        if v[0] > time.time()
-                    }
-                },
-                "operator_workflow": operator_workflow,
-                "workspace_state": workspace_state,
-                "queue_depth": queue_stats.get("active_tasks", 0),
-                "queue_stats": queue_stats,
-                "observability": get_observability_snapshot(),
-            }
-
-        @self.app.post("/api/ops/models")
-        async def ops_models_control(
-            payload: Dict[str, Any] = Body(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            [R12] Управление жизненным циклом локальных моделей.
-            Payload: {"action": "load"|"unload"|"unload_all", "model": "model_name"}
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps.get("router")
-            if not router:
-                return {"ok": False, "error": "router_not_found"}
-
-            action = payload.get("action")
-            model_name = payload.get("model")
-
-            try:
-                if action == "load":
-                    if not model_name:
-                        return {"ok": False, "error": "model_name_required"}
-                    success = await router.load_local_model(model_name)
-                    return {"ok": success, "action": action, "model": model_name}
-
-                elif action == "unload":
-                    if not model_name:
-                        return {"ok": False, "error": "model_name_required"}
-                    success = await router.unload_model_manual(model_name)
-                    return {"ok": success, "action": action, "model": model_name}
-
-                elif action == "unload_all":
-                    await router.unload_models_manual()
-                    return {"ok": True, "action": action}
-
-                else:
-                    return {
-                        "ok": False,
-                        "error": "invalid_action",
-                        "supported": ["load", "unload", "unload_all"],
-                    }
-            except Exception as e:
-                logger.error("ops_models_control_failed", error=str(e))
-                return {"ok": False, "error": f"{type(e).__name__}: {e}"}
-
-        @self.app.get("/api/ecosystem/health/export")
-        async def ecosystem_health_export():
-            """Экспортирует расширенный ecosystem health report в JSON-файл."""
-            router = self.deps["router"]
-            openclaw = self.deps.get("openclaw_client")
-            voice_gateway = self.deps.get("voice_gateway_client")
-            krab_ear = self.deps.get("krab_ear_client")
-            payload = await EcosystemHealthService(
-                router=router,
-                openclaw_client=openclaw,
-                voice_gateway_client=voice_gateway,
-                krab_ear_client=krab_ear,
-            ).collect()
-            ops_dir = Path("artifacts/ops")
-            ops_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
-            out_path = ops_dir / f"ecosystem_health_web_{stamp}.json"
-            with out_path.open("w", encoding="utf-8") as fp:
-                json.dump(payload, fp, ensure_ascii=False, indent=2)
-            return FileResponse(
-                str(out_path),
-                media_type="application/json",
-                filename=out_path.name,
-            )
-
-        @self.app.get("/api/ecosystem/comparison")
-        async def ecosystem_comparison():
-            """Observable delta Krab vs known peer agents (Chado §7 P2).
-
-            self — динамические данные из CommandRegistry / маршрутов / memory_stats.
-            peers — hardcoded профиль Chado (Telethon-based userbot с 7 anti-bot слоями).
-            """
-            # ── self.commands_count ──────────────────────────────────────────
-            commands_count = 154  # fallback из CLAUDE.md
-            try:
-                from ..core.command_registry import registry as _reg
-
-                commands_count = len(_reg.all())
-            except Exception as _exc:  # noqa: BLE001
-                logger.debug("ecosystem_comparison_commands_count_failed", error=str(_exc))
-
-            # ── self.api_endpoints_count ────────────────────────────────────
-            api_endpoints_count = 204  # fallback из CLAUDE.md
-            try:
-                api_endpoints_count = len(self.app.routes)
-            except Exception as _exc:  # noqa: BLE001
-                logger.debug("ecosystem_comparison_routes_count_failed", error=str(_exc))
-
-            # ── self.chats_active ───────────────────────────────────────────
-            chats_active: int | None = None
-            try:
-                from ..core.chat_window_manager import chat_window_manager as _cwm
-
-                cw_stats = _cwm.stats()
-                chats_active = cw_stats.get("active_windows") or cw_stats.get("size") or 0
-            except Exception as _exc:  # noqa: BLE001
-                logger.debug("ecosystem_comparison_chat_windows_failed", error=str(_exc))
-
-            # ── self.memory_* ───────────────────────────────────────────────
-            memory_messages: int | None = None
-            memory_chunks: int | None = None
-            try:
-                from ..core.memory_stats import collect_memory_stats as _cms
-
-                mem = _cms()
-                memory_messages = mem.get("total_messages")
-                memory_chunks = mem.get("total_chunks")
-            except Exception as _exc:  # noqa: BLE001
-                logger.debug("ecosystem_comparison_memory_stats_failed", error=str(_exc))
-
-            self_profile: dict[str, Any] = {
-                "commands_count": commands_count,
-                "api_endpoints_count": api_endpoints_count,
-                "chats_active": chats_active,
-                "memory_messages": memory_messages,
-                "memory_chunks": memory_chunks,
-                "routines_launchd": 5,
-                "routines_desktop": 7,
-                "tests_count_estimate": 6800,
-                "integrations": [
-                    "telegram_userbot",
-                    "openclaw_gateway",
-                    "sentry",
-                    "linear",
-                    "canva",
-                    "figma",
-                    "claude_design",
-                ],
-            }
-
-            peers = [
-                {
-                    "name": "chado",
-                    "profile": "elegant minimalist",
-                    "known_patterns": {
-                        "event_driven": "Telethon + asyncio Queue/Lock/Event",
-                        "backpressure": "per-chat CW + LRU + batching",
-                        "anti_bot_layers": 7,
-                    },
-                }
-            ]
-
-            return {
-                "self": self_profile,
-                "peers": peers,
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-            }
-
-        @self.app.get("/api/model/recommend")
-        async def model_recommend(
-            profile: str = Query(default="chat", description="Профиль задачи"),
-        ):
-            router = self.deps["router"]
-            return router.get_profile_recommendation(profile)
-
-        @self.app.post("/api/model/preflight")
-        async def model_preflight(payload: dict = Body(...)):
-            """
-            Возвращает preflight-план задачи до выполнения:
-            профиль, канал/модель, confirm-step, риски и cost hint.
-            """
-            router = self.deps["router"]
-            if not hasattr(router, "get_task_preflight"):
-                return {"ok": False, "error": "task_preflight_not_supported"}
-
-            prompt = str(payload.get("prompt", "")).strip()
-            if not prompt:
-                raise HTTPException(status_code=400, detail="prompt_required")
-
-            task_type = str(payload.get("task_type", "chat")).strip().lower() or "chat"
-            preferred_model = payload.get("preferred_model")
-            preferred_model_str = str(preferred_model).strip() if preferred_model else None
-            confirm_expensive = bool(payload.get("confirm_expensive", False))
-
-            preflight = router.get_task_preflight(
-                prompt=prompt,
-                task_type=task_type,
-                preferred_model=preferred_model_str,
-                confirm_expensive=confirm_expensive,
-            )
-            return {"ok": True, "preflight": preflight}
-
-        @self.app.get("/api/model/local/status")
-        async def model_local_status():
-            """Возвращает статус локального рантайма LLM."""
-            router = self.deps["router"]
-            truth = await self._resolve_local_runtime_truth(router)
-            active_model = str(truth.get("active_model") or "").strip()
-            engine_raw = str(truth.get("engine") or "unknown").strip()
-            runtime_url = str(truth.get("runtime_url") or "n/a").strip()
-            lifecycle_status = "loaded" if bool(truth.get("is_loaded")) else "not_loaded"
-
-            return {
-                "ok": True,
-                # Каноничный формат для frontend R10.
-                "status": lifecycle_status,
-                "model_name": active_model or "",
-                "engine": engine_raw,
-                "url": runtime_url or "n/a",
-                # Backward compatibility для существующих клиентов.
-                "details": {
-                    "available": bool(truth.get("runtime_reachable")),
-                    "engine": engine_raw,
-                    "active_model": active_model,
-                    "is_loaded": lifecycle_status == "loaded",
-                    "url": runtime_url or "n/a",
-                    "loaded_models": truth.get("loaded_models", []),
-                    "probe_state": truth.get("probe_state", "down"),
-                    "error": truth.get("error", ""),
-                },
-                # Старый вложенный формат оставляем на переходный период.
-                "status_legacy": {
-                    "available": bool(truth.get("runtime_reachable")),
-                    "engine": engine_raw,
-                    "active_model": active_model,
-                    "is_loaded": lifecycle_status == "loaded",
-                    "url": runtime_url or "n/a",
-                    "loaded_models": truth.get("loaded_models", []),
-                    "probe_state": truth.get("probe_state", "down"),
-                    "error": truth.get("error", ""),
-                },
-            }
-
-        @self.app.post("/api/model/local/load-default")
-        async def model_local_load_default(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Загружает предпочтительную локальную модель (write endpoint)."""
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps["router"]
-            preferred = str(getattr(router, "local_preferred_model", "") or "").strip()
-            if not preferred:
-                # Страховка для compat-роутеров/старых инстансов, где поле могло
-                # не быть проброшено, хотя canonical preferred model уже есть в config.
-                fallback_preferred = str(getattr(config, "LOCAL_PREFERRED_MODEL", "") or "").strip()
-                if fallback_preferred.lower() not in {"", "auto", "smallest"}:
-                    preferred = fallback_preferred
-            if not preferred:
-                return {"ok": False, "error": "no_preferred_model_configured"}
-
-            # Используем существующий механизм smart_load
-            success = await router._smart_load(preferred, reason="web_forced")
-            self._invalidate_lmstudio_snapshot_cache()
-            return {"ok": success, "model": preferred}
-
-        @self.app.post("/api/model/local/unload")
-        async def model_local_unload(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Выгружает все локальные модели для освобождения памяти (write endpoint)."""
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps["router"]
-
-            freed_gb = 0.0
-            if hasattr(router, "_evict_idle_models"):
-                # Вызываем с огромным нужным объемом или просто через unload_local_model
-                # Но проще через unload_local_model если мы знаем active_model
-                active = getattr(router, "active_local_model", None)
-                if active:
-                    success = await router.unload_local_model(active)
-                    if success:
-                        router.active_local_model = None
-                        self._invalidate_lmstudio_snapshot_cache()
-                        return {"ok": True, "unloaded": active}
-
-                # Если активной нет, но есть загруженные (по данным _evict_idle_models)
-                freed_gb = await router._evict_idle_models(
-                    needed_gb=100.0
-                )  # Попытаемся выгрузить всё
-                self._invalidate_lmstudio_snapshot_cache()
-
-            return {"ok": True, "freed_gb_estimate": round(freed_gb, 1)}
-
-        @self.app.get("/api/model/explain")
-        async def model_explain(
-            task_type: str = Query(default="chat", description="Тип задачи для preflight"),
-            prompt: str = Query(
-                default="", description="Опциональный prompt для preflight explain"
-            ),
-            preferred_model: str = Query(
-                default="", description="Опциональная предпочтительная модель"
-            ),
-            confirm_expensive: bool = Query(
-                default=False, description="Флаг подтверждения дорогого cloud пути"
-            ),
-        ):
-            """
-            Explainability endpoint: почему выбран канал/модель.
-
-            Возвращает:
-            - last route (route_reason/route_detail);
-            - policy snapshot;
-            - preflight (если передан prompt).
-            """
-            router = self.deps["router"]
-            normalized_prompt = str(prompt or "").strip()
-            normalized_task_type = str(task_type or "chat").strip().lower() or "chat"
-            preferred_model_str = str(preferred_model or "").strip() or None
-
-            if hasattr(router, "get_route_explain"):
-                explain = router.get_route_explain(
-                    prompt=normalized_prompt,
-                    task_type=normalized_task_type,
-                    preferred_model=preferred_model_str,
-                    confirm_expensive=bool(confirm_expensive),
-                )
-                return {"ok": True, "explain": explain}
-
-            # Fallback для старого роутера без get_route_explain.
-            last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
-            preflight = None
-            if normalized_prompt and hasattr(router, "get_task_preflight"):
-                preflight = router.get_task_preflight(
-                    prompt=normalized_prompt,
-                    task_type=normalized_task_type,
-                    preferred_model=preferred_model_str,
-                    confirm_expensive=bool(confirm_expensive),
-                )
-            return {
-                "ok": True,
-                "explain": {
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                    "last_route": last_route if isinstance(last_route, dict) else {},
-                    "reason": {
-                        "code": str(last_route.get("route_reason", "")).strip() or "unknown",
-                        "detail": str(last_route.get("route_detail", "")).strip(),
-                        "human": "Роутер не поддерживает расширенный explain; показан базовый срез.",
-                    },
-                    "policy": {
-                        "force_mode": str(getattr(router, "force_mode", "auto")),
-                        "routing_policy": str(getattr(router, "routing_policy", "unknown")),
-                        "cloud_soft_cap_reached": bool(
-                            getattr(router, "cloud_soft_cap_reached", False)
-                        ),
-                        "local_available": bool(getattr(router, "is_local_available", False)),
-                    },
-                    "preflight": preflight,
-                    "explainability_score": 40 if last_route else 0,
-                    "transparency_level": "low" if not last_route else "medium",
-                },
-            }
-
-        def _normalize_force_mode(force_mode: str) -> str:
-            """Нормализует внутренние force_* режимы в UI-вид: auto/local/cloud."""
-            normalized = str(force_mode or "").strip().lower()
-            if normalized in {"force_local", "local"}:
-                return "local"
-            if normalized in {"force_cloud", "cloud"}:
-                return "cloud"
-            return "auto"
-
-        async def _build_model_catalog(router_obj) -> dict:
-            """
-            Собирает каталог моделей и текущих настроек для web-панели.
-            Нужен для кнопочного UX без ручных `!model` команд.
-            Защита от краша: любая ошибка → пустой каталог вместо 500.
-            """
-            try:
-                return await _build_model_catalog_inner(router_obj)
-            except Exception as exc:  # noqa: BLE001
-                # Graceful fallback — не крашим Krab при холодном запросе
-                import logging as _logging
-
-                _logging.getLogger(__name__).warning(
-                    "_build_model_catalog failed (cold start?): %s", exc
-                )
-                return {
-                    "force_mode": "auto",
-                    "slots": [],
-                    "cloud_slots": {},
-                    "local_engine": "",
-                    "local_available": False,
-                    "local_active_model": "",
-                    "local_models": [],
-                    "local_models_error": str(exc),
-                    "cloud_presets": [],
-                    "cloud_inventory": [],
-                    "cloud_provider_groups": [],
-                    "aliases": [],
-                    "quick_presets": [],
-                    "runtime_model_count": 0,
-                    "cloud_inventory_count": 0,
-                    "runtime_registry_source": "fallback_empty",
-                    "router_usage": {},
-                    "routing_status": {},
-                    "runtime_controls": {},
-                    "parallelism_truth": {},
-                    "auth_recovery": {},
-                    "catalog_guidance": {},
-                    "_error": str(exc),
-                }
-
-        async def _build_model_catalog_inner(router_obj) -> dict:
-            """Внутренняя реализация каталога. Вызывается из _build_model_catalog."""
-            cloud_slots_raw = getattr(router_obj, "models", {}) or {}
-            cloud_slots = (
-                {str(k): str(v) for k, v in cloud_slots_raw.items()}
-                if isinstance(cloud_slots_raw, dict)
-                else {}
-            )
-            slot_list = (
-                sorted(cloud_slots.keys()) if cloud_slots else ["chat", "thinking", "pro", "coding"]
-            )
-            force_mode = _normalize_force_mode(getattr(router_obj, "force_mode", "auto"))
-            local_truth = await self._resolve_local_runtime_truth(router_obj)
-            local_engine = str(
-                local_truth.get("engine") or getattr(router_obj, "local_engine", "") or ""
-            )
-            local_active_model = str(local_truth.get("active_model") or "")
-            local_available = bool(local_truth.get("runtime_reachable"))
-            loaded_model_ids = {
-                str(item).strip()
-                for item in (local_truth.get("loaded_models") or [])
-                if str(item or "").strip()
-            }
-
-            local_models: list[dict] = []
-            local_models_error = ""
-            if hasattr(router_obj, "list_local_models_verbose"):
-                try:
-                    raw_local_models = await router_obj.list_local_models_verbose()
-                    if isinstance(raw_local_models, list):
-                        for item in raw_local_models:
-                            if not isinstance(item, dict):
-                                continue
-                            model_id = str(item.get("id", "")).strip()
-                            if not model_id:
-                                continue
-                            local_models.append(
-                                {
-                                    "id": model_id,
-                                    "loaded": bool(
-                                        model_id == local_active_model
-                                        or model_id in loaded_model_ids
-                                        or item.get("loaded", False)
-                                    ),
-                                    "type": str(item.get("type", "llm")),
-                                    "size_human": str(item.get("size_human", "n/a")),
-                                }
-                            )
-                except Exception as exc:  # noqa: BLE001
-                    local_models_error = str(exc)
-
-            if local_active_model and not any(
-                str(item.get("id")) == local_active_model for item in local_models
-            ):
-                local_models.insert(
-                    0,
-                    {
-                        "id": local_active_model,
-                        "loaded": True,
-                        "type": "llm",
-                        "size_human": "n/a",
-                    },
-                )
-
-            cloud_inventory: list[dict[str, Any]] = []
-            cloud_presets: list[dict[str, Any]] = []
-            alias_items: list[dict[str, str]] = []
-            try:
-                cloud_inventory = self._build_runtime_cloud_presets(cloud_slots)
-                cloud_presets = [
-                    item for item in cloud_inventory if bool(item.get("configured_runtime", True))
-                ]
-                runtime_model_ids = {
-                    str(item.get("id", "")).strip()
-                    for item in cloud_presets
-                    if str(item.get("id", "")).strip()
-                }
-                for alias_key in sorted(MODEL_FRIENDLY_ALIASES.keys()):
-                    resolved_id, _ = normalize_model_alias(alias_key)
-                    if resolved_id not in runtime_model_ids:
-                        continue
-                    alias_items.append(
-                        {
-                            "alias": alias_key,
-                            "model": resolved_id,
-                        }
-                    )
-            except Exception:
-                cloud_inventory = []
-                cloud_presets = []
-                alias_items = []
-
-            if not cloud_inventory:
-                cloud_inventory = self._build_runtime_cloud_presets({})
-            if not cloud_presets:
-                cloud_presets = [
-                    item for item in cloud_inventory if bool(item.get("configured_runtime", True))
-                ]
-            if not cloud_presets:
-                cloud_presets = list(cloud_inventory)
-
-            local_override = (
-                local_active_model
-                or str(
-                    getattr(router_obj, "active_local_model", "")
-                    or getattr(config, "LOCAL_PREFERRED_MODEL", "")
-                    or ""
-                ).strip()
-            )
-            if not local_override:
-                local_override = "nvidia/nemotron-3-nano"
-
-            quick_presets_map = self._build_runtime_quick_presets(
-                current_slots=cloud_slots,
-                local_override=local_override,
-            )
-            quick_presets = [
-                {
-                    "id": preset_id,
-                    "title": str(preset_payload.get("title", preset_id)),
-                    "description": str(preset_payload.get("description", "")),
-                }
-                for preset_id, preset_payload in quick_presets_map.items()
-            ]
-            openclaw = self.deps.get("openclaw_client")
-            last_runtime_route: dict[str, Any] = {}
-            if openclaw and hasattr(openclaw, "get_last_runtime_route"):
-                try:
-                    last_runtime_route = dict(openclaw.get_last_runtime_route() or {})
-                except Exception:
-                    last_runtime_route = {}
-            routing_status = self._overlay_live_route_on_openclaw_model_routing_status(
-                routing=self._build_openclaw_model_routing_status(),
-                last_runtime_route=last_runtime_route,
-            )
-            cloud_inventory = self._overlay_routing_provider_truth_on_cloud_inventory(
-                cloud_inventory=cloud_inventory,
-                routing_status=routing_status,
-            )
-            runtime_controls = self._build_openclaw_runtime_controls()
-            auth_recovery = build_auth_recovery_readiness_snapshot(
-                project_root=self._project_root(),
-                status_payload=self._openclaw_models_status_snapshot().get("raw"),
-                auth_profiles_payload=self._load_openclaw_auth_profiles(),
-                runtime_models_payload=self._load_openclaw_runtime_models(),
-                runtime_config_payload=self._load_openclaw_runtime_config(),
-            )
-
-            router_usage_summary = {}
-            if hasattr(router_obj, "get_usage_summary"):
-                try:
-                    router_usage_summary = dict(router_obj.get_usage_summary() or {})
-                except Exception:
-                    router_usage_summary = {}
-
-            cloud_provider_groups_map: dict[str, dict[str, Any]] = {}
-            for item in cloud_inventory:
-                provider_name = str(item.get("provider", "") or "").strip()
-                if not provider_name:
-                    continue
-                group = cloud_provider_groups_map.setdefault(
-                    provider_name,
-                    {
-                        "provider": provider_name,
-                        "provider_label": str(item.get("provider_label", provider_name)),
-                        "provider_auth": str(item.get("provider_auth", "unknown")),
-                        "provider_readiness": str(item.get("provider_readiness", "unknown")),
-                        "provider_readiness_label": str(
-                            item.get("provider_readiness_label", "Configured")
-                        ),
-                        "provider_detail": str(item.get("provider_detail", "")),
-                        "provider_quota_state": str(item.get("provider_quota_state", "unknown")),
-                        "provider_quota_label": str(item.get("provider_quota_label", "")),
-                        "provider_effective_kind": str(item.get("provider_effective_kind", "")),
-                        "provider_effective_detail": str(item.get("provider_effective_detail", "")),
-                        "provider_oauth_status": str(item.get("provider_oauth_status", "")),
-                        "provider_oauth_remaining_human": str(
-                            item.get("provider_oauth_remaining_human", "")
-                        ),
-                        "provider_auth_recovery": dict(item.get("provider_auth_recovery") or {}),
-                        "provider_ui": dict(item.get("provider_ui") or {}),
-                        "legacy": bool(item.get("legacy")),
-                        "models": [],
-                    },
-                )
-                group["models"].append(item)
-
-            cloud_provider_groups = [
-                {
-                    **group,
-                    "model_count": len(group["models"]),
-                    "configured_model_count": sum(
-                        1 for model in group["models"] if bool(model.get("configured_runtime"))
-                    ),
-                    "catalog_only_model_count": sum(
-                        1 for model in group["models"] if not bool(model.get("configured_runtime"))
-                    ),
-                    "active_count": sum(
-                        1 for model in group["models"] if bool(model.get("active_runtime"))
-                    ),
-                    "selected_slots": sorted(
-                        {
-                            slot_name
-                            for model in group["models"]
-                            for slot_name in (model.get("selected_slots") or [])
-                            if str(slot_name or "").strip()
-                        }
-                    ),
-                }
-                for group in sorted(
-                    cloud_provider_groups_map.values(),
-                    key=lambda item: self._provider_sort_rank(str(item.get("provider") or "")),
-                )
-            ]
-            parallelism_truth = self._build_openclaw_parallelism_truth()
-
-            payload = {
-                "force_mode": force_mode,
-                "slots": slot_list,
-                "cloud_slots": cloud_slots,
-                "local_engine": local_engine,
-                "local_available": local_available,
-                "local_active_model": local_active_model,
-                "local_models": local_models,
-                "local_models_error": local_models_error,
-                "cloud_presets": cloud_presets,
-                "cloud_inventory": cloud_inventory,
-                "cloud_provider_groups": cloud_provider_groups,
-                "aliases": alias_items,
-                "quick_presets": quick_presets,
-                "runtime_model_count": len(cloud_presets),
-                "cloud_inventory_count": len(cloud_inventory),
-                "runtime_registry_source": "openclaw_models_json+openclaw_models_list_all",
-                "router_usage": router_usage_summary,
-                "routing_status": routing_status,
-                "runtime_controls": runtime_controls,
-                "parallelism_truth": parallelism_truth,
-                "auth_recovery": auth_recovery,
-                "catalog_guidance": {
-                    "primary_flow": "Сначала выбери режим и пресет. Точный слот меняй только в advanced override.",
-                    "openai_manual_only": False,
-                },
-            }
-            self._store_model_catalog_cache(payload)
-            return payload
-
-        @self.app.get("/api/model/catalog")
-        async def model_catalog(force_refresh: bool = Query(default=False)):
-            """Каталог моделей/режимов для web-панели с кнопочным управлением."""
-            router = self.deps["router"]
-            if not force_refresh:
-                cached_catalog = self._get_model_catalog_cache()
-                if cached_catalog is not None:
-                    return {"ok": True, "catalog": cached_catalog, "cached": True}
-            return {"ok": True, "catalog": await _build_model_catalog(router)}
-
-        @self.app.post("/api/model/provider-action")
-        async def model_provider_action(
-            payload: dict = Body(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Запускает provider-specific repair/migration action из owner-панели."""
-            self._assert_write_access(x_krab_web_key, token)
-
-            provider = str(payload.get("provider", "") or "").strip().lower()
-            action = str(payload.get("action", "") or "").strip().lower()
-            if not provider:
-                raise HTTPException(status_code=400, detail="provider_action_provider_required")
-            if not action:
-                raise HTTPException(status_code=400, detail="provider_action_action_required")
-
-            provider_ui = self._provider_ui_metadata(provider)
-            expected_action = str(provider_ui.get("repair_action", "") or "").strip().lower()
-            if action not in {"repair_oauth", "migrate_to_gemini_cli"}:
-                raise HTTPException(status_code=400, detail=f"provider_action_unsupported:{action}")
-            if not expected_action or action != expected_action:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"provider_action_not_available:{provider}:{action}",
-                )
-
-            helper_provider = "google-gemini-cli" if action == "migrate_to_gemini_cli" else provider
-            helper_path = self._provider_repair_helper_path(helper_provider)
-            if not helper_path or not helper_path.exists():
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"provider_action_helper_missing:{helper_provider}",
-                )
-
-            launch = self._launch_local_app(helper_path)
-            if not launch.get("ok"):
-                raise HTTPException(
-                    status_code=500,
-                    detail=str(launch.get("error") or "provider_action_launch_failed"),
-                )
-
-            detail = str(provider_ui.get("repair_detail", "") or "").strip()
-            if action == "migrate_to_gemini_cli":
-                message = "✅ Открыт helper миграции на Gemini CLI OAuth."
-            else:
-                message = f"✅ Открыт helper для провайдера `{provider}`."
-
-            return {
-                "ok": True,
-                "provider": provider,
-                "action": action,
-                "message": message,
-                "detail": detail,
-                "launch": launch,
-            }
-
-        @self.app.get("/api/openclaw/model-routing/status")
-        async def openclaw_model_routing_status():
-            """Read-only статус runtime model routing для owner-панели."""
-            routing = self._build_openclaw_model_routing_status()
-            openclaw = self.deps.get("openclaw_client")
-            last_runtime_route: dict[str, Any] = {}
-            if openclaw and hasattr(openclaw, "get_last_runtime_route"):
-                try:
-                    last_runtime_route = dict(openclaw.get_last_runtime_route() or {})
-                except Exception:
-                    last_runtime_route = {}
-            routing = self._overlay_live_route_on_openclaw_model_routing_status(
-                routing=routing,
-                last_runtime_route=last_runtime_route,
-            )
-
-            return {
-                "ok": True,
-                "routing": routing,
-            }
-
-        @self.app.get("/api/thinking/status")
-        async def thinking_status():
-            """Текущий thinking_default и список доступных режимов."""
-            controls = self._build_openclaw_runtime_controls()
-            return {
-                "ok": True,
-                "thinking_default": controls.get("thinking_default", "off"),
-                "thinking_modes": controls.get(
-                    "thinking_modes",
-                    ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
-                ),
-                "chain_items": controls.get("chain_items", []),
-            }
-
-        @self.app.post("/api/thinking/set")
-        async def thinking_set(
-            payload: dict = Body(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Устанавливает глобальный thinking_default без изменения моделей."""
-            self._assert_write_access(x_krab_web_key, token)
-            raw_mode = str(payload.get("mode", "")).strip().lower()
-            try:
-                mode = self._normalize_thinking_mode(raw_mode)
-            except ValueError:
-                raise HTTPException(status_code=400, detail=f"invalid_thinking_mode: {raw_mode!r}")
-            # Считываем текущую chain, чтобы не затирать primary/fallbacks
-            current = self._build_openclaw_runtime_controls()
-            try:
-                applied = self._apply_openclaw_runtime_controls(
-                    primary_raw=current.get("primary") or "",
-                    fallbacks_raw=list(current.get("fallbacks") or []),
-                    context_tokens_raw=current.get("context_tokens"),
-                    thinking_default_raw=mode,
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            self._runtime_lite_cache = None
-            return {
-                "ok": True,
-                "thinking_default": applied.get("thinking_default", mode),
-                "changed": applied.get("changed", {}),
-            }
-
-        @self.app.get("/api/depth/status")
-        async def depth_status():
-            """Алиас /api/thinking/status — depth == thinking_default в терминах OpenClaw."""
-            controls = self._build_openclaw_runtime_controls()
-            thinking_default = controls.get("thinking_default", "off")
-            modes = controls.get(
-                "thinking_modes",
-                ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
-            )
-            return {
-                "ok": True,
-                "depth": thinking_default,
-                "thinking_default": thinking_default,
-                "available_modes": modes,
-            }
-
-        @self.app.get("/api/userbot/acl/status")
-        async def userbot_acl_status():
-            """Read-only runtime ACL userbot."""
-            return {
-                "ok": True,
-                "acl": {
-                    "path": str(config.USERBOT_ACL_FILE),
-                    "owner_username": get_effective_owner_label(),
-                    "owner_subjects": get_effective_owner_subjects(),
-                    "state": load_acl_runtime_state(),
-                    "partial_commands": sorted(PARTIAL_ACCESS_COMMANDS),
-                },
-            }
-
-        @self.app.post("/api/userbot/acl/update")
-        async def userbot_acl_update(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Обновляет runtime ACL userbot через owner web-key."""
-            self._assert_write_access(x_krab_web_key, token)
-            body = await request.json()
-            if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="acl_update_body_required")
-            action = str(body.get("action") or "").strip().lower()
-            level = str(body.get("level") or "").strip().lower()
-            subject = str(body.get("subject") or "").strip()
-            if action not in {"grant", "revoke"}:
-                raise HTTPException(status_code=400, detail="acl_update_invalid_action")
-            try:
-                result = update_acl_subject(level, subject, add=(action == "grant"))
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return {
-                "ok": True,
-                "acl": {
-                    "action": action,
-                    "level": result["level"],
-                    "subject": result["subject"],
-                    "changed": bool(result["changed"]),
-                    "path": str(result["path"]),
-                    "state": result["state"],
-                    "partial_commands": sorted(PARTIAL_ACCESS_COMMANDS),
-                },
-            }
-
-        @self.app.get("/api/openclaw/model-compat/probe")
-        async def openclaw_model_compat_probe(
-            model: str = Query(default=""),
-            reasoning: str = Query(default="high"),
-            skip_reasoning: bool = Query(default=False),
-        ):
-            """Read-only compatibility probe для target-модели через текущий OpenClaw gateway."""
-            payload = _run_openclaw_model_compat_probe(
-                model=model,
-                reasoning=reasoning,
-                skip_reasoning=skip_reasoning,
-            )
-            return {"ok": True, "probe": payload}
-
-        @self.app.post("/api/model/apply")
-        async def model_apply(
-            payload: dict = Body(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Применяет изменения модели/режима из web UI без ручных команд."""
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps["router"]
-            black_box = self.deps.get("black_box")
-
-            action = str(payload.get("action", "")).strip().lower()
-            if not action:
-                raise HTTPException(status_code=400, detail="model_apply_action_required")
-
-            result_payload: dict[str, object] = {}
-            message_text = "✅ Изменения применены."
-            post_apply_runtime_controls: dict[str, Any] | None = None
-            post_apply_routing_status: dict[str, Any] | None = None
-
-            if action == "set_mode":
-                mode = str(payload.get("mode", "auto")).strip().lower() or "auto"
-                if mode not in {"auto", "local", "cloud"}:
-                    raise HTTPException(status_code=400, detail="model_apply_invalid_mode")
-                if not hasattr(router, "set_force_mode"):
-                    raise HTTPException(
-                        status_code=400, detail="model_apply_set_mode_not_supported"
-                    )
-                update_result = router.set_force_mode(mode)
-                result_payload = {
-                    "mode": _normalize_force_mode(getattr(router, "force_mode", "auto")),
-                    "router_response": str(update_result),
-                }
-                message_text = f"✅ Режим обновлен: {result_payload['mode']}"
-
-            elif action == "set_slot_model":
-                slot = str(payload.get("slot", "")).strip().lower()
-                raw_model = str(payload.get("model", "")).strip()
-                if not slot or not raw_model:
-                    raise HTTPException(
-                        status_code=400, detail="model_apply_slot_and_model_required"
-                    )
-                if not hasattr(router, "models") or not isinstance(getattr(router, "models"), dict):
-                    raise HTTPException(status_code=400, detail="model_apply_slots_not_supported")
-                if slot not in router.models:
-                    available = ", ".join(sorted(router.models.keys()))
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"model_apply_unknown_slot: {slot}; available={available}",
-                    )
-                resolved_model, alias_note = normalize_model_alias(raw_model)
-                old_model = str(router.models.get(slot, ""))
-                router.models[slot] = resolved_model
-                result_payload = {
-                    "slot": slot,
-                    "old_model": old_model,
-                    "new_model": resolved_model,
-                    "alias_note": alias_note,
-                }
-                message_text = f"✅ Слот `{slot}`: `{old_model}` → `{resolved_model}`"
-
-            elif action == "apply_preset":
-                preset_id = str(payload.get("preset", "")).strip().lower()
-                if not preset_id:
-                    raise HTTPException(status_code=400, detail="model_apply_preset_required")
-                if not hasattr(router, "models") or not isinstance(getattr(router, "models"), dict):
-                    raise HTTPException(status_code=400, detail="model_apply_slots_not_supported")
-
-                local_override = str(payload.get("local_model", "")).strip() or str(
-                    getattr(router, "active_local_model", "") or ""
-                )
-                if not local_override:
-                    local_override = (
-                        os.getenv("LOCAL_PREFERRED_MODEL", "nvidia/nemotron-3-nano").strip()
-                        or "nvidia/nemotron-3-nano"
-                    )
-
-                presets = self._build_runtime_quick_presets(
-                    current_slots={str(k): str(v) for k, v in router.models.items()},
-                    local_override=local_override,
-                )
-                chosen = presets.get(preset_id)
-                if not chosen:
-                    raise HTTPException(
-                        status_code=400, detail=f"model_apply_unknown_preset: {preset_id}"
-                    )
-
-                applied_changes: list[dict[str, str]] = []
-                for slot, model_id in dict(chosen.get("slots", {})).items():
-                    if slot not in router.models:
-                        continue
-                    resolved_model, _ = normalize_model_alias(str(model_id))
-                    previous = str(router.models.get(slot, ""))
-                    router.models[slot] = resolved_model
-                    applied_changes.append(
-                        {
-                            "slot": str(slot),
-                            "old_model": previous,
-                            "new_model": resolved_model,
-                        }
-                    )
-
-                target_mode = (
-                    str(payload.get("mode_override", "") or chosen.get("mode", "auto"))
-                    .strip()
-                    .lower()
-                    or "auto"
-                )
-                if hasattr(router, "set_force_mode"):
-                    router.set_force_mode(target_mode)
-
-                result_payload = {
-                    "preset": preset_id,
-                    "mode": _normalize_force_mode(getattr(router, "force_mode", "auto")),
-                    "changes": applied_changes,
-                }
-                message_text = f"✅ Пресет `{preset_id}` применён ({len(applied_changes)} слотов)."
-
-            elif action == "set_runtime_chain":
-                primary_raw = payload.get("primary")
-                fallbacks_raw = (
-                    payload.get("fallbacks") if isinstance(payload.get("fallbacks"), list) else []
-                )
-                context_tokens_raw = payload.get("context_tokens")
-                thinking_default_raw = payload.get("thinking_default", "off")
-                execution_preset_raw = payload.get("execution_preset", "")
-                main_max_concurrent_raw = payload.get("main_max_concurrent")
-                subagent_max_concurrent_raw = payload.get("subagent_max_concurrent")
-                slot_thinking_raw = payload.get("slot_thinking")
-                try:
-                    applied = self._apply_openclaw_runtime_controls(
-                        primary_raw=primary_raw,
-                        fallbacks_raw=list(fallbacks_raw),
-                        context_tokens_raw=context_tokens_raw,
-                        thinking_default_raw=thinking_default_raw,
-                        execution_preset_raw=execution_preset_raw,
-                        main_max_concurrent_raw=main_max_concurrent_raw,
-                        subagent_max_concurrent_raw=subagent_max_concurrent_raw,
-                        slot_thinking_raw=slot_thinking_raw
-                        if isinstance(slot_thinking_raw, dict)
-                        else {},
-                    )
-                except ValueError as exc:
-                    raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-                self._runtime_lite_cache = None
-                post_apply_routing_status = self._build_openclaw_model_routing_status()
-                post_apply_runtime_controls = self._build_openclaw_runtime_controls()
-                result_payload = {
-                    "runtime": applied,
-                    "routing_status": post_apply_routing_status,
-                    "runtime_controls": post_apply_runtime_controls,
-                }
-                backup_hint = ""
-                if applied.get("backup_openclaw_json"):
-                    backup_hint = " backup создан."
-                message_text = (
-                    f"✅ Глобальная цепочка OpenClaw обновлена: `{applied['primary']}` + "
-                    f"{len(applied['fallbacks'])} fallback(s).{backup_hint}"
-                )
-
-            else:
-                raise HTTPException(status_code=400, detail=f"model_apply_unknown_action: {action}")
-
-            if black_box and hasattr(black_box, "log_event"):
-                black_box.log_event("web_model_apply", f"action={action} result={message_text}")
-
-            catalog_refresh = {
-                "degraded": False,
-                "reason": "",
-                "detail": "",
-            }
-            try:
-                catalog_payload = await asyncio.wait_for(
-                    _build_model_catalog(router),
-                    timeout=self._model_apply_catalog_timeout_sec(),
-                )
-            except asyncio.TimeoutError:
-                catalog_payload = self._build_model_catalog_fallback(
-                    runtime_controls=post_apply_runtime_controls,
-                    routing_status=post_apply_routing_status,
-                    degraded_reason="catalog_refresh_timeout",
-                )
-                self._store_model_catalog_cache(catalog_payload)
-                catalog_refresh = {
-                    "degraded": True,
-                    "reason": "catalog_refresh_timeout",
-                    "detail": "Runtime уже записан, но полный refresh каталога занял слишком много времени; UI временно использует cache.",
-                }
-            except Exception as exc:  # noqa: BLE001
-                catalog_payload = self._build_model_catalog_fallback(
-                    runtime_controls=post_apply_runtime_controls,
-                    routing_status=post_apply_routing_status,
-                    degraded_reason="catalog_refresh_failed",
-                )
-                self._store_model_catalog_cache(catalog_payload)
-                catalog_refresh = {
-                    "degraded": True,
-                    "reason": "catalog_refresh_failed",
-                    "detail": f"Runtime уже записан, но post-apply refresh каталога завершился ошибкой: {exc}",
-                }
-
-            return {
-                "ok": True,
-                "action": action,
-                "message": message_text,
-                "result": result_payload,
-                "catalog": catalog_payload,
-                "catalog_refresh": catalog_refresh,
-            }
-
-        @self.app.get("/api/model/feedback")
-        async def model_feedback_summary(
-            profile: str | None = Query(default=None),
-            top: int = Query(default=5, ge=1, le=20),
-        ):
-            """Сводка оценок качества роутинга моделей."""
-            router = self.deps["router"]
-            if not hasattr(router, "get_feedback_summary"):
-                return {"ok": False, "error": "feedback_summary_not_supported"}
-            normalized_profile = str(profile).strip().lower() if profile is not None else None
-            return {
-                "ok": True,
-                "feedback": router.get_feedback_summary(profile=normalized_profile, top=top),
-            }
-
-        @self.app.post("/api/model/feedback")
-        async def model_feedback_submit(
-            payload: dict = Body(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            x_idempotency_key: str = Header(default="", alias="X-Idempotency-Key"),
-            token: str = Query(default=""),
-        ):
-            """Принимает оценку качества ответа (1-5) для самообучающегося роутинга."""
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps["router"]
-            if not hasattr(router, "submit_feedback"):
-                return {"ok": False, "error": "feedback_submit_not_supported"}
-
-            idem_key = (x_idempotency_key or "").strip()
-            cached = self._idempotency_get("model_feedback_submit", idem_key)
-            if cached:
-                return cached
-
-            score = payload.get("score")
-            profile = payload.get("profile")
-            model_name = payload.get("model")
-            channel = payload.get("channel")
-            note = payload.get("note", "")
-
-            try:
-                result = router.submit_feedback(
-                    score=int(score),
-                    profile=str(profile).strip().lower() if profile is not None else None,
-                    model_name=str(model_name).strip() if model_name is not None else None,
-                    channel=str(channel).strip().lower() if channel is not None else None,
-                    note=str(note).strip(),
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=500, detail=f"feedback_submit_failed: {exc}"
-                ) from exc
-
-            response_payload = {"ok": True, "result": result}
-            self._idempotency_set("model_feedback_submit", idem_key, response_payload)
-            return response_payload
-
-        @self.app.get("/api/ops/usage")
-        async def ops_usage():
-            """Агрегированный usage-срез роутера моделей."""
-            router = self.deps["router"]
-            if hasattr(router, "get_usage_summary"):
-                return {"ok": True, "usage": router.get_usage_summary()}
-            return {"ok": False, "error": "usage_summary_not_supported"}
-
-        @self.app.get("/api/ops/cost-report")
-        async def ops_cost_report(
-            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
-        ):
-            """Оценочный отчет по затратам local/cloud маршрутизации."""
-            router = self.deps["router"]
-            if hasattr(router, "get_cost_report"):
-                return {
-                    "ok": True,
-                    "report": router.get_cost_report(monthly_calls_forecast=monthly_calls_forecast),
-                }
-            return {"ok": False, "error": "cost_report_not_supported"}
-
-        @self.app.get("/api/ops/runway")
-        async def ops_runway(
-            credits_usd: float = Query(default=300.0, ge=0.0, le=1000000.0),
-            horizon_days: int = Query(default=80, ge=1, le=3650),
-            reserve_ratio: float = Query(default=0.1, ge=0.0, le=0.95),
-            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
-        ):
-            """План расхода кредитов: burn-rate, runway и safe calls/day."""
-            router = self.deps["router"]
-            if hasattr(router, "get_credit_runway_report"):
-                return {
-                    "ok": True,
-                    "runway": router.get_credit_runway_report(
-                        credits_usd=credits_usd,
-                        horizon_days=horizon_days,
-                        reserve_ratio=reserve_ratio,
-                        monthly_calls_forecast=monthly_calls_forecast,
-                    ),
-                }
-            return {"ok": False, "error": "ops_runway_not_supported"}
-
-        @self.app.get("/api/ops/executive-summary")
-        async def ops_executive_summary(
-            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
-        ):
-            """Компактный ops executive summary: KPI + риски + рекомендации."""
-            router = self.deps["router"]
-            if hasattr(router, "get_ops_executive_summary"):
-                return {
-                    "ok": True,
-                    "summary": router.get_ops_executive_summary(
-                        monthly_calls_forecast=monthly_calls_forecast
-                    ),
-                }
-            return {"ok": False, "error": "ops_executive_summary_not_supported"}
-
-        @self.app.get("/api/ops/report")
-        async def ops_report(
-            history_limit: int = Query(default=20, ge=1, le=200),
-            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
-        ):
-            """Единый ops отчет: usage + alerts + costs + history."""
-            router = self.deps["router"]
-            if hasattr(router, "get_ops_report"):
-                return {
-                    "ok": True,
-                    "report": router.get_ops_report(
-                        history_limit=history_limit,
-                        monthly_calls_forecast=monthly_calls_forecast,
-                    ),
-                }
-            return {"ok": False, "error": "ops_report_not_supported"}
-
-        @self.app.get("/api/ops/report/export")
-        async def ops_report_export(
-            history_limit: int = Query(default=50, ge=1, le=200),
-            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
-        ):
-            """Экспортирует полный ops report в JSON-файл."""
-            router = self.deps["router"]
-            if not hasattr(router, "get_ops_report"):
-                return {"ok": False, "error": "ops_report_not_supported"}
-            report = router.get_ops_report(
-                history_limit=history_limit,
-                monthly_calls_forecast=monthly_calls_forecast,
-            )
-            ops_dir = Path("artifacts/ops")
-            ops_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
-            out_path = ops_dir / f"ops_report_web_{stamp}.json"
-            with out_path.open("w", encoding="utf-8") as fp:
-                json.dump(report, fp, ensure_ascii=False, indent=2)
-            return FileResponse(
-                str(out_path),
-                media_type="application/json",
-                filename=out_path.name,
-            )
-
-        @self.app.get("/api/ops/bundle")
-        async def ops_bundle(
-            history_limit: int = Query(default=50, ge=1, le=200),
-            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
-        ):
-            """Единый bundle: ops report + health snapshot."""
-            router = self.deps["router"]
-            if not hasattr(router, "get_ops_report"):
-                return {"ok": False, "error": "ops_report_not_supported"}
-            openclaw = self.deps.get("openclaw_client")
-            voice_gateway = self.deps.get("voice_gateway_client")
-            local_ok = await router.check_local_health()
-            openclaw_ok = await openclaw.health_check() if openclaw else False
-            voice_ok = await voice_gateway.health_check() if voice_gateway else False
-            return {
-                "ok": True,
-                "bundle": {
-                    "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                    "ops_report": router.get_ops_report(
-                        history_limit=history_limit,
-                        monthly_calls_forecast=monthly_calls_forecast,
-                    ),
-                    "health": {
-                        "openclaw": openclaw_ok,
-                        "local_lm": local_ok,
-                        "voice_gateway": voice_ok,
-                    },
-                },
-            }
-
-        @self.app.get("/api/ops/bundle/export")
-        async def ops_bundle_export(
-            history_limit: int = Query(default=50, ge=1, le=200),
-            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
-        ):
-            """Экспортирует единый ops bundle в JSON-файл."""
-            router = self.deps["router"]
-            if not hasattr(router, "get_ops_report"):
-                return {"ok": False, "error": "ops_report_not_supported"}
-            openclaw = self.deps.get("openclaw_client")
-            voice_gateway = self.deps.get("voice_gateway_client")
-            local_ok = await router.check_local_health()
-            openclaw_ok = await openclaw.health_check() if openclaw else False
-            voice_ok = await voice_gateway.health_check() if voice_gateway else False
-
-            payload = {
-                "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "ops_report": router.get_ops_report(
-                    history_limit=history_limit,
-                    monthly_calls_forecast=monthly_calls_forecast,
-                ),
-                "health": {
-                    "openclaw": openclaw_ok,
-                    "local_lm": local_ok,
-                    "voice_gateway": voice_ok,
-                },
-            }
-            ops_dir = Path("artifacts/ops")
-            ops_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
-            out_path = ops_dir / f"ops_bundle_web_{stamp}.json"
-            with out_path.open("w", encoding="utf-8") as fp:
-                json.dump(payload, fp, ensure_ascii=False, indent=2)
-            return FileResponse(
-                str(out_path),
-                media_type="application/json",
-                filename=out_path.name,
-            )
-
-        @self.app.get("/api/ops/alerts")
-        async def ops_alerts():
-            """Операционные алерты по расходам и маршрутизации."""
-            router = self.deps["router"]
-            if hasattr(router, "get_ops_alerts"):
-                return {"ok": True, "alerts": router.get_ops_alerts()}
-            return {"ok": False, "error": "ops_alerts_not_supported"}
-
-        @self.app.get("/api/ops/history")
-        async def ops_history(limit: int = Query(default=30, ge=1, le=200)):
-            """История ops snapshot-ов (alerts/status over time)."""
-            router = self.deps["router"]
-            if hasattr(router, "get_ops_history"):
-                return {"ok": True, "history": router.get_ops_history(limit=limit)}
-            return {"ok": False, "error": "ops_history_not_supported"}
-
-        @self.app.post("/api/ops/maintenance/prune")
-        async def ops_prune(
-            payload: dict = Body(default={}),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Очищает ops history по retention-параметрам."""
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps["router"]
-            if not hasattr(router, "prune_ops_history"):
-                return {"ok": False, "error": "ops_prune_not_supported"}
-            max_age_days = int(payload.get("max_age_days", 30))
-            keep_last = int(payload.get("keep_last", 100))
-            try:
-                result = router.prune_ops_history(max_age_days=max_age_days, keep_last=keep_last)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return {"ok": True, "result": result}
-
-        @self.app.post("/api/ops/ack/{code}")
-        async def ops_ack(
-            code: str,
-            payload: dict = Body(default={}),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Подтверждает alert код оператором."""
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps["router"]
-            if not hasattr(router, "acknowledge_ops_alert"):
-                return {"ok": False, "error": "ops_ack_not_supported"}
-            actor = str(payload.get("actor", "web_api")).strip() or "web_api"
-            note = str(payload.get("note", "")).strip()
-            try:
-                result = router.acknowledge_ops_alert(code=code, actor=actor, note=note)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return {"ok": True, "result": result}
-
-        @self.app.delete("/api/ops/ack/{code}")
-        async def ops_unack(
-            code: str,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Снимает подтверждение alert кода."""
-            self._assert_write_access(x_krab_web_key, token)
-            router = self.deps["router"]
-            if not hasattr(router, "clear_ops_alert_ack"):
-                return {"ok": False, "error": "ops_unack_not_supported"}
-            try:
-                result = router.clear_ops_alert_ack(code=code)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return {"ok": True, "result": result}
-
-        @self.app.get("/api/archive/growth")
-        async def archive_growth():
-            """Archive.db рост: текущий snapshot + статистика по истории."""
-            from ..core.archive_growth_monitor import growth_summary, take_snapshot
-
-            current = take_snapshot()
-            return {
-                "ok": True,
-                "current": current.__dict__ if current else None,
-                **growth_summary(),
-            }
-
-        @self.app.post("/api/assistant/attachment")
-        async def assistant_attachment_upload(
-            file: UploadFile = File(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Загружает вложение для web-assistant и возвращает prompt-snippet.
-            Поддерживает текст/PDF/DOCX (извлечение текста best effort),
-            а также изображения/видео/архивы (метаданные + локальный путь).
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            black_box = self.deps.get("black_box")
-
-            if not file:
-                raise HTTPException(status_code=400, detail="assistant_attachment_file_required")
-            original_name = str(file.filename or "").strip()
-            if not original_name:
-                raise HTTPException(
-                    status_code=400, detail="assistant_attachment_filename_required"
-                )
-
-            raw = await file.read()
-            if not raw:
-                raise HTTPException(status_code=400, detail="assistant_attachment_empty_file")
-
-            max_bytes = self._web_attachment_max_bytes()
-            if len(raw) > max_bytes:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"assistant_attachment_too_large: max={max_bytes} bytes",
-                )
-
-            safe_name = self._sanitize_attachment_name(original_name)
-            guessed_type = mimetypes.guess_type(safe_name)[0] or ""
-            content_type = str(file.content_type or guessed_type or "application/octet-stream")
-
-            uploads_dir = Path("artifacts/web_uploads")
-            uploads_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            short_hash = hashlib.sha256(raw).hexdigest()[:10]
-            stored_name = f"{ts}_{short_hash}_{safe_name}"
-            stored_path = uploads_dir / stored_name
-            stored_path.write_bytes(raw)
-
-            attachment = self._build_attachment_prompt(
-                file_name=safe_name,
-                content_type=content_type,
-                raw_bytes=raw,
-                stored_path=stored_path,
-            )
-
-            if black_box and hasattr(black_box, "log_event"):
-                black_box.log_event(
-                    "web_assistant_attachment",
-                    f"name={safe_name} type={content_type} size={len(raw)} kind={attachment.get('kind')}",
-                )
-
-            return {"ok": True, "attachment": attachment}
-
-        @self.app.get("/api/assistant/capabilities")
-        async def assistant_capabilities():
-            """Возвращает возможности web-native assistant режима."""
-            return self._assistant_capabilities_snapshot()
-
-        @self.app.post("/api/assistant/query")
-        async def assistant_query(
-            request: Request,
-            payload: dict = Body(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            x_krab_client: str = Header(default="", alias="X-Krab-Client"),
-            x_idempotency_key: str = Header(default="", alias="X-Idempotency-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            Выполняет AI-запрос напрямую через web-панель (без Telegram чата).
-            Это must-have для web-first сценариев управления Крабом.
-            """
-            self._assert_write_access(x_krab_web_key, token)
-            client_ip = request.client.host if request.client else "unknown"
-            client_key = (x_krab_client or "").strip() or client_ip
-            idem_key = (x_idempotency_key or "").strip()
-            cached = self._idempotency_get("assistant_query", idem_key)
-            if cached:
-                return cached
-            self._enforce_assistant_rate_limit(client_key)
-            router = self.deps.get("router")
-            if not router:
-                raise HTTPException(status_code=503, detail="router_not_configured")
-
-            prompt = str(payload.get("prompt", "")).strip()
-            if not prompt:
-                raise HTTPException(status_code=400, detail="prompt_required")
-
-            task_type = str(payload.get("task_type", "chat")).strip().lower() or "chat"
-            use_rag = bool(payload.get("use_rag", False))
-            preferred_model = payload.get("preferred_model")
-            preferred_model_str = str(preferred_model).strip() if preferred_model else None
-            confirm_expensive = bool(payload.get("confirm_expensive", False))
-            requested_force_mode_raw = str(payload.get("force_mode", "")).strip().lower()
-            requested_force_mode = (
-                requested_force_mode_raw
-                if requested_force_mode_raw in {"auto", "local", "cloud"}
-                else ""
-            )
-
-            def _is_model_status_question(text: str) -> bool:
-                low = str(text or "").strip().lower()
-                if not low:
-                    return False
-                patterns = [
-                    "на какой модел",
-                    "какой моделью",
-                    "какая модель",
-                    "на чем работаешь",
-                    "через какую модель",
-                    "what model",
-                    "which model",
-                ]
-                return any(p in low for p in patterns)
-
-            def _build_model_status_from_route(route: dict[str, object]) -> str:
-                channel = str(route.get("channel", "unknown"))
-                model = str(route.get("model", "unknown"))
-                provider = str(route.get("provider", "unknown"))
-                tier = str(route.get("active_tier", "-"))
-                return (
-                    "🧭 Фактический runtime-маршрут:\n"
-                    f"- Канал: `{channel}`\n"
-                    f"- Модель: `{model}`\n"
-                    f"- Провайдер: `{provider}`\n"
-                    f"- Cloud tier: `{tier}`"
-                )
-
-            # Web UX-хелпер: поддержка команд вида `.model ...` и `!model ...`
-            # прямо из web-assistant input. Иначе команда уходила в LLM как обычный prompt.
-            command_prompt = prompt
-            if command_prompt.startswith(".model"):
-                command_prompt = f"!{command_prompt[1:]}"
-
-            if command_prompt.startswith("!model"):
-                try:
-                    tokens = shlex.split(command_prompt[1:])
-                except Exception:
-                    tokens = command_prompt[1:].split()
-
-                if not tokens or tokens[0].lower() != "model":
-                    raise HTTPException(status_code=400, detail="assistant_model_command_invalid")
-
-                subcommand = tokens[1].strip().lower() if len(tokens) >= 2 else ""
-                if subcommand in {"presets", "catalog", "quick"}:
-                    response_payload = {
-                        "ok": True,
-                        "mode": "web_native",
-                        "task_type": task_type,
-                        "profile": "chat",
-                        "command_mode": True,
-                        "last_route": router.get_last_route()
-                        if hasattr(router, "get_last_route")
-                        else {},
-                        "reply": render_model_presets_text(),
-                    }
-                    self._idempotency_set("assistant_query", idem_key, response_payload)
-                    return response_payload
-
-                if subcommand in {"local", "cloud", "auto"} and hasattr(router, "set_force_mode"):
-                    result = router.set_force_mode(subcommand)
-                    response_payload = {
-                        "ok": True,
-                        "mode": "web_native",
-                        "task_type": task_type,
-                        "profile": "chat",
-                        "command_mode": True,
-                        "last_route": router.get_last_route()
-                        if hasattr(router, "get_last_route")
-                        else {},
-                        "reply": f"✅ Режим обновлен: {result}",
-                    }
-                    self._idempotency_set("assistant_query", idem_key, response_payload)
-                    return response_payload
-
-                if subcommand == "set":
-                    # Короткий формат: !model set <model_id> -> slot=chat.
-                    if len(tokens) == 3:
-                        tokens = [tokens[0], tokens[1], "chat", tokens[2]]
-                    parsed = parse_model_set_request(tokens, list(router.models.keys()))
-                    if not parsed.get("ok"):
-                        response_payload = {
-                            "ok": True,
-                            "mode": "web_native",
-                            "task_type": task_type,
-                            "profile": "chat",
-                            "command_mode": True,
-                            "last_route": router.get_last_route()
-                            if hasattr(router, "get_last_route")
-                            else {},
-                            "reply": str(parsed.get("error") or "❌ Некорректная команда"),
-                        }
-                        self._idempotency_set("assistant_query", idem_key, response_payload)
-                        return response_payload
-
-                    slot = str(parsed["slot"])
-                    model_raw = str(parsed["model_name"])
-                    model_resolved, alias_note = normalize_model_alias(model_raw)
-                    old_value = str(router.models.get(slot, "—"))
-                    router.models[slot] = model_resolved
-
-                    reply_lines = []
-                    if parsed.get("warning"):
-                        reply_lines.append(str(parsed["warning"]))
-                    if alias_note:
-                        reply_lines.append(alias_note)
-                    reply_lines.append(
-                        f"✅ Slot `{slot}` обновлен: `{old_value}` → `{model_resolved}`"
-                    )
-                    reply_lines.append("Подсказка: `!model` или `!model preflight chat Тест`")
-
-                    response_payload = {
-                        "ok": True,
-                        "mode": "web_native",
-                        "task_type": task_type,
-                        "profile": "chat",
-                        "command_mode": True,
-                        "last_route": router.get_last_route()
-                        if hasattr(router, "get_last_route")
-                        else {},
-                        "reply": "\n".join(reply_lines),
-                    }
-                    self._idempotency_set("assistant_query", idem_key, response_payload)
-                    return response_payload
-
-            try:
-                # Если UI передал force_mode, синхронизируем режим до выполнения запроса.
-                if requested_force_mode and hasattr(router, "set_force_mode"):
-                    router.set_force_mode(requested_force_mode)
-                effective_force_mode = _normalize_force_mode(getattr(router, "force_mode", "auto"))
-
-                reply = await router.route_query(
-                    prompt=prompt,
-                    task_type=task_type,
-                    context=[],
-                    chat_type="private",
-                    is_owner=True,
-                    use_rag=use_rag,
-                    preferred_model=preferred_model_str,
-                    confirm_expensive=confirm_expensive,
-                )
-
-                # Local-first аварийная деградация:
-                # если cloud-ключ скомпрометирован/отклонён, пробуем принудительный local.
-                # В force_cloud это запрещено: режим должен быть строго cloud-only.
-                leaked_key_marker = "reported as leaked"
-                if (
-                    isinstance(reply, str)
-                    and leaked_key_marker in reply.lower()
-                    and effective_force_mode != "cloud"
-                    and hasattr(router, "check_local_health")
-                ):
-                    local_ok = bool(await router.check_local_health(force=True))
-                    if local_ok:
-                        previous_mode = str(getattr(router, "force_mode", "auto"))
-                        try:
-                            router.force_mode = "force_local"
-                            local_reply = await router.route_query(
-                                prompt=prompt,
-                                task_type=task_type,
-                                context=[],
-                                chat_type="private",
-                                is_owner=True,
-                                use_rag=use_rag,
-                                preferred_model=None,
-                                confirm_expensive=confirm_expensive,
-                            )
-                            if isinstance(local_reply, str) and local_reply.strip():
-                                reply = (
-                                    "⚠️ Cloud API key отклонён (`reported as leaked`). "
-                                    "Переключился на local-first ответ.\n\n"
-                                    f"{local_reply}"
-                                )
-                        finally:
-                            router.force_mode = previous_mode
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=500, detail=f"assistant_query_failed: {exc}"
-                ) from exc
-
-            profile = (
-                router.classify_task_profile(prompt, task_type)
-                if hasattr(router, "classify_task_profile")
-                else task_type
-            )
-            recommendation = (
-                router.get_profile_recommendation(profile)
-                if hasattr(router, "get_profile_recommendation")
-                else {"profile": profile}
-            )
-            if hasattr(router, "get_task_preflight"):
-                try:
-                    preflight = router.get_task_preflight(
-                        prompt=prompt,
-                        task_type=task_type,
-                        preferred_model=preferred_model_str,
-                        confirm_expensive=confirm_expensive,
-                    )
-                except Exception:
-                    preflight = {}
-                if isinstance(preflight, dict):
-                    execution = (
-                        preflight.get("execution")
-                        if isinstance(preflight.get("execution"), dict)
-                        else {}
-                    )
-                    recommended_model = str(
-                        execution.get("model")
-                        or recommendation.get("model")
-                        or recommendation.get("recommended_model")
-                        or ""
-                    ).strip()
-                    recommended_channel = str(
-                        execution.get("channel") or recommendation.get("channel") or ""
-                    ).strip()
-                    reason_lines = (
-                        preflight.get("reasons")
-                        if isinstance(preflight.get("reasons"), list)
-                        else []
-                    )
-                    recommendation = {
-                        **(recommendation if isinstance(recommendation, dict) else {}),
-                        "profile": str(preflight.get("profile") or profile),
-                        "model": recommended_model,
-                        "recommended_model": recommended_model,
-                        "channel": recommended_channel,
-                        "reasoning": "; ".join(
-                            str(item) for item in reason_lines if str(item).strip()
-                        )
-                        or str((recommendation or {}).get("reasoning") or ""),
-                        "local_available": bool(
-                            preflight.get(
-                                "local_available",
-                                (recommendation or {}).get("local_available", False),
-                            )
-                        ),
-                        "force_mode": str(
-                            execution.get("force_mode")
-                            or (recommendation or {}).get("force_mode")
-                            or "auto"
-                        ),
-                    }
-            last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
-            black_box = self.deps.get("black_box")
-            if black_box and hasattr(black_box, "log_event"):
-                black_box.log_event(
-                    "web_assistant_query",
-                    f"task_type={task_type} profile={profile} prompt_len={len(prompt)} client={client_key}",
-                )
-            response_payload = {
-                "ok": True,
-                "mode": "web_native",
-                "task_type": task_type,
-                "profile": profile,
-                "effective_force_mode": _normalize_force_mode(
-                    getattr(router, "force_mode", "auto")
-                ),
-                "recommendation": recommendation,
-                "last_route": last_route,
-                "reply": reply,
-            }
-            # Для вопросов о модели отдаём authoritative-ответ из last_route.
-            if (
-                _is_model_status_question(prompt)
-                and isinstance(last_route, dict)
-                and last_route.get("model")
-            ):
-                response_payload["reply"] = _build_model_status_from_route(last_route)
-            self._idempotency_set("assistant_query", idem_key, response_payload)
-            return response_payload
-
-        @self.app.get("/api/assistant/stream")
-        async def assistant_stream(
-            prompt: str = Query(default=""),
-            token: str = Query(default=""),
-            task_type: str = Query(default="chat"),
-        ):
-            """SSE streaming для AI Chat dashboard."""
-            from fastapi.responses import StreamingResponse as _StreamingResponse
-
-            # Auth: dev mode — SSE chat доступен без ключа
-            # (write-endpoints защищены отдельно через X-Krab-Web-Key)
-            if not prompt.strip():
-                return {"ok": False, "error": "empty prompt"}
-
-            async def event_generator():
-                import json as _json
-
-                # Фаза routing
-                yield f"event: status\ndata: {_json.dumps({'phase': 'routing'})}\n\n"
-
-                try:
-                    from ..openclaw_client import openclaw_client
-
-                    # Фаза обработки
-                    yield f"event: status\ndata: {_json.dumps({'phase': 'processing'})}\n\n"
-
-                    # Собираем ответ
-                    chunks = []
-                    async for chunk in openclaw_client.send_message_stream(
-                        message=prompt,
-                        chat_id=f"web_chat_{id(prompt) % 10000}",
-                        system_prompt="Ты — AI ассистент Krab. Отвечай полезно и по делу.",
-                        force_cloud=True,
-                    ):
-                        chunks.append(chunk)
-
-                    reply = "".join(chunks).strip()
-
-                    # Tool calls info
-                    if hasattr(openclaw_client, "_active_tool_calls"):
-                        for i, tc in enumerate(openclaw_client._active_tool_calls):
-                            yield f"event: tool_done\ndata: {_json.dumps({'name': tc.get('name', '?'), 'index': i})}\n\n"
-
-                    # Route info
-                    route = {}
-                    if hasattr(openclaw_client, "get_last_runtime_route"):
-                        route = openclaw_client.get_last_runtime_route() or {}
-
-                    yield f"event: route\ndata: {_json.dumps({'model': route.get('model', '?'), 'provider': route.get('provider', '?')})}\n\n"
-                    yield f"event: message\ndata: {_json.dumps({'reply': reply})}\n\n"
-
-                except Exception as exc:
-                    yield f"event: error\ndata: {_json.dumps({'error': str(exc)})}\n\n"
-
-                yield "event: done\ndata: {}\n\n"
-
-            return _StreamingResponse(
-                event_generator(),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-
-        @self.app.get("/api/swarm/events")
-        async def swarm_events(token: str = Query(default="")):
-            """SSE stream для обновлений Swarm task board.
-
-            Стримит snapshot task_board + artifacts_count + listeners_enabled.
-            Эмитит event 'update' только при реальном изменении состояния (hash-based).
-            Heartbeat каждые 5 секунд.
-            """
-            from fastapi.responses import StreamingResponse as _StreamingResponse
-
-            async def event_stream():
-                last_hash: Optional[str] = None
-                while True:
-                    try:
-                        from ..core.swarm_artifact_store import swarm_artifact_store
-                        from ..core.swarm_task_board import swarm_task_board
-                        from ..core.swarm_team_listener import is_listeners_enabled
-
-                        board = swarm_task_board.get_board_summary()
-                        tasks = swarm_task_board.list_tasks(limit=30)
-                        tasks_payload = [
-                            {
-                                "task_id": t.task_id,
-                                "team": t.team,
-                                "title": t.title,
-                                "status": t.status,
-                                "priority": t.priority,
-                                "created_at": t.created_at,
-                            }
-                            for t in tasks
-                        ]
-                        arts = swarm_artifact_store.list_artifacts(limit=10)
-                        arts_payload = [
-                            {
-                                "team": a.get("team"),
-                                "topic": a.get("topic"),
-                                "timestamp_iso": a.get("timestamp_iso"),
-                                "duration_sec": a.get("duration_sec"),
-                                "result_preview": (a.get("result") or "")[:200],
-                            }
-                            for a in arts
-                        ]
-                        listeners_enabled = is_listeners_enabled()
-
-                        payload = {
-                            "summary": board,
-                            "tasks": tasks_payload,
-                            "artifacts": arts_payload,
-                            "listeners_enabled": listeners_enabled,
-                            "ts": datetime.now(timezone.utc).isoformat(),
-                        }
-
-                        current_hash = hashlib.sha256(
-                            json.dumps(
-                                {
-                                    "summary": board,
-                                    "tasks": tasks_payload,
-                                    "artifacts": arts_payload,
-                                    "listeners_enabled": listeners_enabled,
-                                },
-                                sort_keys=True,
-                                default=str,
-                            ).encode()
-                        ).hexdigest()
-
-                        if current_hash != last_hash:
-                            last_hash = current_hash
-                            yield f"event: update\ndata: {json.dumps(payload, default=str)}\n\n"
-                        else:
-                            yield ": heartbeat\n\n"
-
-                        await asyncio.sleep(5)
-                    except asyncio.CancelledError:
-                        break
-                    except Exception as exc:
-                        logger.error("swarm_events_error", error=str(exc))
-                        yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
-                        await asyncio.sleep(10)
-
-            return _StreamingResponse(
-                event_stream(),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-
-        @self.app.get("/api/inbox/events")
-        async def inbox_events(token: str = Query(default="")):
-            """SSE stream для inbox updates.
-
-            Стримит summary (open/attention/escalations/stale) + items list.
-            Эмитит event 'update' только при реальном изменении состояния.
-            Heartbeat каждые 5 секунд.
-            """
-            from fastapi.responses import StreamingResponse as _StreamingResponse
-
-            async def event_stream():
-                last_hash: Optional[str] = None
-                while True:
-                    try:
-                        workflow = inbox_service.get_workflow_snapshot()
-                        summary = workflow.get("summary") or {}
-                        items = inbox_service.list_items(status="all", kind="", limit=20)
-
-                        payload = {
-                            "summary": summary,
-                            "workflow": workflow,
-                            "items": items,
-                            "ts": datetime.now(timezone.utc).isoformat(),
-                        }
-
-                        current_hash = hashlib.sha256(
-                            json.dumps(
-                                {"summary": summary, "items": items},
-                                sort_keys=True,
-                                default=str,
-                            ).encode()
-                        ).hexdigest()
-
-                        if current_hash != last_hash:
-                            last_hash = current_hash
-                            yield f"event: update\ndata: {json.dumps(payload, default=str)}\n\n"
-                        else:
-                            yield ": heartbeat\n\n"
-
-                        await asyncio.sleep(5)
-                    except asyncio.CancelledError:
-                        break
-                    except Exception as exc:
-                        logger.error("inbox_events_error", error=str(exc))
-                        yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
-                        await asyncio.sleep(10)
-
-            return _StreamingResponse(
-                event_stream(),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-
-        @self.app.get("/api/openclaw/report")
-        async def openclaw_report():
-            """Агрегированный health-report OpenClaw."""
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw:
-                return {"available": False, "error": "openclaw_client_not_configured"}
-            if not hasattr(openclaw, "get_health_report"):
-                return {"available": False, "error": "openclaw_report_not_supported"}
-            try:
-                report = await openclaw.get_health_report()
-            except Exception as exc:
-                return {"available": False, "error": "openclaw_report_failed", "detail": str(exc)}
-            return {"available": True, "report": report}
-
-        @self.app.get("/api/openclaw/deep-check")
-        async def openclaw_deep_check():
-            """Расширенная проверка OpenClaw (включая tool smoke и remediation)."""
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw:
-                return {"available": False, "error": "openclaw_client_not_configured"}
-            if not hasattr(openclaw, "get_deep_health_report"):
-                return {"available": False, "error": "openclaw_deep_check_not_supported"}
-            try:
-                report = await openclaw.get_deep_health_report()
-            except Exception as exc:
-                return {
-                    "available": False,
-                    "error": "openclaw_deep_check_failed",
-                    "detail": str(exc),
-                }
-            return {"available": True, "report": report}
-
-        @self.app.get("/api/openclaw/remediation-plan")
-        async def openclaw_remediation_plan():
-            """Пошаговый план исправления OpenClaw контуров."""
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw:
-                return {"available": False, "error": "openclaw_client_not_configured"}
-            if not hasattr(openclaw, "get_remediation_plan"):
-                return {"available": False, "error": "openclaw_remediation_not_supported"}
-            try:
-                report = await openclaw.get_remediation_plan()
-            except Exception as exc:
-                return {
-                    "available": False,
-                    "error": "openclaw_remediation_failed",
-                    "detail": str(exc),
-                }
-            return {"available": True, "report": report}
-
-        @self.app.get("/api/openclaw/browser-smoke")
-        async def openclaw_browser_smoke(url: str = "https://example.com"):
-            """
-            Browser relay smoke check с явным attached/not attached статусом.
-
-            Контур:
-            1) `openclaw gateway probe` (reachability gateway ws),
-            2) HTTP probe browser-server (`http://127.0.0.1:18791/`).
-            """
-            # Верхний guard: не зависаем если gateway не отвечает.
-            try:
-                report = await asyncio.wait_for(
-                    self._collect_openclaw_browser_smoke_report(url),
-                    timeout=5.0,
-                )
-            except asyncio.TimeoutError:
-                return {
-                    "available": False,
-                    "error": "OpenClaw timeout (5s)",
-                    "detail": "gateway not responding",
-                }
-            return {
-                "available": True,
-                "report": report,
-            }
-
-        @self.app.post("/api/diagnostics/smoke")
-        async def diagnostics_smoke():
-            """
-            Агрегированный owner-smoke для быстрой кнопки в панели.
-
-            Нам нужен честный backend-контракт под кнопку `Run Smoke Trigger`, а не
-            фронтовый placeholder. Endpoint собирает базовые browser/photo smoke
-            и возвращает единый verdict, который потом можно расширять дальше.
-            """
-            browser_report, photo_payload = await asyncio.gather(
-                self._collect_openclaw_browser_smoke_report("https://example.com"),
-                self._collect_openclaw_photo_smoke_payload(),
-            )
-
-            browser_smoke = dict(browser_report.get("browser_smoke", {}) or {})
-            photo_smoke = dict((photo_payload.get("report") or {}).get("photo_smoke", {}) or {})
-            browser_ok = bool(browser_smoke.get("ok"))
-            photo_available = bool(photo_payload.get("available"))
-            photo_ok = bool(photo_smoke.get("ok")) if photo_available else False
-
-            checks: list[dict[str, Any]] = [
-                {
-                    "name": "browser_smoke",
-                    "ok": browser_ok,
-                    "detail": str(browser_smoke.get("detail") or "browser smoke unavailable"),
-                },
-                {
-                    "name": "photo_smoke",
-                    "ok": photo_ok,
-                    "detail": (
-                        str(photo_smoke.get("detail") or "photo smoke unavailable")
-                        if photo_available
-                        else str(photo_payload.get("error") or "photo smoke unavailable")
-                    ),
-                },
-            ]
-
-            ok = all(bool(item.get("ok")) for item in checks)
-            return {
-                "ok": ok,
-                "available": True,
-                "checks": checks,
-                "report": {
-                    "browser": {
-                        "available": True,
-                        "report": browser_report,
-                    },
-                    "photo": photo_payload,
-                },
-            }
-
-        @self.app.post("/api/openclaw/browser/start")
-        async def openclaw_browser_start(
-            token: str = Query(default=""),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-        ):
-            """Явно поднимает dedicated OpenClaw browser и возвращает обновлённый readiness snapshot."""
-            self._assert_write_access(x_krab_web_key, token)
-
-            start_payload, start_error = await self._run_openclaw_cli_json(
-                ["browser", "--json", "start"],
-                timeout_sec=20.0,
-            )
-            if start_error:
-                return {
-                    "ok": False,
-                    "error": "browser_start_failed",
-                    "detail": start_error,
-                }
-
-            # После старта хотим вернуть тот же truthful payload, что и readiness-endpoint:
-            # relay-smoke и owner Chrome probe независимы и могут собираться параллельно.
-            smoke_report, owner_chrome = await asyncio.gather(
-                self._collect_openclaw_browser_smoke_report("https://example.com"),
-                self._probe_owner_chrome_devtools("https://example.com"),
-            )
-            smoke = dict(smoke_report.get("browser_smoke", {}) or {})
-            (
-                browser_status,
-                browser_status_error,
-                tabs_payload,
-                tabs_error,
-            ) = await self._collect_stable_browser_cli_runtime(
-                relay_reachable=bool(
-                    smoke.get("relay_reachable") or smoke.get("browser_http_reachable")
-                ),
-                auth_required=bool(smoke.get("browser_auth_required")),
-                attempts=3,
-                settle_delay_sec=0.8,
-            )
-            browser = self._classify_browser_stage(
-                browser_status,
-                tabs_payload,
-                smoke,
-                browser_status_error=browser_status_error,
-                tabs_error=tabs_error,
-            )
-
-            return {
-                "ok": True,
-                "start": start_payload,
-                "browser": browser,
-                "raw": {
-                    "browser_status": browser_status,
-                    "browser_status_error": browser_status_error,
-                    "tabs": tabs_payload,
-                    "tabs_error": tabs_error,
-                    "browser_smoke": smoke_report,
-                    "owner_chrome": owner_chrome,
-                },
-            }
-
-        @self.app.post("/api/openclaw/browser/open-owner-chrome")
-        async def openclaw_browser_open_owner_chrome(
-            token: str = Query(default=""),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-        ):
-            """Открывает helper для relaunch обычного Chrome владельца с Remote Debugging."""
-            self._assert_write_access(x_krab_web_key, token)
-            return self._launch_owner_chrome_remote_debugging()
-
-        @self.app.get("/api/chrome/dedicated/status")
-        async def chrome_dedicated_status():
-            """Статус dedicated Chrome (isolated profile на /tmp/krab-chrome)."""
-            from ..integrations.dedicated_chrome import (
-                DEFAULT_CDP_PORT,
-                find_chrome_binary,
-                is_dedicated_chrome_running,
-            )
-
-            port = int(os.environ.get("DEDICATED_CHROME_PORT") or DEFAULT_CDP_PORT)
-            enabled = os.environ.get("DEDICATED_CHROME_ENABLED", "false").lower() in (
-                "true",
-                "1",
-                "yes",
-            )
-            return {
-                "ok": True,
-                "enabled": enabled,
-                "running": is_dedicated_chrome_running(port),
-                "port": port,
-                "binary": find_chrome_binary(),
-                "profile_dir": os.environ.get("DEDICATED_CHROME_PROFILE_DIR") or "/tmp/krab-chrome",
-            }
-
-        @self.app.post("/api/chrome/dedicated/launch")
-        async def chrome_dedicated_launch(
-            token: str = Query(default=""),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-        ):
-            """Ручной запуск dedicated Chrome (идемпотентно)."""
-            self._assert_write_access(x_krab_web_key, token)
-            from ..integrations.dedicated_chrome import launch_dedicated_chrome
-
-            ok, status = await asyncio.to_thread(launch_dedicated_chrome)
-            return {"ok": ok, "status": status}
-
-        @self.app.get("/api/openclaw/browser-mcp-readiness")
-        async def openclaw_browser_mcp_readiness(url: str = "https://example.com"):
-            """Агрегированный staged readiness для browser-контура владельца и managed MCP."""
-
-            async def _run_readiness() -> dict:
-                # Важный UX-момент: ordinary Chrome probe и relay-smoke не зависят друг от
-                # друга напрямую, поэтому нет смысла ждать их строго последовательно.
-                smoke_report, owner_chrome = await asyncio.gather(
-                    self._collect_openclaw_browser_smoke_report(url),
-                    self._probe_owner_chrome_devtools(url),
-                )
-                smoke = dict(smoke_report.get("browser_smoke", {}) or {})
-                (
-                    browser_status,
-                    browser_status_error,
-                    tabs_payload,
-                    tabs_error,
-                ) = await self._collect_stable_browser_cli_runtime(
-                    relay_reachable=bool(
-                        smoke.get("relay_reachable") or smoke.get("browser_http_reachable")
-                    ),
-                    auth_required=bool(smoke.get("browser_auth_required")),
-                    attempts=3,
-                    settle_delay_sec=0.8,
-                )
-                browser = self._classify_browser_stage(
-                    browser_status,
-                    tabs_payload,
-                    smoke,
-                    browser_status_error=browser_status_error,
-                    tabs_error=tabs_error,
-                )
-                mcp = self._build_mcp_readiness_snapshot(browser, owner_chrome=owner_chrome)
-                browser["paths"] = self._build_browser_access_paths(browser, mcp)
-
-                overall = "ready"
-                if "blocked" in {str(browser.get("readiness")), str(mcp.get("readiness"))}:
-                    overall = "blocked"
-                elif "attention" in {str(browser.get("readiness")), str(mcp.get("readiness"))}:
-                    overall = "attention"
-
-                return {
-                    "available": True,
-                    "overall": {
-                        "readiness": overall,
-                        "detail": (
-                            "Browser relay и managed MCP готовы."
-                            if overall == "ready"
-                            else "Есть оставшиеся шаги для browser/MCP readiness."
-                        ),
-                    },
-                    "browser": browser,
-                    "mcp": mcp,
-                    "raw": {
-                        "browser_status": browser_status,
-                        "browser_status_error": browser_status_error,
-                        "tabs": tabs_payload,
-                        "tabs_error": tabs_error,
-                        "browser_smoke": smoke_report,
-                        "owner_chrome": owner_chrome,
-                    },
-                }
-
-            # Верхний guard: не зависаем если gateway/browser не отвечает.
-            try:
-                return await asyncio.wait_for(_run_readiness(), timeout=5.0)
-            except asyncio.TimeoutError:
-                return {
-                    "available": False,
-                    "error": "OpenClaw timeout (5s)",
-                    "detail": "gateway not responding",
-                }
-
-        @self.app.get("/api/openclaw/photo-smoke")
-        async def openclaw_photo_smoke():
-            """
-            Легковесная проверка готовности photo/vision маршрута.
-
-            Проверяет:
-            1) доступ к model manager через router;
-            2) наличие vision-capable локальных моделей;
-            3) выбранную модель для `has_photo=True`.
-            """
-            return await self._collect_openclaw_photo_smoke_payload()
-
-        async def _openclaw_cloud_diagnostics_impl(providers: str = ""):
-            """Проверка cloud-провайдеров OpenClaw с классификацией ошибок ключей/API."""
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw:
-                return {"available": False, "error": "openclaw_client_not_configured"}
-            if not hasattr(openclaw, "get_cloud_provider_diagnostics"):
-                return {"available": False, "error": "cloud_diagnostics_not_supported"}
-
-            providers_list: list[str] | None = None
-            raw = (providers or "").strip()
-            if raw:
-                providers_list = [item.strip().lower() for item in raw.split(",") if item.strip()]
-                if not providers_list:
-                    providers_list = None
-            report = await openclaw.get_cloud_provider_diagnostics(providers=providers_list)
-            return {"available": True, "report": report}
-
-        @self.app.get("/api/openclaw/cloud")
-        async def openclaw_cloud_diagnostics(providers: str = Query(default="")):
-            """Канонический endpoint cloud-диагностики."""
-            return await _openclaw_cloud_diagnostics_impl(providers=providers)
-
-        @self.app.get("/api/openclaw/cloud/diagnostics")
-        async def openclaw_cloud_diagnostics_legacy(providers: str = Query(default="")):
-            """Совместимость со старым UI-клиентом (legacy alias)."""
-            return await _openclaw_cloud_diagnostics_impl(providers=providers)
-
-        @self.app.get("/api/openclaw/cloud/runtime-check")
-        async def openclaw_cloud_runtime_check():
-            """Runtime-check cloud key chain (masked)."""
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw:
-                return {"available": False, "error": "openclaw_client_not_configured"}
-            if not hasattr(openclaw, "get_cloud_runtime_check"):
-                return {"available": False, "error": "cloud_runtime_check_not_supported"}
-            try:
-                report = await openclaw.get_cloud_runtime_check()
-            except Exception as exc:
-                return {
-                    "available": False,
-                    "error": "cloud_runtime_check_failed",
-                    "detail": str(exc),
-                }
-            # После truthful runtime-check tier-state может измениться с stale `free`
-            # на фактический `paid`, поэтому lightweight runtime snapshot нужно
-            # пересобрать заново, а не держать старый TTL-cache.
-            self._runtime_lite_cache = None
-            return {"available": True, "report": report}
-
-        @self.app.post("/api/openclaw/cloud/switch-tier")
-        async def openclaw_cloud_switch_tier(
-            payload: dict = Body(default_factory=dict),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Ручное переключение cloud-tier (free/paid) + secrets reload."""
-            self._assert_write_access(x_krab_web_key, token)
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw:
-                return {"ok": False, "error": "openclaw_client_not_configured"}
-            if not hasattr(openclaw, "switch_cloud_tier"):
-                return {"ok": False, "error": "switch_cloud_tier_not_supported"}
-
-            tier = str((payload or {}).get("tier", "free")).strip().lower()
-            if tier not in {"free", "paid"}:
-                return {"ok": False, "error": "invalid_tier", "detail": "Допустимо: free|paid"}
-            try:
-                result = await openclaw.switch_cloud_tier(tier)
-                self._runtime_lite_cache = None
-                return {"ok": bool(result.get("ok")), "result": result}
-            except Exception as exc:
-                return {"ok": False, "error": "switch_cloud_tier_failed", "detail": str(exc)}
-
-        @self.app.get("/api/openclaw/cloud/tier/state")
-        async def openclaw_cloud_tier_state():
-            """
-            [R23/R25] Диагностика Cloud Tier State.
-
-            Возвращает текущий активный tier (free/paid/default), статистику
-            переключений, метрики (cloud_attempts_total и др.) и конфигурацию.
-            Не содержит секретов — только счётчики событий.
-            """
-            try:
-                openclaw = self.deps.get("openclaw_client")
-                if not openclaw:
-                    return build_ops_response(
-                        status="failed",
-                        error_code="openclaw_client_not_configured",
-                        summary="Openclaw client not configured",
-                    )
-                if not hasattr(openclaw, "get_tier_state_export"):
-                    return build_ops_response(
-                        status="failed",
-                        error_code="tier_state_not_supported",
-                        summary="Tier state not supported",
-                    )
-                tier_state = openclaw.get_tier_state_export()
-                return build_ops_response(status="ok", data={"tier_state": tier_state})
-            except Exception as exc:
-                return build_ops_response(
-                    status="failed", error_code="system_error", summary=str(exc)
-                )
-
-        @self.app.post("/api/openclaw/cloud/tier/reset")
-        async def openclaw_cloud_tier_reset(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """
-            [R23/R25] Ручной сброс Cloud Tier на free.
-
-            Требует X-Krab-Web-Key или token (WEB_API_KEY).
-            Снимает sticky_paid флаг, не требует перезапуска бота.
-            Возвращает: {ok, previous_tier, new_tier, reset_at}.
-            """
-            try:
-                self._assert_write_access(x_krab_web_key, token)
-            except HTTPException as exc:
-                return build_ops_response(
-                    status="failed", error_code="forbidden", summary=exc.detail
-                )
-
-            try:
-                openclaw = self.deps.get("openclaw_client")
-                if not openclaw:
-                    return build_ops_response(
-                        status="failed",
-                        error_code="openclaw_client_not_configured",
-                        summary="Openclaw client not configured",
-                    )
-                if not hasattr(openclaw, "reset_cloud_tier"):
-                    return build_ops_response(
-                        status="failed",
-                        error_code="tier_reset_not_supported",
-                        summary="Tier reset not supported",
-                    )
-
-                result = await openclaw.reset_cloud_tier()
-                return build_ops_response(status="ok", data={"result": result})
-            except Exception as exc:
-                return build_ops_response(
-                    status="failed", error_code="tier_reset_error", summary=str(exc)
-                )
-
-        def _run_openclaw_model_autoswitch(
-            *,
-            dry_run: bool,
-            profile: str = "",
-            toggle: bool = False,
-        ) -> dict:
-            """
-            Запускает autoswitch-утилиту OpenClaw.
-            dry_run=True: только диагностика, без изменения конфигурации.
-            """
-            project_root = Path(__file__).resolve().parents[2]
-            script_path = project_root / "scripts" / "openclaw_model_autoswitch.py"
-            if not script_path.exists():
-                raise HTTPException(
-                    status_code=500, detail="openclaw_model_autoswitch_script_missing"
-                )
-
-            # Единый venv (Py 3.13) в приоритете; legacy .venv — фолбек.
-            python_bin = project_root / "venv" / "bin" / "python"
-            if not python_bin.exists():
-                python_bin = project_root / ".venv" / "bin" / "python"
-            if not python_bin.exists():
-                python_bin = Path(sys.executable or "python3")
-
-            cmd = [str(python_bin), str(script_path)]
-            requested_profile = str(profile or "").strip().lower()
-            if toggle:
-                requested_profile = "toggle"
-            elif not requested_profile:
-                requested_profile = "current" if dry_run else "local-first"
-            if requested_profile:
-                cmd.extend(["--profile", requested_profile])
-            if dry_run:
-                cmd.append("--dry-run")
-
-            proc = subprocess.run(
-                cmd,
-                cwd=str(project_root),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            stdout = (proc.stdout or "").strip()
-            stderr = (proc.stderr or "").strip()
-            if proc.returncode != 0:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"openclaw_model_autoswitch_failed: {stderr or stdout or proc.returncode}",
-                )
-
-            lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-            if not lines:
-                raise HTTPException(
-                    status_code=500, detail="openclaw_model_autoswitch_empty_output"
-                )
-            try:
-                payload = json.loads(lines[-1])
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"openclaw_model_autoswitch_invalid_json: {exc}",
-                ) from exc
-            if not isinstance(payload, dict):
-                raise HTTPException(
-                    status_code=500, detail="openclaw_model_autoswitch_invalid_payload"
-                )
-            return payload
-
-        def _run_openclaw_model_compat_probe(
-            *,
-            model: str = "",
-            reasoning: str = "high",
-            skip_reasoning: bool = False,
-        ) -> dict:
-            """
-            Запускает read-only probe совместимости target-модели в OpenClaw runtime.
-            """
-            project_root = Path(__file__).resolve().parents[2]
-            script_path = project_root / "scripts" / "openclaw_model_compat_probe.py"
-            if not script_path.exists():
-                raise HTTPException(
-                    status_code=500, detail="openclaw_model_compat_probe_script_missing"
-                )
-
-            # Единый venv (Py 3.13) в приоритете; legacy .venv — фолбек.
-            python_bin = project_root / "venv" / "bin" / "python"
-            if not python_bin.exists():
-                python_bin = project_root / ".venv" / "bin" / "python"
-            if not python_bin.exists():
-                python_bin = Path(sys.executable or "python3")
-
-            cmd = [str(python_bin), str(script_path)]
-            normalized_model = str(model or "").strip()
-            normalized_reasoning = str(reasoning or "high").strip().lower() or "high"
-            if normalized_model:
-                cmd.extend(["--model", normalized_model])
-            if normalized_reasoning:
-                cmd.extend(["--reasoning", normalized_reasoning])
-            if skip_reasoning:
-                cmd.append("--skip-reasoning")
-
-            proc = subprocess.run(
-                cmd,
-                cwd=str(project_root),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            stdout = (proc.stdout or "").strip()
-            stderr = (proc.stderr or "").strip()
-            if proc.returncode != 0:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"openclaw_model_compat_probe_failed: {stderr or stdout or proc.returncode}",
-                )
-
-            lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-            if not lines:
-                raise HTTPException(
-                    status_code=500, detail="openclaw_model_compat_probe_empty_output"
-                )
-            try:
-                payload = json.loads(lines[-1])
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"openclaw_model_compat_probe_invalid_json: {exc}",
-                ) from exc
-            if not isinstance(payload, dict):
-                raise HTTPException(
-                    status_code=500, detail="openclaw_model_compat_probe_invalid_payload"
-                )
-            return payload
-
-        @self.app.get("/api/openclaw/model-autoswitch/status")
-        async def openclaw_model_autoswitch_status(
-            profile: str = Query(default="current"),
-        ):
-            """Статус autoswitch без изменения runtime-конфига."""
-            payload = _run_openclaw_model_autoswitch(dry_run=True, profile=profile, toggle=False)
-            return {"ok": True, "autoswitch": payload}
-
-        @self.app.post("/api/openclaw/model-autoswitch/apply")
-        async def openclaw_model_autoswitch_apply(
-            request: Request,
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-            profile: str = Query(default=""),
-        ):
-            """Применяет autoswitch runtime-конфига OpenClaw (write endpoint)."""
-            self._assert_write_access(x_krab_web_key, token)
-            body: dict[str, Any] = {}
-            try:
-                body_raw = await request.json()
-                if isinstance(body_raw, dict):
-                    body = body_raw
-            except Exception:
-                body = {}
-
-            body_profile = str(body.get("profile") or "").strip()
-            body_toggle_raw = body.get("toggle")
-            body_toggle = False
-            if isinstance(body_toggle_raw, bool):
-                body_toggle = body_toggle_raw
-            elif body_toggle_raw is not None:
-                body_toggle = str(body_toggle_raw).strip().lower() in {"1", "true", "yes", "on"}
-
-            effective_profile = body_profile or profile
-            effective_toggle = body_toggle or (not effective_profile)
-            payload = _run_openclaw_model_autoswitch(
-                dry_run=False,
-                profile=effective_profile,
-                toggle=effective_toggle,
-            )
-            return {"ok": True, "autoswitch": payload}
-
-        @self.app.get("/api/openclaw/control-compat/status")
-        async def openclaw_control_compat_status():
-            """
-            [R22] Control Compatibility Diagnostics.
-
-            Дает прозрачный ответ на вопрос: предупреждения OpenClaw Control UI
-            (`Unsupported schema node`) — это UI-артефакт или реальный runtime-риск?
-
-            Источники:
-            - `openclaw channels status --probe` → runtime_channels_ok
-            - `openclaw logs --tail 200` → control_schema_warnings (фильтрация по маркерам)
-
-            Логика impact_level:
-            - runtime ok + warnings → "ui_only"   (каналы работают, предупреждение косметическое)
-            - runtime fail + warnings → "runtime_risk"  (нужна диагностика)
-            - runtime ok, warnings нет → "none"
-            """
-
-            async def _inner() -> dict:
-                # --- Шаг 1: проверяем runtime каналов ---
-                runtime_ok = False
-                try:
-                    async with get_global_semaphore():
-                        proc_channels = await asyncio.create_subprocess_exec(
-                            "openclaw",
-                            "channels",
-                            "status",
-                            "--probe",
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.STDOUT,
-                        )
-                        try:
-                            stdout_ch, _ = await asyncio.wait_for(
-                                proc_channels.communicate(), timeout=30.0
-                            )
-                            runtime_ok = proc_channels.returncode == 0
-                        except asyncio.TimeoutError:
-                            await terminate_and_reap(proc_channels)
-                            runtime_ok = False
-                except Exception:
-                    runtime_ok = False
-
-                # --- Шаг 2: получаем последние логи OpenClaw для поиска schema-маркеров ---
-                schema_markers = {"unsupported schema node", "schema", "validation"}
-                control_schema_warnings: list[str] = []
-                try:
-                    async with get_global_semaphore():
-                        proc_logs = await asyncio.create_subprocess_exec(
-                            "openclaw",
-                            "logs",
-                            "--tail",
-                            "200",
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.STDOUT,
-                        )
-                        try:
-                            stdout_logs, _ = await asyncio.wait_for(
-                                proc_logs.communicate(), timeout=10.0
-                            )
-                            raw_logs = stdout_logs.decode("utf-8", errors="replace")
-                            for line in raw_logs.splitlines():
-                                line_lower = line.lower()
-                                # Ищем строки, содержащие хотя бы один из маркеров схемы
-                                if any(marker in line_lower for marker in schema_markers):
-                                    stripped = line.strip()
-                                    if stripped:
-                                        control_schema_warnings.append(stripped)
-                        except asyncio.TimeoutError:
-                            await terminate_and_reap(proc_logs)
-                            # При таймауте логов — не считаем это runtime-риском
-                except Exception:
-                    # CLI openclaw logs недоступен — просто нет данных для schema-анализа
-                    pass
-
-                # --- Шаг 3: определяем impact_level и рекомендацию ---
-                has_warnings = bool(control_schema_warnings)
-                if runtime_ok and has_warnings:
-                    impact_level = "ui_only"
-                    recommended_action = (
-                        "Предупреждения ограничены UI Control. Runtime каналов работает нормально. "
-                        "Для редактирования затронутых полей используй Raw-режим в Control Dashboard."
-                    )
-                elif not runtime_ok and has_warnings:
-                    impact_level = "runtime_risk"
-                    recommended_action = (
-                        "Обнаружены schema-предупреждения И проблемы runtime. "
-                        "Запусти: openclaw doctor --fix  или  ./openclaw_runtime_repair.command"
-                    )
-                elif not runtime_ok:
-                    impact_level = "runtime_risk"
-                    recommended_action = (
-                        "Runtime каналов недоступен. Schema-предупреждения не обнаружены. "
-                        "Запусти: openclaw doctor --fix"
-                    )
-                else:
-                    impact_level = "none"
-                    recommended_action = "Все каналы работают нормально. Предупреждений нет."
-
-                return {
-                    "ok": runtime_ok or not has_warnings,
-                    "runtime_channels_ok": runtime_ok,
-                    "runtime_status": "OK" if runtime_ok else "FAIL",
-                    "control_schema_warnings": control_schema_warnings,
-                    "has_schema_warning": has_warnings,
-                    "impact_level": impact_level,
-                    "recommended_action": recommended_action,
-                }
-
-            # Верхний guard: не зависаем если CLI не стартует.
-            try:
-                return await asyncio.wait_for(_inner(), timeout=5.0)
-            except asyncio.TimeoutError:
-                return {
-                    "ok": False,
-                    "error": "OpenClaw timeout (5s)",
-                    "detail": "gateway not responding",
-                }
-
-        @self.app.get("/api/openclaw/routing/effective")
-        async def openclaw_routing_effective():
-            """
-            [R22] Routing Effective Source of Truth.
-
-            Единый источник истины о текущем routing-решении Krab:
-            откуда оно взялось, какой force_mode активен, почему идём в local или cloud.
-
-            Читает только существующие атрибуты роутера — без внешних вызовов.
-            Это позволяет: дебаггинг без отправки запросов в LM Studio/cloud,
-            проверку конфигурации, понимание причин route-решений.
-            """
-            router = self.deps["router"]
-
-            # --- Normalize force_mode ---
-            force_mode_raw = str(getattr(router, "force_mode", "auto") or "auto")
-            force_mode_eff = _normalize_force_mode(force_mode_raw)
-
-            # --- Определяем default slot и модель ---
-            cloud_slots: dict = {}
-            raw_models = getattr(router, "models", {}) or {}
-            if isinstance(raw_models, dict):
-                cloud_slots = {str(k): str(v) for k, v in raw_models.items()}
-            # Приоритет: "chat" → первый ключ → пусто
-            default_slot = (
-                "chat" if "chat" in cloud_slots else (next(iter(cloud_slots), None) or "")
-            )
-            default_model = cloud_slots.get(default_slot, "")
-
-            # --- Cloud fallback включен если НЕ принудительный local ---
-            cloud_fallback_enabled = force_mode_eff != "local"
-            last_route: dict[str, Any] = {}
-            try:
-                getter = getattr(router, "get_last_route", None)
-                if callable(getter):
-                    candidate = getter() or {}
-                    if isinstance(candidate, dict):
-                        last_route = candidate
-            except Exception:
-                last_route = {}
-
-            # --- Строим decision_notes из фактического состояния runtime ---
-            local_truth = await self._resolve_local_runtime_truth(router)
-            local_engine = str(
-                local_truth.get("engine") or getattr(router, "local_engine", "") or ""
-            )
-            local_available = bool(local_truth.get("runtime_reachable"))
-            active_local_model = str(local_truth.get("active_model") or "")
-            routing_policy = str(
-                getattr(router, "routing_policy", "free_first_hybrid") or "free_first_hybrid"
-            )
-            cloud_cap_reached = bool(getattr(router, "cloud_soft_cap_reached", False))
-            last_route_status = str(last_route.get("status") or "").strip().lower()
-            last_route_channel = str(last_route.get("channel") or "").strip().lower()
-            last_route_model = str(last_route.get("model") or "").strip()
-
-            current_route_uses_cloud = bool(
-                last_route_status == "ok" and last_route_channel in {"openclaw_cloud", "cloud"}
-            )
-            current_fallback_active = False
-            if force_mode_eff == "cloud" and cloud_fallback_enabled:
-                current_fallback_active = True
-            elif not cloud_fallback_enabled:
-                current_fallback_active = False
-            elif last_route_status == "ok":
-                # Cloud =/= fallback.
-                # Считаем fallback активным только если фактическая модель маршрута
-                # отличается от configured default cloud-model либо пришлось уйти
-                # в cloud при force_local=off и отсутствии рабочей local-модели.
-                if (
-                    current_route_uses_cloud
-                    and default_model
-                    and last_route_model
-                    and last_route_model != default_model
-                ):
-                    current_fallback_active = True
-                elif (
-                    not current_route_uses_cloud
-                    and last_route_model
-                    and active_local_model
-                    and last_route_model != active_local_model
-                ):
-                    current_fallback_active = True
-            elif not local_available and force_mode_eff not in {"cloud"} and cloud_fallback_enabled:
-                current_fallback_active = True
-
-            if not cloud_fallback_enabled:
-                cloud_fallback_state = "disabled"
-            elif current_fallback_active:
-                cloud_fallback_state = "active"
-            else:
-                cloud_fallback_state = "standby"
-
-            decision_notes: list[str] = []
-            if force_mode_raw in {"force_local", "local"}:
-                decision_notes.append(
-                    f"Принудительный local-режим активен — все запросы идут через {local_engine or 'local'}."
-                )
-            elif force_mode_raw in {"force_cloud", "cloud"}:
-                decision_notes.append(
-                    "Принудительный cloud-режим активен — локальный движок пропускается."
-                )
-            else:
-                decision_notes.append(f"Routing policy: {routing_policy} — auto-routing включен.")
-
-            if local_available:
-                decision_notes.append(
-                    f"Локальный движок '{local_engine}' доступен."
-                    + (f" Активная модель: '{active_local_model}'." if active_local_model else "")
-                )
-            else:
-                decision_notes.append("Локальный движок недоступен — fallback только на cloud.")
-
-            if cloud_cap_reached:
-                decision_notes.append(
-                    "Cloud soft-cap достигнут: приоритет переключен на локальный движок."
-                )
-
-            if not cloud_fallback_enabled:
-                decision_notes.append(
-                    "Cloud fallback ОТКЛЮЧЕН: force_local режим запрещает обращение к cloud."
-                )
-            elif cloud_fallback_state == "active":
-                decision_notes.append("Cloud fallback сейчас задействован как активный маршрут.")
-            else:
-                decision_notes.append(
-                    "Cloud fallback доступен как резерв, но сейчас не задействован."
-                )
-
-            # Для owner UI важнее фактическая последняя модель маршрута, чем stale router-slot.
-            # Иначе после hot-reload/runtime-fallback верхние виджеты показывают правду,
-            # а блок "Эффективный роутинг" остаётся на старом default-model.
-            active_slot_or_model = (
-                last_route_model or active_local_model or default_model or default_slot
-            )
-
-            return {
-                "ok": True,
-                "requested_mode": force_mode_raw,
-                "effective_mode": force_mode_eff,
-                "active_slot_or_model": active_slot_or_model,
-                "cloud_fallback": cloud_fallback_enabled,
-                "cloud_fallback_state": cloud_fallback_state,
-                "cloud_fallback_active": current_fallback_active,
-                "cloud_route_active": current_route_uses_cloud,
-                "force_mode_requested": force_mode_raw,
-                "force_mode_effective": force_mode_eff,
-                "assistant_default_slot": default_slot,
-                "assistant_default_model": default_model,
-                "cloud_fallback_enabled": cloud_fallback_enabled,
-                "decision_notes": decision_notes,
-            }
-
-        @self.app.get("/api/provisioning/templates")
-        async def provisioning_templates(entity: str = Query(default="agent")):
-            """Возвращает шаблоны для provisioning UI/API."""
-            provisioning = self.deps.get("provisioning_service")
-            if not provisioning:
-                raise HTTPException(status_code=503, detail="provisioning_service_not_configured")
-            return {"entity": entity, "templates": provisioning.list_templates(entity)}
-
-        @self.app.get("/api/provisioning/drafts")
-        async def provisioning_drafts(
-            status: str | None = Query(default=None),
-            limit: int = Query(default=20, ge=1, le=200),
-        ):
-            """Список provisioning draft'ов."""
-            provisioning = self.deps.get("provisioning_service")
-            if not provisioning:
-                raise HTTPException(status_code=503, detail="provisioning_service_not_configured")
-            return {"drafts": provisioning.list_drafts(limit=limit, status=status)}
-
-        @self.app.post("/api/provisioning/drafts")
-        async def provisioning_create_draft(
-            payload: dict = Body(...),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            x_idempotency_key: str = Header(default="", alias="X-Idempotency-Key"),
-            token: str = Query(default=""),
-        ):
-            """Создает provisioning draft (write endpoint)."""
-            self._assert_write_access(x_krab_web_key, token)
-            idem_key = (x_idempotency_key or "").strip()
-            cached = self._idempotency_get("provisioning_create_draft", idem_key)
-            if cached:
-                return cached
-            provisioning = self.deps.get("provisioning_service")
-            if not provisioning:
-                raise HTTPException(status_code=503, detail="provisioning_service_not_configured")
-
-            try:
-                draft = provisioning.create_draft(
-                    entity_type=payload.get("entity_type", "agent"),
-                    name=payload.get("name", ""),
-                    role=payload.get("role", ""),
-                    description=payload.get("description", ""),
-                    requested_by=payload.get("requested_by", "web_api"),
-                    settings=payload.get("settings", {}),
-                )
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            black_box = self.deps.get("black_box")
-            if black_box and hasattr(black_box, "log_event"):
-                black_box.log_event(
-                    "web_provisioning_draft_create",
-                    f"entity={payload.get('entity_type', 'agent')} name={payload.get('name', '')}",
-                )
-            response_payload = {"ok": True, "draft": draft}
-            self._idempotency_set("provisioning_create_draft", idem_key, response_payload)
-            return response_payload
-
-        @self.app.get("/api/provisioning/preview/{draft_id}")
-        async def provisioning_preview(draft_id: str):
-            """Показывает diff для draft перед apply."""
-            provisioning = self.deps.get("provisioning_service")
-            if not provisioning:
-                raise HTTPException(status_code=503, detail="provisioning_service_not_configured")
-            try:
-                preview = provisioning.preview_diff(draft_id)
-            except Exception as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from exc
-            return {"ok": True, "preview": preview}
-
-        @self.app.post("/api/provisioning/apply/{draft_id}")
-        async def provisioning_apply(
-            draft_id: str,
-            confirm: bool = Query(default=False),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            x_idempotency_key: str = Header(default="", alias="X-Idempotency-Key"),
-            token: str = Query(default=""),
-        ):
-            """Применяет draft в catalog (write endpoint)."""
-            self._assert_write_access(x_krab_web_key, token)
-            idem_key = (x_idempotency_key or "").strip()
-            cached = self._idempotency_get("provisioning_apply", f"{draft_id}:{idem_key}")
-            if cached:
-                return cached
-            provisioning = self.deps.get("provisioning_service")
-            if not provisioning:
-                raise HTTPException(status_code=503, detail="provisioning_service_not_configured")
-            try:
-                result = provisioning.apply_draft(draft_id, confirmed=confirm)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            black_box = self.deps.get("black_box")
-            if black_box and hasattr(black_box, "log_event"):
-                black_box.log_event(
-                    "web_provisioning_apply",
-                    f"draft_id={draft_id} confirmed={confirm}",
-                )
-            response_payload = {"ok": True, "result": result}
-            self._idempotency_set("provisioning_apply", f"{draft_id}:{idem_key}", response_payload)
-            return response_payload
+        self.app.include_router(_build_chat_policy(self._make_router_context()))
 
         # ── Chat Window Manager endpoints ────────────────────────────────────
-
-        @self.app.get("/api/chat_windows/config")
-        async def chat_windows_config():
-            """Возвращает env-конфигурацию ChatWindowManager."""
-
-            from src.core.chat_window_manager import (
-                CAPACITY,
-                IDLE_EVICTION_SEC,
-                MESSAGE_CAP_PER_WINDOW,
-            )
-
-            return {
-                "ok": True,
-                "capacity": CAPACITY,
-                "message_cap_per_window": MESSAGE_CAP_PER_WINDOW,
-                "idle_eviction_sec": IDLE_EVICTION_SEC,
-            }
-
-        @self.app.get("/api/chat_windows/list")
-        async def chat_windows_list():
-            """Список всех активных окон с метаданными."""
-            windows = chat_window_manager.list_windows()
-            return {
-                "ok": True,
-                "total": len(windows),
-                "windows": windows,
-            }
-
-        @self.app.post("/api/chat_windows/evict_idle")
-        async def chat_windows_evict_idle(
-            max_age_sec: int = Query(default=3600),
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Выгнать окна, неактивные дольше max_age_sec."""
-            self._assert_write_access(x_krab_web_key, token)
-            from src.core.chat_window_manager import IDLE_EVICTION_SEC
-
-            timeout = max_age_sec if max_age_sec > 0 else IDLE_EVICTION_SEC
-            count = chat_window_manager.evict_idle(timeout_sec=timeout)
-            return {
-                "ok": True,
-                "evicted": count,
-                "timeout_sec": timeout,
-            }
-
-        @self.app.post("/api/chat_windows/clear")
-        async def chat_windows_clear(
-            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
-            token: str = Query(default=""),
-        ):
-            """Очистить все окна (owner-only)."""
-            self._assert_write_access(x_krab_web_key, token)
-            count = chat_window_manager.clear_all()
-            return {
-                "ok": True,
-                "cleared": count,
-            }
 
     async def start(self):
         """Запуск сервера в фоне."""

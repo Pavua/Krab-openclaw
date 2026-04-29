@@ -1,0 +1,35 @@
+# cloudflared tunnel config template
+# Скопируйте в ~/.cloudflared/config.yml и замените плейсхолдеры.
+#
+# Получить tunnel UUID: cloudflared tunnel list
+# Создать туннель:       cloudflared tunnel create krab-panel
+# Маршрут DNS:           cloudflared tunnel route dns krab-panel krab.yourdomain.com
+# Запуск:                cloudflared tunnel run krab-panel
+
+tunnel: YOUR_TUNNEL_UUID_HERE
+credentials-file: /Users/pablito/.cloudflared/YOUR_TUNNEL_UUID_HERE.json
+
+ingress:
+  # Основной маршрут: кастомный хостнейм → Krab panel
+  - hostname: krab.yourdomain.com
+    service: http://localhost:8080
+    originRequest:
+      # Таймаут на медленные API ответы (swarm/research могут быть долгими)
+      connectTimeout: 30s
+      tlsTimeout: 30s
+      tcpKeepAlive: 30s
+      httpHostHeader: localhost
+      # Не передавать CF заголовки downstream (панель их не использует)
+      noHappyEyeballs: false
+      keepAliveConnections: 10
+      keepAliveTimeout: 90s
+
+  # Fallback: всё остальное — 404
+  - service: http_status:404
+
+# Логи: info / warn / error
+loglevel: warn
+logfile: /tmp/cloudflared-krab.log
+
+# Метрики (опционально, для мониторинга состояния туннеля)
+metrics: localhost:2999

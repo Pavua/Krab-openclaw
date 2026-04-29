@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Named Cloudflare Tunnel (stable UUID + hostname).
+        Заменяет ai.krab.cloudflared-tunnel.plist (quick tunnel).
+
+        Prerequisites (до загрузки этого LaunchAgent):
+          1. cloudflared tunnel login            (1 click в браузере)
+          2. cloudflared tunnel create krab-alerts
+          3. cp deploy/cloudflare/config.yml.template ~/.cloudflared/config.yml
+             и вписать tunnel UUID + hostname
+          4. cloudflared tunnel route dns krab-alerts krab-alerts.yourdomain.com
+          5. launchctl unload ~/Library/LaunchAgents/ai.krab.cloudflared-tunnel.plist
+          6. cp этот файл в ~/Library/LaunchAgents/ и launchctl load
+
+        Подробности: docs/NAMED_TUNNEL_SETUP.md
+    -->
+    <key>Label</key>
+    <string>ai.krab.cloudflared-named-tunnel</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/cloudflared</string>
+        <string>tunnel</string>
+        <string>--no-autoupdate</string>
+        <string>--config</string>
+        <string>/Users/pablito/.cloudflared/config.yml</string>
+        <string>run</string>
+        <string>krab-alerts</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/krab_cf_tunnel/named-tunnel.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/krab_cf_tunnel/named-tunnel.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>TUNNEL_ORIGIN_CERT</key>
+        <string>/Users/pablito/.cloudflared/cert.pem</string>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

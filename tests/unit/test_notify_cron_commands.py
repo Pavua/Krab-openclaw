@@ -57,7 +57,7 @@ class TestHandleNotify:
         msg = _make_message("!notify on")
 
         mock_cfg = MagicMock()
-        with patch("src.handlers.command_handlers.config"), patch("src.config.config", mock_cfg):
+        with patch("src.handlers.commands.scheduler_commands.config"), patch("src.config.config", mock_cfg):
             # патчим импорт внутри функции
             with patch("src.config.config.update_setting"):
                 # handle_notify делает `from ..config import config as _cfg` внутри тела
@@ -75,7 +75,7 @@ class TestHandleNotify:
         bot = _make_bot(command_args="off")
         msg = _make_message("!notify off")
 
-        with patch("src.handlers.command_handlers.config"):
+        with patch("src.handlers.commands.scheduler_commands.config"):
             await handle_notify(bot, msg)
 
         msg.reply.assert_called_once()
@@ -90,7 +90,7 @@ class TestHandleNotify:
         bot = _make_bot(command_args="")
         msg = _make_message("!notify")
 
-        with patch("src.handlers.command_handlers.config"):
+        with patch("src.handlers.commands.scheduler_commands.config"):
             await handle_notify(bot, msg)
 
         msg.reply.assert_called_once()
@@ -107,7 +107,7 @@ class TestHandleNotify:
         bot = _make_bot(command_args="1")
         msg = _make_message("!notify 1")
 
-        with patch("src.handlers.command_handlers.config"):
+        with patch("src.handlers.commands.scheduler_commands.config"):
             await handle_notify(bot, msg)
 
         msg.reply.assert_called_once()
@@ -121,7 +121,7 @@ class TestHandleNotify:
         bot = _make_bot(command_args="false")
         msg = _make_message("!notify false")
 
-        with patch("src.handlers.command_handlers.config"):
+        with patch("src.handlers.commands.scheduler_commands.config"):
             await handle_notify(bot, msg)
 
         msg.reply.assert_called_once()
@@ -147,7 +147,7 @@ class TestHandleRemindValidation:
         mock_cfg = MagicMock()
         mock_cfg.SCHEDULER_ENABLED = True
 
-        with patch("src.handlers.command_handlers.config", mock_cfg):
+        with patch("src.handlers.commands.scheduler_commands.config", mock_cfg):
             with pytest.raises(UserInputError) as exc_info:
                 await handle_remind(bot, msg)
 
@@ -164,7 +164,7 @@ class TestHandleRemindValidation:
         mock_cfg = MagicMock()
         mock_cfg.SCHEDULER_ENABLED = False
 
-        with patch("src.handlers.command_handlers.config", mock_cfg):
+        with patch("src.handlers.commands.scheduler_commands.config", mock_cfg):
             with pytest.raises(UserInputError) as exc_info:
                 await handle_remind(bot, msg)
 
@@ -182,7 +182,7 @@ class TestHandleRemindValidation:
         mock_cfg = MagicMock()
         mock_cfg.SCHEDULER_ENABLED = True
 
-        with patch("src.handlers.command_handlers.config", mock_cfg):
+        with patch("src.handlers.commands.scheduler_commands.config", mock_cfg):
             with pytest.raises(UserInputError):
                 await handle_remind(bot, msg)
 
@@ -202,8 +202,8 @@ class TestHandleRemindValidation:
         mock_scheduler.add_reminder = MagicMock(return_value="rem-001")
 
         with (
-            patch("src.handlers.command_handlers.config", mock_cfg),
-            patch("src.handlers.command_handlers.krab_scheduler", mock_scheduler),
+            patch("src.handlers.commands.scheduler_commands.config", mock_cfg),
+            patch("src.handlers.commands.scheduler_commands.krab_scheduler", mock_scheduler),
         ):
             await handle_remind(bot, msg)
 
@@ -232,7 +232,7 @@ class TestHandleReminders:
         mock_scheduler = MagicMock()
         mock_scheduler.list_reminders = MagicMock(return_value=[])
 
-        with patch("src.handlers.command_handlers.krab_scheduler", mock_scheduler):
+        with patch("src.handlers.commands.scheduler_commands.krab_scheduler", mock_scheduler):
             await handle_reminders(bot, msg)
 
         msg.reply.assert_called_once()
@@ -252,7 +252,7 @@ class TestHandleReminders:
         mock_scheduler = MagicMock()
         mock_scheduler.list_reminders = MagicMock(return_value=items)
 
-        with patch("src.handlers.command_handlers.krab_scheduler", mock_scheduler):
+        with patch("src.handlers.commands.scheduler_commands.krab_scheduler", mock_scheduler):
             await handle_reminders(bot, msg)
 
         msg.reply.assert_called_once()
@@ -287,7 +287,7 @@ class TestHandleCronstatus:
         mock_scheduler = MagicMock()
         mock_scheduler.get_status = MagicMock(return_value=status_data)
 
-        with patch("src.handlers.command_handlers.krab_scheduler", mock_scheduler):
+        with patch("src.handlers.commands.scheduler_commands.krab_scheduler", mock_scheduler):
             await handle_cronstatus(bot, msg)
 
         msg.reply.assert_called_once()
@@ -314,7 +314,7 @@ class TestHandleCronstatus:
         mock_scheduler = MagicMock()
         mock_scheduler.get_status = MagicMock(return_value=status_data)
 
-        with patch("src.handlers.command_handlers.krab_scheduler", mock_scheduler):
+        with patch("src.handlers.commands.scheduler_commands.krab_scheduler", mock_scheduler):
             await handle_cronstatus(bot, msg)
 
         reply_text = msg.reply.call_args[0][0]

@@ -149,7 +149,8 @@ def test_inbox_status_returns_workflow_snapshot(
     """`/api/inbox/status` должен отдавать workflow buckets вместе с summary."""
     inbox = InboxService(state_path=tmp_path / "inbox.json")
     _seed_inbox(inbox)
-    monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    # inbox_router импортирует singleton на уровне модуля, патчим там
+    monkeypatch.setattr("src.modules.web_routers.inbox_router.inbox_service", inbox)
     client = _make_client(inbox=inbox)
 
     resp = client.get("/api/inbox/status")

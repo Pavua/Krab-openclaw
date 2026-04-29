@@ -287,12 +287,75 @@ class MCPClientManager:
         except ImportError:
             pass  # voice_assistant_tools не установлены — не критично
 
+        # userbot_self_tools: read-only Telegram tools для самого Краба (Feature M)
+        try:
+            from .core.userbot_self_tools import USERBOT_SELF_TOOL_SCHEMAS
+
+            for schema in USERBOT_SELF_TOOL_SCHEMAS:
+                manifest.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": schema["name"],
+                            "description": schema["description"],
+                            "parameters": schema["inputSchema"],
+                        },
+                    }
+                )
+        except ImportError:
+            pass  # graceful: модуль может отсутствовать в редуцированных сборках
+
+        # vpn_tools: read-only VPN x-ui панель (VPN Phase A).
+        # Опционально через KRAB_VPN_TOOLS_ENABLED (default включено).
+        if os.environ.get("KRAB_VPN_TOOLS_ENABLED", "1").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+        ):
+            try:
+                from .core.vpn_tools import VPN_TOOL_SCHEMAS
+
+                for schema in VPN_TOOL_SCHEMAS:
+                    manifest.append(
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": schema["name"],
+                                "description": schema["description"],
+                                "parameters": schema["inputSchema"],
+                            },
+                        }
+                    )
+            except ImportError:
+                pass  # graceful: vpn_tools опциональны
+
         return manifest
 
     async def call_tool_unified(self, full_tool_name: str, arguments: Dict[str, Any]) -> str:
         """
         Вызывает инструмент по полному имени (server__tool) или нативному имени.
         """
+        # Per-team allowlist guard: если активен swarm-контекст, проверяем что
+        # tool разрешён команде. Silent strip + WARN + Prometheus метрика.
+        try:
+            from .core.swarm_tool_allowlist import (
+                get_current_team,
+                is_tool_allowed,
+                record_blocked_tool,
+            )
+
+            _team = get_current_team()
+            if _team and not is_tool_allowed(full_tool_name, _team):
+                record_blocked_tool(_team, full_tool_name)
+                logger.warning(
+                    "swarm_tool_blocked",
+                    team=_team,
+                    tool=full_tool_name,
+                )
+                return f"❌ Инструмент `{full_tool_name}` недоступен команде `{_team}`."
+        except Exception as _guard_exc:  # noqa: BLE001
+            logger.warning("swarm_tool_guard_failed", error=str(_guard_exc))
+
         if full_tool_name == "peekaboo":
             return await self._peekaboo_impl(arguments)
 
@@ -304,6 +367,33 @@ class MCPClientManager:
 
         if full_tool_name.startswith("voice:"):
             return await self._voice_tool_impl(full_tool_name, arguments)
+
+        # Feature M: native userbot read-only tools
+        try:
+            from .core.userbot_self_tools import (
+                dispatch_userbot_self_tool,
+                is_userbot_self_tool,
+            )
+
+            if is_userbot_self_tool(full_tool_name):
+                result = await dispatch_userbot_self_tool(full_tool_name, arguments)
+                import json as _json
+
+                return _json.dumps(result, ensure_ascii=False, default=str)
+        except ImportError:
+            pass
+
+        # VPN Phase A: read-only x-ui panel tools
+        try:
+            from .core.vpn_tools import dispatch_vpn_tool, is_vpn_tool
+
+            if is_vpn_tool(full_tool_name):
+                result = await dispatch_vpn_tool(full_tool_name, arguments)
+                import json as _json
+
+                return _json.dumps(result, ensure_ascii=False, default=str)
+        except ImportError:
+            pass
 
         if "__" not in full_tool_name:
             return f"❌ Неизвестный формат инструмента: {full_tool_name}"

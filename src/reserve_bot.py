@@ -11,7 +11,10 @@ Phase 2.1 Master Plan v3:
 
 from __future__ import annotations
 
+import asyncio
 import json
+import random
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +25,78 @@ logger = get_logger(__name__)
 
 _OPENCLAW_JSON = Path.home() / ".openclaw" / "openclaw.json"
 _MSG_CHUNK = 4096
+
+# Persisted FloodWait state — переживает рестарты Краба, чтобы не уходить
+# в каскад auth.ImportBotAuthorization при цикле stop/start (см. инцидент
+# 134 FloodWait events / месяц = 97% всех flood-wait, cascade 431s → 393s → ...).
+_FLOOD_STATE_FILE = Path.home() / ".openclaw" / "krab_runtime_state" / "reserve_bot_flood.json"
+
+# Максимальный множитель exponential-backoff для повторных попыток
+# в одном процессе (на случай если Telegram продолжает throttle).
+_MAX_BACKOFF_MULT = 8
+
+# Prometheus counter (опциональный — если prometheus_client доступен).
+# Имя совпадает с krab_telegram_flood_wait_total из CLAUDE.md auto-generated списка.
+# Координация с другими модулями: используем try/except для duplicate registration.
+try:
+    from prometheus_client import Counter as _Counter  # type: ignore[import-not-found]
+
+    try:
+        _flood_wait_counter = _Counter(
+            "krab_telegram_flood_wait_total",
+            "Total Telegram FloodWait events grouped by caller",
+            ["caller"],
+        )
+    except ValueError:
+        # Уже зарегистрирован другим модулем — подцепляем существующий
+        from prometheus_client import REGISTRY  # type: ignore[import-not-found]
+
+        _flood_wait_counter = REGISTRY._names_to_collectors.get(  # type: ignore[attr-defined]
+            "krab_telegram_flood_wait_total"
+        )
+except Exception:  # noqa: BLE001 - optional dependency
+    _flood_wait_counter = None  # type: ignore[assignment]
+
+
+def _load_flood_state() -> dict[str, Any]:
+    """Читает persisted FloodWait state. {} если файла нет / битый."""
+    try:
+        return json.loads(_FLOOD_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_flood_state(state: dict[str, Any]) -> None:
+    """Сохраняет persisted FloodWait state. Тихо игнорирует ошибки I/O."""
+    try:
+        _FLOOD_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _FLOOD_STATE_FILE.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("reserve_bot_flood_state_save_failed", error=str(exc))
+
+
+def _record_flood_wait(wait_seconds: int, caller: str) -> None:
+    """
+    Записывает FloodWait событие: prometheus counter + persisted next-allowed-time.
+    """
+    if _flood_wait_counter is not None:
+        try:
+            _flood_wait_counter.labels(caller=caller).inc()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("reserve_bot_flood_metric_failed", error=str(exc))
+    state = _load_flood_state()
+    prev_attempts = int(state.get("attempts", 0)) + 1
+    next_allowed = time.time() + wait_seconds
+    _save_flood_state(
+        {
+            "next_allowed_at": next_allowed,
+            "last_wait_seconds": wait_seconds,
+            "last_caller": caller,
+            "attempts": prev_attempts,
+        }
+    )
 
 
 def _resolve_bot_token() -> str:
@@ -81,14 +156,38 @@ class ReserveBotBridge:
 
         Возвращает True при успехе, False если не сконфигурирован или ошибка.
         При ошибке — логирует и не бросает исключение.
+
+        FloodWait handling: уважает persisted next_allowed_at (переживает рестарты).
+        Если Telegram попросил ждать — НЕ ретраим в плотном цикле, отказываем
+        в старте до истечения cooldown. Exponential-backoff jitter добавляется
+        поверх wait_seconds.
         """
         if not self.is_configured:
             logger.debug("reserve_bot_not_configured")
             return False
         if self._running:
             return True
+
+        # Проверка persisted FloodWait cooldown (переживает рестарты Krab).
+        # Это main fix против каскада 134 FloodWait events: вместо плотного
+        # retry каждые ~35с при Krab restart loop — отказываемся стартовать
+        # пока Telegram-сервер не разрешит.
+        flood_state = _load_flood_state()
+        next_allowed = float(flood_state.get("next_allowed_at", 0) or 0)
+        now = time.time()
+        if now < next_allowed:
+            remaining = int(next_allowed - now)
+            logger.warning(
+                "reserve_bot_flood_cooldown_active",
+                remaining_seconds=remaining,
+                last_wait=flood_state.get("last_wait_seconds"),
+                attempts=flood_state.get("attempts"),
+            )
+            return False
+
         try:
             from pyrogram import Client, filters
+            from pyrogram.errors import FloodWait
             from pyrogram.types import Message
 
             client = Client(
@@ -131,7 +230,38 @@ class ReserveBotBridge:
                     "⚡ Reserve bot активен.\nКоманды: /status /silence /notify /voice /tasks"
                 )
 
-            await client.start()
+            try:
+                await client.start()
+            except FloodWait as fw:
+                # Telegram попросил подождать — уважаем его wait_seconds
+                # вместо плотного retry. Сохраняем next_allowed_at в файл,
+                # чтобы Krab restart loop не продолжил каскад.
+                wait = int(getattr(fw, "value", None) or getattr(fw, "x", 60) or 60)
+                jitter = random.uniform(1.0, 5.0)
+                # Exponential backoff multiplier: при повторных attempts
+                # увеличиваем cooldown, чтобы не долбить даже после wait.
+                state = _load_flood_state()
+                attempts = int(state.get("attempts", 0))
+                mult = min(2**attempts, _MAX_BACKOFF_MULT) if attempts > 0 else 1
+                effective_wait = int(wait * mult + jitter)
+                logger.warning(
+                    "reserve_bot_flood_wait",
+                    wait_seconds=wait,
+                    effective_wait=effective_wait,
+                    attempts=attempts,
+                    caller="auth.ImportBotAuthorization",
+                )
+                _record_flood_wait(effective_wait, "auth.ImportBotAuthorization")
+                # Внутри одного процесса: спим (если короткий wait) либо сразу bail.
+                # Для очень длинных wait (>60с) — bail, дадим Krab restart loop'у
+                # увидеть persisted cooldown.
+                if wait <= 60:
+                    await asyncio.sleep(effective_wait)
+                self._running = False
+                self._client = None
+                return False
+            # Успешный старт — сбрасываем persisted FloodWait state
+            _save_flood_state({})
             self._client = client
             self._running = True
             logger.info("reserve_bot_started", owner_ids=owner_ids)
