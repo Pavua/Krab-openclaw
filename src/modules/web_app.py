@@ -8808,6 +8808,11 @@ class WebApp:
 
         self.app.include_router(_build_write(self._make_router_context()))
 
+        # VPN Phase B: /api/vpn/help — endpoint для @pablito_vpn_bot.
+        from .web_routers.vpn_brain_router import build_vpn_brain_router as _build_vpn_brain
+
+        self.app.include_router(_build_vpn_brain(self._make_router_context()))
+
         # /api/translator/{languages,status,history,test} — Wave K extraction;
         # /api/translator/{readiness,control-plane,session-inspector,mobile-readiness,
         # delivery-matrix} — Wave Q extraction (через ctx.collect_runtime_lite() +
