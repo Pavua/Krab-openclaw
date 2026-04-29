@@ -1476,6 +1476,43 @@ class LLMFlowMixin:
                     error_type=type(_sc_exc).__name__,
                 )
 
+            # Idea 12 (Constitutional Guardrails). Прогоняем ответ через
+            # GuardrailEngine: PII / prompt-injection / mat. Default OFF
+            # (gate KRAB_GUARDRAILS_ENABLED=1). Fail-open: любая ошибка
+            # логируется и не блокирует доставку.
+            try:
+                if os.environ.get("KRAB_GUARDRAILS_ENABLED", "0") == "1" and full_response:
+                    from ..core.constitutional_guardrails import GuardrailEngine
+                    from ..core.pii_redactor import PIIRedactor
+
+                    _guard_engine = GuardrailEngine(redactor=PIIRedactor())
+                    _guard_result = _guard_engine.check(full_response, {"context_kind": "default"})
+                    if not _guard_result.passed:
+                        logger.warning(
+                            "guardrail_violation",
+                            chat_id=chat_id,
+                            severity=_guard_result.severity,
+                            kinds=[v.kind for v in _guard_result.violations],
+                        )
+                        if _guard_result.severity == "block":
+                            full_response = "🦀 Не могу ответить на этот запрос."
+                    elif _guard_result.severity == "rewrite" and _guard_result.rewritten:
+                        logger.info(
+                            "guardrail_rewrite_applied",
+                            chat_id=chat_id,
+                            kinds=[v.kind for v in _guard_result.violations],
+                            old_len=len(full_response),
+                            new_len=len(_guard_result.rewritten),
+                        )
+                        full_response = _guard_result.rewritten
+            except Exception as _guard_exc:  # noqa: BLE001
+                logger.warning(
+                    "guardrail_hook_failed",
+                    chat_id=chat_id,
+                    error=str(_guard_exc),
+                    error_type=type(_guard_exc).__name__,
+                )
+
             self._remember_hidden_reasoning_trace(
                 chat_id=chat_id,
                 query=query,
