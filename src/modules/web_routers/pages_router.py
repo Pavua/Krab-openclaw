@@ -77,9 +77,18 @@ def build_pages_router(ctx: RouterContext) -> APIRouter:
         return default
 
     # ── Landing + nano_theme.css ───────────────────────────────────────
+    # Session 30 (30.04.2026): default route / теперь отдаёт V4 (Liquid Glass)
+    # dashboard. Старый landing доступен по /legacy/.
 
     @router.get("/", response_class=HTMLResponse)
     async def index():
+        # Default → V4 dashboard
+        return _v4_html_or_stub("index.html", "<h1>V4 not ready</h1>")
+
+    @router.get("/legacy", response_class=HTMLResponse)
+    @router.get("/legacy/", response_class=HTMLResponse)
+    async def legacy_index():
+        # Старый landing на /legacy
         index_path = _resolve_path("_index_path", default_index_path)
         if index_path.exists():
             return FileResponse(index_path, headers=_no_store_headers())
