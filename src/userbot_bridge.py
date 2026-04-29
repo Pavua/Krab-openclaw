@@ -587,6 +587,9 @@ class KraabUserbot(
         self._error_digest_task: Optional[asyncio.Task] = None
         self._silence_schedule_task: Optional[asyncio.Task] = None
         self._command_usage_save_task: Optional[asyncio.Task] = None
+        # Idea-features periodic tick (reply_scheduler / daily_brief / channel_digest / patterns)
+        self._idea_features_task: Optional[asyncio.Task] = None
+        self._idea_tick_state: dict[str, float] = {}
         self._swarm_team_clients: dict[str, Any] = {}  # team → Pyrogram Client
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
@@ -1974,6 +1977,151 @@ class KraabUserbot(
         except Exception as exc:
             logger.warning("memory_indexer_start_failed", error=str(exc), non_fatal=True)
 
+    async def _idea_features_tick_loop(self) -> None:
+        """Единый периодический tick для idea-features (Idea 5/18/+).
+
+        Периодичность:
+        - reply_scheduler.pop_due() — каждые 30 секунд (отправка отложенных ответов)
+        - daily_brief — раз в день в 08:00 local (если KRAB_DAILY_BRIEF_ENABLED=1)
+        - channel_digest — раз в день в 09:00 в KRAB_CHANNEL_DIGEST_CHAT_ID
+        - pattern_detector.detect_patterns() — каждые 6 часов
+
+        State (last_run timestamps) — в self._idea_tick_state.
+        Каждая фича обёрнута в try/except: fail-open, не валит петлю.
+        """
+        # Шаг тика: 30 секунд (минимально для reply_scheduler)
+        tick_interval = 30.0
+        # Периоды (секунды)
+        pattern_period = 6 * 3600  # 6 часов
+        daily_reentry_guard = 23 * 3600  # 23 часа — защита от двойного запуска
+
+        while True:
+            try:
+                await asyncio.sleep(tick_interval)
+            except asyncio.CancelledError:
+                raise
+
+            now_ts = time.time()
+            now_local = datetime.now().astimezone()
+
+            # ── 1. reply_scheduler.pop_due ─────────────────────────────
+            try:
+                from .core.reply_scheduler import reply_scheduler  # noqa: PLC0415
+
+                due = reply_scheduler.pop_due()
+                for job in due:
+                    try:
+                        kwargs: dict[str, Any] = {}
+                        meta = dict(getattr(job, "metadata", {}) or {})
+                        rt = meta.get("reply_to_message_id")
+                        if rt is not None:
+                            try:
+                                kwargs["reply_to_message_id"] = int(rt)
+                            except (TypeError, ValueError):
+                                pass
+                        await self.client.send_message(job.chat_id, job.text, **kwargs)
+                        logger.info(
+                            "idea_tick_reply_sent",
+                            job_id=job.job_id,
+                            chat_id=job.chat_id,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "idea_tick_reply_send_failed",
+                            job_id=getattr(job, "job_id", "?"),
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                        )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "idea_tick_reply_scheduler_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+            # ── 2. daily_brief — 08:00 local в self-DM ─────────────────
+            try:
+                if os.getenv("KRAB_DAILY_BRIEF_ENABLED", "0").strip().lower() in (
+                    "1",
+                    "true",
+                    "yes",
+                ):
+                    last_run = float(self._idea_tick_state.get("daily_brief", 0.0))
+                    if (
+                        now_local.hour == 8
+                        and (now_ts - last_run) > daily_reentry_guard
+                        and self.me is not None
+                    ):
+                        from .core.daily_brief import DailyBriefBuilder  # noqa: PLC0415
+
+                        builder = DailyBriefBuilder()
+                        text = await builder.build_brief()
+                        if text:
+                            await self.client.send_message(self.me.id, text)
+                            logger.info("idea_tick_daily_brief_sent", chars=len(text))
+                        else:
+                            logger.info("idea_tick_daily_brief_empty")
+                        self._idea_tick_state["daily_brief"] = now_ts
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "idea_tick_daily_brief_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+            # ── 3. channel_digest — 09:00 local в configured chat ──────
+            try:
+                digest_chat = os.getenv("KRAB_CHANNEL_DIGEST_CHAT_ID", "").strip()
+                if digest_chat:
+                    last_run = float(self._idea_tick_state.get("channel_digest", 0.0))
+                    if now_local.hour == 9 and (now_ts - last_run) > daily_reentry_guard:
+                        from .core.channel_digest import (  # noqa: PLC0415
+                            channel_digest_builder,
+                        )
+
+                        text = channel_digest_builder.build_digest()
+                        if text:
+                            try:
+                                target: int | str = int(digest_chat)
+                            except ValueError:
+                                target = digest_chat
+                            await self.client.send_message(target, text)
+                            logger.info(
+                                "idea_tick_channel_digest_sent",
+                                chat=digest_chat,
+                                chars=len(text),
+                            )
+                        else:
+                            logger.info("idea_tick_channel_digest_empty")
+                        self._idea_tick_state["channel_digest"] = now_ts
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "idea_tick_channel_digest_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+            # ── 4. pattern_detector — каждые 6 часов ───────────────────
+            try:
+                last_run = float(self._idea_tick_state.get("pattern_detector", 0.0))
+                if (now_ts - last_run) >= pattern_period:
+                    from .core.proactive_suggestions import (  # noqa: PLC0415
+                        pattern_detector,
+                    )
+
+                    suggestions = pattern_detector.detect_patterns()
+                    logger.info(
+                        "proactive_patterns_detected",
+                        count=len(suggestions),
+                    )
+                    self._idea_tick_state["pattern_detector"] = now_ts
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "idea_tick_pattern_detector_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
     async def _command_usage_save_loop(self) -> None:
         """Периодически (каждые 5 минут) сохраняет счётчики команд на диск."""
         while True:
@@ -2860,6 +3008,10 @@ class KraabUserbot(
         self._ensure_silence_schedule_started()
         self._ensure_memory_indexer_started()
         self._command_usage_save_task = asyncio.create_task(self._command_usage_save_loop())
+        # Idea-features periodic tick: reply_scheduler / daily_brief / channel_digest / patterns
+        if self._idea_features_task is None or self._idea_features_task.done():
+            self._idea_features_task = asyncio.create_task(self._idea_features_tick_loop())
+            logger.info("idea_features_tick_started")
 
         # Wave 29-YY: chat_ban_cache periodic cleanup (follow-up 29-TT)
         # Фоновый sweep_expired каждые 5 минут, удаляет записи с истёкшим expires_at.
