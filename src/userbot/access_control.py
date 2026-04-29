@@ -344,6 +344,25 @@ class AccessControlMixin:
             except Exception:  # noqa: BLE001
                 pass
 
+        # Idea 31 multi-persona switcher (Session 29 part B):
+        # переключатель персон по chat_id. Идёт ПОСЛЕ Feature C/F/J,
+        # чтобы выбранная persona видела общий контекст. Fail-open и
+        # под env-флагом — выключено по умолчанию.
+        if chat_id is not None:
+            try:
+                import os  # noqa: PLC0415
+
+                if os.environ.get("KRAB_MULTI_PERSONA_ENABLED", "0") == "1":
+                    from ..core.multi_persona import (  # noqa: PLC0415
+                        persona_suffix_for_prompt as _persona_suffix,
+                    )
+
+                    ms = _persona_suffix(chat_id)
+                    if ms and ms not in base:
+                        base = f"{base}\n\n{ms}".strip()
+            except Exception:  # noqa: BLE001
+                pass
+
         return base
 
     # ------------------------------------------------------------------
