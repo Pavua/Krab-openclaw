@@ -305,6 +305,30 @@ class MCPClientManager:
         except ImportError:
             pass  # graceful: модуль может отсутствовать в редуцированных сборках
 
+        # vpn_tools: read-only VPN x-ui панель (VPN Phase A).
+        # Опционально через KRAB_VPN_TOOLS_ENABLED (default включено).
+        if os.environ.get("KRAB_VPN_TOOLS_ENABLED", "1").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+        ):
+            try:
+                from .core.vpn_tools import VPN_TOOL_SCHEMAS
+
+                for schema in VPN_TOOL_SCHEMAS:
+                    manifest.append(
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": schema["name"],
+                                "description": schema["description"],
+                                "parameters": schema["inputSchema"],
+                            },
+                        }
+                    )
+            except ImportError:
+                pass  # graceful: vpn_tools опциональны
+
         return manifest
 
     async def call_tool_unified(self, full_tool_name: str, arguments: Dict[str, Any]) -> str:
@@ -353,6 +377,18 @@ class MCPClientManager:
 
             if is_userbot_self_tool(full_tool_name):
                 result = await dispatch_userbot_self_tool(full_tool_name, arguments)
+                import json as _json
+
+                return _json.dumps(result, ensure_ascii=False, default=str)
+        except ImportError:
+            pass
+
+        # VPN Phase A: read-only x-ui panel tools
+        try:
+            from .core.vpn_tools import dispatch_vpn_tool, is_vpn_tool
+
+            if is_vpn_tool(full_tool_name):
+                result = await dispatch_vpn_tool(full_tool_name, arguments)
                 import json as _json
 
                 return _json.dumps(result, ensure_ascii=False, default=str)
