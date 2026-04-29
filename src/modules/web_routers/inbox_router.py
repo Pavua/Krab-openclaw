@@ -18,6 +18,7 @@ Write endpoints (Wave O):
 - POST /api/inbox/stale-processing/remediate — bulk-action stale acked
 - POST /api/inbox/stale-open/remediate — bulk-action stale open
 - POST /api/inbox/create — owner_task / approval_request
+- POST /api/inbox/create-vpn-alert — VPN watchdog → inbox bridge (kind=vpn_alert)
 """
 
 from __future__ import annotations
@@ -355,5 +356,68 @@ def build_inbox_router(ctx: RouterContext) -> APIRouter:
             "ok": True,
             "result": result,
         }
+
+    # ---------------------------------------------------------------------
+    # POST /api/inbox/create-vpn-alert (VPN Phase C — alerts bridge)
+    # ---------------------------------------------------------------------
+
+    # Допустимые severity-значения VPN watchdog'ов. Совпадают с inbox
+    # severity, поэтому маппинг тривиален — единственная задача endpoint'а
+    # лочить kind=vpn_alert и source=vpn-watchdog, чтобы каналы не
+    # перемешивались.
+    vpn_alert_severities = {"info", "warning", "error"}
+
+    @router.post("/api/inbox/create-vpn-alert")
+    async def inbox_create_vpn_alert(
+        payload: dict[str, Any] = Body(default_factory=dict),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """
+        Bridge VPN watchdog → Krab inbox.
+
+        VPN watchdogs (`cert_guard`, `disk_guard`, `watchdog_vpn_panel`,
+        `bruteforce_audit`) дополнительно к Telegram-нотификации через
+        `alerts.env` шлют alert сюда. Endpoint thin: валидируем поля,
+        нормализуем severity, кладём в inbox через `upsert_item` с
+        kind=`vpn_alert` + dedupe по (source_script + title), чтобы
+        повторные алерты от одного watchdog'а на одну тему не плодили
+        дубликаты в UI.
+        """
+        ctx.assert_write_access(x_krab_web_key, token)
+
+        title = str(payload.get("title") or "").strip()
+        body = str(payload.get("body") or "").strip()
+        source_script = str(payload.get("source_script") or "").strip()
+        if not title or not body:
+            raise HTTPException(status_code=400, detail="vpn_alert_title_body_required")
+        if not source_script:
+            raise HTTPException(status_code=400, detail="vpn_alert_source_script_required")
+
+        severity = str(payload.get("severity") or "warning").strip().lower() or "warning"
+        if severity not in vpn_alert_severities:
+            raise HTTPException(status_code=400, detail="vpn_alert_invalid_severity")
+
+        metadata = dict(payload.get("metadata") or {})
+        metadata["source_script"] = source_script
+        metadata["origin"] = "vpn-watchdog"
+
+        # dedupe по watchdog+title — повторные сигналы upsert'ятся, не плодя items
+        dedupe_key = f"vpn_alert::{source_script}::{title}"
+
+        try:
+            result = inbox_service.upsert_item(
+                dedupe_key=dedupe_key,
+                kind="vpn_alert",
+                source="vpn-watchdog",
+                title=title,
+                body=body,
+                severity=severity,
+                metadata=metadata,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return {"ok": True, "result": result}
 
     return router

@@ -251,6 +251,7 @@ class AccessControlMixin:
         *,
         chat_id: str | int | None = None,
         owner_id: str | int | None = None,
+        user_id: str | int | None = None,
     ) -> str:
         """
         Добавляет runtime-ограничения, которые не должны теряться между ролями.
@@ -363,7 +364,57 @@ class AccessControlMixin:
             except Exception:  # noqa: BLE001
                 pass
 
+        # Idea 24 A/B testing wire (Session 29 part C):
+        # sticky per-user variant подмешивается в system prompt. Под env-флагом
+        # `KRAB_AB_TESTING_ENABLED=1`. Fail-open: любая ошибка не ломает prompt.
+        if user_id is not None:
+            try:
+                import os  # noqa: PLC0415
+
+                if os.environ.get("KRAB_AB_TESTING_ENABLED", "0") == "1":
+                    from ..core.prompt_ab_testing import ab_tester  # noqa: PLC0415
+
+                    # Убедимся, что default-эксперимент зарегистрирован.
+                    AccessControlMixin._ensure_ab_default_experiment()
+                    try:
+                        variant_name, variant_text = ab_tester.pick_variant(
+                            "system_prompt_tone", str(user_id)
+                        )
+                        if variant_text and variant_text.strip():
+                            ab_chunk = f"[A/B variant '{variant_name}']:\n{variant_text.strip()}"
+                            if ab_chunk not in base:
+                                base = f"{base}\n\n{ab_chunk}".strip()
+                    except KeyError:
+                        # Эксперимент не зарегистрирован — тихо пропускаем.
+                        pass
+            except Exception:  # noqa: BLE001
+                pass
+
         return base
+
+    @staticmethod
+    def _ensure_ab_default_experiment() -> None:
+        """Регистрирует дефолтный эксперимент `system_prompt_tone`, если его нет.
+
+        Owner может перерегистрировать его через `ab_tester.register_experiment(...)`
+        в любой момент — перерегистрация сохраняет уже накопленные outcomes
+        для variants с теми же именами.
+        """
+        try:
+            from ..core.prompt_ab_testing import ab_tester  # noqa: PLC0415
+
+            if "system_prompt_tone" in ab_tester.list_experiments():
+                return
+            ab_tester.register_experiment(
+                "system_prompt_tone",
+                variants={
+                    "control": "",
+                    "concise": "Стиль: коротко и по сути, без лишних слов.",
+                },
+                traffic_split={"control": 0.5, "concise": 0.5},
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     # ------------------------------------------------------------------
     # Optional AI disclosure
