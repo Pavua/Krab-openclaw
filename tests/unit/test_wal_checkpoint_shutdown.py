@@ -18,8 +18,11 @@ from unittest.mock import patch
 import pytest
 
 from src.bootstrap.db_corruption_guard import (
+    check_wal_sentinel,
+    clear_wal_sentinel,
     flush_wal_checkpoints,
     known_wal_db_paths,
+    write_wal_sentinel,
 )
 
 
@@ -53,7 +56,7 @@ def test_known_wal_db_paths_covers_three_canonical(monkeypatch, tmp_path):
 
 
 def test_flush_wal_checkpoints_runs_pragma_on_all_dbs(tmp_path):
-    """Для каждой существующей WAL-базы вызывается PRAGMA wal_checkpoint(FULL)."""
+    """Для каждой существующей WAL-базы вызывается PRAGMA wal_checkpoint(TRUNCATE)."""
     db1 = tmp_path / "a.db"
     db2 = tmp_path / "b.db"
     _make_wal_db(db1)
@@ -90,6 +93,60 @@ def test_flush_wal_checkpoints_handles_corrupt_db_without_raising(tmp_path):
     assert reports[0]["skipped"] is False
     # Здоровая база после битой — должна успешно обработаться.
     assert reports[1]["ok"] is True
+
+
+# ---------- WAL sentinel ----------
+
+
+def test_sentinel_write_and_check(tmp_path, monkeypatch):
+    """write_wal_sentinel() создаёт файл; check_wal_sentinel() возвращает True."""
+    import src.bootstrap.db_corruption_guard as guard_mod
+
+    monkeypatch.setattr(
+        guard_mod,
+        "_sentinel_path",
+        lambda: tmp_path / ".wal_flushed",
+    )
+    assert not check_wal_sentinel()
+    write_wal_sentinel()
+    assert check_wal_sentinel()
+
+
+def test_sentinel_clear(tmp_path, monkeypatch):
+    """clear_wal_sentinel() удаляет файл."""
+    import src.bootstrap.db_corruption_guard as guard_mod
+
+    sentinel = tmp_path / ".wal_flushed"
+    sentinel.write_text("1234567890")
+    monkeypatch.setattr(guard_mod, "_sentinel_path", lambda: sentinel)
+    assert check_wal_sentinel()
+    clear_wal_sentinel()
+    assert not check_wal_sentinel()
+
+
+def test_flush_wal_checkpoints_writes_sentinel_on_success(tmp_path, monkeypatch):
+    """flush_wal_checkpoints() пишет sentinel если все DB прошли OK."""
+    import src.bootstrap.db_corruption_guard as guard_mod
+
+    sentinel = tmp_path / ".wal_flushed"
+    monkeypatch.setattr(guard_mod, "_sentinel_path", lambda: sentinel)
+    db = tmp_path / "test.db"
+    _make_wal_db(db)
+    assert not sentinel.exists()
+    flush_wal_checkpoints([db])
+    assert sentinel.exists()
+
+
+def test_flush_wal_checkpoints_no_sentinel_on_failure(tmp_path, monkeypatch):
+    """flush_wal_checkpoints() НЕ пишет sentinel если есть ошибка."""
+    import src.bootstrap.db_corruption_guard as guard_mod
+
+    sentinel = tmp_path / ".wal_flushed"
+    monkeypatch.setattr(guard_mod, "_sentinel_path", lambda: sentinel)
+    corrupt = tmp_path / "corrupt.db"
+    corrupt.write_bytes(b"NOT_A_SQLITE_FILE" * 100)
+    flush_wal_checkpoints([corrupt])
+    assert not sentinel.exists()
 
 
 # ---------- preflight retry on transient disk I/O error ----------

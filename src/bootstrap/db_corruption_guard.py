@@ -276,6 +276,45 @@ def preflight_known_dbs(
     return reports
 
 
+def _sentinel_path() -> Path:
+    """Путь к sentinel-файлу WAL flush."""
+    home = Path.home()
+    return home / ".openclaw" / "krab_runtime_state" / ".wal_flushed"
+
+
+def write_wal_sentinel() -> None:
+    """Записывает sentinel после успешного WAL checkpoint."""
+    sentinel = _sentinel_path()
+    try:
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text(str(int(time.time())))
+        logger.debug("wal_sentinel_written", path=str(sentinel))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("wal_sentinel_write_failed", error=str(exc))
+
+
+def clear_wal_sentinel() -> None:
+    """Удаляет sentinel при старте (перед тем как базы открыты)."""
+    sentinel = _sentinel_path()
+    try:
+        if sentinel.exists():
+            sentinel.unlink()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("wal_sentinel_clear_failed", error=str(exc))
+
+
+def check_wal_sentinel() -> bool:
+    """
+    Проверяет наличие sentinel-файла.
+
+    Returns:
+        True — предыдущий процесс успешно flush'нул WAL (безопасно открывать DB).
+        False — sentinel отсутствует (предыдущий процесс мог не завершиться штатно
+                или это первый запуск).
+    """
+    return _sentinel_path().exists()
+
+
 def known_wal_db_paths() -> list[Path]:
     """
     Список SQLite WAL-mode баз, которые надо checkpoint'ить на shutdown.
@@ -309,12 +348,13 @@ def flush_wal_checkpoints(
     PYTHON-FASTAPI-5W, 9 events/24h, 28.04.2026).
 
     Стратегия:
-    - Для каждой WAL-mode базы: connect + `PRAGMA wal_checkpoint(FULL)`;
-      `FULL` гарантирует, что все committed pages переписаны в main DB,
-      но НЕ требует exclusive lock как `TRUNCATE`.
+    - Для каждой WAL-mode базы: connect + `PRAGMA wal_checkpoint(TRUNCATE)`;
+      `TRUNCATE` гарантирует полный перенос WAL → main DB и обнуление WAL-файла,
+      что устраняет disk I/O error при быстром restart.
     - Missing файл — graceful skip (для archive.db не существует на первом запуске).
     - Per-db timeout 5s — если SQLite заблокирован, не висим бесконечно.
     - Любое исключение → логируем и продолжаем со следующей базой.
+    - После успешного обхода всех DB записывается sentinel-файл `.wal_flushed`.
 
     Returns:
         Список report-словарей: {path, ok, detail, skipped}.
@@ -322,6 +362,7 @@ def flush_wal_checkpoints(
     if db_paths is None:
         db_paths = known_wal_db_paths()
     reports: list[dict] = []
+    all_ok = True
     for path in db_paths:
         report: dict = {
             "path": str(path),
@@ -341,7 +382,9 @@ def flush_wal_checkpoints(
             try:
                 # busy_timeout — на случай, если фоновая операция ещё держит лок.
                 conn.execute(f"PRAGMA busy_timeout = {int(timeout_sec * 1000)};")
-                cur = conn.execute("PRAGMA wal_checkpoint(FULL);")
+                # TRUNCATE: полный checkpoint + обнуление WAL-файла.
+                # Устраняет disk I/O error при быстром restart (Sentry PYTHON-FASTAPI-5W).
+                cur = conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
                 row = cur.fetchone()
                 # row = (busy, log_pages, checkpointed_pages); busy=0 означает успех.
                 report["ok"] = bool(row is not None and row[0] == 0)
@@ -350,6 +393,7 @@ def flush_wal_checkpoints(
                 conn.close()
         except Exception as exc:  # noqa: BLE001 — shutdown не должен падать
             report["detail"] = f"{type(exc).__name__}: {exc}"
+            all_ok = False
             logger.warning(
                 "wal_checkpoint_failed",
                 path=str(path),
@@ -357,12 +401,20 @@ def flush_wal_checkpoints(
                 error_type=type(exc).__name__,
             )
         else:
+            if not report["ok"]:
+                all_ok = False
             logger.info(
                 "wal_checkpoint_ok",
                 path=str(path),
                 detail=report["detail"],
             )
         reports.append(report)
+
+    # Sentinel: записываем после обхода всех DB, даже если отдельные базы
+    # не удалось checkpoint'нуть (missing = ok). Это сигнализирует следующему
+    # процессу, что предыдущий завершился штатно.
+    if all_ok:
+        write_wal_sentinel()
     return reports
 
 
@@ -375,4 +427,7 @@ __all__ = [
     "report_corruption_to_sentry",
     "known_wal_db_paths",
     "flush_wal_checkpoints",
+    "check_wal_sentinel",
+    "write_wal_sentinel",
+    "clear_wal_sentinel",
 ]
