@@ -417,6 +417,15 @@ class Config:
     # после gateway restart). Default 120 сек: меньше 90 — ложные срабатывания
     # на больших моделях, больше 180 — пользователь заметно "виснет".
     LLM_STAGNATION_THRESHOLD_SEC: float = float(os.getenv("LLM_STAGNATION_THRESHOLD_SEC", "120"))
+    # Hard wall-clock cap на весь _run_llm_request_flow цикл (seconds).
+    # Срабатывает даже если gateway активно обрабатывает запрос — просто слишком медленно.
+    # Отличается от stagnation (тот срабатывает только при отсутствии активности в runs.sqlite).
+    # Default: 90s для текста, 180s для фото (overrides: KRAB_LLM_WALL_CLOCK_CAP_SEC /
+    # KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC). 0 = отключено.
+    KRAB_LLM_WALL_CLOCK_CAP_SEC: float = float(os.getenv("KRAB_LLM_WALL_CLOCK_CAP_SEC", "90"))
+    KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC: float = float(
+        os.getenv("KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC", "180")
+    )
     # Streaming UI: показывать reasoning (chain-of-thought) в сообщении.
     TELEGRAM_STREAM_SHOW_REASONING: bool = os.getenv(
         "TELEGRAM_STREAM_SHOW_REASONING", "0"
@@ -654,6 +663,10 @@ class Config:
                         "true",
                         "yes",
                     )
+                elif key == "KRAB_LLM_WALL_CLOCK_CAP_SEC":
+                    cls.KRAB_LLM_WALL_CLOCK_CAP_SEC = float(value)
+                elif key == "KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC":
+                    cls.KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC = float(value)
                 elif key == "LM_STUDIO_NATIVE_REASONING_MODE":
                     cls.LM_STUDIO_NATIVE_REASONING_MODE = value.strip().lower()
                 elif key == "LM_STUDIO_NATIVE_AUTO_CONTINUE_MAX_ROUNDS":
