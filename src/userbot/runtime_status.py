@@ -480,7 +480,7 @@ class RuntimeStatusMixin:
             f"- Chrome profile DevTools: {'configured' if chrome_profile_ready else 'missing config'}",
             f"- macOS automation: {'configured' if macos_automation.is_available() else 'unavailable'}",
             "- Memory engine: ON",
-            f"- Proactive watch: {'ON' if bool(getattr(config, 'PROACTIVE_WATCH_ENABLED', False)) else 'OFF'}",
+            f"- Proactive watch: {'ON' if config.PROACTIVE_WATCH_ENABLED else 'OFF'}",
             "- Файловый MCP-контур: ON",
         ]
         return (

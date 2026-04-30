@@ -431,6 +431,14 @@ class Config:
         "DEFERRED_ACTION_GUARD_ENABLED",
         "1",
     ).strip().lower() in ("1", "true", "yes")
+    # Фоновый owner-watch: мониторинг runtime состояния + дайджест ошибок.
+    # По умолчанию включено — отключить через PROACTIVE_WATCH_ENABLED=0.
+    PROACTIVE_WATCH_ENABLED: bool = os.getenv(
+        "PROACTIVE_WATCH_ENABLED",
+        "1",
+    ).strip().lower() in ("1", "true", "yes")
+    # Интервал снятия owner-digest (секунды). Дефолт 15 минут.
+    PROACTIVE_WATCH_INTERVAL_SEC: int = int(os.getenv("PROACTIVE_WATCH_INTERVAL_SEC", "900"))
 
     # Автономные рекуррентные задачи свёрма (scheduled swarm runs).
     # По умолчанию ВЫКЛЮЧЕНО — включать только после стабилизации.
@@ -506,6 +514,17 @@ class Config:
     # Формат: comma-separated chat_id (отрицательные для супергрупп и каналов).
     VOICE_REPLY_BLOCKED_CHATS: list[str] = [
         s.strip() for s in os.getenv("VOICE_REPLY_BLOCKED_CHATS", "").split(",") if s.strip()
+    ] or ["-1001587432709"]
+
+    # Permanent chat-level ban list: Краб НИКОГДА не отвечает в этих чатах и не
+    # гоняет LLM flow для входящих из них. Список применяется как permanent запись
+    # в chat_ban_cache при bootstrap (cooldown_hours=None → не истекает).
+    # Это hardcoded fallback для чатов с USER_BANNED_IN_CHANNEL без возможности
+    # восстановления (например, How2AI где бот окончательно заблокирован).
+    # Снять: либо убрать из этого списка + restart, либо `!chatban clear <chat_id>`.
+    # Формат: comma-separated chat_id.
+    CHAT_PERMANENT_BAN_LIST: list[str] = [
+        s.strip() for s in os.getenv("CHAT_PERMANENT_BAN_LIST", "").split(",") if s.strip()
     ] or ["-1001587432709"]
 
     # Session watchdog heartbeat (сек). Проверяет Telegram MTProto alive.

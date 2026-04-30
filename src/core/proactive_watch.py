@@ -691,8 +691,8 @@ class ProactiveWatchService:
             state.get("last_snapshot") if isinstance(state.get("last_snapshot"), dict) else {}
         )
         return {
-            "enabled": bool(getattr(config, "PROACTIVE_WATCH_ENABLED", False)),
-            "interval_sec": int(getattr(config, "PROACTIVE_WATCH_INTERVAL_SEC", 900) or 900),
+            "enabled": config.PROACTIVE_WATCH_ENABLED,
+            "interval_sec": config.PROACTIVE_WATCH_INTERVAL_SEC,
             "alert_cooldown_sec": self.alert_cooldown_sec,
             "last_reason": str(state.get("last_reason") or ""),
             "last_digest_ts": str(state.get("last_digest_ts") or ""),
@@ -1061,6 +1061,224 @@ class ProactiveWatchService:
             pct=round(pct, 1),
         )
         return True
+
+    # -----------------------------------------------------------------
+    # OpenClaw gateway health alert (consecutive failures → owner alert)
+    # -----------------------------------------------------------------
+    # Интервал между пробами (секунды)
+    OPENCLAW_HEALTH_CHECK_INTERVAL_SEC: int = 10
+    # Количество последовательных сбоев до отправки алерта
+    OPENCLAW_HEALTH_FAIL_THRESHOLD: int = 3
+    # Debounce: минимальный интервал между алертами (30 минут)
+    OPENCLAW_HEALTH_ALERT_DEBOUNCE_SEC: int = 1800
+
+    @staticmethod
+    def _is_openclaw_health_alert_enabled() -> bool:
+        """Gate: KRAB_OPENCLAW_HEALTH_ALERT_ENABLED, default on."""
+        raw = os.environ.get("KRAB_OPENCLAW_HEALTH_ALERT_ENABLED", "1").strip().lower()
+        return raw in ("1", "true", "yes", "on")
+
+    async def _check_openclaw_gateway_unreachable(
+        self,
+        notifier: Callable[[str], Awaitable[None]] | None = None,
+        *,
+        _consecutive_failures: list[int],
+    ) -> dict[str, Any]:
+        """
+        Проверяет доступность OpenClaw gateway.
+
+        Параметры:
+          notifier — async callback для отправки Telegram alert владельцу.
+          _consecutive_failures — mutable list[int] с единственным элементом —
+            счётчиком последовательных сбоев (in-out аргумент через список).
+
+        Логика:
+          - Каждый вызов делает один health probe.
+          - При сбое инкрементирует счётчик.
+          - При OPENCLAW_HEALTH_FAIL_THRESHOLD последовательных сбоях:
+            - создаёт inbox item;
+            - если notifier доступен и прошёл debounce — отправляет Telegram alert.
+          - При успехе сбрасывает счётчик и при восстановлении после алерта — recovery alert.
+          - Возвращает dict {ok, consecutive_failures, alerted}.
+        """
+        if not self._is_openclaw_health_alert_enabled():
+            return {"ok": True, "consecutive_failures": 0, "alerted": False, "disabled": True}
+
+        ok = await self._probe_service_health("http://127.0.0.1:18789/health")
+        state = self._load_state()
+        prev_failures = _consecutive_failures[0]
+        prev_alerted = bool(state.get("openclaw_health_alert_active", False))
+        last_alert_ts = float(state.get("openclaw_health_last_alert_ts", 0))
+        ts_now = _now_utc_iso()
+        alerted = False
+
+        if ok:
+            # Gateway доступен
+            if prev_failures > 0:
+                logger.info(
+                    "openclaw_gateway_health_recovered",
+                    after_failures=prev_failures,
+                )
+            _consecutive_failures[0] = 0
+            # Если был активный алерт — отправим recovery уведомление
+            if prev_alerted:
+                state["openclaw_health_alert_active"] = False
+                self._save_state(state)
+                # Закрываем inbox item
+                try:
+                    inbox_service.set_status_by_dedupe(
+                        "proactive:alert:openclaw_gateway_unreachable",
+                        status="done",
+                        actor="krab-internal",
+                        note="gateway_health_recovered",
+                        event_action="resolved",
+                        metadata_updates={"recovered_at": ts_now},
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("openclaw_health_recovery_inbox_close_failed", error=str(exc))
+                if notifier is not None:
+                    try:
+                        await notifier(
+                            "✅ **OpenClaw Gateway: восстановлен**\n"
+                            f"Gateway `http://127.0.0.1:18789` снова отвечает (был недоступен {prev_failures} проб)."
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("openclaw_health_recovery_alert_failed", error=str(exc))
+            return {"ok": True, "consecutive_failures": 0, "alerted": False}
+
+        # Gateway недоступен
+        _consecutive_failures[0] = prev_failures + 1
+        new_failures = _consecutive_failures[0]
+        logger.warning(
+            "openclaw_gateway_health_probe_failed",
+            consecutive_failures=new_failures,
+            threshold=self.OPENCLAW_HEALTH_FAIL_THRESHOLD,
+        )
+
+        if new_failures < self.OPENCLAW_HEALTH_FAIL_THRESHOLD:
+            # Ещё не достигли порога — молчим
+            return {"ok": False, "consecutive_failures": new_failures, "alerted": False}
+
+        # Порог достигнут — проверяем debounce
+        now_ts = time.time()
+        debounce_elapsed = now_ts - last_alert_ts
+        debounce_ok = debounce_elapsed >= self.OPENCLAW_HEALTH_ALERT_DEBOUNCE_SEC
+
+        # Создаём/обновляем inbox item при каждом срабатывании порога
+        alert_body = (
+            f"**OpenClaw Gateway Unreachable** — {ts_now}\n"
+            f"Gateway `http://127.0.0.1:18789` не отвечает {new_failures} проб подряд "
+            f"(порог: {self.OPENCLAW_HEALTH_FAIL_THRESHOLD}).\n"
+            "Возможные причины: crash gateway-процесса, занятый порт, OOM.\n"
+            "Действие: `openclaw gateway` для рестарта (НЕ SIGHUP)."
+        )
+        try:
+            inbox_service.upsert_item(
+                dedupe_key="proactive:alert:openclaw_gateway_unreachable",
+                kind="proactive_action",
+                source="krab-internal",
+                title=f"OpenClaw Gateway недоступен ({new_failures} сбоев подряд)",
+                body=alert_body,
+                severity="error",
+                status="open",
+                identity=inbox_service.build_identity(
+                    channel_id="system",
+                    team_id="owner",
+                    trace_id="alert:openclaw_gateway_unreachable",
+                    approval_scope="owner",
+                ),
+                metadata={
+                    "action_type": "openclaw_gateway_unreachable_alert",
+                    "consecutive_failures": new_failures,
+                    "threshold": self.OPENCLAW_HEALTH_FAIL_THRESHOLD,
+                    "alert_ts": ts_now,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("openclaw_health_alert_inbox_upsert_failed", error=str(exc))
+
+        # Telegram alert с debounce
+        if notifier is not None and debounce_ok:
+            try:
+                await notifier(
+                    f"🚨 **OpenClaw Gateway недоступен**\n"
+                    f"Не отвечает `http://127.0.0.1:18789` — {new_failures} проб подряд.\n"
+                    "Используй `openclaw gateway` для рестарта (НЕ SIGHUP).\n"
+                    "Проверь: `!health` или Owner Panel."
+                )
+                alerted = True
+                state["openclaw_health_last_alert_ts"] = now_ts
+                state["openclaw_health_alert_active"] = True
+                self._save_state(state)
+                logger.warning(
+                    "openclaw_gateway_unreachable_alert_sent",
+                    consecutive_failures=new_failures,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("openclaw_health_alert_send_failed", error=str(exc))
+        elif not debounce_ok:
+            logger.debug(
+                "openclaw_health_alert_debounce_active",
+                elapsed_sec=round(debounce_elapsed),
+                debounce_sec=self.OPENCLAW_HEALTH_ALERT_DEBOUNCE_SEC,
+            )
+
+        return {"ok": False, "consecutive_failures": new_failures, "alerted": alerted}
+
+    async def _openclaw_health_alert_loop(
+        self,
+        notifier: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
+        """
+        Бесконечный цикл мониторинга OpenClaw gateway.
+
+        Проверяет gateway каждые OPENCLAW_HEALTH_CHECK_INTERVAL_SEC секунд.
+        При OPENCLAW_HEALTH_FAIL_THRESHOLD последовательных сбоях — отправляет
+        Telegram alert и создаёт inbox item.
+        При восстановлении — recovery уведомление.
+
+        Gate: KRAB_OPENCLAW_HEALTH_ALERT_ENABLED (default "1").
+        Debounce: max 1 alert per OPENCLAW_HEALTH_ALERT_DEBOUNCE_SEC (30 min).
+        """
+        if not self._is_openclaw_health_alert_enabled():
+            logger.info("openclaw_health_alert_disabled_by_gate")
+            return
+
+        # Mutable счётчик последовательных сбоев — передаём через list для mutability
+        consecutive_failures: list[int] = [0]
+
+        logger.info(
+            "openclaw_health_alert_loop_started",
+            interval_sec=self.OPENCLAW_HEALTH_CHECK_INTERVAL_SEC,
+            fail_threshold=self.OPENCLAW_HEALTH_FAIL_THRESHOLD,
+            debounce_sec=self.OPENCLAW_HEALTH_ALERT_DEBOUNCE_SEC,
+        )
+
+        while True:
+            await asyncio.sleep(self.OPENCLAW_HEALTH_CHECK_INTERVAL_SEC)
+            try:
+                await self._check_openclaw_gateway_unreachable(
+                    notifier=notifier,
+                    _consecutive_failures=consecutive_failures,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("openclaw_health_alert_loop_error", error=str(exc))
+
+    def start_openclaw_health_alert_loop(
+        self,
+        notifier: Callable[[str], Awaitable[None]] | None = None,
+    ) -> "asyncio.Task[None]":
+        """Запускает фоновый loop мониторинга OpenClaw gateway и возвращает Task."""
+        loop = asyncio.get_event_loop()
+        task = loop.create_task(
+            self._openclaw_health_alert_loop(notifier=notifier),
+            name="krab_openclaw_health_alert",
+        )
+        logger.info(
+            "openclaw_health_alert_loop_task_created",
+            enabled=self._is_openclaw_health_alert_enabled(),
+        )
+        return task
 
     # Cooldown между archive.db alert'ами (12 часов)
     ARCHIVE_DB_ALERT_COOLDOWN_SEC: int = 43200
