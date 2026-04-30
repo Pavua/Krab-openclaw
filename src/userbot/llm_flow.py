@@ -681,6 +681,18 @@ class LLMFlowMixin:
         except Exception:  # noqa: BLE001
             pass
 
+        # Idea 33: Joke Calibration — подмешиваем humor_score в system_prompt.
+        # Gated KRAB_JOKE_CALIBRATION_ENABLED. Fail-open: любая ошибка проглатывается.
+        if os.environ.get("KRAB_JOKE_CALIBRATION_ENABLED", "0") == "1":
+            try:
+                from ..core.joke_calibration import joke_calibration_store as _jcs  # noqa: PLC0415
+
+                _humor_advice = _jcs.format_humor_advice_for_prompt(chat_id)
+                if _humor_advice:
+                    system_prompt = system_prompt + "\n\n" + _humor_advice
+            except Exception as _jc_exc:  # noqa: BLE001
+                logger.debug("joke_calibration_prompt_inject_failed", error=str(_jc_exc))
+
         stream = openclaw_client.send_message_stream(
             message=effective_query,
             chat_id=runtime_chat_id,
@@ -1599,6 +1611,25 @@ class LLMFlowMixin:
             ):
                 asyncio.create_task(self._send_message_reaction(message, "✅"))
                 _reaction_sent = True
+
+            # TODO extraction (Idea 21): извлекаем TODO-намерения из LLM-ответа.
+            # Только для owner-чатов, только при успешном ответе, fire-and-forget.
+            # Gated env-флагом KRAB_TODO_EXTRACTION_ENABLED (проверяется внутри).
+            if (
+                is_self
+                and not timeout_error_was_sent
+                and full_response
+                and not self._looks_like_error_surface_text(full_response)
+            ):
+                try:
+                    from ..core.feedback_tracker import get_tracker as _get_tracker  # noqa: PLC0415
+
+                    asyncio.create_task(
+                        _get_tracker().on_owner_message_in(full_response),
+                        name=f"todo_extraction_{chat_id}",
+                    )
+                except Exception as _te_exc:  # noqa: BLE001
+                    logger.debug("todo_extraction_schedule_failed", error=str(_te_exc))
 
             # Cost footer (Feature A): показываем owner'у стоимость запроса.
             _cost_footer_mode = _get_cost_footer_mode()
