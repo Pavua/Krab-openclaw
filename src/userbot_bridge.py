@@ -3423,7 +3423,9 @@ class KraabUserbot(
                 sent = await self._safe_reply_or_send_new(source_message, part)
                 if getattr(sent, "id", None):
                     delivered_ids.append(str(sent.id))
-            self._maybe_record_smart_trigger_response(source_message.chat.id, delivered_ids)
+            self._maybe_record_smart_trigger_response(
+                source_message.chat.id, delivered_ids, full_response
+            )
             self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
             return {
                 "delivery_mode": "edit_and_reply",
@@ -3455,7 +3457,9 @@ class KraabUserbot(
                     await delete_coro()
             except Exception:
                 pass
-            self._maybe_record_smart_trigger_response(source_message.chat.id, delivered_ids)
+            self._maybe_record_smart_trigger_response(
+                source_message.chat.id, delivered_ids, full_response
+            )
             self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
             return {
                 "delivery_mode": "send_message",
@@ -3476,6 +3480,9 @@ class KraabUserbot(
             sent = await self._safe_reply_or_send_new(source_message, part)
             if getattr(sent, "id", None):
                 delivered_ids.append(str(sent.id))
+        self._maybe_record_smart_trigger_response(
+            source_message.chat.id, delivered_ids, full_response
+        )
         result = {
             "delivery_mode": "edit_and_reply",
             "text_message_ids": delivered_ids,
@@ -3488,11 +3495,15 @@ class KraabUserbot(
         self,
         chat_id: int | str,
         delivered_ids: list[str],
+        response_text: str | None = None,
     ) -> None:
         """Smart Routing Phase 5: записать KrabResponse если был pending smart trigger.
 
         Вызывается из _deliver_response_parts после успешной доставки.
         Best-effort — никогда не падает (best-effort tracking).
+
+        response_text передаётся для joke calibration (Idea 33): feedback_tracker
+        проверяет _is_humor_like() и при необходимости фиксирует шутку в store.
         """
         try:
             cid = str(chat_id)
@@ -3518,6 +3529,7 @@ class KraabUserbot(
                         sent_at=now,
                         decision_path=getattr(pending, "decision_path", "unknown"),
                         confidence=float(getattr(pending, "confidence", 1.0) or 1.0),
+                        response_text=response_text or None,
                     )
                 )
         except Exception:  # noqa: BLE001

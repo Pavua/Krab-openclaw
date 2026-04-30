@@ -764,7 +764,9 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             # openclaw_client импортирован на уровне модуля; task_board подтягиваем локально.
             _reflect_board = None
             try:
-                from ...core.swarm_task_board import swarm_task_board as _reflect_board
+                from ...core.swarm_task_board import swarm_task_board as _stb
+
+                _reflect_board = _stb
             except Exception as _reflect_exc:  # noqa: BLE001
                 logger.warning(
                     "swarm_research_reflect_wiring_failed",
