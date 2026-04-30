@@ -608,6 +608,10 @@ class KraabUserbot(
         # Время старта и счётчик обработанных сообщений за сессию (для !stats).
         self._session_start_time: float = time.time()
         self._session_messages_processed: int = 0
+        # Монитор сетевого offline: время последнего входящего TG-события.
+        # Обновляется в _process_message; мониторится _network_offline_monitor_loop.
+        self._last_telegram_event_ts: float = time.time()
+        self._network_offline_monitor_task: Optional[asyncio.Task] = None
         # Runtime-состояние старта userbot для health/handoff и контролируемой деградации.
         self._startup_state = "initializing"
         self._startup_error_code = ""
@@ -2152,6 +2156,76 @@ class KraabUserbot(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("command_usage_periodic_save_failed", error=str(exc))
 
+    async def _network_offline_monitor_loop(self) -> None:
+        """
+        Мониторинг сетевого offline: если Krab не получал Telegram-событий
+        дольше KRAB_NETWORK_OFFLINE_ALERT_SEC секунд — отправляет алерт владельцу.
+
+        Дебаунс: не более 1 алерта каждые 10 минут (600 сек).
+        Логика: отслеживаем _last_telegram_event_ts, обновляемый в _process_message.
+        Не считаем offline, если userbot только что стартовал (grace period = threshold).
+        """
+        _raw_threshold = int(getattr(config, "KRAB_NETWORK_OFFLINE_ALERT_SEC", 60) or 60)
+        if _raw_threshold == 0:
+            return  # мониторинг отключён через env
+        threshold_sec = max(30, _raw_threshold)
+
+        debounce_sec = 600  # 10 минут между алертами
+        check_interval = max(15, threshold_sec // 4)
+        _last_alert_ts: float = 0.0
+        _alert_active: bool = False  # флаг «алерт уже был отправлен»
+
+        # Grace period: даём время на прогрев после запуска
+        await asyncio.sleep(threshold_sec)
+
+        try:
+            while True:
+                await asyncio.sleep(check_interval)
+                now = time.time()
+                silence_sec = now - self._last_telegram_event_ts
+
+                if silence_sec >= threshold_sec:
+                    # Проверяем: Pyrogram вообще connected?
+                    client_connected = bool(self.client and self.client.is_connected)
+                    if not client_connected:
+                        # Уже ловит watchdog → не дублируем
+                        _alert_active = False
+                        continue
+
+                    # Отправляем алерт при дебаунсе
+                    if now - _last_alert_ts >= debounce_sec:
+                        _last_alert_ts = now
+                        _alert_active = True
+                        silence_min = int(silence_sec // 60)
+                        silence_s = int(silence_sec % 60)
+                        msg = (
+                            f"⚠️ **Krab: нет Telegram-событий {silence_min}м {silence_s}с**\n"
+                            f"MTProto подключён, но входящих сообщений не было >{threshold_sec}s.\n"
+                            f"Возможен backoff/throttle на стороне Telegram.\n"
+                            f"Используй `!health` для диагностики."
+                        )
+                        logger.warning(
+                            "network_offline_alert_sent",
+                            silence_sec=round(silence_sec, 1),
+                            threshold_sec=threshold_sec,
+                        )
+                        try:
+                            await self._send_proactive_watch_alert(msg)
+                        except Exception as _e:  # noqa: BLE001
+                            logger.warning("network_offline_alert_send_failed", error=str(_e))
+                else:
+                    # Событие было — если был алерт, сообщим о восстановлении
+                    if _alert_active:
+                        _alert_active = False
+                        try:
+                            await self._send_proactive_watch_alert(
+                                "✅ **Krab: Telegram-события восстановлены** — сеть в норме."
+                            )
+                        except Exception as _e:  # noqa: BLE001
+                            logger.warning("network_recovery_alert_send_failed", error=str(_e))
+        except asyncio.CancelledError:
+            logger.info("network_offline_monitor_cancelled")
+
     def _ensure_proactive_watch_started(self) -> None:
         """Запускает фоновый proactive watch, если он включён конфигом."""
         if not bool(getattr(config, "PROACTIVE_WATCH_ENABLED", False)):
@@ -3053,6 +3127,16 @@ class KraabUserbot(
         self._ensure_silence_schedule_started()
         self._ensure_memory_indexer_started()
         self._command_usage_save_task = asyncio.create_task(self._command_usage_save_loop())
+        # Монитор сетевого offline: алерт если нет TG-событий >KRAB_NETWORK_OFFLINE_ALERT_SEC сек
+        if int(getattr(config, "KRAB_NETWORK_OFFLINE_ALERT_SEC", 60) or 60) > 0:
+            self._last_telegram_event_ts = time.time()  # сбрасываем к моменту старта
+            self._network_offline_monitor_task = asyncio.create_task(
+                self._network_offline_monitor_loop()
+            )
+            logger.info(
+                "network_offline_monitor_started",
+                threshold_sec=int(getattr(config, "KRAB_NETWORK_OFFLINE_ALERT_SEC", 60)),
+            )
         # Idea-features periodic tick: reply_scheduler / daily_brief / channel_digest / patterns
         if self._idea_features_task is None or self._idea_features_task.done():
             self._idea_features_task = asyncio.create_task(self._idea_features_tick_loop())
@@ -3328,6 +3412,7 @@ class KraabUserbot(
         await self._cancel_background_task("_proactive_watch_task")
         await self._cancel_background_task("_silence_schedule_task")
         await self._cancel_background_task("_memory_indexer_task")
+        await self._cancel_background_task("_network_offline_monitor_task")
         try:
             from .core.memory_indexer_worker import get_indexer as _get_idx
 
@@ -5548,6 +5633,8 @@ class KraabUserbot(
 
     async def _process_message(self, message: Message):
         """Главный обработчик входящих сообщений"""
+        # Обновляем метку последнего TG-события для network offline monitor.
+        self._last_telegram_event_ts = time.time()
         # Correlation ID: короткий UUID (48-bit entropy) для связывания логов
         # одного запроса через весь pipeline (bridge → openclaw_client → swarm → indexer).
         # Наследуется автоматически в asyncio.create_task / asyncio.to_thread

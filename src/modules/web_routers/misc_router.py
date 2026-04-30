@@ -381,6 +381,17 @@ def build_misc_router(ctx: RouterContext) -> APIRouter:
             await userbot.client.send_message(chat_id, text)
             return {"ok": True, "chat_id": chat_id}
         except Exception as exc:
+            from pyrogram.errors import PeerIdInvalid
+
+            if isinstance(exc, PeerIdInvalid):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "ok": False,
+                        "error": "PEER_ID_INVALID",
+                        "detail": f"Unknown chat_id: {chat_id}",
+                    },
+                ) from exc
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return router
