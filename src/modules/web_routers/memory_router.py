@@ -1,19 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-Memory router — Phase 2 Wave B + Wave S + Wave BB extraction (Session 25).
+Memory router — Phase 2 Wave B + Wave S + Wave BB + Wave DC extraction.
 
 Wave B: stateless GET endpoints (/api/memory/stats, /api/memory/indexer).
 Wave S: factory-pattern + POST /api/memory/indexer/flush через
 ``ctx.assert_write_access`` (write-protected owner debug tool).
 Wave BB: advanced GET endpoints — /api/memory/search (HybridRetriever)
 и /api/memory/heatmap (chat×time density через sqlite3).
+Wave DC: memory doctor + coverage-audit + indexer backfill.
 
 Endpoints:
 - GET  /api/memory/stats           — Memory Layer статистика (Dashboard V4)
 - GET  /api/memory/indexer         — IndexerStats snapshot для owner panel
 - POST /api/memory/indexer/flush   — owner-tool принудительный flush
+- POST /api/memory/indexer/backfill — запустить backfill embeddings
 - GET  /api/memory/search          — FTS5/semantic/hybrid поиск (Phase 2)
 - GET  /api/memory/heatmap         — chat × time density (Dashboard V4)
+- GET  /api/memory/doctor          — диагностика Memory Layer (без side-effects)
+- POST /api/memory/doctor/fix      — диагностика + авто-ремонт (write-protected)
+- GET  /api/memory/coverage-audit  — покрытие embeddings (короткий срез doctor)
 
 Контракт ответов сохранён 1:1 с inline definitions из web_app.py.
 
@@ -296,6 +301,39 @@ def _build_get_endpoints(router: APIRouter) -> None:
         finally:
             conn.close()
 
+    @router.get("/api/memory/doctor")
+    async def memory_doctor() -> dict:
+        """Диагностика Memory Layer: 6 проверок без side-effects.
+
+        Returns:
+          { ok, checks, failed, warnings, summary, ts, db_path }
+        """
+        from ...core.memory_doctor import run_diagnostics
+
+        return await run_diagnostics()
+
+    @router.get("/api/memory/coverage-audit")
+    async def memory_coverage_audit() -> dict:
+        """Краткий аудит покрытия embeddings (encoded_ratio из диагностики).
+
+        Returns:
+          { ok, encoded_chunks, total_chunks, ratio_pct, status, message, db_path, ts }
+        """
+        from ...core.memory_doctor import run_diagnostics
+
+        diag = await run_diagnostics()
+        enc = diag.get("checks", {}).get("encoded_ratio", {})
+        return {
+            "ok": enc.get("status") in ("ok", "skip"),
+            "encoded_chunks": enc.get("encoded_chunks", 0),
+            "total_chunks": enc.get("total_chunks", 0),
+            "ratio_pct": enc.get("ratio_pct", 0.0),
+            "status": enc.get("status", "unknown"),
+            "message": enc.get("message", ""),
+            "db_path": diag.get("db_path", ""),
+            "ts": diag.get("ts"),
+        }
+
 
 def build_memory_router(ctx: RouterContext) -> APIRouter:
     """Factory: возвращает APIRouter с memory GET + POST endpoints.
@@ -323,6 +361,70 @@ def build_memory_router(ctx: RouterContext) -> APIRouter:
             "queue_size": stats.queue_size,
             "note": "flush будет выполнен в течение batch_timeout_sec",
         }
+
+    @router.post("/api/memory/indexer/backfill")
+    async def memory_indexer_backfill(
+        limit: int = Query(default=5000),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Запустить encode_memory_phase2.py для backfill embeddings (owner tool).
+
+        Params:
+          limit: сколько чанков обработать (default 5000).
+        """
+        ctx.assert_write_access(x_krab_web_key, token)
+        from pathlib import Path
+
+        from ...core.memory_doctor import _find_python, _run_command_capture
+
+        limit_val = max(1, min(int(limit), 100_000))
+        backfill_script = (
+            Path(__file__).parent.parent.parent.parent / "scripts" / "encode_memory_phase2.py"
+        )
+        if not backfill_script.exists():
+            return {
+                "ok": False,
+                "error": "script_not_found",
+                "path": str(backfill_script),
+            }
+
+        python = _find_python()
+        try:
+            returncode, stdout, stderr = await _run_command_capture(
+                [python, str(backfill_script), "--limit", str(limit_val)],
+                timeout_sec=300,
+            )
+            return {
+                "ok": returncode == 0,
+                "returncode": returncode,
+                "limit": limit_val,
+                "stdout_tail": stdout[-1000:] if stdout else "",
+                "stderr_tail": stderr[-500:] if stderr else "",
+            }
+        except TimeoutError:
+            return {
+                "ok": False,
+                "error": "timeout",
+                "message": "encode_memory_phase2.py завершён по таймауту (300с)",
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
+    @router.post("/api/memory/doctor/fix")
+    async def memory_doctor_fix(
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Диагностика + авто-ремонт Memory Layer (owner tool, write-protected).
+
+        Returns:
+          { ok, repairs: [{ action, status, message, ... }], ts, db_path }
+        """
+        ctx.assert_write_access(x_krab_web_key, token)
+        from ...core.memory_doctor import run_repairs
+
+        return await run_repairs()
 
     return router
 

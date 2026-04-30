@@ -72,10 +72,11 @@ def build_model_router(ctx: RouterContext) -> APIRouter:
         from src.openclaw_client import openclaw_client as _oc
 
         route = _oc.get_last_runtime_route()
+        provider_str = str(route.get("provider") or "").strip() or "unknown"
         return {
             "ok": True,
             "route": route,
-            "provider": _mm.format_status() if hasattr(_mm, "format_status") else str(_mm),
+            "provider": provider_str,
             "active_model": str(getattr(_mm, "active_model_id", None) or route.get("model", "")),
         }
 

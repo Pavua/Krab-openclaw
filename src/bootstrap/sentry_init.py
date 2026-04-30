@@ -61,6 +61,11 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     # pyrogram. Это race между peer DC resolve и storage close — runtime
     # сам recovery'ится через retry. См. Sentry PYTHON-FASTAPI-6G.
     "'NoneType' object has no attribute 'to_bytes'",
+    # PEER_ID_INVALID: Telegram отклоняет запрос если chat_id не известен
+    # серверу (бот ни разу не взаимодействовал с этим peer'ом). Это штатная
+    # ситуация — например при попытке ответить в чат, куда ещё не попали
+    # сообщения. Не runtime-ошибка, не требует investigate в Sentry.
+    "PEER_ID_INVALID",
 )
 
 
