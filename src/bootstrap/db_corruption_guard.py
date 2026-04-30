@@ -246,6 +246,12 @@ def _check_db_entries(entries: Iterable[KnownDb]) -> list[dict]:
                 detail=detail,
                 quarantine_path=quarantine_path,
             )
+            try:
+                from src.core.prometheus_metrics import inc_session_corruption  # noqa: PLC0415
+
+                inc_session_corruption(entry.kind)
+            except Exception:  # noqa: BLE001 — метрики не должны ронять boot
+                pass
         elif not ok:
             # integrity_check вернул не-ok, но это не corruption-маркер
             # (например, locked) — просто логируем, не quarantine.

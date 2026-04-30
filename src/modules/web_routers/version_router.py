@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from ...bootstrap import runtime as _bootstrap_runtime
+
 router = APIRouter(tags=["meta"])
 
 
@@ -29,6 +31,7 @@ async def version_info() -> dict:
         "commits": 650,
         "tests": 9991,
         "api_endpoints": 249,
+        "startup_time_sec": _bootstrap_runtime.startup_time_sec,
         "features": [
             "translator_mvp",
             "swarm_execution",

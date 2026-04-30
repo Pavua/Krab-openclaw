@@ -34,6 +34,15 @@ _GUEST_LLM_SKIPPED_COUNTER: dict[str, int] = {}
 # словарём → /metrics всегда отдаёт # TYPE строку, alert не «мёртвый».
 _TELEGRAM_FLOOD_WAIT_COUNTER: dict[str, int] = {}
 
+# Session corruption counter. Инкрементируется из db_corruption_guard при
+# обнаружении corruption и quarantine. Словарь kind → count (session/archive/…).
+_SESSION_CORRUPTION_COUNTER: dict[str, int] = {}
+
+# Startup duration (секунды от первого байта main.py до kraab_running).
+# Выставляется однократно из bootstrap/runtime.py после kraab.start().
+# 0.0 означает «ещё не замерено».
+_STARTUP_DURATION_SECONDS: list[float] = [0.0]
+
 
 def inc_telegram_flood_wait(caller: str) -> None:
     """Инкремент krab_telegram_flood_wait_total{caller=...}.
@@ -42,6 +51,30 @@ def inc_telegram_flood_wait(caller: str) -> None:
     """
     key = (caller or "unknown")[:80]
     _TELEGRAM_FLOOD_WAIT_COUNTER[key] = _TELEGRAM_FLOOD_WAIT_COUNTER.get(key, 0) + 1
+
+
+def inc_session_corruption(kind: str) -> None:
+    """Инкремент krab_session_corruption_total{kind=...}.
+
+    Вызывается из db_corruption_guard при обнаружении corruption и quarantine.
+    kind ∈ {session, archive, ...} — строка из KnownDb.kind.
+    Не бросает, не I/O.
+    """
+    key = (kind or "unknown")[:40]
+    _SESSION_CORRUPTION_COUNTER[key] = _SESSION_CORRUPTION_COUNTER.get(key, 0) + 1
+
+
+def set_startup_duration(elapsed_sec: float) -> None:
+    """Выставляет krab_startup_duration_seconds.
+
+    Вызывается однократно из bootstrap/runtime.py после kraab.start().
+    Повторный вызов перезаписывает значение (рестарт в рамках одного процесса).
+    Не бросает.
+    """
+    try:
+        _STARTUP_DURATION_SECONDS[0] = max(0.0, float(elapsed_sec))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # === C6: Memory retrieval метрики (prometheus_client). ===
@@ -559,6 +592,29 @@ def collect_metrics() -> str:
             )
     except Exception:
         pass
+
+    # === Session corruption counter ===
+    # Pre-register HELP/TYPE даже если счётчик пустой — чтобы alert
+    # `increase(krab_session_corruption_total[1h])` не считался "no data".
+    lines.append(
+        "# HELP krab_session_corruption_total DB corruption events requiring quarantine by kind"
+    )
+    lines.append("# TYPE krab_session_corruption_total counter")
+    if not _SESSION_CORRUPTION_COUNTER:
+        lines.append('krab_session_corruption_total{kind="none"} 0')
+    else:
+        for _corr_kind, _corr_count in _SESSION_CORRUPTION_COUNTER.items():
+            label_str = f'kind="{_sanitize_label(_corr_kind)}"'
+            lines.append(f"krab_session_corruption_total{{{label_str}}} {_corr_count}")
+
+    # === Startup duration ===
+    lines.append(
+        _format_metric(
+            "krab_startup_duration_seconds",
+            _STARTUP_DURATION_SECONDS[0],
+            help_text="Время от старта процесса до kraab_running (секунды)",
+        )
+    )
 
     # === Timestamps ===
     lines.append(

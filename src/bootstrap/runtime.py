@@ -10,6 +10,7 @@ import os
 import signal
 import sqlite3
 import sys
+import time
 
 # Отключаем ChromaDB/PostHog telemetry ДО первого импорта chromadb.
 # Иначе chromadb при импорте поднимает consumer thread (queue.get block=True),
@@ -41,6 +42,9 @@ from .db_corruption_guard import (
 DB_CORRUPTION_EXIT_CODE = 78
 
 logger = structlog.get_logger(__name__)
+
+# Время запуска (monotonic, секунды). None до завершения run_app().
+startup_time_sec: float | None = None
 
 
 def _build_perceptor() -> object | None:
@@ -225,6 +229,9 @@ async def run_app() -> None:
     Запускает приложение: баннер, проверки здоровья, web panel, userbot start → wait → stop.
     Вызывать после validate_config().
     """
+    global startup_time_sec
+    _startup_begin_ts = time.monotonic()
+
     print(f"""
     🦀 KRAB USERBOT STARTED 🦀
     Owner: {get_effective_owner_label()}
@@ -359,6 +366,15 @@ async def run_app() -> None:
             logger.info("kraab_running")
         else:
             logger.warning("kraab_degraded_mode", **kraab_state)
+        # Замеряем время запуска и сохраняем для /api/version.
+        startup_time_sec = round(time.monotonic() - _startup_begin_ts, 2)
+        logger.info("startup_complete", elapsed_sec=startup_time_sec)
+        try:
+            from ..core.prometheus_metrics import set_startup_duration  # noqa: PLC0415
+
+            set_startup_duration(startup_time_sec)
+        except Exception:  # noqa: BLE001 — метрики не должны ронять старт
+            pass
         warmup_task = asyncio.create_task(_warmup_runtime_route_truth())
         # Memory Phase 2 — warmup background task (idempotent, feature-flagged).
         embed_bootstrap_task = asyncio.create_task(
