@@ -25,15 +25,22 @@ async def version_info() -> dict:
     """
     return {
         "ok": True,
-        "version": "session5",
-        "commits": 113,
-        "tests": 2043,
-        "api_endpoints": 184,
+        "version": "session31",
+        "commits": 650,
+        "tests": 9991,
+        "api_endpoints": 249,
         "features": [
             "translator_mvp",
             "swarm_execution",
             "channel_parity",
             "finops",
             "hammerspoon_mcp",
+            "memory_layer_phase2",
+            "cross_ai_review",
+            "skill_discovery",
+            "command_handlers_split",
+            "sentry_integration",
+            "smart_routing",
+            "memory_doctor",
         ],
     }
