@@ -25,6 +25,8 @@ from ..model_manager import model_manager
 from ..openclaw_client import openclaw_client
 from ..userbot_bridge import KraabUserbot, _telegram_send_queue
 from .db_corruption_guard import (
+    check_wal_sentinel,
+    clear_wal_sentinel,
     flush_wal_checkpoints,
     is_corruption_error,
     preflight_known_dbs,
@@ -227,6 +229,21 @@ async def run_app() -> None:
     Mode: {config.LOG_LEVEL}
     RAM Limit: {config.MAX_RAM_GB}GB
     """)
+
+    # WAL sentinel check (Sentry PYTHON-FASTAPI-5W): если предыдущий процесс
+    # завершился штатно, он записал .wal_flushed после flush_wal_checkpoints().
+    # Если sentinel отсутствует — предыдущий процесс был SIGKILL'нут или упал
+    # до shutdown, WAL мог остаться не-flush'нутым. Ждём 3 секунды, чтобы OS
+    # успел освободить file-system locks перед открытием DB.
+    if not check_wal_sentinel():
+        logger.warning(
+            "wal_sentinel_missing",
+            detail="previous process may not have flushed WAL; waiting 3s before opening DBs",
+        )
+        await asyncio.sleep(3.0)
+    # Сбрасываем sentinel ДО открытия DB: если текущий процесс упадёт до
+    # штатного shutdown, следующий старт снова увидит отсутствие sentinel.
+    clear_wal_sentinel()
 
     # DB corruption circuit breaker (Session 26): integrity_check на known DB
     # перед запуском userbot. Если session corrupt — quarantine + exit, чтобы

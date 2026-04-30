@@ -634,4 +634,37 @@ def build_swarm_router(ctx: RouterContext) -> APIRouter:
         removed = swarm_artifact_store.cleanup_old(max_files=50)
         return {"ok": True, "removed": removed}
 
+    # ── Auto-executor endpoints ───────────────────────────────────────────
+
+    @new_router.get("/api/swarm/auto-executor/status")
+    async def swarm_auto_executor_status() -> dict:
+        """Статус фонового авто-экзекутора задач swarm."""
+        from ...core.swarm_auto_executor import swarm_auto_executor
+
+        return {"ok": True, **swarm_auto_executor.get_status()}
+
+    @new_router.post("/api/swarm/auto-executor/toggle")
+    async def swarm_auto_executor_toggle(
+        payload: dict = Body(default_factory=dict),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Включить / выключить авто-экзекутор во время работы."""
+        ctx.assert_write_access(x_krab_web_key, token)
+        from ...config import config
+        from ...core.swarm_auto_executor import swarm_auto_executor
+
+        # Определяем желаемое состояние: из payload или инверсия текущего
+        status = swarm_auto_executor.get_status()
+        enabled: bool = bool(payload.get("enabled", not status["started"]))
+
+        if enabled:
+            config.KRAB_SWARM_AUTO_EXECUTE_ENABLED = True
+            swarm_auto_executor.start()
+        else:
+            swarm_auto_executor.stop()
+            config.KRAB_SWARM_AUTO_EXECUTE_ENABLED = False
+
+        return {"ok": True, **swarm_auto_executor.get_status()}
+
     return new_router
