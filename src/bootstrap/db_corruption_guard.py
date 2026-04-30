@@ -222,27 +222,10 @@ def report_corruption_to_sentry(
         logger.debug("sentry_corruption_report_skipped", error=str(exc))
 
 
-def preflight_known_dbs(
-    known_dbs: Iterable[KnownDb] | None = None,
-) -> list[dict]:
-    """
-    Pre-flight проверка known DB-файлов.
-
-    Returns:
-        Список report-словарей: {path, kind, critical, ok, detail,
-        quarantined, quarantine_path}.
-
-    Стратегия:
-    - integrity_check() для каждой DB;
-    - если NOT ok И detail матчится corruption — quarantine + Sentry;
-    - non-critical → bootstrap продолжает (DB регенерируется);
-    - critical (session) → bootstrap должен exit, чтобы НЕ зациклить
-      launchd на пустой/битой сессии (owner re-auth needed).
-    """
-    if known_dbs is None:
-        known_dbs = _known_db_paths()
+def _check_db_entries(entries: Iterable[KnownDb]) -> list[dict]:
+    """Внутренняя функция: проверяет integrity каждой DB из списка и возвращает reports."""
     reports: list[dict] = []
-    for entry in known_dbs:
+    for entry in entries:
         ok, detail = integrity_check(entry.path)
         report = {
             "path": str(entry.path),
@@ -273,6 +256,85 @@ def preflight_known_dbs(
                 detail=detail,
             )
         reports.append(report)
+    return reports
+
+
+def preflight_known_dbs(
+    known_dbs: Iterable[KnownDb] | None = None,
+) -> list[dict]:
+    """
+    Pre-flight проверка known DB-файлов.
+
+    Returns:
+        Список report-словарей: {path, kind, critical, ok, detail,
+        quarantined, quarantine_path}.
+
+    Стратегия:
+    - integrity_check() для каждой DB;
+    - если NOT ok И detail матчится corruption — quarantine + Sentry;
+    - non-critical → bootstrap продолжает (DB регенерируется);
+    - critical (session) → bootstrap должен exit, чтобы НЕ зациклить
+      launchd на пустой/битой сессии (owner re-auth needed).
+    """
+    if known_dbs is None:
+        known_dbs = _known_db_paths()
+    return _check_db_entries(known_dbs)
+
+
+def preflight_critical_dbs(
+    known_dbs: Iterable[KnownDb] | None = None,
+) -> list[dict]:
+    """
+    Быстрый pre-flight: проверяет только critical=True DB (краткосрочный путь старта).
+
+    Проверяет только kraab.session и другие critical=True базы — те, при
+    повреждении которых boot должен прерваться. archive.db (critical=False,
+    507MB, ~6.2s integrity_check) здесь не проверяется — она вынесена в
+    `preflight_non_critical_dbs_background()`.
+
+    Returns:
+        Список report-словарей для critical DB.
+    """
+    if known_dbs is None:
+        known_dbs = _known_db_paths()
+    critical = [entry for entry in known_dbs if entry.critical]
+    return _check_db_entries(critical)
+
+
+def preflight_non_critical_dbs_background(
+    known_dbs: Iterable[KnownDb] | None = None,
+) -> list[dict]:
+    """
+    Тяжёлый pre-flight для non-critical баз (archive.db и т.п.).
+
+    Предназначен для запуска в фоновом потоке через `asyncio.to_thread()`,
+    чтобы не блокировать event-loop во время старта userbot. archive.db
+    занимает ~6.2s на integrity_check при размере 507MB.
+
+    Returns:
+        Список report-словарей для non-critical DB.
+    """
+    if known_dbs is None:
+        known_dbs = _known_db_paths()
+    non_critical = [entry for entry in known_dbs if not entry.critical]
+    logger.info(
+        "db_preflight_background_start",
+        count=len(non_critical),
+        paths=[str(e.path) for e in non_critical],
+    )
+    reports = _check_db_entries(non_critical)
+    quarantined = [r for r in reports if r.get("quarantined")]
+    if quarantined:
+        logger.error(
+            "db_preflight_background_quarantined",
+            quarantined=[r["path"] for r in quarantined],
+        )
+    else:
+        logger.info(
+            "db_preflight_background_done",
+            count=len(reports),
+            all_ok=all(r.get("ok") for r in reports),
+        )
     return reports
 
 
@@ -424,6 +486,8 @@ __all__ = [
     "quarantine_db_file",
     "integrity_check",
     "preflight_known_dbs",
+    "preflight_critical_dbs",
+    "preflight_non_critical_dbs_background",
     "report_corruption_to_sentry",
     "known_wal_db_paths",
     "flush_wal_checkpoints",

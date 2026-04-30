@@ -81,8 +81,10 @@ def _split_text(text: str) -> list[str]:
 
 _SUMMARY_DEFAULT_N = 50
 _SUMMARY_MAX_N = 500
-# Максимум символов истории, передаваемых в LLM
-_SUMMARY_MAX_HISTORY_CHARS = 24_000
+# Максимум символов истории, передаваемых в LLM.
+# Gemini 3 Pro имеет ~1M токенов контекста; 80k символов ≈ 20k токенов — безопасный лимит
+# позволяет корректно передать 100–500 реальных сообщений без отсечения.
+_SUMMARY_MAX_HISTORY_CHARS = 80_000
 # Порог редактирования streaming-сообщения (каждые N новых символов)
 _SUMMARY_EDIT_THRESHOLD = 200
 

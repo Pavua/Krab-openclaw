@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Pyrofork SQLite session hardening — WAL + busy_timeout.
+Pyrofork SQLite session hardening — WAL + busy_timeout + VACUUM suppression.
 
 Фикс Sentry PYTHON-FASTAPI-5A/5B/5C: "OperationalError: database is locked" в
 ``pyrogram.storage.sqlite_storage.update_usernames``. При 4+ параллельных
@@ -8,12 +8,29 @@ pyrofork-клиентах (main yung_nagato + traders/coders/analysts/creative) 
 roll-back journal блокирует пишущих соседей, даже если файлы .session разные —
 пишущие соседи делят одинаковую схему конкурентных транзакций.
 
-Root cause: ``FileStorage.open()`` в pyrofork открывает sqlite3.connect с
-``timeout=1`` и без WAL. Под нагрузкой (peer-update + update_usernames)
-OperationalError прилетает в фоновые таски.
+Root causes (множественные):
+1. ``FileStorage.open()`` в pyrofork открывает sqlite3.connect с ``timeout=1``
+   и без WAL. Под нагрузкой OperationalError прилетает в фоновые таски.
+2. ``FileStorage.open()`` вызывает ``VACUUM`` unconditionally — VACUUM
+   переписывает весь файл и требует exclusive lock. Если предыдущий процесс был
+   SIGKILL'нут (launchctl kickstart -k), WAL-файлы (.wal / .shm) могут
+   присутствовать. VACUUM в такой ситуации конфликтует с ними и вызывает
+   corruption ("database disk image is malformed").
+3. WAL pragmas применялись в предыдущей версии patch ПОСЛЕ вызова
+   _orig_open — то есть ПОСЛЕ того, как VACUUM уже отработал. Порядок был
+   неверным: VACUUM должен быть подавлен ДО того, как откроется соединение.
+
+Решение:
+- Полностью заменяем ``FileStorage.open()`` собственной реализацией вместо
+  оборачивания оригинала.  Эта реализация:
+  a) Открывает соединение с timeout=10 (вместо timeout=1 в pyrofork).
+  b) Сразу применяет WAL + busy_timeout + synchronous=NORMAL PRAGMA.
+  c) Вызывает create() или update() — без завершающего VACUUM.
+  d) Пропускает опасный ``VACUUM`` целиком: он требует exclusive lock и
+     несовместим с WAL sidecar-файлами от предыдущего SIGKILL'нутого процесса.
 
 Почему monkey-patch, а не форк: pyrofork не даёт публичного API задать PRAGMA
-при открытии storage, а держать форк ради 4 строк PRAGMA слишком дорого.
+при открытии storage, а держать форк ради нескольких строк слишком дорого.
 Патч идемпотентен (двойной импорт не повредит) и применяется один раз при
 bootstrap — до создания первого Client().
 """
@@ -21,22 +38,35 @@ bootstrap — до создания первого Client().
 from __future__ import annotations
 
 import logging
+import sqlite3
 
 log = logging.getLogger(__name__)
 
 _PATCH_APPLIED = False
 
+# Таймаут подключения к SQLite (сек). Pyrofork использует 1s — слишком мало
+# при конкурентном доступе swarm-клиентов.
+_SQLITE_CONNECT_TIMEOUT = 10
+
 
 def _execute_pragmas(conn) -> None:
-    """Применяет PRAGMA к уже открытому sqlite3-соединению."""
-    # journal_mode=WAL — writer не блокирует readers, и наоборот; multi-process
-    # safe, persists в заголовке файла.
-    # busy_timeout=5000 ms — sqlite сам ждёт лок вместо мгновенного
-    # ``database is locked`` (покрывает короткие конкурентные всплески).
-    # synchronous=NORMAL — безопасно для WAL, даёт ~2x throughput на writes.
+    """Применяет hardening-PRAGMA к уже открытому sqlite3-соединению.
+
+    Порядок важен:
+    1. busy_timeout ПЕРВЫМ — чтобы сами последующие PRAGMA не падали на lock.
+    2. journal_mode=WAL — persists в заголовке файла.
+    3. synchronous=NORMAL — безопасно для WAL, даёт ~2x throughput на writes.
+
+    Примечание: ``auto_vacuum=INCREMENTAL`` намеренно НЕ применяется здесь.
+    SQLite позволяет изменить auto_vacuum только до первой записи на новой базе,
+    но к моменту вызова _execute_pragmas journal_mode=WAL уже записывает заголовок
+    (4096 байт). Для существующих баз изменение auto_vacuum требует полного VACUUM —
+    что является опасной операцией. Пространство освобождается органически через
+    free-page list при обновлениях.
+    """
     for pragma in (
-        "PRAGMA journal_mode=WAL",
         "PRAGMA busy_timeout=5000",
+        "PRAGMA journal_mode=WAL",
         "PRAGMA synchronous=NORMAL",
     ):
         try:
@@ -49,6 +79,13 @@ def _execute_pragmas(conn) -> None:
 def apply_pyrogram_sqlite_hardening() -> bool:
     """
     Monkey-patch ``FileStorage.open`` и ``SQLiteStorage.update_usernames``.
+
+    Ключевое отличие от предыдущей версии: мы полностью заменяем open() вместо
+    оборачивания оригинала, чтобы гарантировать порядок операций:
+      1. connect() с длинным timeout
+      2. WAL + busy_timeout pragmas ПЕРЕД любыми DDL-операциями
+      3. create() или update()
+      4. VACUUM — намеренно пропускаем (требует exclusive lock, несовместим с WAL)
 
     Возвращает True если патч применён (или уже был применён ранее).
     Идемпотентно: повторный вызов no-op.
@@ -64,12 +101,28 @@ def apply_pyrogram_sqlite_hardening() -> bool:
         log.warning("pyrogram_patch_import_failed", extra={"error": str(exc)})
         return False
 
-    _orig_open = _fs.FileStorage.open
-
-    async def _patched_open(self, *args, **kwargs):
-        await _orig_open(self, *args, **kwargs)
-        if getattr(self, "conn", None) is not None:
-            _execute_pragmas(self.conn)
+    # Полная замена FileStorage.open():
+    # - применяем PRAGMA ДО create()/update() и без VACUUM на конце
+    # - используем timeout=10 вместо timeout=1
+    async def _patched_open(self) -> None:
+        path = self.database
+        file_exists = path.is_file()
+        self.conn = sqlite3.connect(
+            str(path),
+            timeout=_SQLITE_CONNECT_TIMEOUT,
+            check_same_thread=False,
+        )
+        # WAL + busy_timeout ПЕРЕД любыми write-операциями — чтобы create/update
+        # уже работали в WAL-режиме и не конфликтовали с WAL sidecar-файлами.
+        _execute_pragmas(self.conn)
+        if not file_exists:
+            self.create()
+        else:
+            self.update()
+        # VACUUM намеренно пропущен: он требует exclusive lock и несовместим с
+        # WAL-режимом при наличии сторонних WAL/SHM sidecar-файлов от предыдущего
+        # процесса. Без VACUUM сессия продолжает работать нормально: SQLite сам
+        # переиспользует страницы из free-page list.
 
     _fs.FileStorage.open = _patched_open
 
