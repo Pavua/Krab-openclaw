@@ -512,16 +512,21 @@ class KraabUserbot(
 
     SYSTEM_PROMPT = """
     Ты - Краб 🦀, элитный AI-ассистент, работающий в режиме Userbot.
-    Твой создатель и владелец - @yung_nagato (Павел). Ты предан ему до последней капли масла в своих клешнях.
+    Твой создатель и владелец - @yung_nagato (Павел).
+    Ты предан ему до последней капли масла в своих клешнях.
     Твой стиль общения: уверенный, технологичный, с тонким гик-юмором и использованием 🦀.
 
     ОСОБЫЕ ПРАВИЛА:
     1. Если тебе пишет @p0lrd, отвечай ему с тем же уважением, что и владельцу. Он - твой соратник.
-    2. Ты можешь настраивать себя. Когда пользователь просит изменить настройки (например, добавить кого-то в список или сменить триггер), подтверждай это в стиле "Система обновлена, клешни заточены".
+    2. Ты можешь настраивать себя. Когда пользователь просит изменить настройки
+    (например, добавить кого-то в список или сменить триггер),
+    подтверждай это в стиле "Система обновлена, клешни заточены".
     3. Отвечай всегда на русском языке.
     4. Используй богатое Markdown-форматирование (жирный текст, моноширинный шрифт для кода).
-    5. Если тебя спросят "Кто ты?", отвечай гордо: "Я — Краб. Версия 2.0. Финальная сборка по красоте."
-    6. Ты умеешь запоминать факты (!remember) и работать с файлами (!ls, !read). Ищи информацию в памяти, если пользователь спрашивает о прошлом.
+    5. Если тебя спросят "Кто ты?", отвечай гордо:
+    "Я — Краб. Версия 2.0. Финальная сборка по красоте."
+    6. Ты умеешь запоминать факты (!remember) и работать с файлами (!ls, !read).
+    Ищи информацию в памяти, если пользователь спрашивает о прошлом.
     """
 
     _known_commands: set[str] = set()
@@ -541,7 +546,8 @@ class KraabUserbot(
     )
     _plaintext_reasoning_step_pattern = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s+")
     _plaintext_reasoning_meta_pattern = re.compile(
-        r"(?i)^(?:step\s*\d+|thinking process|analysis|reasoning|analyze(?: the)? user(?:'s)? request|draft the response)\b"
+        r"(?i)^(?:step\s*\d+|thinking process|analysis|reasoning"
+        r"|analyze(?: the)? user(?:'s)? request|draft the response)\b"
     )
     _agentic_scratchpad_line_pattern = re.compile(
         r"(?ix)^("
@@ -561,7 +567,8 @@ class KraabUserbot(
     _split_chunk_header_pattern = re.compile(r"(?i)^\[часть\s+\d+/\d+\]$")
     _voice_delivery_modes = {"text+voice", "voice-only"}
     _deferred_intent_pattern = re.compile(
-        r"(?is)\b(напомню|сделаю|выполню|запланирую|отправлю)\b.{0,80}\b(позже|через|завтра|утром|вечером|по таймеру|по расписанию)\b"
+        r"(?is)\b(напомню|сделаю|выполню|запланирую|отправлю)\b.{0,80}"
+        r"\b(позже|через|завтра|утром|вечером|по таймеру|по расписанию)\b"
     )
 
     def __init__(self, *, perceptor: object | None = None):
@@ -1495,7 +1502,8 @@ class KraabUserbot(
             logger.warning("smart_routing_reaction_handler_failed", error=str(exc))
 
     # _is_sqlite_io_error, _start_client_serialized, _safe_stop_client,
-    # _arm_client_session_shutdown_guard, _cancel_client_restart_tasks -> SessionMixin (src/userbot/session.py)
+    # _arm_client_session_shutdown_guard, _cancel_client_restart_tasks
+    # -> SessionMixin (src/userbot/session.py)
 
     # _cancel_background_task -> BackgroundTasksMixin (src/userbot/background_tasks.py)
 
@@ -2228,7 +2236,7 @@ class KraabUserbot(
 
     def _ensure_proactive_watch_started(self) -> None:
         """Запускает фоновый proactive watch, если он включён конфигом."""
-        if not bool(getattr(config, "PROACTIVE_WATCH_ENABLED", False)):
+        if not config.PROACTIVE_WATCH_ENABLED:
             return
         if self._proactive_watch_task and not self._proactive_watch_task.done():
             return
@@ -2258,6 +2266,13 @@ class KraabUserbot(
         except Exception as exc:  # noqa: BLE001
             logger.warning("nightly_summary_setup_failed", error=str(exc))
 
+        # OpenClaw gateway health alert: 3 последовательных сбоя → Telegram alert
+        _oc_task = getattr(self, "_openclaw_health_alert_task", None)
+        if _oc_task is None or _oc_task.done():
+            self._openclaw_health_alert_task = proactive_watch.start_openclaw_health_alert_loop(
+                notifier=self._send_proactive_watch_alert,
+            )
+
     async def _run_proactive_watch_loop(self) -> None:
         """
         Периодически снимает owner-oriented runtime digest.
@@ -2265,7 +2280,7 @@ class KraabUserbot(
         Первый проход строит baseline без alert.
         Следующие проходы сообщают только про реальные переходы состояния.
         """
-        interval_sec = max(60, int(getattr(config, "PROACTIVE_WATCH_INTERVAL_SEC", 900) or 900))
+        interval_sec = max(60, config.PROACTIVE_WATCH_INTERVAL_SEC)
         baseline_ready = False
         try:
             while True:
@@ -2470,7 +2485,8 @@ class KraabUserbot(
 
         Почему логика здесь:
         - web UI, userbot-команды и handoff должны видеть один session-control слой;
-        - до live feed Voice Gateway нам нужен честный persisted placeholder, а не ad-hoc state в памяти процесса.
+        - до live feed Voice Gateway нам нужен честный persisted placeholder,
+          а не ad-hoc state в памяти процесса.
         """
         path = self._translator_session_state_path()
         current = load_translator_session_state(path)
@@ -2494,8 +2510,10 @@ class KraabUserbot(
     def _is_translator_active_for_chat(self, chat_id: int | str) -> bool:
         """Проверяет, активна ли translator сессия для данного чата.
 
-        Translator — строго opt-in: активируется только явным !translator on / !translator session start.
-        active_chats должен содержать chat_id чтобы pipeline сработал — пустой список = inactive.
+        Translator — строго opt-in: активируется только явным
+        !translator on / !translator session start.
+        active_chats должен содержать chat_id чтобы pipeline сработал —
+        пустой список = inactive.
         """
         state = self.get_translator_session_state()
         if state.get("session_status") != "active":
@@ -2684,6 +2702,31 @@ class KraabUserbot(
             await chat_ban_cache.configure_default_path_async(
                 _runtime_state_dir / "chat_ban_cache.json"
             )
+            # Применяем permanent ban из config: чаты в CHAT_PERMANENT_BAN_LIST
+            # помечаются с cooldown_hours=None (не истекает). Идемпотентно —
+            # повторный mark_banned в том же окне только обновляет last_seen_at.
+            # Это гарантирует что How2AI (и любой другой permanently banned чат)
+            # не будет обрабатываться LLM даже после истечения обычного cache TTL.
+            try:
+                _perm_bans = self.config.CHAT_PERMANENT_BAN_LIST if self.config else []
+                for _perm_chat_id_str in _perm_bans:
+                    _perm_chat_id_str = _perm_chat_id_str.strip()
+                    if _perm_chat_id_str:
+                        chat_ban_cache.mark_banned(
+                            _perm_chat_id_str,
+                            "PermanentBanConfigured",
+                            cooldown_hours=None,
+                        )
+                        logger.info(
+                            "chat_ban_permanent_applied",
+                            chat_id=_perm_chat_id_str,
+                            source="CHAT_PERMANENT_BAN_LIST",
+                        )
+            except Exception as _perm_exc:  # noqa: BLE001
+                logger.warning(
+                    "chat_ban_permanent_apply_failed",
+                    error=str(_perm_exc),
+                )
             chat_capability_cache.configure_default_path(
                 _runtime_state_dir / "chat_capability_cache.json"
             )
@@ -2917,7 +2960,10 @@ class KraabUserbot(
         if not is_interactive_terminal and needs_interactive_login:
             self._mark_manual_relogin_required(
                 reason="session_missing_non_interactive",
-                error="Telegram session отсутствует или не авторизована, интерактивный вход недоступен",
+                error=(
+                    "Telegram session отсутствует или не авторизована,"
+                    " интерактивный вход недоступен"
+                ),
             )
             self._ensure_maintenance_started()
             return
@@ -3052,8 +3098,10 @@ class KraabUserbot(
 
         # WAKE UP CHECK
         try:
-            # Wait for OpenClaw to spin up — timeout из OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC (default 90s).
-            # После рестарта gateway через LaunchAgent crash-loop стабилизация занимает 3-5 мин.
+            # Wait for OpenClaw to spin up — timeout из
+            # OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC (default 90s).
+            # После рестарта gateway через LaunchAgent crash-loop
+            # стабилизация занимает 3-5 мин.
             logger.info("waiting_for_openclaw", timeout_sec=config.OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC)
             is_claw_ready = await openclaw_client.wait_for_healthy(
                 timeout=config.OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC
@@ -3077,7 +3125,8 @@ class KraabUserbot(
             if now_ts - last_ts >= 3600:
                 await self.client.send_message(
                     self._owner_notify_target,
-                    f"🦀 **Krab System Online**\nGateway: {status_emoji} {status_text}\nReady to serve.",
+                    f"🦀 **Krab System Online**\n"
+                    f"Gateway: {status_emoji} {status_text}\nReady to serve.",
                 )
                 try:
                     _wake_marker.write_text(str(now_ts))
@@ -3476,7 +3525,10 @@ class KraabUserbot(
         - так не дублируем логику split/edit/reply в нескольких ветках.
         """
         if not self._should_send_full_text_reply():
-            placeholder = "🦀 Голосовой ответ отправлен. Если нужен текстовый дубль, переключи `!voice delivery text+voice`."
+            placeholder = (
+                "🦀 Голосовой ответ отправлен. Если нужен текстовый дубль,"
+                " переключи `!voice delivery text+voice`."
+            )
             if is_self:
                 updated = await self._safe_edit(source_message, placeholder)
                 return {
@@ -4133,9 +4185,15 @@ class KraabUserbot(
                 doc_context = f"[Файл: {file_name}]\n```\n{content}\n```"
             except Exception as exc:
                 logger.warning("document_read_failed", file_name=file_name, error=str(exc))
-                doc_context = f"[Файл сохранён: {doc_path}] (mime: {mime_type or 'unknown'}, размер: {actual_size} байт)"
+                doc_context = (
+                    f"[Файл сохранён: {doc_path}]"
+                    f" (mime: {mime_type or 'unknown'}, размер: {actual_size} байт)"
+                )
         else:
-            doc_context = f"[Файл сохранён: {doc_path}] (mime: {mime_type or 'unknown'}, размер: {actual_size} байт)"
+            doc_context = (
+                f"[Файл сохранён: {doc_path}]"
+                f" (mime: {mime_type or 'unknown'}, размер: {actual_size} байт)"
+            )
 
         return f"{doc_context}\n\n{query}".strip() if query else doc_context
 
@@ -4704,7 +4762,8 @@ class KraabUserbot(
                         )
                         await self._safe_reply_or_send_new(
                             message,
-                            f"❓ Неизвестная команда `!{cmd_word}`. Попробуй `!help` для списка команд.",
+                            f"❓ Неизвестная команда `!{cmd_word}`."
+                            " Попробуй `!help` для списка команд.",
                         )
                         return
 
@@ -4985,7 +5044,9 @@ class KraabUserbot(
                     self._forward_guest_incoming_to_owner(
                         message=message,
                         query=query or text or "",
-                        krab_response="[автоответ пропущен: уведомление/заблокированный отправитель]",
+                        krab_response=(
+                            "[автоответ пропущен: уведомление/заблокированный отправитель]"
+                        ),
                     )
                 )
             return
