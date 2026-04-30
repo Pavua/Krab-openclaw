@@ -46,6 +46,10 @@ logger = structlog.get_logger(__name__)
 # Время запуска (monotonic, секунды). None до завершения run_app().
 startup_time_sec: float | None = None
 
+# True если предыдущий процесс завершился штатно (WAL sentinel был найден).
+# Заполняется до clear_wal_sentinel() в run_app(). None до первого запуска.
+prev_shutdown_clean: bool | None = None
+
 
 def _build_perceptor() -> object | None:
     """
@@ -244,7 +248,9 @@ async def run_app() -> None:
     # Если sentinel отсутствует — предыдущий процесс был SIGKILL'нут или упал
     # до shutdown, WAL мог остаться не-flush'нутым. Ждём 3 секунды, чтобы OS
     # успел освободить file-system locks перед открытием DB.
-    if not check_wal_sentinel():
+    global prev_shutdown_clean
+    prev_shutdown_clean = check_wal_sentinel()
+    if not prev_shutdown_clean:
         logger.warning(
             "wal_sentinel_missing",
             detail="previous process may not have flushed WAL; waiting 3s before opening DBs",

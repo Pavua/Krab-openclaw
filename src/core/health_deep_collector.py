@@ -204,10 +204,39 @@ async def collect_health_deep(
         proc = psutil.Process(os.getpid())
         rss_mb = int(proc.memory_info().rss / 1024 / 1024)
         load1, load5, _ = os.getloadavg()
+
+        # Метрики старта — из bootstrap.runtime и prometheus_metrics.
+        startup_duration_sec: float | None = None
+        process_start_unix: float | None = None
+        last_restart_iso: str | None = None
+        prev_shutdown_clean: bool | None = None
+        try:
+            from ..bootstrap import runtime as _rt  # noqa: PLC0415
+
+            startup_duration_sec = _rt.startup_time_sec
+            prev_shutdown_clean = _rt.prev_shutdown_clean
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            import datetime  # noqa: PLC0415
+
+            from ..core.prometheus_metrics import _PROCESS_START_TIME  # noqa: PLC0415
+
+            process_start_unix = _PROCESS_START_TIME
+            last_restart_iso = datetime.datetime.fromtimestamp(
+                _PROCESS_START_TIME, tz=datetime.timezone.utc
+            ).isoformat()
+        except Exception:  # noqa: BLE001
+            pass
+
         result["krab"] = {
             "uptime_sec": uptime_sec,
             "rss_mb": rss_mb,
             "cpu_pct": round(load1, 2),
+            "startup_duration_sec": startup_duration_sec,
+            "process_start_unix": process_start_unix,
+            "last_restart_iso": last_restart_iso,
+            "prev_shutdown_clean": prev_shutdown_clean,
         }
     except Exception as exc:  # noqa: BLE001
         result["krab"] = {"error": str(exc), "error_type": type(exc).__name__}

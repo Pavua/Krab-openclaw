@@ -745,6 +745,17 @@ class LLMFlowMixin:
         ).strip()
         next_chunk_task = asyncio.create_task(stream_iter.__anext__())
 
+        # Hard wall-clock cap: убиваем цикл если суммарное время превысило порог,
+        # даже когда gateway активно обрабатывает (stagnation там не срабатывает).
+        # 0 = отключено. По умолчанию: 90s текст / 180s фото.
+        _wall_clock_cap_sec = float(
+            getattr(
+                config,
+                "KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC" if images else "KRAB_LLM_WALL_CLOCK_CAP_SEC",
+                180.0 if images else 90.0,
+            )
+        )
+
         try:
             while True:
                 if received_any_chunk:
@@ -754,6 +765,57 @@ class LLMFlowMixin:
                 else:
                     wait_timeout = first_chunk_timeout_sec
                 elapsed_wait_sec = time.monotonic() - started_wait_at
+
+                # Wall-clock cap: принудительный выход если total elapsed > cap.
+                # Срабатывает до всех остальных timeout-проверок чтобы не было
+                # бесконечного ожидания при активном (но слишком медленном) gateway.
+                if (
+                    _wall_clock_cap_sec > 0
+                    and elapsed_wait_sec >= _wall_clock_cap_sec
+                    and not received_any_chunk
+                ):
+                    _wc_model = startup_route_model or getattr(config, "MODEL", "") or "unknown"
+                    logger.error(
+                        "llm_wall_clock_cap_exceeded",
+                        chat_id=chat_id,
+                        elapsed_sec=round(elapsed_wait_sec, 1),
+                        cap_sec=_wall_clock_cap_sec,
+                        has_photo=bool(images),
+                        model=_wc_model,
+                    )
+                    full_response = (
+                        f"❌ Запрос отменён: gateway обрабатывал дольше "
+                        f"{int(_wall_clock_cap_sec)} сек без ответа. "
+                        f"Попробуй `!model switch` или повтори позже."
+                    )
+                    timeout_error_was_sent = True
+                    if _show_progress:
+                        try:
+                            _wc_notice = (
+                                f"⏱ Превышен лимит ожидания {int(_wall_clock_cap_sec)} сек. "
+                                f"Gateway работает, но слишком медленно (модель: `{_wc_model}`). "
+                                "Запрос отменён."
+                            )
+                            if is_self:
+                                await self._safe_edit(message, f"🦀 {query}\n\n{_wc_notice}")
+                            else:
+                                await self._safe_edit(temp_msg, _wc_notice)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if next_chunk_task and not next_chunk_task.done():
+                        next_chunk_task.cancel()
+                        try:
+                            await next_chunk_task
+                        except (asyncio.CancelledError, StopAsyncIteration):
+                            pass
+                        except Exception:  # noqa: BLE001
+                            pass
+                    try:
+                        await stream.aclose()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    break
+
                 remaining_total_timeout_sec = max(
                     0.0, buffered_response_timeout_sec - elapsed_wait_sec
                 )
