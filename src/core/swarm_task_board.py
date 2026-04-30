@@ -61,6 +61,7 @@ class SwarmTask:
     result: str = ""  # результат после done
     artifacts: list[str] = field(default_factory=list)  # пути к файлам
     parent_task_id: str = ""  # для цепочек делегирования
+    auto_execute: bool = False  # автоматическое выполнение swarm-экзекутором
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SwarmTask:
@@ -78,6 +79,7 @@ class SwarmTask:
             result=d.get("result", ""),
             artifacts=list(d.get("artifacts", [])),
             parent_task_id=d.get("parent_task_id", ""),
+            auto_execute=bool(d.get("auto_execute", False)),
         )
 
 
@@ -209,6 +211,7 @@ class SwarmTaskBoard:
         priority: str = "medium",
         created_by: str = "owner",
         parent_task_id: str = "",
+        auto_execute: bool = False,
     ) -> SwarmTask:
         """Создаёт новую задачу и добавляет на board."""
         now = _now_iso()
@@ -226,6 +229,7 @@ class SwarmTaskBoard:
             created_at=now,
             updated_at=now,
             parent_task_id=parent_task_id,
+            auto_execute=auto_execute,
         )
 
         self._tasks[task_id] = asdict(task)

@@ -185,10 +185,18 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             return
 
         if sub == "create":
-            # !swarm task create <team> <title>
-            create_parts = (task_tokens[2] if len(task_tokens) > 2 else "").split(maxsplit=1)
+            # !swarm task create [--auto] <team> <title>
+            raw_rest = task_tokens[2] if len(task_tokens) > 2 else ""
+            # Проверяем флаг --auto
+            auto_execute = False
+            if raw_rest.startswith("--auto"):
+                auto_execute = True
+                raw_rest = raw_rest[len("--auto") :].lstrip()
+            create_parts = raw_rest.split(maxsplit=1)
             if len(create_parts) < 2:
-                raise UserInputError(user_message="❌ Формат: `!swarm task create <team> <title>`")
+                raise UserInputError(
+                    user_message="❌ Формат: `!swarm task create [--auto] <team> <title>`"
+                )
             team_name = create_parts[0].lower()
             title = create_parts[1]
             task = swarm_task_board.create_task(
@@ -197,8 +205,12 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
                 description="",
                 priority="medium",
                 created_by="owner",
+                auto_execute=auto_execute,
             )
-            await message.reply(f"✅ Task `{task.task_id[:8]}` создан для **{team_name}**: {title}")
+            auto_label = " 🤖 (авто)" if auto_execute else ""
+            await message.reply(
+                f"✅ Task `{task.task_id[:8]}` создан для **{team_name}**: {title}{auto_label}"
+            )
             return
 
         if sub == "done":
@@ -320,7 +332,7 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
                 "📋 Task Board:\n"
                 "`!swarm task board` — сводка\n"
                 "`!swarm task list [team]` — список задач\n"
-                "`!swarm task create <team> <title>` — создать\n"
+                "`!swarm task create [--auto] <team> <title>` — создать (--auto = авто-выполнение)\n"
                 "`!swarm task done <id>` — завершить\n"
                 "`!swarm task fail <id>` — отметить как failed\n"
                 "`!swarm task assign <id>` — запустить swarm round для задачи\n"
