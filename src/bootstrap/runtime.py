@@ -29,7 +29,9 @@ from .db_corruption_guard import (
     clear_wal_sentinel,
     flush_wal_checkpoints,
     is_corruption_error,
+    preflight_critical_dbs,
     preflight_known_dbs,
+    preflight_non_critical_dbs_background,
     report_corruption_to_sentry,
 )
 
@@ -250,6 +252,12 @@ async def run_app() -> None:
     # launchd KeepAlive=true НЕ зацикливал нас на битой базе (incident
     # 26.04.2026: 322 fatal_error events за 24h из-за corrupt kraab.session).
     #
+    # Startup optimization (Session 32): archive.db (507MB, ~6.2s integrity_check)
+    # теперь проверяется в фоне через preflight_non_critical_dbs_background(),
+    # так как archive.db помечена critical=False (quarantine + continue, не abort).
+    # Это экономит ~6.2s на critical path и позволяет kraab_running появиться
+    # раньше. Только critical=True DB (kraab.session, <1s) блокируют boot.
+    #
     # Retry на transient `disk I/O error` (Sentry PYTHON-FASTAPI-5W, 28.04.2026):
     # после быстрого restart предыдущий процесс мог не успеть flush WAL,
     # OS возвращает disk I/O error при первом open. 0.5s sleep + 3 попытки —
@@ -258,7 +266,7 @@ async def run_app() -> None:
     preflight_reports = []
     for attempt in range(3):
         try:
-            preflight_reports = preflight_known_dbs()
+            preflight_reports = preflight_critical_dbs()
             break
         except sqlite3.OperationalError as exc:
             msg = str(exc).lower()
@@ -298,6 +306,13 @@ async def run_app() -> None:
             exit_code=DB_CORRUPTION_EXIT_CODE,
         )
         sys.exit(DB_CORRUPTION_EXIT_CODE)
+
+    # Запускаем проверку non-critical DB (archive.db) в фоне — не блокируем
+    # critical path. Fire-and-forget: результат логируется внутри функции.
+    asyncio.create_task(
+        asyncio.to_thread(preflight_non_critical_dbs_background),
+        name="krab_db_preflight_background",
+    )
 
     lm_health = await model_manager.health_check()
     claw_health = await openclaw_client.health_check()

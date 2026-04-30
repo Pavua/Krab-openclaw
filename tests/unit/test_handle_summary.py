@@ -635,5 +635,5 @@ class TestConstants:
         assert _SUMMARY_MAX_N == 500
 
     def test_max_history_chars_reasonable(self) -> None:
-        """Лимит истории > 10к (чтобы вмещать реальный контекст)."""
-        assert _SUMMARY_MAX_HISTORY_CHARS >= 10_000
+        """Лимит истории >= 80k (чтобы 100+ реальных сообщений не обрезались)."""
+        assert _SUMMARY_MAX_HISTORY_CHARS >= 80_000
