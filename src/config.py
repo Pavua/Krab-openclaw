@@ -151,7 +151,7 @@ class Config:
     OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC: Optional[float] = (
         float(x)
         if (x := os.getenv("OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC", "").strip())
-        else None  # codex-cli может думать долго; зависание ловит inactivity watchdog
+        else 45.0  # 45s: успевает при нормальной работе, быстро падает при abort MCP-сервера
     )
     OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC: Optional[float] = (
         float(x)
