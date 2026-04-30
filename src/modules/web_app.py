@@ -3585,66 +3585,178 @@ class WebApp:
 
     async def _collect_openclaw_cron_snapshot(self, *, include_all: bool = True) -> dict[str, Any]:
         """
-        Возвращает статус scheduler и список cron jobs из настоящего OpenClaw CLI.
+        Возвращает статус scheduler и список cron jobs напрямую из файлов.
+
+        Читает файлы напрямую (без subprocess/CLI/WebSocket) — CLI висит на
+        WebSocket auth и вызывает таймаут. Если CLI починят, можно вернуться
+        к старой реализации (_collect_openclaw_cron_snapshot_via_cli).
+
+        Источники:
+        - ~/.openclaw/cron/jobs.json       — 11 OpenClaw jobs (определения)
+        - ~/.openclaw/cron/jobs-state.json — runtime state (lastRunAtMs, lastStatus)
+        - cron_native_store.list_jobs()    — нативные Krab jobs (~4 шт.)
         """
-        status_result = await self._run_openclaw_cli(
-            "cron",
-            "status",
-            "--json",
-            timeout=35.0,
-            expect_json=True,
-        )
-        if not status_result.get("ok"):
+        import pathlib
+
+        from ..core import cron_native_store
+
+        jobs_path = pathlib.Path.home() / ".openclaw" / "cron" / "jobs.json"
+        state_path = pathlib.Path.home() / ".openclaw" / "cron" / "jobs-state.json"
+
+        # --- читаем definitions ---
+        try:
+            jobs_data = json.loads(jobs_path.read_text(encoding="utf-8", errors="replace"))
+            openclaw_jobs_raw: list[dict] = (
+                jobs_data.get("jobs", []) if isinstance(jobs_data, dict) else []
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            openclaw_jobs_raw = []
+            _log = getattr(self, "_log", None) or __import__("logging").getLogger(__name__)
+            _log.warning("cron_snapshot_jobs_read_failed", extra={"error": str(exc)})
+
+        # --- читаем runtime state (dict job_id → state_entry) ---
+        try:
+            state_data = json.loads(state_path.read_text(encoding="utf-8", errors="replace"))
+            # jobs-state.json: {"version": 1, "jobs": {"<id>": {"state": {...}, ...}, ...}}
+            state_map: dict[str, dict] = (
+                state_data.get("jobs", {}) if isinstance(state_data, dict) else {}
+            )
+            if not isinstance(state_map, dict):
+                state_map = {}
+        except (OSError, json.JSONDecodeError):
+            state_map = {}
+
+        # --- объединяем state в каждый job и нормализуем ---
+        def _merge_state(job: dict) -> dict:
+            """Встраивает runtime state из jobs-state.json в job dict."""
+            job_id = str(job.get("id") or "")
+            state_entry = state_map.get(job_id, {})
+            if isinstance(state_entry, dict):
+                runtime_state = state_entry.get("state") or {}
+                if isinstance(runtime_state, dict) and "state" not in job:
+                    job = dict(job)
+                    job["state"] = runtime_state
+            return job
+
+        openclaw_jobs = [
+            self._normalize_openclaw_cron_job(_merge_state(j))
+            for j in openclaw_jobs_raw
+            if isinstance(j, dict)
+        ]
+
+        # --- нативные Krab jobs ---
+        try:
+            native_raw = cron_native_store.list_jobs()
+        except Exception:  # noqa: BLE001
+            native_raw = []
+
+        def _normalize_native_job(j: dict) -> dict:
+            """Приводит нативный job к той же схеме, что OpenClaw jobs."""
+            cron_spec = str(j.get("cron_spec") or "").strip()
+            last_run_iso = str(j.get("last_run_at") or "")
+            last_run_ms = 0
+            if last_run_iso:
+                try:
+                    import datetime as _dt
+
+                    dt = _dt.datetime.fromisoformat(last_run_iso.replace("Z", "+00:00"))
+                    last_run_ms = int(dt.timestamp() * 1000)
+                except (ValueError, OSError):
+                    last_run_ms = 0
             return {
-                "ok": False,
-                "error": status_result.get("error") or "cron_status_failed",
-                "detail": status_result.get("detail")
-                or status_result.get("raw")
-                or "Не удалось прочитать cron status",
+                "id": str(j.get("id") or "").strip(),
+                "name": str(j.get("prompt") or j.get("id") or "native")[:60].strip(),
+                "enabled": bool(j.get("enabled", True)),
+                "agent_id": "krab-native",
+                "session_target": "native",
+                "wake_mode": "cron",
+                "schedule_kind": "cron",
+                "schedule_label": f"Cron: {cron_spec}" if cron_spec else "native",
+                "payload_kind": "prompt",
+                "payload_text": str(j.get("prompt") or "").strip(),
+                "description": "Нативный Krab cron job",
+                "updated_at_ms": 0,
+                "created_at_ms": 0,
+                "last_run_at_ms": last_run_ms,
+                "last_status": "ok" if last_run_ms else "unknown",
+                "last_error": "",
+                "consecutive_errors": 0,
+                "_source": "native",
             }
 
-        list_args = ["cron", "list", "--json"]
-        if include_all:
-            list_args.append("--all")
-        jobs_result = await self._run_openclaw_cli(
-            *list_args,
-            timeout=35.0,
-            expect_json=True,
-        )
-        if not jobs_result.get("ok"):
-            return {
-                "ok": False,
-                "error": jobs_result.get("error") or "cron_jobs_failed",
-                "detail": jobs_result.get("detail")
-                or jobs_result.get("raw")
-                or "Не удалось прочитать cron jobs",
-            }
+        native_jobs = [_normalize_native_job(j) for j in native_raw if isinstance(j, dict)]
 
-        status_payload = (
-            status_result.get("data") if isinstance(status_result.get("data"), dict) else {}
-        )
-        jobs_payload = jobs_result.get("data") if isinstance(jobs_result.get("data"), dict) else {}
-        jobs_raw = jobs_payload.get("jobs") if isinstance(jobs_payload.get("jobs"), list) else []
-        jobs = [self._normalize_openclaw_cron_job(job) for job in jobs_raw if isinstance(job, dict)]
-        jobs.sort(key=lambda item: ((not item["enabled"]), item["name"].lower(), item["id"]))
-        enabled_jobs = sum(1 for item in jobs if item["enabled"])
-        disabled_jobs = max(0, len(jobs) - enabled_jobs)
+        # --- фильтрация (include_all=False → только enabled) ---
+        all_jobs = openclaw_jobs + native_jobs
+        if not include_all:
+            all_jobs = [j for j in all_jobs if j.get("enabled")]
+
+        all_jobs.sort(key=lambda item: ((not item["enabled"]), item["name"].lower(), item["id"]))
+        enabled_jobs = sum(1 for j in all_jobs if j.get("enabled"))
+        disabled_jobs = max(0, len(all_jobs) - enabled_jobs)
+
+        # store_path для совместимости UI
+        store_path = str(jobs_path) if jobs_path.exists() else ""
+
         return {
             "ok": True,
             "status": {
-                "enabled": bool(status_payload.get("enabled")),
-                "store_path": str(status_payload.get("storePath") or "").strip(),
-                "jobs_total_runtime": int(status_payload.get("jobs") or 0),
-                "next_wake_at_ms": status_payload.get("nextWakeAtMs"),
+                "enabled": True,
+                "store_path": store_path,
+                "jobs_total_runtime": len(openclaw_jobs),
+                "next_wake_at_ms": None,
+                "_source": "direct_file_read",
             },
             "summary": {
-                "total": len(jobs),
+                "total": len(all_jobs),
                 "enabled": enabled_jobs,
                 "disabled": disabled_jobs,
                 "include_all": bool(include_all),
+                "openclaw_count": len(openclaw_jobs),
+                "native_count": len(native_jobs),
             },
-            "jobs": jobs,
+            "jobs": all_jobs,
         }
+
+    # ---------------------------------------------------------------------------
+    # Старая реализация через CLI (оставлена как комментарий-fallback).
+    # Раскомментировать если CLI auth починят.
+    # ---------------------------------------------------------------------------
+    # async def _collect_openclaw_cron_snapshot_via_cli(
+    #     self, *, include_all: bool = True
+    # ) -> dict[str, Any]:
+    #     """CLI-based fallback (зависает на WebSocket auth — не использовать)."""
+    #     status_result = await self._run_openclaw_cli(
+    #         "cron", "status", "--json", timeout=35.0, expect_json=True,
+    #     )
+    #     if not status_result.get("ok"):
+    #         return {"ok": False, "error": status_result.get("error") or "cron_status_failed"}
+    #     list_args = ["cron", "list", "--json"]
+    #     if include_all:
+    #         list_args.append("--all")
+    #     jobs_result = await self._run_openclaw_cli(*list_args, timeout=35.0, expect_json=True)
+    #     if not jobs_result.get("ok"):
+    #         return {"ok": False, "error": jobs_result.get("error") or "cron_jobs_failed"}
+    #     status_payload = status_result.get("data") or {}
+    #     jobs_payload = jobs_result.get("data") or {}
+    #     jobs_raw = jobs_payload.get("jobs") or []
+    #     jobs = [self._normalize_openclaw_cron_job(j) for j in jobs_raw if isinstance(j, dict)]
+    #     jobs.sort(key=lambda item: ((not item["enabled"]), item["name"].lower(), item["id"]))
+    #     enabled_jobs = sum(1 for item in jobs if item["enabled"])
+    #     return {
+    #         "ok": True,
+    #         "status": {
+    #             "enabled": bool(status_payload.get("enabled")),
+    #             "store_path": str(status_payload.get("storePath") or ""),
+    #             "jobs_total_runtime": int(status_payload.get("jobs") or 0),
+    #             "next_wake_at_ms": status_payload.get("nextWakeAtMs"),
+    #         },
+    #         "summary": {
+    #             "total": len(jobs), "enabled": enabled_jobs,
+    #             "disabled": max(0, len(jobs) - enabled_jobs), "include_all": bool(include_all),
+    #         },
+    #         "jobs": jobs,
+    #     }
 
     @staticmethod
     def _clone_jsonish_dict(payload: dict[str, Any]) -> dict[str, Any]:

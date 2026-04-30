@@ -462,6 +462,18 @@ class Config:
         "SWARM_AUTONOMOUS_ENABLED",
         "0",
     ).strip().lower() in ("1", "true", "yes")
+    # Автоматическое выполнение задач с флагом auto_execute=true через swarm_auto_executor.
+    # По умолчанию выключено; включить: KRAB_SWARM_AUTO_EXECUTE_ENABLED=1
+    KRAB_SWARM_AUTO_EXECUTE_ENABLED: bool = os.getenv(
+        "KRAB_SWARM_AUTO_EXECUTE_ENABLED",
+        "0",
+    ).strip().lower() in ("1", "true", "yes")
+    # Интервал проверки авто-задач (секунды). Дефолт: 60.
+    KRAB_SWARM_AUTO_EXECUTE_INTERVAL: int = int(os.getenv("KRAB_SWARM_AUTO_EXECUTE_INTERVAL", "60"))
+    # Максимум авто-выполнений в час (rate-limit). Дефолт: 5.
+    KRAB_SWARM_AUTO_EXECUTE_MAX_PER_HOUR: int = int(
+        os.getenv("KRAB_SWARM_AUTO_EXECUTE_MAX_PER_HOUR", "5")
+    )
     # Разрешить voice-сообщения в группах как триггер для бота (только от allowed пользователей),
     # даже если нет текстового упоминания "Краб".
     GROUP_VOICE_FALLBACK_TRIGGER: bool = os.getenv(

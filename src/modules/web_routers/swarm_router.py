@@ -403,6 +403,42 @@ def build_swarm_router(ctx: RouterContext) -> APIRouter:
             "timeout_sec": swarm_loop_guard._timeout_sec,
         }
 
+    @new_router.get("/api/swarm/channels/status")
+    async def swarm_channels_status() -> dict:
+        """Конфигурация и статус swarm-каналов (forum/legacy/additional)."""
+        try:
+            from ...core.swarm_channels import swarm_channels as _sc
+
+            mode = (
+                "forum" if _sc.is_forum_mode else ("legacy" if _sc.get_all_team_chats() else "none")
+            )
+            team_topics = {}
+            if _sc.is_forum_mode:
+                # Собираем topic_id для каждой команды (через resolve)
+                for team in ["traders", "coders", "analysts", "creative"]:
+                    topic_id = _sc._team_topics.get(team)
+                    if topic_id is not None:
+                        team_topics[team] = topic_id
+
+            active_rounds = {
+                team: _sc.is_round_active(team)
+                for team in ["traders", "coders", "analysts", "creative"]
+            }
+
+            return {
+                "ok": True,
+                "mode": mode,
+                "forum_chat_id": _sc._forum_chat_id,
+                "team_topics": team_topics,
+                "team_chats": _sc.get_all_team_chats(),
+                "additional_chats": {
+                    str(cid): meta for cid, meta in _sc.get_additional_chats().items()
+                },
+                "active_rounds": active_rounds,
+            }
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     @new_router.get("/api/swarm/events")
     async def swarm_events(token: str = Query(default="")):
         """SSE stream для обновлений Swarm task board."""
@@ -499,14 +535,22 @@ def build_swarm_router(ctx: RouterContext) -> APIRouter:
         title = str(payload.get("title") or "").strip()
         if not team or not title:
             return {"ok": False, "error": "team and title required"}
+        auto_execute = bool(payload.get("auto_execute", False))
         task = swarm_task_board.create_task(
             team=team,
             title=title,
             description=str(payload.get("description") or ""),
             priority=str(payload.get("priority") or "medium"),
             created_by=str(payload.get("created_by") or "api"),
+            auto_execute=auto_execute,
         )
-        return {"ok": True, "task_id": task.task_id, "team": task.team, "title": task.title}
+        return {
+            "ok": True,
+            "task_id": task.task_id,
+            "team": task.team,
+            "title": task.title,
+            "auto_execute": task.auto_execute,
+        }
 
     @new_router.post("/api/swarm/task/{task_id}/update")
     async def swarm_task_update(

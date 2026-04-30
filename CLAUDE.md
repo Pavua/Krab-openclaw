@@ -730,7 +730,7 @@ Endpoints session 7 (добавлены, ~249 итого после Session 22):
 
 <!-- BEGIN:auto-endpoints -->
 
-### Auto-generated endpoints table (254+ уникальных paths; **207 extracted в `src/modules/web_routers/`** через factory `build_X_router(ctx)` pattern — **25 routers** за 50 waves Phase 2 Wave A→XX; +`/api/inbox/bulk-ack-stale` Session 28)
+### Auto-generated endpoints table (248 routes; **29 routers** в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern — Phase 2 Wave A→XX + Session 28-29 memory doctor/coverage-audit/backfill)
 
 | Endpoint | Метод |
 |----------|-------|
@@ -796,8 +796,12 @@ Endpoints session 7 (добавлены, ~249 итого после Session 22):
 | `/api/krab/restart_userbot` | POST |
 | `/api/krab_ear/status` | GET |
 | `/api/links` | GET |
+| `/api/memory/coverage-audit` | GET |
+| `/api/memory/doctor` | GET |
+| `/api/memory/doctor/fix` | POST |
 | `/api/memory/heatmap` | GET |
 | `/api/memory/indexer` | GET |
+| `/api/memory/indexer/backfill` | POST |
 | `/api/memory/indexer/flush` | POST |
 | `/api/memory/phase2/status` | GET |
 | `/api/memory/search` | GET |
@@ -989,7 +993,7 @@ Endpoints session 7 (добавлены, ~249 итого после Session 22):
 
 <!-- BEGIN:auto-commands -->
 
-### Auto-generated handlers (105 команд из userbot_bridge.py; Phase 2 Waves 11-18 добавили модули: admin_commands / cli_commands / fileio_commands / group_admin_commands / content_commands / state_commands / observability_commands / memory_admin_commands в `src/handlers/commands/`)
+### Auto-generated handlers (169 handle_* функций; Phase 2 Waves 11-18 + Session 28-29: admin / cli / fileio / group_admin / content / state / observability / memory_admin / diagnostic / scheduler / system в `src/handlers/commands/`)
 
 `!access`, `!acl`, `!agent`, `!alias`, `!archive`, `!ask`
 `!autodel`, `!backup`, `!bench`, `!block`, `!blocklist`, `!browser`
@@ -1016,10 +1020,10 @@ Beta (Session 17): `!mem` — быстрый поиск по архиву пам
 
 <!-- BEGIN:auto-metrics -->
 
-### Auto-generated Prometheus (11 алертов, 21 метрик)
+### Auto-generated Prometheus (11 алертов, 27 метрик)
 
 Alerts: `ArchiveChunksStalled`, `ArchiveDbSizeCritical`, `ArchiveDbSizeWarning`, `ChatFilterModeMuteDominant`, `CommandInvocationSpike`, `KrabAutoRestartSpiking`, `KrabDown`, `LLMRouteLatencyHigh`, `MemoryValidatorConfirmFailedSpike`, `MemoryValidatorPendingHigh`, `RemindersQueueBacklog`
 
-Metrics: `krab_archive_chunks_embedded_total`, `krab_archive_db_size_bytes`, `krab_auto_restart_attempts_total`, `krab_chat_filter_modes_total`, `krab_chat_windows_active`, `krab_chat_windows_capacity`, `krab_chat_windows_evicted_total`, `krab_chat_windows_total_messages`, `krab_command_invocations_total`, `krab_guest_llm_skipped_total`, `krab_llm_route_latency_seconds`, `krab_llm_route_ok`, `krab_memory_adaptive_rerank_used_total`, `krab_memory_retrieval_latency_seconds`, `krab_memory_retrieval_mode_total`, `krab_memory_validator_pending`, `krab_metrics_generated_at`, `krab_process_start_time_seconds`, `krab_reminders_pending_total`, `krab_stealth_detection_total`, `krab_swarm_tool_blocked_total`
+Metrics: `krab_archive_chunks_embedded_total`, `krab_archive_db_size_bytes`, `krab_auto_restart_attempts_total`, `krab_chat_filter_modes_total`, `krab_chat_windows_active`, `krab_chat_windows_capacity`, `krab_chat_windows_evicted_total`, `krab_chat_windows_total_messages`, `krab_command_invocations_total`, `krab_guest_llm_skipped_total`, `krab_handler_invocations_total`, `krab_handler_latency_seconds`, `krab_llm_route_latency_seconds`, `krab_llm_route_ok`, `krab_memory_adaptive_rerank_used_total`, `krab_memory_retrieval_latency_seconds`, `krab_memory_retrieval_mode_total`, `krab_memory_validator_pending`, `krab_metrics_generated_at`, `krab_process_start_time_seconds`, `krab_reminders_pending_total`, `krab_stealth_detection_total`, `krab_swarm_tool_blocked_total`, `krab_telegram_flood_wait_total`, `krab_thread_coherence_drift_total`, `krab_thread_coherence_score`, `krab_vec_query_duration_seconds`
 
 <!-- END:auto-metrics -->

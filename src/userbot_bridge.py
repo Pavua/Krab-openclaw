@@ -50,6 +50,7 @@ from .core.sender_context import _extract_forward_origin_parts
 from .core.silence_mode import silence_manager
 from .core.silence_schedule import silence_schedule_manager
 from .core.spam_filter import is_bulk_sender as _is_bulk_sender_ext
+from .core.swarm_auto_executor import swarm_auto_executor
 from .core.swarm_channels import swarm_channels
 from .core.swarm_scheduler import swarm_scheduler
 from .core.telegram_rate_limiter import telegram_rate_limiter
@@ -2264,6 +2265,32 @@ class KraabUserbot(
                     swarm_scheduler.start()
                     logger.info("swarm_scheduler_runtime_started")
 
+            # Swarm auto-executor — авто-выполнение задач board с auto_execute=True
+            if config.KRAB_SWARM_AUTO_EXECUTE_ENABLED and self.me:
+                _auto_owner_chat_id = str(self.me.id)
+                _auto_system_prompt = self._build_system_prompt_for_sender(
+                    is_allowed_sender=True,
+                    access_level="owner",
+                )
+
+                def _auto_executor_router_factory(team_name: str):
+                    from .handlers.command_handlers import _AgentRoomRouterAdapter
+
+                    return _AgentRoomRouterAdapter(
+                        chat_id=f"swarm:auto:{team_name}",
+                        system_prompt=_auto_system_prompt,
+                        team_name=team_name,
+                    )
+
+                swarm_auto_executor.bind(
+                    sender=self._send_scheduled_message,
+                    router_factory=_auto_executor_router_factory,
+                    owner_chat_id=_auto_owner_chat_id,
+                )
+                if not swarm_auto_executor._started:
+                    swarm_auto_executor.start()
+                    logger.info("swarm_auto_executor_runtime_started")
+
             # Native cron scheduler — fallback когда OpenClaw CLI недоступен
             # W32: cron health check выявил что bind_sender не вызывался →
             # все 4 jobs были silent no-op (last_run_at обновлялся, но messages
@@ -3282,6 +3309,11 @@ class KraabUserbot(
                 swarm_scheduler.stop()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("swarm_scheduler_stop_failed", error=str(exc), non_fatal=True)
+        if swarm_auto_executor._started:
+            try:
+                swarm_auto_executor.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("swarm_auto_executor_stop_failed", error=str(exc), non_fatal=True)
         if cron_native_scheduler.is_running:
             try:
                 cron_native_scheduler.stop()
