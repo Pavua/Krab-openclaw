@@ -90,10 +90,12 @@ class CronNativeScheduler:
             due_ts = cron_native_store.next_due(job)
             if due_ts is None:
                 continue
-            # Trigger только когда due_ts фактически due. Cooldown на 1 poll-interval
-            # защищает от двойного срабатывания при дрожании next_due вокруг now.
+            # Trigger когда due_ts попадает в look-ahead окно (now + POLL_INTERVAL).
+            # next_due() всегда возвращает будущее время (+1min base), поэтому
+            # нельзя проверять `due_ts <= now` — оно никогда не будет true.
+            # Cooldown >50s защищает от двойного срабатывания.
             last = self._last_fired.get(job_id, 0.0)
-            if due_ts <= now and (now - last) > _POLL_INTERVAL:
+            if due_ts <= now + _POLL_INTERVAL and (now - last) > 50:
                 self._last_fired[job_id] = due_ts
                 asyncio.ensure_future(self._run_job(job))
 
