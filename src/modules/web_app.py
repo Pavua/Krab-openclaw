@@ -3718,46 +3718,6 @@ class WebApp:
             "jobs": all_jobs,
         }
 
-    # ---------------------------------------------------------------------------
-    # Старая реализация через CLI (оставлена как комментарий-fallback).
-    # Раскомментировать если CLI auth починят.
-    # ---------------------------------------------------------------------------
-    # async def _collect_openclaw_cron_snapshot_via_cli(
-    #     self, *, include_all: bool = True
-    # ) -> dict[str, Any]:
-    #     """CLI-based fallback (зависает на WebSocket auth — не использовать)."""
-    #     status_result = await self._run_openclaw_cli(
-    #         "cron", "status", "--json", timeout=35.0, expect_json=True,
-    #     )
-    #     if not status_result.get("ok"):
-    #         return {"ok": False, "error": status_result.get("error") or "cron_status_failed"}
-    #     list_args = ["cron", "list", "--json"]
-    #     if include_all:
-    #         list_args.append("--all")
-    #     jobs_result = await self._run_openclaw_cli(*list_args, timeout=35.0, expect_json=True)
-    #     if not jobs_result.get("ok"):
-    #         return {"ok": False, "error": jobs_result.get("error") or "cron_jobs_failed"}
-    #     status_payload = status_result.get("data") or {}
-    #     jobs_payload = jobs_result.get("data") or {}
-    #     jobs_raw = jobs_payload.get("jobs") or []
-    #     jobs = [self._normalize_openclaw_cron_job(j) for j in jobs_raw if isinstance(j, dict)]
-    #     jobs.sort(key=lambda item: ((not item["enabled"]), item["name"].lower(), item["id"]))
-    #     enabled_jobs = sum(1 for item in jobs if item["enabled"])
-    #     return {
-    #         "ok": True,
-    #         "status": {
-    #             "enabled": bool(status_payload.get("enabled")),
-    #             "store_path": str(status_payload.get("storePath") or ""),
-    #             "jobs_total_runtime": int(status_payload.get("jobs") or 0),
-    #             "next_wake_at_ms": status_payload.get("nextWakeAtMs"),
-    #         },
-    #         "summary": {
-    #             "total": len(jobs), "enabled": enabled_jobs,
-    #             "disabled": max(0, len(jobs) - enabled_jobs), "include_all": bool(include_all),
-    #         },
-    #         "jobs": jobs,
-    #     }
-
     @staticmethod
     def _clone_jsonish_dict(payload: dict[str, Any]) -> dict[str, Any]:
         """Неглубокая копия dict/list payload (delegates → _helpers)."""

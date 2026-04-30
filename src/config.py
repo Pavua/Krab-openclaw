@@ -474,6 +474,9 @@ class Config:
     KRAB_SWARM_AUTO_EXECUTE_MAX_PER_HOUR: int = int(
         os.getenv("KRAB_SWARM_AUTO_EXECUTE_MAX_PER_HOUR", "5")
     )
+    # Порог (секунды) отсутствия Telegram-событий для алерта о возможном MTProto backoff.
+    # 0 — отключить мониторинг. Дефолт: 60.
+    KRAB_NETWORK_OFFLINE_ALERT_SEC: int = int(os.getenv("KRAB_NETWORK_OFFLINE_ALERT_SEC", "60"))
     # Разрешить voice-сообщения в группах как триггер для бота (только от allowed пользователей),
     # даже если нет текстового упоминания "Краб".
     GROUP_VOICE_FALLBACK_TRIGGER: bool = os.getenv(

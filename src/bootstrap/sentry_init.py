@@ -66,6 +66,14 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     # ситуация — например при попытке ответить в чат, куда ещё не попали
     # сообщения. Не runtime-ошибка, не требует investigate в Sentry.
     "PEER_ID_INVALID",
+    # asyncio.CancelledError во время uvicorn/starlette lifespan shutdown —
+    # штатное поведение при остановке сервера. Генерирует PYTHON-FASTAPI-Z
+    # (352 события) при каждом нормальном выключении Краба. Не runtime-баг.
+    "CancelledError",
+    # DB corruption quarantine circuit breaker — ожидаемое поведение при
+    # обнаружении повреждения БД: система сама переходит в safe-режим.
+    # Не требует отдельного алерта в Sentry — уже логируется локально.
+    "db_corruption_quarantined",
 )
 
 
