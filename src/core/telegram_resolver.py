@@ -25,6 +25,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from .contact_cache import lookup as _cache_lookup
+from .contact_cache import store as _cache_store
 from .logger import get_logger
 
 if TYPE_CHECKING:
@@ -189,6 +191,20 @@ async def _strategy_dialog_scan(client: "Client", target: str) -> dict[str, Any]
     return None
 
 
+def _cache_store_result(result: dict[str, Any], fallback_target: str) -> None:
+    """Сохраняет успешный результат резолва в кэш контактов."""
+    username = result.get("username") or _strip_at(fallback_target)
+    peer_id = result.get("peer_id")
+    display_name = result.get("display_name") or username
+    # Числовые peer_id и "me" не кэшируем по username
+    if not username or not peer_id or str(peer_id) == peer_id:
+        return
+    try:
+        _cache_store(username, int(peer_id), display_name or username)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("resolver_cache_store_error", error=str(exc))
+
+
 async def resolve_peer(client: "Client", target: str) -> dict[str, Any]:
     """
     Многостратегийный резолвер Telegram peer.
@@ -213,6 +229,18 @@ async def resolve_peer(client: "Client", target: str) -> dict[str, Any]:
     tried: list[str] = []
 
     logger.info("resolver_start", target=target)
+
+    # --- Кэш контактов: проверяем до любых API-вызовов ---
+    cached = _cache_lookup(target)
+    if cached:
+        logger.debug("resolver_cache_hit", target=target, peer_id=cached.get("peer_id"))
+        return {
+            "ok": True,
+            "peer_id": cached["peer_id"],
+            "username": cached.get("username"),
+            "display_name": cached.get("display_name"),
+            "strategy_used": "contact_cache",
+        }
 
     # Числовой ID — сразу возвращаем без resolve
     if re.fullmatch(r"-?\d+", target):
@@ -256,6 +284,7 @@ async def resolve_peer(client: "Client", target: str) -> dict[str, Any]:
             strategy=result["strategy_used"],
             peer_id=result["peer_id"],
         )
+        _cache_store_result(result, target)
         return result
 
     # --- Стратегия 2: get_users (только для username-подобных строк) ---
@@ -269,6 +298,7 @@ async def resolve_peer(client: "Client", target: str) -> dict[str, Any]:
                 strategy=result["strategy_used"],
                 peer_id=result["peer_id"],
             )
+            _cache_store_result(result, target)
             return result
 
     # --- Стратегия 3: scan dialogs ---
@@ -281,6 +311,7 @@ async def resolve_peer(client: "Client", target: str) -> dict[str, Any]:
             strategy=result["strategy_used"],
             peer_id=result["peer_id"],
         )
+        _cache_store_result(result, target)
         return result
 
     # --- Все стратегии исчерпаны ---
