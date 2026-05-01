@@ -1149,6 +1149,19 @@ async def handle_say(bot: "KraabUserbot", message: Message) -> None:
     if not text:
         raise UserInputError(user_message="❌ Текст сообщения не может быть пустым.")
 
+    # Резолвим username → числовой peer_id если нужно
+    if isinstance(target_chat, str) and not target_chat.lstrip("-").isdigit():
+        from ...core.telegram_resolver import resolve_peer
+
+        resolve_result = await resolve_peer(bot.client, target_chat)
+        if not resolve_result.get("ok"):
+            await bot._safe_reply(
+                message,
+                f"❌ Не удалось найти `{target_chat}`: {resolve_result.get('error_code', 'PEER_NOT_FOUND')}",
+            )
+            return
+        target_chat = resolve_result["peer_id"]
+
     try:
         await message.delete()
     except Exception:
