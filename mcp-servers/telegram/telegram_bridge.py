@@ -521,6 +521,216 @@ class TelegramBridge:
 
         return await self._run_client_call(_op)
 
+    async def resolve_username(self, username: str) -> dict[str, Any]:
+        """Резолвит @username в user_id/chat_id.
+
+        Принимает username с @ или без. Пробует get_users, при ошибке — get_chat.
+        """
+        clean = username.lstrip("@")
+
+        async def _op(client: Client) -> dict[str, Any]:
+            # Пробуем как пользователя
+            try:
+                users = await client.get_users(clean)
+                user = users if not isinstance(users, list) else users[0]
+                status_raw = getattr(user, "status", None)
+                return {
+                    "ok": True,
+                    "user_id": user.id,
+                    "username": user.username,
+                    "first_name": getattr(user, "first_name", None),
+                    "last_name": getattr(user, "last_name", None),
+                    "is_bot": bool(getattr(user, "is_bot", False)),
+                    "status": str(status_raw) if status_raw else None,
+                }
+            except Exception:  # noqa: BLE001
+                pass
+            # Fallback: пробуем как чат/канал
+            try:
+                chat = await client.get_chat(clean)
+                return {
+                    "ok": True,
+                    "user_id": chat.id,
+                    "username": getattr(chat, "username", None),
+                    "first_name": getattr(chat, "first_name", None) or getattr(chat, "title", None),
+                    "last_name": getattr(chat, "last_name", None),
+                    "is_bot": False,
+                    "status": str(getattr(chat, "type", "")),
+                }
+            except Exception as exc:  # noqa: BLE001
+                exc_name = type(exc).__name__
+                return {
+                    "ok": False,
+                    "error_code": "PEER_NOT_RESOLVED",
+                    "error": str(exc),
+                    "details": {
+                        "username": clean,
+                        "in_dialogs": False,
+                        "exception": exc_name,
+                    },
+                }
+
+        return await self._run_client_call(_op)
+
+    async def get_profile(self, peer: str) -> dict[str, Any]:
+        """Возвращает расширенный профиль пользователя по user_id или @username.
+
+        Объединяет данные из get_users() и get_chat() для полной информации.
+        """
+        async def _op(client: Client) -> dict[str, Any]:
+            try:
+                peer_val: int | str
+                try:
+                    peer_val = int(peer)
+                except ValueError:
+                    peer_val = peer.lstrip("@")
+
+                user = None
+                chat = None
+                try:
+                    users = await client.get_users(peer_val)
+                    user = users if not isinstance(users, list) else users[0]
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    chat = await client.get_chat(peer_val)
+                except Exception:  # noqa: BLE001
+                    pass
+
+                if user is None and chat is None:
+                    return {
+                        "ok": False,
+                        "error_code": "PEER_NOT_FOUND",
+                        "error": f"Не удалось найти профиль для peer={peer!r}",
+                    }
+
+                result: dict[str, Any] = {"ok": True}
+
+                if user is not None:
+                    result["user_id"] = user.id
+                    result["username"] = user.username
+                    result["first_name"] = getattr(user, "first_name", None)
+                    result["last_name"] = getattr(user, "last_name", None)
+                    result["is_bot"] = bool(getattr(user, "is_bot", False))
+                    result["is_contact"] = bool(getattr(user, "is_contact", False))
+                    result["is_mutual_contact"] = bool(getattr(user, "is_mutual_contact", False))
+                    status_raw = getattr(user, "status", None)
+                    result["last_online"] = str(status_raw) if status_raw else None
+                    result["bio"] = None  # требует get_chat для full profile
+                    result["photo_url"] = None
+
+                if chat is not None:
+                    if "user_id" not in result:
+                        result["user_id"] = chat.id
+                        result["username"] = getattr(chat, "username", None)
+                        result["first_name"] = getattr(chat, "first_name", None) or getattr(chat, "title", None)
+                        result["last_name"] = getattr(chat, "last_name", None)
+                        result["is_bot"] = False
+                        result["is_contact"] = False
+                        result["is_mutual_contact"] = False
+                        result["last_online"] = None
+                    result["bio"] = getattr(chat, "bio", None) or getattr(chat, "description", None)
+                    # photo — ссылку получить можно только через download, возвращаем file_id
+                    photo = getattr(chat, "photo", None)
+                    if photo:
+                        result["photo_url"] = getattr(photo, "small_file_id", None)
+                    else:
+                        result["photo_url"] = None
+
+                return result
+
+            except Exception as exc:  # noqa: BLE001
+                return {
+                    "ok": False,
+                    "error_code": "PROFILE_ERROR",
+                    "error": str(exc),
+                    "peer": peer,
+                }
+
+        return await self._run_client_call(_op)
+
+    async def mark_read(self, chat_id: int | str) -> dict[str, Any]:
+        """Помечает чат как прочитанный (read_chat_history)."""
+        async def _op(client: Client) -> dict[str, Any]:
+            await client.read_chat_history(chat_id)
+            return {"ok": True, "chat_id": str(chat_id)}
+
+        return await self._run_client_call(_op)
+
+    async def inspect_forward(
+        self, chat_id: int | str, message_id: int
+    ) -> dict[str, Any]:
+        """Извлекает информацию о пересылке (forward origin) из forwarded-сообщения."""
+        async def _op(client: Client) -> dict[str, Any]:
+            msgs = await client.get_messages(chat_id, message_ids=message_id)
+            msg: Message = msgs if not isinstance(msgs, list) else msgs[0]
+            if msg is None:
+                return {
+                    "ok": False,
+                    "error": f"Сообщение {message_id} не найдено в чате {chat_id}",
+                }
+
+            # Проверяем наличие forward
+            forward_from = getattr(msg, "forward_from", None)
+            forward_from_chat = getattr(msg, "forward_from_chat", None)
+            forward_sender_name = getattr(msg, "forward_sender_name", None)
+            forward_date = getattr(msg, "forward_date", None)
+
+            has_forward = any([forward_from, forward_from_chat, forward_sender_name])
+
+            if not has_forward:
+                return {
+                    "ok": True,
+                    "has_forward": False,
+                    "original_sender_id": None,
+                    "original_sender_username": None,
+                    "original_sender_name": None,
+                    "original_chat_id": None,
+                    "original_message_id": None,
+                    "forward_date": None,
+                }
+
+            original_sender_id = None
+            original_sender_username = None
+            original_sender_name = None
+            original_chat_id = None
+            original_message_id = getattr(msg, "forward_from_message_id", None)
+
+            if forward_from:
+                original_sender_id = forward_from.id
+                original_sender_username = getattr(forward_from, "username", None)
+                original_sender_name = (
+                    getattr(forward_from, "first_name", None) or ""
+                )
+                last = getattr(forward_from, "last_name", None)
+                if last:
+                    original_sender_name = f"{original_sender_name} {last}".strip()
+
+            if forward_from_chat:
+                original_chat_id = forward_from_chat.id
+                if original_sender_id is None:
+                    original_sender_id = forward_from_chat.id
+                if original_sender_username is None:
+                    original_sender_username = getattr(forward_from_chat, "username", None)
+                if original_sender_name is None:
+                    original_sender_name = getattr(forward_from_chat, "title", None)
+
+            if forward_sender_name and original_sender_name is None:
+                original_sender_name = forward_sender_name
+
+            return {
+                "ok": True,
+                "has_forward": True,
+                "original_sender_id": original_sender_id,
+                "original_sender_username": original_sender_username,
+                "original_sender_name": original_sender_name,
+                "original_chat_id": original_chat_id,
+                "original_message_id": original_message_id,
+                "forward_date": forward_date.isoformat() if forward_date else None,
+            }
+
+        return await self._run_client_call(_op)
+
     async def session_info_json(self) -> str:
         """Возвращает JSON с диагностической инфой о текущей session.
 
