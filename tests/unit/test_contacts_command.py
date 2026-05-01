@@ -1,14 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-Тесты для команды !contacts — управление контактами адресной книги.
+Тесты для команды !contacts — управление кэшем контактов.
+
+Полностью переписаны в Session 31: теперь !contacts использует
+contact_cache + telegram_resolver вместо прямых API-вызовов.
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.core.access_control import AccessLevel
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_contacts
 
@@ -16,12 +21,29 @@ from src.handlers.command_handlers import handle_contacts
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------
 
+_MODULE = "src.handlers.commands.group_admin_commands"
+
 
 def _make_bot(args: str = "") -> MagicMock:
-    """Mock-бот с _get_command_args и client."""
+    """Mock-бот с owner-level доступом."""
     bot = MagicMock()
     bot._get_command_args = MagicMock(return_value=args)
     bot.client = MagicMock()
+    # owner access profile
+    profile = MagicMock()
+    profile.level = AccessLevel.OWNER
+    bot._get_access_profile = MagicMock(return_value=profile)
+    return bot
+
+
+def _make_bot_non_owner(args: str = "") -> MagicMock:
+    """Mock-бот с guest-level доступом (не owner)."""
+    bot = MagicMock()
+    bot._get_command_args = MagicMock(return_value=args)
+    bot.client = MagicMock()
+    profile = MagicMock()
+    profile.level = AccessLevel.GUEST
+    bot._get_access_profile = MagicMock(return_value=profile)
     return bot
 
 
@@ -32,120 +54,154 @@ def _make_message() -> MagicMock:
     return msg
 
 
-def _make_user(
+def _make_cache_entry(
     *,
-    user_id: int = 123456789,
-    first_name: str = "Иван",
-    last_name: str | None = None,
-    username: str | None = None,
-    phone_number: str | None = None,
-) -> MagicMock:
-    """Создать mock-объект пользователя (контакта)."""
-    user = MagicMock()
-    user.id = user_id
-    user.first_name = first_name
-    user.last_name = last_name
-    user.username = username
-    user.phone_number = phone_number
-    return user
+    username: str = "vasya",
+    peer_id: int = 123456789,
+    display_name: str = "Василий",
+    aliases: list[str] | None = None,
+) -> dict:
+    """Создать запись кэша контактов."""
+    return {
+        "username": username,
+        "peer_id": peer_id,
+        "display_name": display_name,
+        "aliases": aliases or [],
+        "last_resolved_at": "2026-05-01T12:00:00+00:00",
+    }
 
 
 # ---------------------------------------------------------------------------
-# Тесты: !contacts без аргументов — количество контактов
+# Тесты: owner-only
 # ---------------------------------------------------------------------------
 
 
-class TestContactsCount:
-    """Тесты !contacts — показ количества контактов."""
+class TestContactsOwnerOnly:
+    """Команда !contacts доступна только владельцу."""
 
     @pytest.mark.asyncio
-    async def test_отображает_количество_контактов(self) -> None:
-        """Ответ содержит количество контактов."""
-        bot = _make_bot("")
+    async def test_не_owner_бросает_ошибку(self) -> None:
+        """Не-owner получает UserInputError."""
+        bot = _make_bot_non_owner("")
         msg = _make_message()
-        contacts = [_make_user(user_id=i) for i in range(42)]
-        bot.client.get_contacts = AsyncMock(return_value=contacts)
 
-        await handle_contacts(bot, msg)
+        with pytest.raises(UserInputError) as exc_info:
+            await handle_contacts(bot, msg)
 
-        reply_text: str = msg.reply.call_args[0][0]
-        assert "42" in reply_text
+        assert "owner" in exc_info.value.user_message.lower() or "🔒" in exc_info.value.user_message
 
     @pytest.mark.asyncio
-    async def test_ответ_содержит_заголовок_контакты(self) -> None:
-        """Ответ содержит слово 'Контакты'."""
+    async def test_owner_проходит_проверку(self) -> None:
+        """Owner без ошибки доступа выполняет команду."""
         bot = _make_bot("")
         msg = _make_message()
-        bot.client.get_contacts = AsyncMock(return_value=[])
-
-        await handle_contacts(bot, msg)
-
-        reply_text: str = msg.reply.call_args[0][0]
-        assert "Контакты" in reply_text
-
-    @pytest.mark.asyncio
-    async def test_ноль_контактов(self) -> None:
-        """Пустая адресная книга — 0 контактов."""
-        bot = _make_bot("")
-        msg = _make_message()
-        bot.client.get_contacts = AsyncMock(return_value=[])
-
-        await handle_contacts(bot, msg)
-
-        reply_text: str = msg.reply.call_args[0][0]
-        assert "0" in reply_text
-
-    @pytest.mark.asyncio
-    async def test_один_контакт(self) -> None:
-        """Один контакт — 1 в ответе."""
-        bot = _make_bot("")
-        msg = _make_message()
-        bot.client.get_contacts = AsyncMock(return_value=[_make_user()])
-
-        await handle_contacts(bot, msg)
-
-        reply_text: str = msg.reply.call_args[0][0]
-        assert "1" in reply_text
-
-    @pytest.mark.asyncio
-    async def test_ответ_содержит_подсказки_команд(self) -> None:
-        """Ответ содержит подсказки поиска и добавления."""
-        bot = _make_bot("")
-        msg = _make_message()
-        bot.client.get_contacts = AsyncMock(return_value=[])
-
-        await handle_contacts(bot, msg)
-
-        reply_text: str = msg.reply.call_args[0][0]
-        assert "search" in reply_text
-        assert "add" in reply_text
-
-    @pytest.mark.asyncio
-    async def test_ошибка_get_contacts_отправляет_ошибку(self) -> None:
-        """При ошибке API — сообщение об ошибке."""
-        bot = _make_bot("")
-        msg = _make_message()
-        bot.client.get_contacts = AsyncMock(side_effect=Exception("network error"))
-
-        await handle_contacts(bot, msg)
-
-        reply_text: str = msg.reply.call_args[0][0]
-        assert "❌" in reply_text or "Не удалось" in reply_text
-
-    @pytest.mark.asyncio
-    async def test_get_contacts_вызывается_без_аргументов(self) -> None:
-        """get_contacts вызывается при пустых аргументах."""
-        bot = _make_bot("")
-        msg = _make_message()
-        bot.client.get_contacts = AsyncMock(return_value=[])
-
-        await handle_contacts(bot, msg)
-
-        bot.client.get_contacts.assert_awaited_once()
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.list_all.return_value = []
+            await handle_contacts(bot, msg)
+        # Нет UserInputError — тест прошёл
 
 
 # ---------------------------------------------------------------------------
-# Тесты: !contacts search — поиск контактов
+# Тесты: !contacts / !contacts list — показ кэша
+# ---------------------------------------------------------------------------
+
+
+class TestContactsList:
+    """Тесты !contacts (без аргументов) и !contacts list."""
+
+    @pytest.mark.asyncio
+    async def test_пустой_кэш_сообщает_о_пустоте(self) -> None:
+        """Пустой кэш → сообщение о пустоте + помощь."""
+        bot = _make_bot("")
+        msg = _make_message()
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.list_all.return_value = []
+            await handle_contacts(bot, msg)
+
+        reply_text: str = msg.reply.call_args[0][0]
+        assert "пуст" in reply_text.lower() or "пустой" in reply_text.lower() or "Кэш" in reply_text
+
+    @pytest.mark.asyncio
+    async def test_показывает_количество_записей(self) -> None:
+        """Количество записей кэша отображается в заголовке."""
+        bot = _make_bot("")
+        msg = _make_message()
+        entries = [_make_cache_entry(username=f"user{i}", peer_id=i) for i in range(3)]
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.list_all.return_value = entries
+            await handle_contacts(bot, msg)
+
+        reply_text: str = msg.reply.call_args[0][0]
+        assert "3" in reply_text
+
+    @pytest.mark.asyncio
+    async def test_показывает_display_name(self) -> None:
+        """display_name контакта виден в выводе."""
+        bot = _make_bot("")
+        msg = _make_message()
+        entry = _make_cache_entry(display_name="Алексей Иванов", peer_id=111)
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.list_all.return_value = [entry]
+            await handle_contacts(bot, msg)
+
+        reply_text: str = msg.reply.call_args[0][0]
+        assert "Алексей Иванов" in reply_text
+
+    @pytest.mark.asyncio
+    async def test_показывает_peer_id(self) -> None:
+        """peer_id контакта виден в выводе."""
+        bot = _make_bot("")
+        msg = _make_message()
+        entry = _make_cache_entry(peer_id=987654321)
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.list_all.return_value = [entry]
+            await handle_contacts(bot, msg)
+
+        reply_text: str = msg.reply.call_args[0][0]
+        assert "987654321" in reply_text
+
+    @pytest.mark.asyncio
+    async def test_показывает_aliases(self) -> None:
+        """aliases контакта отображаются в строке."""
+        bot = _make_bot("")
+        msg = _make_message()
+        entry = _make_cache_entry(aliases=["Лёша из армии", "Боец"])
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.list_all.return_value = [entry]
+            await handle_contacts(bot, msg)
+
+        reply_text: str = msg.reply.call_args[0][0]
+        assert "Лёша из армии" in reply_text
+
+    @pytest.mark.asyncio
+    async def test_ограничение_30_записей(self) -> None:
+        """При >30 записях выводятся первые 30 + пометка."""
+        bot = _make_bot("")
+        msg = _make_message()
+        entries = [_make_cache_entry(username=f"u{i}", peer_id=i) for i in range(35)]
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.list_all.return_value = entries
+            await handle_contacts(bot, msg)
+
+        reply_text: str = msg.reply.call_args[0][0]
+        # 35 - 30 = 5 оставшихся
+        assert "5" in reply_text
+
+    @pytest.mark.asyncio
+    async def test_list_subcmd_работает(self) -> None:
+        """!contacts list эквивалентен !contacts."""
+        bot = _make_bot("list")
+        msg = _make_message()
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.list_all.return_value = []
+            await handle_contacts(bot, msg)
+
+        reply_text: str = msg.reply.call_args[0][0]
+        assert "Кэш" in reply_text or "пуст" in reply_text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Тесты: !contacts search
 # ---------------------------------------------------------------------------
 
 
@@ -153,313 +209,294 @@ class TestContactsSearch:
     """Тесты !contacts search <запрос>."""
 
     @pytest.mark.asyncio
-    async def test_поиск_возвращает_результаты(self) -> None:
-        """Результаты поиска отображаются в ответе."""
-        bot = _make_bot("search Иван")
+    async def test_поиск_без_запроса_бросает_ошибку(self) -> None:
+        """!contacts search без запроса → UserInputError."""
+        bot = _make_bot("search")
         msg = _make_message()
-        contacts = [
-            _make_user(
-                user_id=1, first_name="Иван", last_name="Петров", phone_number="+79001234567"
-            ),
-        ]
-        bot.client.search_contacts = AsyncMock(return_value=contacts)
-
-        await handle_contacts(bot, msg)
-
-        reply_text: str = msg.reply.call_args[0][0]
-        assert "Иван" in reply_text
-
-    @pytest.mark.asyncio
-    async def test_поиск_содержит_телефон_контакта(self) -> None:
-        """Телефон пользователя показывается в результатах поиска."""
-        bot = _make_bot("search Мария")
-        msg = _make_message()
-        contacts = [
-            _make_user(first_name="Мария", phone_number="+79119876543"),
-        ]
-        bot.client.search_contacts = AsyncMock(return_value=contacts)
-
-        await handle_contacts(bot, msg)
-
-        reply_text: str = msg.reply.call_args[0][0]
-        assert "+79119876543" in reply_text
-
-    @pytest.mark.asyncio
-    async def test_поиск_без_телефона_показывает_скрыт(self) -> None:
-        """Если телефон не доступен — 'скрыт'."""
-        bot = _make_bot("search Анон")
-        msg = _make_message()
-        user = _make_user(first_name="Анон", phone_number=None)
-        bot.client.search_contacts = AsyncMock(return_value=[user])
-
-        await handle_contacts(bot, msg)
-
-        reply_text: str = msg.reply.call_args[0][0]
-        assert "скрыт" in reply_text
-
-    @pytest.mark.asyncio
-    async def test_поиск_показывает_username(self) -> None:
-        """Username контакта отображается с @."""
-        bot = _make_bot("search Дима")
-        msg = _make_message()
-        user = _make_user(first_name="Дима", username="dima_dev")
-        bot.client.search_contacts = AsyncMock(return_value=[user])
-
-        await handle_contacts(bot, msg)
-
-        reply_text: str = msg.reply.call_args[0][0]
-        assert "@dima_dev" in reply_text
+        with patch(f"{_MODULE}.contact_cache"):
+            with pytest.raises(UserInputError):
+                await handle_contacts(bot, msg)
 
     @pytest.mark.asyncio
     async def test_поиск_без_результатов(self) -> None:
-        """Поиск без результатов — сообщение 'ничего не найдено'."""
-        bot = _make_bot("search НесуществующийЧеловек")
+        """Поиск без результатов → 'не найдено'."""
+        bot = _make_bot("search Несуществующий")
         msg = _make_message()
-        bot.client.search_contacts = AsyncMock(return_value=[])
-
-        await handle_contacts(bot, msg)
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.search.return_value = []
+            await handle_contacts(bot, msg)
 
         reply_text: str = msg.reply.call_args[0][0]
         assert "не найдено" in reply_text.lower() or "📭" in reply_text
 
     @pytest.mark.asyncio
-    async def test_поиск_без_запроса_бросает_user_input_error(self) -> None:
-        """!contacts search без запроса — UserInputError."""
-        bot = _make_bot("search")
-        msg = _make_message()
-
-        with pytest.raises(UserInputError):
-            await handle_contacts(bot, msg)
-
-    @pytest.mark.asyncio
-    async def test_поиск_передает_запрос_в_api(self) -> None:
-        """search_contacts вызывается с переданным запросом."""
+    async def test_поиск_возвращает_результаты(self) -> None:
+        """При наличии результатов — отображение в ответе."""
         bot = _make_bot("search Алексей")
         msg = _make_message()
-        bot.client.search_contacts = AsyncMock(return_value=[])
-
-        await handle_contacts(bot, msg)
-
-        bot.client.search_contacts.assert_awaited_once_with("Алексей")
-
-    @pytest.mark.asyncio
-    async def test_поиск_ошибка_api_сообщает_об_ошибке(self) -> None:
-        """При ошибке search_contacts — сообщение об ошибке."""
-        bot = _make_bot("search Тест")
-        msg = _make_message()
-        bot.client.search_contacts = AsyncMock(side_effect=Exception("timeout"))
-
-        await handle_contacts(bot, msg)
+        entry = _make_cache_entry(display_name="Алексей Петров", username="alex_p", peer_id=111)
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.search.return_value = [entry]
+            await handle_contacts(bot, msg)
 
         reply_text: str = msg.reply.call_args[0][0]
-        assert "❌" in reply_text or "Ошибка" in reply_text
+        assert "Алексей Петров" in reply_text
+
+    @pytest.mark.asyncio
+    async def test_поиск_вызывает_cache_search(self) -> None:
+        """contact_cache.search вызывается с переданным запросом."""
+        bot = _make_bot("search Ваня")
+        msg = _make_message()
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.search.return_value = []
+            await handle_contacts(bot, msg)
+
+        mock_cache.search.assert_called_once_with("Ваня")
 
     @pytest.mark.asyncio
     async def test_поиск_показывает_количество_результатов(self) -> None:
-        """В заголовке поиска указано количество найденных контактов."""
-        bot = _make_bot("search Ник")
+        """Количество найденных записей указано в заголовке."""
+        bot = _make_bot("search Тест")
         msg = _make_message()
-        users = [_make_user(user_id=i, first_name=f"Ник{i}") for i in range(3)]
-        bot.client.search_contacts = AsyncMock(return_value=users)
-
-        await handle_contacts(bot, msg)
+        entries = [_make_cache_entry(username=f"u{i}", peer_id=i) for i in range(4)]
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.search.return_value = entries
+            await handle_contacts(bot, msg)
 
         reply_text: str = msg.reply.call_args[0][0]
-        assert "3" in reply_text
+        assert "4" in reply_text
 
     @pytest.mark.asyncio
     async def test_поиск_ограничение_20_результатов(self) -> None:
-        """При >20 результатах выводятся первые 20 + пометка об остальных."""
+        """При >20 результатах выводятся первые 20 + пометка."""
         bot = _make_bot("search Имя")
         msg = _make_message()
-        users = [_make_user(user_id=i, first_name=f"Имя{i}") for i in range(25)]
-        bot.client.search_contacts = AsyncMock(return_value=users)
-
-        await handle_contacts(bot, msg)
+        entries = [_make_cache_entry(username=f"u{i}", peer_id=i) for i in range(25)]
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.search.return_value = entries
+            await handle_contacts(bot, msg)
 
         reply_text: str = msg.reply.call_args[0][0]
         # 25 - 20 = 5 оставшихся
         assert "5" in reply_text
 
     @pytest.mark.asyncio
-    async def test_поиск_fullname_с_фамилией(self) -> None:
-        """Полное имя (имя + фамилия) отображается в ответе."""
-        bot = _make_bot("search Петров")
+    async def test_поиск_показывает_alias(self) -> None:
+        """aliases контакта видны в результатах поиска."""
+        bot = _make_bot("search Боец")
         msg = _make_message()
-        user = _make_user(first_name="Иван", last_name="Петров")
-        bot.client.search_contacts = AsyncMock(return_value=[user])
-
-        await handle_contacts(bot, msg)
+        entry = _make_cache_entry(aliases=["Боец", "Лёша"])
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.search.return_value = [entry]
+            await handle_contacts(bot, msg)
 
         reply_text: str = msg.reply.call_args[0][0]
-        assert "Иван" in reply_text
-        assert "Петров" in reply_text
-
-    @pytest.mark.asyncio
-    async def test_поиск_без_имени_показывает_прочерк(self) -> None:
-        """Без first_name и last_name — '—' вместо имени."""
-        bot = _make_bot("search test")
-        msg = _make_message()
-        user = _make_user(first_name="", last_name=None)
-        bot.client.search_contacts = AsyncMock(return_value=[user])
-
-        await handle_contacts(bot, msg)
-
-        reply_text: str = msg.reply.call_args[0][0]
-        assert "—" in reply_text
-
-    @pytest.mark.asyncio
-    async def test_поиск_содержит_id_пользователя(self) -> None:
-        """ID пользователя присутствует в результатах поиска."""
-        bot = _make_bot("search Тест")
-        msg = _make_message()
-        user = _make_user(user_id=999888777, first_name="Тест")
-        bot.client.search_contacts = AsyncMock(return_value=[user])
-
-        await handle_contacts(bot, msg)
-
-        reply_text: str = msg.reply.call_args[0][0]
-        assert "999888777" in reply_text
+        assert "Боец" in reply_text
 
 
 # ---------------------------------------------------------------------------
-# Тесты: !contacts add — добавление контакта
+# Тесты: !contacts alias
 # ---------------------------------------------------------------------------
 
 
-class TestContactsAdd:
-    """Тесты !contacts add <phone> <имя>."""
+class TestContactsAlias:
+    """Тесты !contacts alias <user> <псевдоним>."""
 
     @pytest.mark.asyncio
-    async def test_добавление_успешно_сообщает_имя(self) -> None:
-        """При успешном добавлении — подтверждение с именем."""
-        bot = _make_bot("add +79001234567 Иван")
+    async def test_alias_без_аргументов_бросает_ошибку(self) -> None:
+        """!contacts alias без аргументов → UserInputError."""
+        bot = _make_bot("alias")
         msg = _make_message()
-        added_user = _make_user(user_id=111, first_name="Иван")
-        bot.client.add_contact = AsyncMock(return_value=added_user)
+        with patch(f"{_MODULE}.contact_cache"), patch(f"{_MODULE}.telegram_resolver"):
+            with pytest.raises(UserInputError):
+                await handle_contacts(bot, msg)
 
-        await handle_contacts(bot, msg)
+    @pytest.mark.asyncio
+    async def test_alias_только_target_без_псевдонима_бросает_ошибку(self) -> None:
+        """!contacts alias @user без псевдонима → UserInputError."""
+        bot = _make_bot("alias @vasya")
+        msg = _make_message()
+        with patch(f"{_MODULE}.contact_cache"), patch(f"{_MODULE}.telegram_resolver"):
+            with pytest.raises(UserInputError):
+                await handle_contacts(bot, msg)
+
+    @pytest.mark.asyncio
+    async def test_alias_успешно_через_кэш(self) -> None:
+        """Alias добавляется когда контакт есть в кэше."""
+        bot = _make_bot("alias @vasya Вася из армии")
+        msg = _make_message()
+        cached = _make_cache_entry(username="vasya", peer_id=111)
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.lookup.return_value = cached
+            mock_cache.add_alias.return_value = True
+            with patch(f"{_MODULE}.telegram_resolver"):
+                await handle_contacts(bot, msg)
 
         reply_text: str = msg.reply.call_args[0][0]
         assert "✅" in reply_text
-        assert "Иван" in reply_text
+        assert "Вася из армии" in reply_text
 
     @pytest.mark.asyncio
-    async def test_добавление_сообщает_телефон(self) -> None:
-        """Подтверждение содержит номер телефона."""
-        bot = _make_bot("add +79001234567 Иван")
+    async def test_alias_вызывает_add_alias(self) -> None:
+        """contact_cache.add_alias вызывается с правильными аргументами."""
+        bot = _make_bot("alias @ivan Ваня лучший")
         msg = _make_message()
-        added_user = _make_user(user_id=111, first_name="Иван")
-        bot.client.add_contact = AsyncMock(return_value=added_user)
+        cached = _make_cache_entry(username="ivan", peer_id=999)
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.lookup.return_value = cached
+            mock_cache.add_alias.return_value = True
+            with patch(f"{_MODULE}.telegram_resolver"):
+                await handle_contacts(bot, msg)
 
-        await handle_contacts(bot, msg)
+        mock_cache.add_alias.assert_called_once_with(999, "Ваня лучший")
+
+    @pytest.mark.asyncio
+    async def test_alias_не_найден_в_кэше_резолвит(self) -> None:
+        """Если контакт не в кэше — резолвится через telegram_resolver."""
+        bot = _make_bot("alias @newuser Незнакомец")
+        msg = _make_message()
+        resolve_result = {
+            "ok": True,
+            "peer_id": 456,
+            "username": "newuser",
+            "display_name": "Новый",
+            "strategy_used": "get_users",
+        }
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.lookup.return_value = None
+            mock_cache.add_alias.return_value = True
+            with patch(f"{_MODULE}.telegram_resolver") as mock_resolver:
+                mock_resolver.resolve_peer = AsyncMock(return_value=resolve_result)
+                await handle_contacts(bot, msg)
+
+        mock_resolver.resolve_peer.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_alias_resolve_fail_сообщает_об_ошибке(self) -> None:
+        """Если resolve не удался — предлагает сначала resolve."""
+        bot = _make_bot("alias @ghost Призрак")
+        msg = _make_message()
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.lookup.return_value = None
+            with patch(f"{_MODULE}.telegram_resolver") as mock_resolver:
+                mock_resolver.resolve_peer = AsyncMock(
+                    return_value={"ok": False, "tried_strategies": [], "suggestions": []}
+                )
+                await handle_contacts(bot, msg)
 
         reply_text: str = msg.reply.call_args[0][0]
-        assert "+79001234567" in reply_text
+        assert "❌" in reply_text or "resolve" in reply_text.lower()
 
     @pytest.mark.asyncio
-    async def test_добавление_показывает_id_пользователя(self) -> None:
-        """Подтверждение содержит ID добавленного контакта."""
-        bot = _make_bot("add +79001234567 Иван")
+    async def test_alias_по_числовому_peer_id(self) -> None:
+        """Alias добавляется по числовому peer_id напрямую."""
+        bot = _make_bot("alias 123456 Числовой")
         msg = _make_message()
-        added_user = _make_user(user_id=777123, first_name="Иван")
-        bot.client.add_contact = AsyncMock(return_value=added_user)
+        with patch(f"{_MODULE}.contact_cache") as mock_cache:
+            mock_cache.lookup.return_value = None
+            mock_cache.add_alias.return_value = True
+            with patch(f"{_MODULE}.telegram_resolver"):
+                await handle_contacts(bot, msg)
 
-        await handle_contacts(bot, msg)
+        mock_cache.add_alias.assert_called_once_with(123456, "Числовой")
 
-        reply_text: str = msg.reply.call_args[0][0]
-        assert "777123" in reply_text
+
+# ---------------------------------------------------------------------------
+# Тесты: !contacts resolve
+# ---------------------------------------------------------------------------
+
+
+class TestContactsResolve:
+    """Тесты !contacts resolve <target>."""
 
     @pytest.mark.asyncio
-    async def test_добавление_возвращает_none_всё_равно_подтверждает(self) -> None:
-        """Если add_contact вернул None — всё равно подтверждение."""
-        bot = _make_bot("add +79001234567 Тест")
+    async def test_resolve_без_аргументов_бросает_ошибку(self) -> None:
+        """!contacts resolve без аргументов → UserInputError."""
+        bot = _make_bot("resolve")
         msg = _make_message()
-        bot.client.add_contact = AsyncMock(return_value=None)
+        with patch(f"{_MODULE}.contact_cache"), patch(f"{_MODULE}.telegram_resolver"):
+            with pytest.raises(UserInputError):
+                await handle_contacts(bot, msg)
 
-        await handle_contacts(bot, msg)
+    @pytest.mark.asyncio
+    async def test_resolve_успешный(self) -> None:
+        """Успешный resolve → сообщение с peer_id и именем."""
+        bot = _make_bot("resolve @vasya")
+        msg = _make_message()
+        resolve_result = {
+            "ok": True,
+            "peer_id": 555000,
+            "username": "vasya",
+            "display_name": "Василий",
+            "strategy_used": "get_users",
+        }
+        with patch(f"{_MODULE}.contact_cache"):
+            with patch(f"{_MODULE}.telegram_resolver") as mock_resolver:
+                mock_resolver.resolve_peer = AsyncMock(return_value=resolve_result)
+                await handle_contacts(bot, msg)
 
         reply_text: str = msg.reply.call_args[0][0]
         assert "✅" in reply_text
+        assert "555000" in reply_text
+        assert "Василий" in reply_text
 
     @pytest.mark.asyncio
-    async def test_добавление_передает_телефон_в_api(self) -> None:
-        """add_contact вызывается с правильным номером телефона."""
-        bot = _make_bot("add +79005556677 Мария")
+    async def test_resolve_неудачный(self) -> None:
+        """Неудачный resolve → сообщение об ошибке со стратегиями."""
+        bot = _make_bot("resolve @nonexistent")
         msg = _make_message()
-        bot.client.add_contact = AsyncMock(return_value=None)
-
-        await handle_contacts(bot, msg)
-
-        bot.client.add_contact.assert_awaited_once_with("+79005556677", "Мария")
-
-    @pytest.mark.asyncio
-    async def test_добавление_передает_имя_в_api(self) -> None:
-        """add_contact вызывается с правильным именем контакта."""
-        bot = _make_bot("add +79001111111 Алексей")
-        msg = _make_message()
-        bot.client.add_contact = AsyncMock(return_value=None)
-
-        await handle_contacts(bot, msg)
-
-        bot.client.add_contact.assert_awaited_once_with("+79001111111", "Алексей")
-
-    @pytest.mark.asyncio
-    async def test_добавление_без_аргументов_бросает_user_input_error(self) -> None:
-        """!contacts add без аргументов — UserInputError."""
-        bot = _make_bot("add")
-        msg = _make_message()
-
-        with pytest.raises(UserInputError):
-            await handle_contacts(bot, msg)
-
-    @pytest.mark.asyncio
-    async def test_добавление_только_телефон_без_имени_бросает_ошибку(self) -> None:
-        """!contacts add <phone> без имени — UserInputError."""
-        bot = _make_bot("add +79001234567")
-        msg = _make_message()
-
-        with pytest.raises(UserInputError):
-            await handle_contacts(bot, msg)
-
-    @pytest.mark.asyncio
-    async def test_добавление_ошибка_api_сообщает_об_ошибке(self) -> None:
-        """При ошибке add_contact — сообщение об ошибке."""
-        bot = _make_bot("add +79001234567 Тест")
-        msg = _make_message()
-        bot.client.add_contact = AsyncMock(side_effect=Exception("user not found"))
-
-        await handle_contacts(bot, msg)
+        resolve_result = {
+            "ok": False,
+            "peer_id": None,
+            "tried_strategies": ["resolve_peer", "get_users", "dialog_scan"],
+            "suggestions": ["Убедитесь что аккаунт существует"],
+        }
+        with patch(f"{_MODULE}.contact_cache"):
+            with patch(f"{_MODULE}.telegram_resolver") as mock_resolver:
+                mock_resolver.resolve_peer = AsyncMock(return_value=resolve_result)
+                await handle_contacts(bot, msg)
 
         reply_text: str = msg.reply.call_args[0][0]
-        assert "❌" in reply_text or "Не удалось" in reply_text
+        assert "❌" in reply_text
 
     @pytest.mark.asyncio
-    async def test_добавление_fullname_с_фамилией(self) -> None:
-        """Если у добавленного пользователя есть фамилия — полное имя в ответе."""
-        bot = _make_bot("add +79001234567 Иван")
+    async def test_resolve_вызывает_resolver(self) -> None:
+        """telegram_resolver.resolve_peer вызывается с правильным target."""
+        bot = _make_bot("resolve @testuser")
         msg = _make_message()
-        added_user = _make_user(user_id=11, first_name="Иван", last_name="Сидоров")
-        bot.client.add_contact = AsyncMock(return_value=added_user)
+        resolve_result = {
+            "ok": True,
+            "peer_id": 111,
+            "username": "testuser",
+            "display_name": "Test",
+            "strategy_used": "resolve_peer",
+        }
+        with patch(f"{_MODULE}.contact_cache"):
+            with patch(f"{_MODULE}.telegram_resolver") as mock_resolver:
+                mock_resolver.resolve_peer = AsyncMock(return_value=resolve_result)
+                await handle_contacts(bot, msg)
 
-        await handle_contacts(bot, msg)
+        mock_resolver.resolve_peer.assert_awaited_once_with(bot.client, "@testuser")
+
+    @pytest.mark.asyncio
+    async def test_resolve_показывает_strategy(self) -> None:
+        """Использованная стратегия видна в ответе."""
+        bot = _make_bot("resolve @user")
+        msg = _make_message()
+        resolve_result = {
+            "ok": True,
+            "peer_id": 222,
+            "username": "user",
+            "display_name": "Юзер",
+            "strategy_used": "dialog_scan",
+        }
+        with patch(f"{_MODULE}.contact_cache"):
+            with patch(f"{_MODULE}.telegram_resolver") as mock_resolver:
+                mock_resolver.resolve_peer = AsyncMock(return_value=resolve_result)
+                await handle_contacts(bot, msg)
 
         reply_text: str = msg.reply.call_args[0][0]
-        assert "Иван" in reply_text
-        assert "Сидоров" in reply_text
-
-    @pytest.mark.asyncio
-    async def test_добавление_имя_из_нескольких_слов(self) -> None:
-        """Имя контакта может содержать несколько слов."""
-        bot = _make_bot("add +79001234567 Иван Иванович")
-        msg = _make_message()
-        bot.client.add_contact = AsyncMock(return_value=None)
-
-        await handle_contacts(bot, msg)
-
-        # Должно вызываться с "Иван Иванович"
-        call_args = bot.client.add_contact.call_args[0]
-        assert call_args[1] == "Иван Иванович"
+        assert "dialog_scan" in reply_text
 
 
 # ---------------------------------------------------------------------------
@@ -472,35 +509,45 @@ class TestContactsUnknownSubcommand:
 
     @pytest.mark.asyncio
     async def test_неизвестная_подкоманда_бросает_user_input_error(self) -> None:
-        """Неизвестная подкоманда — UserInputError."""
-        bot = _make_bot("delete +79001234567")
+        """Неизвестная подкоманда → UserInputError."""
+        bot = _make_bot("delete @vasya")
         msg = _make_message()
-
-        with pytest.raises(UserInputError):
-            await handle_contacts(bot, msg)
+        with patch(f"{_MODULE}.contact_cache"), patch(f"{_MODULE}.telegram_resolver"):
+            with pytest.raises(UserInputError):
+                await handle_contacts(bot, msg)
 
     @pytest.mark.asyncio
-    async def test_ошибка_содержит_подсказки(self) -> None:
-        """UserInputError содержит подсказки по использованию."""
+    async def test_ошибка_содержит_search(self) -> None:
+        """UserInputError упоминает подкоманду search."""
         bot = _make_bot("unknown")
         msg = _make_message()
-
-        with pytest.raises(UserInputError) as exc_info:
-            await handle_contacts(bot, msg)
+        with patch(f"{_MODULE}.contact_cache"), patch(f"{_MODULE}.telegram_resolver"):
+            with pytest.raises(UserInputError) as exc_info:
+                await handle_contacts(bot, msg)
 
         assert "search" in exc_info.value.user_message
-        assert "add" in exc_info.value.user_message
 
     @pytest.mark.asyncio
-    async def test_ошибка_содержит_contacts(self) -> None:
-        """UserInputError упоминает команду contacts."""
-        bot = _make_bot("list")
+    async def test_ошибка_содержит_resolve(self) -> None:
+        """UserInputError упоминает подкоманду resolve."""
+        bot = _make_bot("badcmd")
         msg = _make_message()
+        with patch(f"{_MODULE}.contact_cache"), patch(f"{_MODULE}.telegram_resolver"):
+            with pytest.raises(UserInputError) as exc_info:
+                await handle_contacts(bot, msg)
 
-        with pytest.raises(UserInputError) as exc_info:
-            await handle_contacts(bot, msg)
+        assert "resolve" in exc_info.value.user_message
 
-        assert "contacts" in exc_info.value.user_message.lower()
+    @pytest.mark.asyncio
+    async def test_ошибка_содержит_alias(self) -> None:
+        """UserInputError упоминает подкоманду alias."""
+        bot = _make_bot("badcmd")
+        msg = _make_message()
+        with patch(f"{_MODULE}.contact_cache"), patch(f"{_MODULE}.telegram_resolver"):
+            with pytest.raises(UserInputError) as exc_info:
+                await handle_contacts(bot, msg)
+
+        assert "alias" in exc_info.value.user_message
 
 
 # ---------------------------------------------------------------------------
@@ -519,8 +566,6 @@ class TestContactsImport:
 
     def test_handle_contacts_является_корутиной(self) -> None:
         """handle_contacts — это async функция."""
-        import asyncio
-
         from src.handlers.command_handlers import handle_contacts as hc
 
         assert asyncio.iscoroutinefunction(hc)

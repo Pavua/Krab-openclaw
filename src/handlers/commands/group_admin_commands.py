@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from pyrogram.types import Message
 
+from ...core import contact_cache, telegram_resolver
 from ...core.access_control import AccessLevel
 from ...core.exceptions import UserInputError
 from ...core.logger import get_logger
@@ -584,109 +585,163 @@ async def handle_chatmute(bot: "KraabUserbot", message: Message) -> None:
 # !contacts
 # ---------------------------------------------------------------------------
 
+_CONTACTS_HELP = (
+    "📒 **Кэш контактов** (owner-only)\n\n"
+    "`!contacts` / `!contacts list` — все записи в кэше\n"
+    "`!contacts search <запрос>` — нечёткий поиск по имени/alias\n"
+    "`!contacts alias <@user> <псевдоним>` — добавить alias контакту\n"
+    "`!contacts resolve <@user|t.me/...>` — разрезолвить и кэшировать peer"
+)
+
+
+def _fmt_contact_entry(entry: dict) -> str:
+    """Форматирует одну запись кэша контактов в строку."""
+    uname = entry.get("username") or "—"
+    dn = entry.get("display_name") or "—"
+    pid = entry.get("peer_id", "?")
+    aliases = entry.get("aliases") or []
+    alias_str = f" | aliases: {', '.join(aliases)}" if aliases else ""
+    return f"• **{dn}** @{uname} | `{pid}`{alias_str}"
+
 
 async def handle_contacts(bot: "KraabUserbot", message: Message) -> None:
     """
-    Управление контактами Telegram (только userbot).
+    Управление кэшем контактов. Owner-only.
 
     Синтаксис:
-      !contacts                      — количество контактов
-      !contacts search <запрос>      — поиск по имени или номеру
-      !contacts add <phone> <имя>    — добавить контакт по номеру телефона
+      !contacts [list]                       — все записи в кэше
+      !contacts search <запрос>              — нечёткий поиск по display_name/alias
+      !contacts alias <@user|id> <псевдоним> — добавить человеческий alias
+      !contacts resolve <@user|t.me/...>     — разрезолвить peer и добавить в кэш
     """
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!contacts` доступен только владельцу.")
+
     args = bot._get_command_args(message).strip()
 
-    if not args:
-        try:
-            contacts = await bot.client.get_contacts()
-            count = len(contacts)
-        except Exception as exc:  # noqa: BLE001
-            await message.reply(f"❌ Не удалось получить контакты: {exc}")
+    # --- list (или без аргументов) ---
+    if not args or args.lower() == "list":
+        entries = contact_cache.list_all()
+        if not entries:
+            await message.reply("📒 Кэш контактов пуст.\n\n" + _CONTACTS_HELP)
             return
-        await message.reply(
-            f"📒 **Контакты**\n\n"
-            f"Всего в адресной книге: **{count}**\n\n"
-            "`!contacts search <запрос>` — поиск\n"
-            "`!contacts add <phone> <имя>` — добавить"
-        )
+        lines = [f"📒 **Кэш контактов** — {len(entries)} записей:\n"]
+        for e in entries[:30]:
+            lines.append(_fmt_contact_entry(e))
+        if len(entries) > 30:
+            lines.append(f"\n_… и ещё {len(entries) - 30}_")
+        await message.reply("\n".join(lines))
         return
 
     parts = args.split(maxsplit=1)
     subcmd = parts[0].lower()
     rest = parts[1].strip() if len(parts) > 1 else ""
 
+    # --- search ---
     if subcmd == "search":
         if not rest:
-            raise UserInputError(user_message="🔍 Укажи запрос: `!contacts search <имя или номер>`")
-        try:
-            results = await bot.client.search_contacts(rest)
-        except Exception as exc:  # noqa: BLE001
-            await message.reply(f"❌ Ошибка поиска контактов: {exc}")
-            return
+            raise UserInputError(
+                user_message="🔍 Укажи запрос: `!contacts search <имя или псевдоним>`"
+            )
+        results = contact_cache.search(rest)
         if not results:
-            await message.reply(f"📭 Ничего не найдено по запросу: `{rest}`")
+            await message.reply(f"📭 Ничего не найдено в кэше по запросу: `{rest}`")
             return
-        lines = [f"🔍 **Результаты поиска** (`{rest}`) — {len(results)}:\n"]
-        for user in results[:20]:
-            name_parts = [user.first_name or ""]
-            if user.last_name:
-                name_parts.append(user.last_name)
-            full_name = " ".join(name_parts).strip() or "—"
-            username_str = f" @{user.username}" if user.username else ""
-            phone = getattr(user, "phone_number", None) or "скрыт"
-            lines.append(f"• **{full_name}**{username_str} | `{user.id}` | 📞 {phone}")
+        lines = [f"🔍 **Поиск** (`{rest}`) — {len(results)}:\n"]
+        for e in results[:20]:
+            lines.append(_fmt_contact_entry(e))
         if len(results) > 20:
             lines.append(f"\n_… и ещё {len(results) - 20}_")
         await message.reply("\n".join(lines))
         return
 
-    if subcmd == "add":
+    # --- alias ---
+    if subcmd == "alias":
         if not rest:
             raise UserInputError(
                 user_message=(
-                    "📞 Укажи номер и имя: `!contacts add +79001234567 Иван`\n"
-                    "Номер должен быть в международном формате."
+                    "📝 Формат: `!contacts alias <@username или peer_id> <псевдоним>`\n"
+                    "Пример: `!contacts alias @vasya Вася из армии`"
                 )
             )
-        add_parts = rest.split(maxsplit=1)
-        if len(add_parts) < 2:
+        alias_parts = rest.split(maxsplit=1)
+        if len(alias_parts) < 2:
             raise UserInputError(
                 user_message=(
-                    "📞 Формат: `!contacts add <phone> <имя>`\n"
-                    "Пример: `!contacts add +79001234567 Иван`"
+                    "📝 Укажи @username (или peer_id) и псевдоним.\n"
+                    "Пример: `!contacts alias @vasya Вася из армии`"
                 )
             )
-        phone_num, first_name = add_parts[0], add_parts[1].strip()
-        if not first_name:
-            raise UserInputError(user_message="📞 Укажи имя контакта.")
-        try:
-            added = await bot.client.add_contact(phone_num, first_name)
-        except Exception as exc:  # noqa: BLE001
-            await message.reply(f"❌ Не удалось добавить контакт: {exc}")
-            return
-        if added:
-            name_parts = [added.first_name or ""]
-            if added.last_name:
-                name_parts.append(added.last_name)
-            full_name = " ".join(name_parts).strip() or first_name
-            await message.reply(
-                f"✅ Контакт добавлен!\n\n"
-                f"**Имя:** {full_name}\n"
-                f"**ID:** `{added.id}`\n"
-                f"**Телефон:** {phone_num}"
-            )
+        target_raw, alias_text = alias_parts[0].strip(), alias_parts[1].strip()
+        if not alias_text:
+            raise UserInputError(user_message="📝 Псевдоним не может быть пустым.")
+
+        # Ищем peer_id — сначала в кэше, затем резолвим
+        cached = contact_cache.lookup(target_raw)
+        if cached:
+            peer_id = cached["peer_id"]
         else:
-            await message.reply(f"✅ Контакт `{first_name}` ({phone_num}) добавлен.")
+            # Пробуем извлечь числовой peer_id напрямую
+            stripped = target_raw.lstrip("@")
+            if stripped.lstrip("-").isdigit():
+                peer_id = int(stripped)
+                # Нужно иметь запись в кэше для add_alias; если её нет — создаём stub
+                contact_cache.store(stripped, peer_id, stripped)
+            else:
+                # Резолвим через Telegram
+                result = await telegram_resolver.resolve_peer(bot.client, target_raw)
+                if not result.get("ok"):
+                    await message.reply(
+                        f"❌ Не удалось разрезолвить `{target_raw}`.\n"
+                        f"Попробуй сначала `!contacts resolve {target_raw}`."
+                    )
+                    return
+                peer_id = result["peer_id"]
+
+        ok = contact_cache.add_alias(peer_id, alias_text)
+        if ok:
+            await message.reply(f"✅ Псевдоним **«{alias_text}»** добавлен к peer `{peer_id}`.")
+        else:
+            await message.reply(
+                f"⚠️ Контакт `{target_raw}` (peer_id={peer_id}) не найден в кэше.\n"
+                f"Сначала выполни `!contacts resolve {target_raw}`."
+            )
         return
 
-    raise UserInputError(
-        user_message=(
-            "📒 **Контакты**\n\n"
-            "`!contacts` — количество контактов\n"
-            "`!contacts search <запрос>` — поиск по имени или номеру\n"
-            "`!contacts add <phone> <имя>` — добавить контакт"
+    # --- resolve ---
+    if subcmd == "resolve":
+        if not rest:
+            raise UserInputError(
+                user_message=(
+                    "🔗 Укажи цель: `!contacts resolve <@username|t.me/username|peer_id>`"
+                )
+            )
+        result = await telegram_resolver.resolve_peer(bot.client, rest)
+        if not result.get("ok"):
+            tried = ", ".join(result.get("tried_strategies") or [])
+            suggestions = "\n".join(f"  — {s}" for s in (result.get("suggestions") or []))
+            await message.reply(
+                f"❌ Не удалось разрезолвить `{rest}`.\n"
+                f"Стратегии: {tried or '—'}\n"
+                f"Советы:\n{suggestions or '  нет'}"
+            )
+            return
+
+        peer_id = result["peer_id"]
+        username = result.get("username") or rest.lstrip("@").split("/")[-1]
+        display_name = result.get("display_name") or username
+        strategy = result.get("strategy_used") or "?"
+        await message.reply(
+            f"✅ **Разрезолвлено** (`{strategy}`):\n\n"
+            f"**Имя:** {display_name}\n"
+            f"**Username:** @{username}\n"
+            f"**Peer ID:** `{peer_id}`\n\n"
+            f"_Контакт добавлен в кэш._"
         )
-    )
+        return
+
+    raise UserInputError(user_message=_CONTACTS_HELP)
 
 
 # ---------------------------------------------------------------------------

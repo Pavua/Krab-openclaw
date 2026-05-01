@@ -397,6 +397,11 @@ from .commands.system_commands import (  # noqa: E402, F401
 )
 
 # ---------------------------------------------------------------------------
+# tor_commands — !tor (status/ip/newid/fetch). Owner-only.
+# ---------------------------------------------------------------------------
+from .commands.tor_commands import handle_tor  # noqa: E402, F401
+
+# ---------------------------------------------------------------------------
 # Phase 2 Wave 9 (Session 27): translator_commands extraction
 # ---------------------------------------------------------------------------
 # Helpers (_render_translator_profile, _render_translator_session_state,
