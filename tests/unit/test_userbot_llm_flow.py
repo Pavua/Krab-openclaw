@@ -280,3 +280,99 @@ def test_build_background_handoff_notice_none_query() -> None:
     notice = LLMFlowMixin._build_background_handoff_notice(None)  # type: ignore[arg-type]
     assert isinstance(notice, str)
     assert len(notice) > 0
+
+
+# ---------------------------------------------------------------------------
+# Wall-clock cap: background path fix (Sentry 6S/6V)
+# ---------------------------------------------------------------------------
+
+
+def test_wall_clock_cap_source_removes_received_any_chunk_guard() -> None:
+    """Wall-clock cap в background-режиме не зависит от received_any_chunk.
+
+    Проверяем, что в коде llm_flow.py используется prefer_send_message_for_background
+    для расширения условия срабатывания wall-clock cap на background-запросы.
+    """
+    import inspect
+
+    from src.userbot import llm_flow as _module
+
+    source = inspect.getsource(_module)
+    # Убеждаемся, что cap проверяет prefer_send_message_for_background
+    assert "prefer_send_message_for_background" in source
+    # Убеждаемся, что cap содержит флаг is_background в логировании
+    assert "is_background" in source
+    # Убеждаемся что _wc_cap_fires — промежуточная переменная (не inline условие)
+    assert "_wc_cap_fires" in source
+
+
+def test_no_tool_activity_clamp_source_uses_wall_clock_cap() -> None:
+    """no_tool_activity_timeout кламприруется до wall_clock_cap значения.
+
+    Проверяем источник: clamp-блок должен быть в коде после вычисления
+    _wall_clock_cap_sec.
+    """
+    import inspect
+
+    from src.userbot import llm_flow as _module
+
+    source = inspect.getsource(_module)
+    # Убеждаемся, что clamp присутствует в коде
+    assert "no_tool_activity_timeout_sec = min(no_tool_activity_timeout_sec, _wall_clock_cap_sec)" in source
+
+
+def test_wall_clock_cap_logic_background_overrides_chunk_guard() -> None:
+    """Логика cap: background=True → fires даже если received_any_chunk=True."""
+    # Реплика логики из llm_flow.py (синхронизирована с патчем Sentry 6S/6V fix)
+    def _wall_clock_fires(
+        *,
+        wall_clock_cap_sec: float,
+        elapsed: float,
+        prefer_background: bool,
+        received_any_chunk: bool,
+    ) -> bool:
+        _wc_cap_fires = wall_clock_cap_sec > 0 and elapsed >= wall_clock_cap_sec
+        return bool(_wc_cap_fires and (prefer_background or not received_any_chunk))
+
+    # Foreground: chunk received → cap не срабатывает (стриминг продолжается)
+    assert not _wall_clock_fires(
+        wall_clock_cap_sec=90.0,
+        elapsed=95.0,
+        prefer_background=False,
+        received_any_chunk=True,
+    )
+    # Foreground: нет чанков → cap срабатывает
+    assert _wall_clock_fires(
+        wall_clock_cap_sec=90.0,
+        elapsed=95.0,
+        prefer_background=False,
+        received_any_chunk=False,
+    )
+    # Background: chunk received → cap ВСЁ РАВНО срабатывает (Sentry 6S/6V fix)
+    assert _wall_clock_fires(
+        wall_clock_cap_sec=90.0,
+        elapsed=95.0,
+        prefer_background=True,
+        received_any_chunk=True,
+    )
+    # Background: нет чанков → cap срабатывает
+    assert _wall_clock_fires(
+        wall_clock_cap_sec=90.0,
+        elapsed=95.0,
+        prefer_background=True,
+        received_any_chunk=False,
+    )
+    # Cap отключён (=0): не срабатывает
+    assert not _wall_clock_fires(
+        wall_clock_cap_sec=0.0,
+        elapsed=99999.0,
+        prefer_background=True,
+        received_any_chunk=False,
+    )
+    # Elapsed < cap: не срабатывает
+    assert not _wall_clock_fires(
+        wall_clock_cap_sec=90.0,
+        elapsed=89.0,
+        prefer_background=True,
+        received_any_chunk=True,
+    )

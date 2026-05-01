@@ -755,6 +755,11 @@ class LLMFlowMixin:
                 180.0 if images else 90.0,
             )
         )
+        # Клампим no_tool_activity_timeout до wall-clock cap (если задан):
+        # нет смысла ждать 300s при cap=90s — wall-clock cap всегда сработает раньше.
+        # Это предотвращает Sentry 6S/6V: openclaw_no_tool_activity_timeout с idle_sec=300+.
+        if _wall_clock_cap_sec > 0:
+            no_tool_activity_timeout_sec = min(no_tool_activity_timeout_sec, _wall_clock_cap_sec)
 
         try:
             while True:
@@ -769,11 +774,14 @@ class LLMFlowMixin:
                 # Wall-clock cap: принудительный выход если total elapsed > cap.
                 # Срабатывает до всех остальных timeout-проверок чтобы не было
                 # бесконечного ожидания при активном (но слишком медленном) gateway.
-                if (
-                    _wall_clock_cap_sec > 0
-                    and elapsed_wait_sec >= _wall_clock_cap_sec
-                    and not received_any_chunk
-                ):
+                #
+                # Foreground: только пока нет ни одного чанка — после первого чанка
+                # стриминг продолжается без ограничения (chunk_timeout_sec = второй guard).
+                # Background: cap жёсткий независимо от чанков (Sentry 6S/6V fix).
+                # В background-режиме `received_any_chunk` может стать True от промежуточных
+                # tool-chunks, после которых модель зависает — без этого патча cap обходился.
+                _wc_cap_fires = _wall_clock_cap_sec > 0 and elapsed_wait_sec >= _wall_clock_cap_sec
+                if _wc_cap_fires and (prefer_send_message_for_background or not received_any_chunk):
                     _wc_model = startup_route_model or getattr(config, "MODEL", "") or "unknown"
                     logger.error(
                         "llm_wall_clock_cap_exceeded",
@@ -782,12 +790,20 @@ class LLMFlowMixin:
                         cap_sec=_wall_clock_cap_sec,
                         has_photo=bool(images),
                         model=_wc_model,
+                        received_any_chunk=received_any_chunk,
+                        is_background=prefer_send_message_for_background,
                     )
-                    full_response = (
-                        f"❌ Запрос отменён: gateway обрабатывал дольше "
-                        f"{int(_wall_clock_cap_sec)} сек без ответа. "
-                        f"Попробуй `!model switch` или повтори позже."
-                    )
+                    if received_any_chunk:
+                        full_response = (
+                            f"❌ Запрос превысил лимит {int(_wall_clock_cap_sec)} сек "
+                            f"(частичный ответ получен). Попробуй `!model switch` или повтори позже."
+                        )
+                    else:
+                        full_response = (
+                            f"❌ Запрос отменён: gateway обрабатывал дольше "
+                            f"{int(_wall_clock_cap_sec)} сек без ответа. "
+                            f"Попробуй `!model switch` или повтори позже."
+                        )
                     timeout_error_was_sent = True
                     if _show_progress:
                         try:
