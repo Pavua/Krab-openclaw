@@ -850,8 +850,8 @@ _COMMANDS: list[CommandInfo] = [
     CommandInfo(
         name="contacts",
         category="users",
-        description="Список контактов Telegram (поиск, статистика)",
-        usage="!contacts [поиск]",
+        description="Кэш контактов: просмотр, поиск, alias, resolve (owner-only)",
+        usage="!contacts [list|search <q>|alias <user> <псевд>|resolve <target>]",
         owner_only=True,
     ),
     CommandInfo(

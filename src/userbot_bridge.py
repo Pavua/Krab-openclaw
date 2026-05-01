@@ -91,6 +91,7 @@ from .handlers import (
     handle_codex,
     handle_collect,
     handle_config,
+    handle_contacts,
     handle_context,
     handle_costs,
     handle_cronstatus,
@@ -162,6 +163,7 @@ from .handlers import (
     handle_sysinfo,
     handle_timer,
     handle_todo,
+    handle_tor,
     handle_translate,
     handle_translator,
     handle_trust,
@@ -881,6 +883,13 @@ class KraabUserbot(
             await run_cmd(handle_whois, m)
 
         @self.client.on_message(
+            filters.command("contacts", prefixes=prefixes) & _make_command_filter("contacts"),
+            group=-1,
+        )
+        async def wrap_contacts(c, m):
+            await run_cmd(handle_contacts, m)
+
+        @self.client.on_message(
             filters.command("emoji", prefixes=prefixes) & _make_command_filter("emoji"), group=-1
         )
         async def wrap_emoji(c, m):
@@ -1280,6 +1289,12 @@ class KraabUserbot(
         )
         async def wrap_schedule(c, m):
             await run_cmd(handle_schedule, m)
+
+        @self.client.on_message(
+            filters.command("tor", prefixes=prefixes) & _make_command_filter("tor"), group=-1
+        )
+        async def wrap_tor(c, m):
+            await run_cmd(handle_tor, m)
 
         @self.client.on_message(
             filters.command("browser", prefixes=prefixes) & _make_command_filter("browser"),
