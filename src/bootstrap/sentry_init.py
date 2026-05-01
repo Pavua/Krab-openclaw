@@ -74,6 +74,10 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     # обнаружении повреждения БД: система сама переходит в safe-режим.
     # Не требует отдельного алерта в Sentry — уже логируется локально.
     "db_corruption_quarantined",
+    # asyncio shutdown noise: задача была уничтожена пока находилась в pending
+    # состоянии. Генерируется Python при gc pending tasks во время event loop
+    # teardown (Sentry issue 6T, 3 events). Штатное поведение при остановке.
+    "Task was destroyed but it is pending",
 )
 
 
@@ -90,13 +94,17 @@ def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] 
             if error_code in _BENIGN_ERROR_MARKERS:
                 return None
 
-        # 2. HTTPException(503, "userbot_not_ready") — detail попадает в exception value
+        # 2. HTTPException(503, "userbot_not_ready") — detail попадает в exception value.
+        #    asyncio.CancelledError: str(exc) == '' (пустая строка), поэтому проверяем
+        #    также ex["type"] (= exc.__class__.__name__ = "CancelledError"). Именно из-за
+        #    этого маркер "CancelledError" не срабатывал — value всегда пустая строка.
         for ex in (event.get("exception", {}) or {}).get("values", []) or []:
             if not isinstance(ex, dict):
                 continue
             value = str(ex.get("value") or "")
+            ex_type = str(ex.get("type") or "")
             for marker in _BENIGN_ERROR_MARKERS:
-                if marker in value:
+                if marker in value or marker in ex_type:
                     return None
 
         # 3. logentry / message — на случай если warning попал через logging integration

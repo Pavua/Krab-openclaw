@@ -5907,7 +5907,13 @@ class KraabUserbot(
             is_self = self.me and user.id == self.me.id
             raw_text = (message.text or "").strip()
             is_command = raw_text[:1] in ("!", "/", ".") if raw_text else False
-            if is_self and not is_command and chat_id:
+            # Пересланные сообщения owner'а не считаются «печатает» — не глушим
+            _is_self_forward = is_self and bool(
+                getattr(message, "forward_from", None)
+                or getattr(message, "forward_sender_name", None)
+                or getattr(message, "forward_from_chat", None)
+            )
+            if is_self and not is_command and not _is_self_forward and chat_id:
                 _auto_min = int(getattr(config, "OWNER_AUTO_SILENCE_MINUTES", 5))
                 if _auto_min > 0:
                     silence_manager.auto_silence_owner_typing(chat_id, _auto_min)
@@ -5944,11 +5950,10 @@ class KraabUserbot(
             # FORWARD BATCH: если входящее сообщение является пересылкой,
             # буферизуем в ForwardBatchBuffer — дожидаемся конца пачки (5s окно)
             # и обрабатываем всё одним LLM-запросом с per-sender attribution.
-            # Команды (!) и self-сообщения не буферизуем.
+            # Команды (!) не буферизуем. is_self НЕ исключаем: owner пересылает
+            # сообщения в Saved Messages — это главный use-case forward batching.
             _fwd_from, _fwd_name, _fwd_from_chat = _extract_forward_origin_parts(message)
-            _is_fwd_message = bool(
-                not is_command and not is_self and any([_fwd_from, _fwd_name, _fwd_from_chat])
-            )
+            _is_fwd_message = bool(not is_command and any([_fwd_from, _fwd_name, _fwd_from_chat]))
             if _is_fwd_message and message.text:
                 from .core.message_batcher import PendingMessage, message_batcher  # noqa: PLC0415
 

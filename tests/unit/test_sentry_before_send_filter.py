@@ -178,3 +178,58 @@ def test_before_send_keeps_real_attribute_error() -> None:
         }
     }
     assert _before_send(event, {}) is event
+
+
+# ── Session 32: CancelledError fix — маркер в ex["type"], не ex["value"] ──
+
+
+def test_before_send_drops_cancelled_error_via_type_field() -> None:
+    """asyncio.CancelledError: str(exc) == '' (пустая строка), маркер только в ex['type'].
+
+    Это корневая причина того, что 357+ событий PYTHON-FASTAPI-Z проходили в Sentry
+    несмотря на маркер "CancelledError" в _BENIGN_ERROR_MARKERS: фильтр проверял только
+    ex['value'] (= ''), но не ex['type'] (= 'CancelledError').
+    """
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "CancelledError",
+                    "value": "",  # asyncio.CancelledError всегда даёт пустой str()
+                },
+            ]
+        }
+    }
+    assert _before_send(event, {}) is None
+
+
+def test_before_send_drops_cancelled_error_with_module_prefix() -> None:
+    """Sentry может выдавать полный qualified name типа из модуля asyncio.exceptions."""
+    # Некоторые версии Sentry SDK могут ставить ex['type'] как 'asyncio.exceptions.CancelledError'
+    # Маркер 'CancelledError' — подстрока, поэтому тоже должна совпадать.
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "asyncio.exceptions.CancelledError",
+                    "value": "",
+                },
+            ]
+        }
+    }
+    assert _before_send(event, {}) is None
+
+
+def test_before_send_drops_cancelled_error_with_value_too() -> None:
+    """CancelledError с непустым value (edge case) тоже должен дропаться."""
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "CancelledError",
+                    "value": "Task was cancelled",
+                },
+            ]
+        }
+    }
+    assert _before_send(event, {}) is None
