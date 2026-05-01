@@ -321,6 +321,38 @@ class _MemorySearchInput(BaseModel):
     chat_id: str = Field(default="", description="Опциональный chat_id для ограничения поиска")
 
 
+class _ResolveUsernameInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(
+        ...,
+        min_length=1,
+        description="Telegram @username (с @ или без) для резолвинга в user_id/chat_id",
+    )
+
+
+class _GetProfileInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    peer: str = Field(
+        ...,
+        min_length=1,
+        description="user_id (числовой) или @username для получения расширенного профиля",
+    )
+
+
+class _MarkReadInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(
+        ...,
+        description="ID чата или @username для пометки как прочитанного",
+    )
+
+
+class _InspectForwardInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str = Field(..., description="ID чата или @username")
+    message_id: int = Field(..., gt=0, description="ID сообщения для инспекции forward origin")
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ── TELEGRAM TOOLS ────────────────────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
@@ -861,6 +893,138 @@ async def telegram_session_info() -> str:
               если is_bot=False, иначе ограниченный bot toolkit
     """
     return await _bridge.session_info_json()
+
+
+@mcp.tool(
+    name="telegram_resolve_username",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def telegram_resolve_username(params: _ResolveUsernameInput) -> str:
+    """Резолвит Telegram @username в user_id/chat_id.
+
+    Пробует get_users(), при ошибке — get_chat(). Полезно чтобы получить
+    числовой ID пользователя или канала по известному @username.
+
+    Args:
+        params:
+            - username (str): @username (с @ или без)
+
+    Returns:
+        str: JSON-объект:
+            - ok (bool)
+            - user_id (int): Telegram ID
+            - username (str|None): @username аккаунта
+            - first_name (str|None)
+            - last_name (str|None)
+            - is_bot (bool)
+            - status (str|None): статус (UserStatus или тип чата)
+            При ошибке: {ok: false, error_code: "PEER_NOT_RESOLVED", details: {...}}
+    """
+    try:
+        result = await _bridge.resolve_username(params.username)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_get_profile",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def telegram_get_profile(params: _GetProfileInput) -> str:
+    """Получает расширенный профиль пользователя по user_id или @username.
+
+    Объединяет данные из get_users() и get_chat() — возвращает bio, фото,
+    статус контакта и другие поля, недоступные из get_dialogs/get_history.
+
+    Args:
+        params:
+            - peer (str): числовой user_id или @username (с @ или без)
+
+    Returns:
+        str: JSON-объект:
+            - ok (bool)
+            - user_id (int)
+            - username (str|None)
+            - first_name (str|None)
+            - last_name (str|None)
+            - bio (str|None): описание профиля (из get_chat)
+            - photo_url (str|None): file_id аватара (small)
+            - last_online (str|None): UserStatus строка
+            - is_contact (bool)
+            - is_mutual_contact (bool)
+    """
+    try:
+        result = await _bridge.get_profile(params.peer)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_mark_read",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True},
+)
+async def telegram_mark_read(params: _MarkReadInput) -> str:
+    """Помечает все сообщения в чате как прочитанные.
+
+    Использует read_chat_history() — userbot capability, недоступная bot API.
+    Полезно для автоматического снятия счётчика непрочитанных.
+
+    Args:
+        params:
+            - chat_id (str): ID чата или @username
+
+    Returns:
+        str: JSON-объект {"ok": true, "chat_id": "..."}
+    """
+    try:
+        cid: int | str = int(params.chat_id)
+    except ValueError:
+        cid = params.chat_id
+    try:
+        result = await _bridge.mark_read(cid)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="telegram_inspect_forward",
+    annotations={"readOnlyHint": True, "destructiveHint": False},
+)
+async def telegram_inspect_forward(params: _InspectForwardInput) -> str:
+    """Извлекает информацию о forward origin из пересланного сообщения.
+
+    Проверяет поля forward_from, forward_from_chat, forward_sender_name.
+    Возвращает оригинального отправителя, chat и message_id источника.
+    Если сообщение не является пересланным — has_forward=False.
+
+    Args:
+        params:
+            - chat_id (str): ID чата или @username
+            - message_id (int): ID сообщения для инспекции
+
+    Returns:
+        str: JSON-объект:
+            - ok (bool)
+            - has_forward (bool)
+            - original_sender_id (int|None): user_id оригинального отправителя
+            - original_sender_username (str|None)
+            - original_sender_name (str|None)
+            - original_chat_id (int|None): ID чата-источника (для каналов)
+            - original_message_id (int|None): ID сообщения в источнике
+            - forward_date (str|None): ISO datetime пересылки
+    """
+    try:
+        cid: int | str = int(params.chat_id)
+    except ValueError:
+        cid = params.chat_id
+    try:
+        result = await _bridge.inspect_forward(cid, params.message_id)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
