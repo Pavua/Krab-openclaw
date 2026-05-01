@@ -422,7 +422,7 @@ class Config:
     # Отличается от stagnation (тот срабатывает только при отсутствии активности в runs.sqlite).
     # Default: 90s для текста, 180s для фото (overrides: KRAB_LLM_WALL_CLOCK_CAP_SEC /
     # KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC). 0 = отключено.
-    KRAB_LLM_WALL_CLOCK_CAP_SEC: float = float(os.getenv("KRAB_LLM_WALL_CLOCK_CAP_SEC", "90"))
+    KRAB_LLM_WALL_CLOCK_CAP_SEC: float = float(os.getenv("KRAB_LLM_WALL_CLOCK_CAP_SEC", "180"))
     KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC: float = float(
         os.getenv("KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC", "180")
     )
