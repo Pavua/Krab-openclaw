@@ -22,11 +22,109 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+from collections import OrderedDict
 from typing import Any
 
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+
+# ── Wave 14-F (Session 33): per-session event dedupe ─────────────────────────
+# Один и тот же runtime-error может уходить в Sentry сотни раз за инцидент
+# (пример: 226× `db_corruption_detected_runtime` за 3.5 часа). Все 226 — same
+# root cause, same stack — но Sentry квота забивается. Дедупим в рамках одного
+# процесса по ключу f"{event_name}:{error_type}".
+#
+# Lifetime: set живёт на process lifetime; при restart Krab — fresh set
+# (каждый restart получает свежий first-event signal).
+# Modes (env KRAB_SENTRY_DEDUPE_MODE):
+#   - "once_per_session" (default) — пускаем 1 событие, дальше None
+#   - "every_nth"  — sample 1 of every N (KRAB_SENTRY_DEDUPE_EVERY_NTH=10)
+#   - "disabled"   — current pre-Wave 14-F behavior, всё пропускаем
+# LRU eviction at KRAB_SENTRY_DEDUPE_MAX_SIZE (default 100).
+_DEDUPE_LOCK = threading.Lock()
+_session_seen_events: OrderedDict[str, int] = OrderedDict()
+
+
+def _read_int_env(name: str, default: int, *, minimum: int = 1) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
+
+def _dedupe_key(event: dict[str, Any]) -> str | None:
+    """Compute key f"{event_name}:{error_type}" for dedupe.
+
+    event_name = transaction OR logger OR message-prefix (fallback).
+    error_type = exception type (если есть), иначе "log".
+    Возвращает None если ничего вменяемого не извлекли — тогда не дедупим.
+    """
+    try:
+        exc_type = ""
+        for ex in (event.get("exception") or {}).get("values") or []:
+            if isinstance(ex, dict) and ex.get("type"):
+                exc_type = str(ex.get("type"))
+                break
+        event_name = (
+            str(event.get("transaction") or "").strip() or str(event.get("logger") or "").strip()
+        )
+        if not event_name:
+            msg = event.get("message")
+            if isinstance(msg, str) and msg:
+                event_name = msg[:80]
+            else:
+                logentry = event.get("logentry") or {}
+                if isinstance(logentry, dict):
+                    raw = str(logentry.get("message") or "").strip()
+                    if raw:
+                        event_name = raw[:80]
+        if not event_name and not exc_type:
+            return None
+        return f"{event_name or 'unknown'}:{exc_type or 'log'}"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _should_dedupe_drop(event: dict[str, Any]) -> bool:
+    """True → suppress (return None в _before_send). False → пропустить."""
+    mode = os.getenv("KRAB_SENTRY_DEDUPE_MODE", "once_per_session").strip().lower()
+    if mode == "disabled":
+        return False
+    key = _dedupe_key(event)
+    if key is None:
+        return False
+    max_size = _read_int_env("KRAB_SENTRY_DEDUPE_MAX_SIZE", 100, minimum=1)
+    every_nth = _read_int_env("KRAB_SENTRY_DEDUPE_EVERY_NTH", 10, minimum=1)
+    with _DEDUPE_LOCK:
+        if key in _session_seen_events:
+            count = _session_seen_events[key] + 1
+            _session_seen_events[key] = count
+            _session_seen_events.move_to_end(key)
+            if mode == "every_nth":
+                # 1-я уже прошла (count=1 was sent). Теперь sample каждое N-е.
+                # i.e. count in {1+N, 1+2N, ...} → пускаем; иначе drop.
+                return ((count - 1) % every_nth) != 0
+            # once_per_session: всё после первого — drop.
+            return True
+        # Первое появление ключа — добавляем, пускаем.
+        _session_seen_events[key] = 1
+        # LRU evict (oldest) если набрали слишком много.
+        while len(_session_seen_events) > max_size:
+            _session_seen_events.popitem(last=False)
+        return False
+
+
+def _reset_dedupe_state_for_tests() -> None:
+    """Test-only helper: сбрасывает накопленные ключи между прогонами."""
+    with _DEDUPE_LOCK:
+        _session_seen_events.clear()
 
 
 # Маркеры benign-ошибок, которые НЕ должны попадать в Sentry.
@@ -160,6 +258,14 @@ def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] 
                     return None
     except Exception:  # noqa: BLE001
         # Никогда не ломаем error reporting из-за бага в фильтре.
+        return event
+    # Wave 14-F: per-session dedupe — после benign-фильтра, чтобы дедуп
+    # применялся только к событиям, которые иначе бы реально ушли в Sentry.
+    try:
+        if _should_dedupe_drop(event):
+            return None
+    except Exception:  # noqa: BLE001
+        # Defensive: dedupe-bug не должен топить error reporting.
         return event
     return event
 
