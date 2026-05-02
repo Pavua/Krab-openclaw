@@ -3,9 +3,9 @@
 src/core/skill_curator_state.py
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Atomic JSON store для CuratorState (Wave 15-C, Step 2/4).
+Atomic JSON store для CuratorState (Wave 15-C → 16-A, Steps 2-3/4).
 
-Хранит per-team метаданные curator runs + global pause flag в
+Хранит per-team метаданные curator runs + global pause flag + active overlays в
 ``~/.openclaw/krab_runtime_state/curator/state.json``.
 
 Запись через `tempfile + os.replace` — atomic, безопасно при concurrent
@@ -40,6 +40,8 @@ class CuratorState:
     - ``run_count``    — счётчик запусков per team.
     - ``last_report_paths`` — путь к последнему сохранённому отчёту/proposal per team.
     - ``last_proposal_paths`` — путь к последнему LLM-proposal per team.
+    - ``active_overlays`` — активные overlays: {team: {prompt, proposal_id, applied_at, version, archive_path}}.
+    - ``last_apply_at`` — ISO8601 (UTC) per team, момент последнего apply (rate-limit).
     """
 
     last_run_at: dict[str, str] = field(default_factory=dict)
@@ -47,6 +49,9 @@ class CuratorState:
     run_count: dict[str, int] = field(default_factory=dict)
     last_report_paths: dict[str, str] = field(default_factory=dict)
     last_proposal_paths: dict[str, str] = field(default_factory=dict)
+    # Step 3: overlays (backward compat — пустой dict если ключа нет)
+    active_overlays: dict[str, dict[str, Any]] = field(default_factory=dict)
+    last_apply_at: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "CuratorState":
@@ -68,6 +73,9 @@ class CuratorState:
             run_count={k: int(v) for k, v in (data.get("run_count") or {}).items()},
             last_report_paths=dict(data.get("last_report_paths") or {}),
             last_proposal_paths=dict(data.get("last_proposal_paths") or {}),
+            # Backward compat: поле может отсутствовать в старых state.json
+            active_overlays=dict(data.get("active_overlays") or {}),
+            last_apply_at=dict(data.get("last_apply_at") or {}),
         )
 
     def save_atomic(self, path: Path | None = None) -> Path:
@@ -109,3 +117,25 @@ class CuratorState:
         """Записывает путь к последнему LLM-proposal."""
 
         self.last_proposal_paths[team] = str(proposal_path)
+
+    # -- Step 3: overlay API -------------------------------------------------
+
+    def apply_overlay(self, team: str, overlay_data: dict[str, Any]) -> None:
+        """Записывает overlay для команды (в памяти, без save)."""
+
+        self.active_overlays[team.lower()] = dict(overlay_data)
+
+    def clear_overlay(self, team: str) -> None:
+        """Удаляет overlay для команды (в памяти, без save)."""
+
+        self.active_overlays.pop(team.lower(), None)
+
+    def get_overlay(self, team: str) -> dict[str, Any] | None:
+        """Возвращает активный overlay команды или None."""
+
+        return self.active_overlays.get(team.lower())
+
+    def mark_apply(self, team: str) -> None:
+        """Обновляет last_apply_at для rate-limit проверок."""
+
+        self.last_apply_at[team.lower()] = datetime.now(timezone.utc).isoformat(timespec="seconds")
