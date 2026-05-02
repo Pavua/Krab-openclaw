@@ -329,21 +329,47 @@ async def handle_uptime(bot: "KraabUserbot", message: Message) -> None:
     except Exception:
         lines.append("Краб: N/A")
 
-    # OpenClaw gateway uptime — через health endpoint
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get("http://127.0.0.1:18789/health")
+    # OpenClaw gateway uptime — пробуем несколько health endpoint'ов (gateway отвечает на /healthz, /health, /).
+    # Если HTTP вернул 200, считаем Online; uptime извлекаем если есть в JSON.
+    # Fallback: TCP-проба порта 18789 (порт открыт = gateway up).
+    oc_status_line = None
+    for probe_url in (
+        "http://127.0.0.1:18789/healthz",
+        "http://127.0.0.1:18789/health",
+        "http://127.0.0.1:18789/",
+    ):
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(probe_url)
             if resp.status_code == 200:
-                data = resp.json()
-                oc_uptime = data.get("uptime") or data.get("uptime_seconds")
+                oc_uptime = None
+                try:
+                    data = resp.json()
+                    if isinstance(data, dict):
+                        oc_uptime = data.get("uptime") or data.get("uptime_seconds")
+                except Exception:
+                    pass
                 if oc_uptime is not None:
-                    lines.append(f"OpenClaw: `{_format_uptime_str(float(oc_uptime))}`")
+                    oc_status_line = f"OpenClaw: `{_format_uptime_str(float(oc_uptime))}`"
                 else:
-                    lines.append("OpenClaw: ✅ Online")
-            else:
-                lines.append("OpenClaw: ❌ Offline")
-    except Exception:
-        lines.append("OpenClaw: ❌ Недоступен")
+                    oc_status_line = "OpenClaw: ✅ Online"
+                break
+        except Exception:
+            continue
+    if oc_status_line is None:
+        # HTTP пробы упали — пробуем TCP подключение к порту как последний sanity check
+        try:
+            import socket
+
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(1.0)
+                if sock.connect_ex(("127.0.0.1", 18789)) == 0:
+                    oc_status_line = "OpenClaw: ✅ Online (порт 18789 открыт)"
+                else:
+                    oc_status_line = "OpenClaw: ❌ Недоступен"
+        except Exception:
+            oc_status_line = "OpenClaw: ❌ Недоступен"
+    lines.append(oc_status_line)
 
     # LM Studio health check
     try:
