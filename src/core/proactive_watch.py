@@ -451,6 +451,24 @@ class ProactiveWatchService:
             logger.warning("cron_trace_check_failed", error=str(exc))
             updated_cron_runs = dict(state.get("last_cron_runs") or {})
 
+        # Janitor: sweep stale `acked` proactive_action items → `done`
+        # (Wave 8-A safety net: cron handler / background processing created
+        # acked traces but never transitioned them; without this items pile up
+        # as stale_processing forever — см. Wave 7-C / Session 33).
+        try:
+            sweep_result = inbox_service.sweep_acked_proactive_actions(
+                age_threshold_minutes=60,
+                actor="proactive-watch-janitor",
+            )
+            if sweep_result.get("swept"):
+                logger.info(
+                    "proactive_action_janitor_swept",
+                    swept=sweep_result["swept"],
+                    matched=sweep_result.get("matched", 0),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("proactive_action_janitor_failed", error=str(exc))
+
         if persist_memory and (manual or bool(reason)):
             wrote_memory = append_workspace_memory_entry(
                 self.render_memory_entry(snapshot, reason=reason, manual=manual),
