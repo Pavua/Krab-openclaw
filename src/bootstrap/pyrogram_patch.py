@@ -146,6 +146,18 @@ def apply_pyrogram_sqlite_hardening() -> bool:
                     extra={"op": "update_usernames", "count": len(usernames or [])},
                 )
                 return None
+            # Session 33: симметричное malformed-handling с _safe_update_peers.
+            # Без этого Pyrogram boot path (get_me → fetch_peers → update_usernames)
+            # падает на startup при первом прикосновении к UNAME_SCHEMA на
+            # corrupted file. Swallow + log — names подтянутся при следующем
+            # call, а DB_CORRUPTION_EXIT_CODE отрабатывает на уровень выше
+            # уже из integrity_check (а не из cascade exception в update_usernames).
+            if "database disk image is malformed" in msg:
+                log.warning(
+                    "pyrogram_sqlite_malformed_swallowed",
+                    extra={"op": "update_usernames", "count": len(usernames or [])},
+                )
+                return None
             raise
 
     _ss.SQLiteStorage.update_usernames = _safe_update_usernames
