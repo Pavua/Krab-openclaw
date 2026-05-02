@@ -1927,6 +1927,29 @@ class LLMFlowMixin:
                 except Exception:  # noqa: BLE001
                     pass
 
+    def _resolve_response_hard_cap_sec(self, *, has_images: bool = False) -> float:
+        """
+        Bug 14 (Session 32): outer hard cap на весь LLM pipeline.
+
+        Возвращает effective cap в секундах:
+        - codex-cli модель → KRAB_LLM_WALL_CLOCK_CAP_SEC (default 180s) — медленный subprocess.
+        - всё остальное → KRAB_RESPONSE_HARD_CAP_SEC (default 60s).
+        - 0/негатив → cap отключён (None — wait_for без таймаута).
+        """
+        try:
+            current_model = (_current_runtime_primary_model() or "").lower()
+        except Exception:  # noqa: BLE001
+            current_model = ""
+        is_codex_cli = "codex" in current_model and "cli" in current_model
+        if is_codex_cli:
+            cap_attr = (
+                "KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC" if has_images else "KRAB_LLM_WALL_CLOCK_CAP_SEC"
+            )
+            cap = float(getattr(config, cap_attr, 180.0) or 0.0)
+        else:
+            cap = float(getattr(config, "KRAB_RESPONSE_HARD_CAP_SEC", 60.0) or 0.0)
+        return cap
+
     async def _finish_ai_request_background(self, **kwargs: Any) -> None:
         """Доводит long LLM/tool path до конца уже после release per-chat lock."""
         from ..core.chat_ban_cache import BANNED_ERROR_CODES, chat_ban_cache
@@ -1939,6 +1962,9 @@ class LLMFlowMixin:
         chat_id = str(kwargs.get("chat_id") or "").strip()
         incoming_item_result = kwargs.get("incoming_item_result")
         temp_msg = kwargs.get("temp_msg")
+        message = kwargs.get("message")
+        images_kw = kwargs.get("images") or []
+        _hard_cap_sec = self._resolve_response_hard_cap_sec(has_images=bool(images_kw))
 
         # Конфигурация auto-retry
         max_retries = int(getattr(config, "OPENCLAW_AUTO_RETRY_COUNT", 1))
@@ -1949,10 +1975,39 @@ class LLMFlowMixin:
         try:
             while True:
                 try:
-                    await self._run_llm_request_flow(
-                        **kwargs, prefer_send_message_for_background=True
-                    )
+                    _flow_started_at = time.monotonic()
+                    if _hard_cap_sec > 0:
+                        await asyncio.wait_for(
+                            self._run_llm_request_flow(
+                                **kwargs, prefer_send_message_for_background=True
+                            ),
+                            timeout=_hard_cap_sec,
+                        )
+                    else:
+                        await self._run_llm_request_flow(
+                            **kwargs, prefer_send_message_for_background=True
+                        )
                     return  # успешно — выходим
+                except asyncio.TimeoutError:
+                    _elapsed = time.monotonic() - _flow_started_at
+                    logger.warning(
+                        "response_generation_hard_cap_exceeded",
+                        chat_id=chat_id,
+                        cap_sec=_hard_cap_sec,
+                        elapsed_sec=round(_elapsed, 2),
+                        has_images=bool(images_kw),
+                    )
+                    fallback_text = (
+                        "⏱️ Ответ занимает слишком долго, попробуй ещё раз или упрости вопрос"
+                    )
+                    try:
+                        if message is not None:
+                            await self._safe_reply_or_send_new(message, fallback_text)
+                        elif temp_msg is not None:
+                            await self._safe_edit(temp_msg, fallback_text)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return
                 except asyncio.CancelledError as cancel_err:
                     # Стагнационный cancel через watchdog: сообщение пользователю уже
                     # показано внутри _run_llm_request_flow. Тихо выходим, не ретраим.
