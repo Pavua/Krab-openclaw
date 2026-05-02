@@ -33,7 +33,7 @@ logger = get_logger(__name__)
 
 
 _USAGE = (
-    "🧑‍🏫 **SkillCurator** (Waves 14-I + 15-C + 16-A, Steps 1-3/4)\n\n"
+    "🧑‍🏫 **SkillCurator** (Waves 14-I + 15-C + 16-A + 16-D, Steps 1-4/4)\n\n"
     "`!curator dry-run [team]` — read-only анализ последних раундов\n"
     "`!curator dry-run` — все 4 команды одним отчётом\n"
     "`!curator propose <team>` — LLM-предложение апдейта промпта (Gemini-3-flash)\n"
@@ -42,6 +42,11 @@ _USAGE = (
     "`!curator apply <id> [--force]` — применить proposal к live prompt\n"
     "`!curator rollback <team> [--version N]` — откатить к baseline или к версии N\n"
     "`!curator overlays` — показать активные overlays всех команд\n"
+    "`!curator ab start <team> <proposal_id> [--rounds N]` — запустить A/B тест\n"
+    "`!curator ab status [team]` — статус A/B тестов\n"
+    "`!curator ab evaluate <ab_id> [--apply]` — evaluate + опциональный auto-apply\n"
+    "`!curator ab cancel <ab_id>` — отменить A/B тест\n"
+    "`!curator ab list [team]` — список A/B тестов\n"
     "`!curator help` — эта справка\n\n"
     f"Доступные команды: {', '.join(sorted(TEAM_REGISTRY))}"
 )
@@ -112,6 +117,11 @@ async def handle_curator(bot: "KraabUserbot", message: Message) -> None:
 
     if sub == "overlays":
         await _run_overlays(bot, message)
+        return
+
+    if sub == "ab":
+        ab_sub = tokens[1].lower() if len(tokens) > 1 else "help"
+        await _run_ab(bot, message, ab_sub, tokens[2:])
         return
 
     await bot._safe_reply_or_send_new(
@@ -365,4 +375,252 @@ async def _run_overlays(bot: "KraabUserbot", message: Message) -> None:
             f"  `{preview}…`"
         )
     lines.append("\n`!curator rollback <team>` — вернуть к baseline")
+    await bot._safe_reply_or_send_new(message, "\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# A/B framework subcommands (Step 4)
+# ---------------------------------------------------------------------------
+
+_AB_USAGE = (
+    "🧪 **!curator ab** — A/B framework (Step 4)\n\n"
+    "`!curator ab start <team> <proposal_id> [--rounds N]` — запустить A/B тест\n"
+    "`!curator ab status [team]` — статус активных A/B тестов\n"
+    "`!curator ab evaluate <ab_id> [--apply]` — evaluate + опциональный auto-apply\n"
+    "`!curator ab cancel <ab_id>` — отменить A/B тест\n"
+    "`!curator ab list [team]` — список всех A/B тестов\n"
+)
+
+
+async def _run_ab(bot: "KraabUserbot", message: Message, sub: str, args: list[str]) -> None:
+    """Диспетчер !curator ab <sub> субкоманд."""
+
+    if sub in {"help", "?", ""}:
+        await bot._safe_reply_or_send_new(message, _AB_USAGE)
+        return
+
+    if sub == "start":
+        await _ab_start(bot, message, args)
+    elif sub == "status":
+        await _ab_status(bot, message, args)
+    elif sub == "evaluate":
+        await _ab_evaluate(bot, message, args)
+    elif sub == "cancel":
+        await _ab_cancel(bot, message, args)
+    elif sub == "list":
+        await _ab_list(bot, message, args)
+    else:
+        await bot._safe_reply_or_send_new(
+            message, f"❌ Неизвестная A/B субкоманда `{sub}`.\n\n{_AB_USAGE}"
+        )
+
+
+async def _ab_start(bot: "KraabUserbot", message: Message, args: list[str]) -> None:
+    """!curator ab start <team> <proposal_id> [--rounds N]."""
+
+    if len(args) < 2:
+        await bot._safe_reply_or_send_new(
+            message,
+            "❌ Укажи: `!curator ab start <team> <proposal_id> [--rounds N]`",
+        )
+        return
+
+    team_arg = args[0].lower()
+    proposal_id = args[1]
+
+    if team_arg not in TEAM_REGISTRY:
+        await bot._safe_reply_or_send_new(
+            message,
+            f"❌ Команда `{team_arg}` не найдена. Доступны: {', '.join(sorted(TEAM_REGISTRY))}",
+        )
+        return
+
+    n_rounds = 10
+    if "--rounds" in args:
+        idx = args.index("--rounds")
+        if idx + 1 < len(args):
+            try:
+                n_rounds = max(1, int(args[idx + 1]))
+            except ValueError:
+                await bot._safe_reply_or_send_new(message, "❌ `--rounds` должен быть числом.")
+                return
+
+    await bot._safe_reply_or_send_new(
+        message,
+        f"⏳ Запускаю A/B тест для `{team_arg}` (proposal: `{proposal_id}`, rounds={n_rounds})…",
+    )
+
+    try:
+        result = skill_curator.start_ab_test(team_arg, proposal_id, n_rounds=n_rounds)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("curator_ab_start_failed", team=team_arg, error=str(exc))
+        await bot._safe_reply_or_send_new(message, f"❌ A/B start error: {exc}")
+        return
+
+    if result is None:
+        await bot._safe_reply_or_send_new(
+            message,
+            f"⚠️ Для команды `{team_arg}` уже есть running A/B тест. "
+            "Отмени его через `!curator ab cancel <ab_id>` или дождись завершения.",
+        )
+        return
+
+    await bot._safe_reply_or_send_new(
+        message,
+        f"✅ A/B тест запущен!\n"
+        f"- ab_id: `{result['ab_id']}`\n"
+        f"- team: `{result['team']}`\n"
+        f"- rounds target: {result['n_rounds_target']}\n"
+        f"- proposal: `{result['candidate_proposal_id']}`\n\n"
+        f"Отслеживай: `!curator ab status {team_arg}`",
+    )
+
+
+async def _ab_status(bot: "KraabUserbot", message: Message, args: list[str]) -> None:
+    """!curator ab status [team] — статус A/B тестов."""
+
+    team_filter = args[0].lower() if args else None
+
+    teams = [team_filter] if team_filter else list(sorted(TEAM_REGISTRY))
+    lines = ["🧪 **A/B тесты (running)**\n"]
+    found = False
+
+    for team in teams:
+        try:
+            ab_data = skill_curator.get_active_ab_test(team)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("curator_ab_status_failed", team=team, error=str(exc))
+            continue
+        if not ab_data:
+            continue
+        found = True
+        rounds_done = len(ab_data.get("rounds") or [])
+        n_target = ab_data.get("n_rounds_target", 10)
+        lines.append(
+            f"- `{team}`: `{ab_data['ab_id']}` "
+            f"({ab_data.get('status')}, {rounds_done}/{n_target} rounds)\n"
+            f"  started: {(ab_data.get('started_at') or '')[:16]}"
+        )
+
+    if not found:
+        scope = f" для `{team_filter}`" if team_filter else ""
+        await bot._safe_reply_or_send_new(message, f"📭 Активных A/B тестов{scope} нет.")
+        return
+
+    await bot._safe_reply_or_send_new(message, "\n".join(lines))
+
+
+async def _ab_evaluate(bot: "KraabUserbot", message: Message, args: list[str]) -> None:
+    """!curator ab evaluate <ab_id> [--apply]."""
+
+    if not args:
+        await bot._safe_reply_or_send_new(
+            message, "❌ Укажи: `!curator ab evaluate <ab_id> [--apply]`"
+        )
+        return
+
+    ab_id = args[0]
+    auto_apply = "--apply" in args
+
+    await bot._safe_reply_or_send_new(message, f"⏳ Evaluating A/B тест `{ab_id}`…")
+
+    try:
+        if auto_apply:
+            result, applied = await skill_curator.evaluate_ab_test_and_apply(ab_id)
+        else:
+            result = skill_curator.evaluate_ab_test(ab_id)
+            applied = False
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("curator_ab_evaluate_failed", ab_id=ab_id, error=str(exc))
+        await bot._safe_reply_or_send_new(message, f"❌ Evaluate error: {exc}")
+        return
+
+    winner = result.get("winner") or "—"
+    status = result.get("status", "?")
+    reason = result.get("reason", "—")
+    metrics = result.get("metrics", {})
+    ctrl = metrics.get("control", {})
+    cand = metrics.get("candidate", {})
+    rounds_done = result.get("rounds_completed", "?")
+    n_target = result.get("n_rounds_target", "?")
+
+    apply_note = ""
+    if auto_apply:
+        if applied:
+            apply_note = "\n✅ Candidate применён автоматически."
+        elif winner == "candidate":
+            apply_note = f"\n⚠️ Auto-apply: {result.get('auto_apply_msg') or result.get('auto_apply_error') or 'failed'}"
+
+    body = (
+        f"🧪 **A/B evaluate** — `{ab_id}`\n"
+        f"- Status: {status}\n"
+        f"- Rounds: {rounds_done}/{n_target}\n"
+        f"- Winner: **{winner}**\n"
+        f"- Reason: {reason}\n\n"
+        f"**Метрики:**\n"
+        f"- Control: SR={ctrl.get('success_rate', '?')}, "
+        f"cost={ctrl.get('cost_usd_avg', '?')}, lat={ctrl.get('latency_s_avg', '?')}s\n"
+        f"- Candidate: SR={cand.get('success_rate', '?')}, "
+        f"cost={cand.get('cost_usd_avg', '?')}, lat={cand.get('latency_s_avg', '?')}s"
+        f"{apply_note}"
+    )
+    await bot._safe_reply_or_send_new(message, body)
+
+
+async def _ab_cancel(bot: "KraabUserbot", message: Message, args: list[str]) -> None:
+    """!curator ab cancel <ab_id>."""
+
+    if not args:
+        await bot._safe_reply_or_send_new(message, "❌ Укажи: `!curator ab cancel <ab_id>`")
+        return
+
+    ab_id = args[0]
+    try:
+        ok = skill_curator.cancel_ab_test(ab_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("curator_ab_cancel_failed", ab_id=ab_id, error=str(exc))
+        await bot._safe_reply_or_send_new(message, f"❌ Cancel error: {exc}")
+        return
+
+    icon = "✅" if ok else "❌"
+    msg = "отменён" if ok else "не найден или уже завершён"
+    await bot._safe_reply_or_send_new(message, f"{icon} A/B тест `{ab_id}`: {msg}.")
+
+
+async def _ab_list(bot: "KraabUserbot", message: Message, args: list[str]) -> None:
+    """!curator ab list [team] — список A/B тестов."""
+
+    team_filter = args[0].lower() if args else None
+    if team_filter and team_filter not in TEAM_REGISTRY:
+        await bot._safe_reply_or_send_new(
+            message,
+            f"❌ Команда `{team_filter}` не найдена. Доступны: {', '.join(sorted(TEAM_REGISTRY))}",
+        )
+        return
+
+    try:
+        tests = skill_curator.list_ab_tests(team=team_filter)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("curator_ab_list_failed", error=str(exc))
+        await bot._safe_reply_or_send_new(message, f"❌ List error: {exc}")
+        return
+
+    if not tests:
+        scope = f" для `{team_filter}`" if team_filter else ""
+        await bot._safe_reply_or_send_new(message, f"📭 A/B тестов{scope} нет.")
+        return
+
+    lines = [f"🧪 **A/B тесты** (всего: {len(tests)})\n"]
+    for t in tests[:20]:
+        rounds_done = len(t.get("rounds") or [])
+        n_target = t.get("n_rounds_target", 10)
+        lines.append(
+            f"- `{t.get('ab_id', '?')}` "
+            f"({t.get('team', '?')}, {t.get('status', '?')}, "
+            f"{rounds_done}/{n_target} rounds, "
+            f"winner={t.get('decision') or '—'})"
+        )
+    if len(tests) > 20:
+        lines.append(f"\n_…и ещё {len(tests) - 20}_")
+    lines.append("\nПодробнее: `!curator ab evaluate <ab_id>`")
     await bot._safe_reply_or_send_new(message, "\n".join(lines))

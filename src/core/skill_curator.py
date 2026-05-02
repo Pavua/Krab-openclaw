@@ -24,13 +24,16 @@ from __future__ import annotations
 import asyncio
 import difflib
 import json
+import os
 import re
+import tempfile
 import time
+import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .logger import get_logger
 from .skill_curator_state import CURATOR_STATE_PATH, CuratorState
@@ -49,6 +52,7 @@ CURATOR_BASE_DIR = Path.home() / ".openclaw" / "krab_runtime_state" / "curator"
 CURATOR_REPORTS_DIR = CURATOR_BASE_DIR / "reports"
 CURATOR_PROPOSALS_DIR = CURATOR_BASE_DIR / "proposals"
 CURATOR_ARCHIVE_DIR = CURATOR_BASE_DIR / "prompts_archive"
+CURATOR_AB_TESTS_DIR = CURATOR_BASE_DIR / "ab_tests"
 
 # Rate-limit: не чаще 1 apply в 7 дней на команду
 _APPLY_RATE_LIMIT_DAYS = 7
@@ -303,6 +307,8 @@ class SkillCurator:
         self._base_dir = base_dir or CURATOR_BASE_DIR
         # Per-team mutex для apply/rollback — не даёт двум apply одной команды конкурировать
         self._team_locks: dict[str, asyncio.Lock] = {}
+        # Per-team mutex для A/B тестов — один running A/B per team
+        self._ab_team_locks: dict[str, asyncio.Lock] = {}
 
     # -- public API ----------------------------------------------------------
 
@@ -842,6 +848,444 @@ class SkillCurator:
             True,
             f"team {team} rolled back to archive version {version} (new version={new_version})",
         )
+
+    # -- Step 4/4: A/B framework ---------------------------------------------
+
+    def _get_ab_team_lock(self, team: str) -> asyncio.Lock:
+        """Per-team asyncio.Lock для A/B тестов."""
+
+        key = team.lower()
+        if key not in self._ab_team_locks:
+            self._ab_team_locks[key] = asyncio.Lock()
+        return self._ab_team_locks[key]
+
+    def _ab_tests_dir(self) -> Path:
+        """Директория ab_tests под base_dir."""
+
+        return self._base_dir / "ab_tests"
+
+    def _ab_test_path(self, ab_id: str) -> Path:
+        """Путь к JSON файлу конкретного A/B теста."""
+
+        return self._ab_tests_dir() / f"{ab_id}.json"
+
+    def _load_ab_test(self, ab_id: str) -> dict[str, Any] | None:
+        """Читает A/B тест из файла. None если не найден/повреждён."""
+
+        path = self._ab_test_path(ab_id)
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def _save_ab_test_atomic(self, data: dict[str, Any]) -> bool:
+        """Атомарное сохранение A/B теста. Возвращает True при успехе."""
+
+        ab_id = data.get("ab_id", "")
+        if not ab_id:
+            return False
+        ab_dir = self._ab_tests_dir()
+        ab_dir.mkdir(parents=True, exist_ok=True)
+        path = self._ab_test_path(ab_id)
+        tmp_fd, tmp_name = None, ""
+        try:
+            tmp_fd, tmp_name = tempfile.mkstemp(prefix=".ab_test.", suffix=".tmp", dir=str(ab_dir))
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+            os.replace(tmp_name, path)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("curator_ab_save_failed", ab_id=ab_id, error=str(exc))
+            if tmp_name:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+            return False
+
+    def _compute_metrics(self, rounds: list[dict[str, Any]]) -> dict[str, Any]:
+        """Вычисляет агрегированные метрики по списку round-записей.
+
+        Возвращает dict с ключами per-variant: control / candidate.
+        """
+
+        def _agg(variant_rounds: list[dict[str, Any]]) -> dict[str, Any]:
+            if not variant_rounds:
+                return {
+                    "count": 0,
+                    "success_rate": 0.0,
+                    "cost_usd_avg": 0.0,
+                    "latency_s_avg": 0.0,
+                    "tool_calls_avg": 0.0,
+                    "verifier_pass_rate": 0.0,
+                }
+            n = len(variant_rounds)
+            successes = sum(1 for r in variant_rounds if r.get("success", False))
+            verifier_passes = sum(1 for r in variant_rounds if r.get("verifier_pass", False))
+            costs = [r.get("cost_usd") or 0.0 for r in variant_rounds]
+            latencies = [r.get("latency_s") or 0.0 for r in variant_rounds]
+            tool_calls = [r.get("tool_calls") or 0 for r in variant_rounds]
+            return {
+                "count": n,
+                "success_rate": round(successes / n, 4),
+                "cost_usd_avg": round(sum(costs) / n, 6),
+                "latency_s_avg": round(sum(latencies) / n, 3),
+                "tool_calls_avg": round(sum(tool_calls) / n, 2),
+                "verifier_pass_rate": round(verifier_passes / n, 4),
+            }
+
+        control_rounds = [r for r in rounds if r.get("variant") == "control"]
+        candidate_rounds = [r for r in rounds if r.get("variant") == "candidate"]
+        return {
+            "control": _agg(control_rounds),
+            "candidate": _agg(candidate_rounds),
+            "total_rounds": len(rounds),
+        }
+
+    def _decide_winner(
+        self,
+        metrics: dict[str, Any],
+    ) -> tuple[Literal["control", "candidate", "tie"], str]:
+        """Применяет winning criteria per design §4.
+
+        Candidate wins если:
+        - success_rate >= control + 0.05
+        - AND cost_avg <= control_cost * 1.10
+        - AND latency_avg <= control_latency * 1.10
+
+        Returns (winner, reason).
+        """
+
+        ctrl = metrics.get("control", {})
+        cand = metrics.get("candidate", {})
+
+        ctrl_sr = ctrl.get("success_rate", 0.0)
+        cand_sr = cand.get("success_rate", 0.0)
+        ctrl_cost = ctrl.get("cost_usd_avg", 0.0)
+        cand_cost = cand.get("cost_usd_avg", 0.0)
+        ctrl_lat = ctrl.get("latency_s_avg", 0.0)
+        cand_lat = cand.get("latency_s_avg", 0.0)
+
+        # Критерий 1: success_rate
+        sr_ok = cand_sr >= ctrl_sr + 0.05
+
+        # Критерий 2: cost (если control cost = 0 — кандидат не хуже)
+        cost_ok = cand_cost <= (ctrl_cost * 1.10) if ctrl_cost > 0 else True
+
+        # Критерий 3: latency (если control latency = 0 — кандидат не хуже)
+        lat_ok = cand_lat <= (ctrl_lat * 1.10) if ctrl_lat > 0 else True
+
+        if sr_ok and cost_ok and lat_ok:
+            reason = (
+                f"candidate success_rate {cand_sr:.3f} >= control {ctrl_sr:.3f} + 0.05, "
+                f"cost OK ({cand_cost:.4f} vs {ctrl_cost:.4f}*1.10), "
+                f"latency OK ({cand_lat:.2f}s vs {ctrl_lat:.2f}s*1.10)"
+            )
+            return "candidate", reason
+
+        reasons = []
+        if not sr_ok:
+            reasons.append(f"success_rate {cand_sr:.3f} < control {ctrl_sr:.3f} + 0.05")
+        if not cost_ok:
+            reasons.append(f"cost {cand_cost:.4f} > control {ctrl_cost:.4f}*1.10")
+        if not lat_ok:
+            reasons.append(f"latency {cand_lat:.2f}s > control {ctrl_lat:.2f}s*1.10")
+        reason = "control wins: " + "; ".join(reasons)
+        return "control", reason
+
+    def start_ab_test(
+        self,
+        team: str,
+        candidate_proposal_id: str,
+        *,
+        n_rounds: int = 10,
+        state_path: Path | None = None,
+    ) -> dict[str, Any] | None:
+        """Создаёт A/B тест для команды.
+
+        Возвращает None если для команды уже есть running A/B тест.
+        Sync метод — не требует asyncio.
+        """
+
+        _state_path = state_path or CURATOR_STATE_PATH
+        team_key = team.lower()
+
+        # Проверяем наличие running теста
+        try:
+            state = CuratorState.load(_state_path)
+            existing_ab_id = state.get_active_ab_test(team_key)
+            if existing_ab_id:
+                existing = self._load_ab_test(existing_ab_id)
+                if existing and existing.get("status") == "running":
+                    logger.warning("curator_ab_already_running", team=team, ab_id=existing_ab_id)
+                    return None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("curator_ab_state_check_failed", team=team, error=str(exc))
+
+        # Загружаем proposal для получения candidate prompt
+        proposal = self.load_proposal(candidate_proposal_id)
+        if not proposal:
+            logger.warning(
+                "curator_ab_proposal_not_found",
+                team=team,
+                proposal_id=candidate_proposal_id,
+            )
+            return None
+
+        candidate_prompt = proposal.get("proposed_prompt") or ""
+        if not candidate_prompt.strip():
+            logger.warning(
+                "curator_ab_empty_candidate", team=team, proposal_id=candidate_proposal_id
+            )
+            return None
+
+        # Снапшот текущего effective prompt как control
+        try:
+            from .swarm_team_prompts import get_team_system_prompt
+
+            control_prompt = get_team_system_prompt(team_key)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("curator_ab_get_prompt_failed", team=team, error=str(exc))
+            control_prompt = ""
+
+        # Генерируем уникальный ab_id
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M")
+        short_uuid = uuid.uuid4().hex[:8]
+        ab_id = f"{_safe_team(team)}-{ts}-{short_uuid}"
+
+        ab_data: dict[str, Any] = {
+            "ab_id": ab_id,
+            "team": team_key,
+            "started_at": _now_iso(),
+            "control_prompt": control_prompt,
+            "candidate_prompt": candidate_prompt,
+            "candidate_proposal_id": candidate_proposal_id,
+            "n_rounds_target": max(1, n_rounds),
+            "rounds": [],
+            "status": "running",
+            "decision": None,
+            "decided_at": None,
+            "decision_reason": None,
+        }
+
+        ensure_curator_dirs(self._base_dir)
+        if not self._save_ab_test_atomic(ab_data):
+            return None
+
+        # Обновляем state
+        try:
+            state = CuratorState.load(_state_path)
+            state.set_active_ab_test(team_key, ab_id)
+            state.save_atomic(_state_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("curator_ab_state_save_failed", team=team, error=str(exc))
+
+        logger.info("curator_ab_started", team=team, ab_id=ab_id, n_rounds=n_rounds)
+        return ab_data
+
+    def get_ab_test(self, ab_id: str) -> dict[str, Any] | None:
+        """Читает A/B тест по ab_id. None если не найден."""
+
+        return self._load_ab_test(ab_id)
+
+    def get_active_ab_test(
+        self, team: str, *, state_path: Path | None = None
+    ) -> dict[str, Any] | None:
+        """Возвращает данные активного A/B теста команды или None."""
+
+        _state_path = state_path or CURATOR_STATE_PATH
+        try:
+            state = CuratorState.load(_state_path)
+            ab_id = state.get_active_ab_test(team.lower())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("curator_ab_get_active_failed", team=team, error=str(exc))
+            return None
+        if not ab_id:
+            return None
+        return self._load_ab_test(ab_id)
+
+    def select_variant(self, ab_id: str, round_id: str) -> Literal["control", "candidate"]:
+        """Round-robin выбор варианта по round_id.
+
+        Детерминированно через hash: чётный → control, нечётный → candidate.
+        """
+
+        h = hash(f"{ab_id}:{round_id}")
+        return "candidate" if h % 2 else "control"
+
+    def record_round_metric(
+        self,
+        ab_id: str,
+        round_id: str,
+        metrics: dict[str, Any],
+    ) -> bool:
+        """Добавляет метрику раунда в A/B тест (atomic update).
+
+        Возвращает False если тест не найден.
+        """
+
+        data = self._load_ab_test(ab_id)
+        if data is None:
+            logger.warning("curator_ab_record_unknown", ab_id=ab_id)
+            return False
+
+        variant = self.select_variant(ab_id, round_id)
+        entry: dict[str, Any] = {
+            "round_id": round_id,
+            "variant": variant,
+            "recorded_at": _now_iso(),
+        }
+        entry.update(metrics)
+
+        rounds = data.get("rounds") or []
+        rounds.append(entry)
+        data["rounds"] = rounds
+
+        return self._save_ab_test_atomic(data)
+
+    def evaluate_ab_test(self, ab_id: str) -> dict[str, Any]:
+        """Вычисляет decision для A/B теста.
+
+        Если rounds < n_rounds_target — возвращает промежуточный результат без decision.
+        Если достаточно — определяет победителя и обновляет status="decided".
+        Sync. Returns dict с ключами: ab_id, status, winner, reason, metrics.
+        """
+
+        data = self._load_ab_test(ab_id)
+        if data is None:
+            return {
+                "ab_id": ab_id,
+                "status": "not_found",
+                "winner": None,
+                "reason": "not found",
+                "metrics": {},
+            }
+
+        rounds = data.get("rounds") or []
+        n_target = int(data.get("n_rounds_target") or 10)
+        metrics = self._compute_metrics(rounds)
+
+        result: dict[str, Any] = {
+            "ab_id": ab_id,
+            "team": data.get("team"),
+            "rounds_completed": len(rounds),
+            "n_rounds_target": n_target,
+            "metrics": metrics,
+        }
+
+        if len(rounds) < n_target:
+            result["status"] = "running"
+            result["winner"] = None
+            result["reason"] = f"insufficient data: {len(rounds)}/{n_target} rounds"
+            return result
+
+        winner, reason = self._decide_winner(metrics)
+        result["status"] = "decided"
+        result["winner"] = winner
+        result["reason"] = reason
+
+        # Обновляем JSON файл
+        data["status"] = "decided"
+        data["decision"] = winner
+        data["decided_at"] = _now_iso()
+        data["decision_reason"] = reason
+        self._save_ab_test_atomic(data)
+
+        logger.info("curator_ab_decided", ab_id=ab_id, winner=winner, reason=reason)
+        return result
+
+    async def evaluate_ab_test_and_apply(
+        self,
+        ab_id: str,
+        *,
+        state_path: Path | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """Async обёртка: evaluate + auto-apply если candidate wins.
+
+        Returns (evaluation_result, applied: bool).
+        """
+
+        result = self.evaluate_ab_test(ab_id)
+        applied = False
+
+        if result.get("winner") == "candidate":
+            data = self._load_ab_test(ab_id)
+            proposal_id = (data or {}).get("candidate_proposal_id", "")
+            if proposal_id:
+                try:
+                    ok, msg = await self.apply_with_approval(
+                        proposal_id,
+                        force=True,
+                        idle_check=False,
+                        state_path=state_path,
+                    )
+                    applied = ok
+                    result["auto_apply_msg"] = msg
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("curator_ab_auto_apply_failed", ab_id=ab_id, error=str(exc))
+                    result["auto_apply_error"] = str(exc)
+
+        return result, applied
+
+    def cancel_ab_test(
+        self,
+        ab_id: str,
+        *,
+        reason: str = "manual",
+        state_path: Path | None = None,
+    ) -> bool:
+        """Отменяет A/B тест. Обновляет state.active_ab_tests."""
+
+        _state_path = state_path or CURATOR_STATE_PATH
+        data = self._load_ab_test(ab_id)
+        if data is None:
+            return False
+
+        data["status"] = "cancelled"
+        data["decision_reason"] = f"cancelled: {reason}"
+        data["decided_at"] = _now_iso()
+        if not self._save_ab_test_atomic(data):
+            return False
+
+        team = data.get("team", "")
+        if team:
+            try:
+                state = CuratorState.load(_state_path)
+                current = state.get_active_ab_test(team)
+                if current == ab_id:
+                    state.clear_active_ab_test(team)
+                    state.save_atomic(_state_path)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("curator_ab_cancel_state_failed", ab_id=ab_id, error=str(exc))
+
+        logger.info("curator_ab_cancelled", ab_id=ab_id, reason=reason)
+        return True
+
+    def list_ab_tests(
+        self,
+        team: str | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Перечисляет A/B тесты из директории. Опциональная фильтрация по team/status."""
+
+        ab_dir = self._ab_tests_dir()
+        if not ab_dir.exists():
+            return []
+
+        results: list[dict[str, Any]] = []
+        for fp in sorted(ab_dir.glob("*.json"), reverse=True):
+            try:
+                data = json.loads(fp.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if team and (data.get("team") or "").lower() != team.lower():
+                continue
+            if status and (data.get("status") or "") != status:
+                continue
+            results.append(data)
+        return results
 
 
 # ---------------------------------------------------------------------------
