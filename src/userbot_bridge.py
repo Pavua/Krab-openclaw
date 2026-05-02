@@ -5785,7 +5785,13 @@ class KraabUserbot(
             self._register_chat_background_task(chat_id, background_task)
             return
 
-        await self._run_llm_request_flow(
+        # Wave 14-K: foreground path goes through _run_llm_request_flow_with_auto_retry
+        # so LLMRetryableError (e.g. codex-cli first-chunk hang from Wave 14-D)
+        # triggers silent fallback to openai/gpt-5.5 instead of bubbling up to
+        # process_message_error → user-visible "🦀❌ Ошибка: codex-cli first-chunk hang".
+        await self._run_llm_request_flow_with_auto_retry(
+            prefer_send_message_for_background=False,
+            hard_cap_sec=0.0,  # foreground: no outer hard cap (existing behavior)
             message=message,
             temp_msg=temp_msg,
             is_self=is_self,
@@ -5800,7 +5806,6 @@ class KraabUserbot(
             system_prompt=system_prompt,
             action_stop_event=_typing_stop_event,
             action_task=_typing_task,
-            prefer_send_message_for_background=False,
             show_progress_notices=_show_progress_notices,
         )
 

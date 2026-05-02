@@ -17,10 +17,23 @@ class LLMRetryableError(Exception):
     необходимости повтора без изменения сигнатуры основного flow.
     """
 
-    def __init__(self, message: str, error_text: str) -> None:
+    def __init__(
+        self,
+        message: str,
+        error_text: str,
+        retry_model_override: str | None = None,
+        user_progress_notice: str | None = None,
+    ) -> None:
         super().__init__(message)
         # Текст ошибки как он был в full_response (для финального уведомления)
         self.error_text = error_text
+        # Wave 14-K: подсказка retry-loop'у — какую модель использовать в next attempt.
+        # Используется для force-fallback с codex-cli на cloud-модель при first-chunk hang.
+        # None → стандартная routing-логика OpenClaw.
+        self.retry_model_override = retry_model_override
+        # Wave 14-K: текст для пользователя в момент перехода на retry (override
+        # стандартного "🔄 Повторная попытка..."). None → стандартный notice.
+        self.user_progress_notice = user_progress_notice
 
 
 # Паттерны в тексте ответа, которые сигнализируют о retryable-ошибке.

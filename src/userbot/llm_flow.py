@@ -128,119 +128,6 @@ async def _safe_react(func, bot, message, *args):
 # ---------------------------------------------------------------------------
 
 
-# Bug 14 (Session 33, Wave 7-B): denylist of read-only tool name patterns.
-# При срабатывании hard-cap проверяем _active_tool_calls openclaw_client'а —
-# если хоть один write/send tool успешно завершился ("done"), пропускаем
-# misleading fallback message. Read-only вызовы НЕ считаются user-visible
-# subtask success'ом.
-_READ_ONLY_TOOL_PATTERNS: tuple[str, ...] = (
-    "get_",
-    "list_",
-    "read_",
-    "fetch_",
-    "search",
-    "recall",
-    "find_",
-    "history",
-    "inspect",
-    "show_",
-    "view_",
-    "describe",
-    "status",
-    "snapshot",
-    "lookup",
-    "query",
-    "resolve_",
-    "transcribe",
-    "ocr",
-    "screenshot",
-)
-
-# Имена/префиксы, которые однозначно являются write/side-effect — даже если
-# совпадает с read pattern (например `send_query` теоретически), приоритет — write.
-_WRITE_TOOL_PATTERNS: tuple[str, ...] = (
-    "send_",
-    "forward_",
-    "post_",
-    "create",
-    "write_",
-    "edit_",
-    "delete",
-    "remove",
-    "pin_",
-    "unpin_",
-    "react",
-    "reply",
-    "publish",
-    "schedule_",
-    "execute_",
-    "run_",
-    "invoke_",
-    "deploy",
-    "commit",
-    "push",
-    "save_",
-    "update_",
-    "add_",
-    "set_",
-    "apply_",
-    "trigger_",
-    "notify",
-    "mark_",
-    "upload",
-    "download",
-)
-
-
-def _classify_tool_subtask_kind(name: str | None) -> str:
-    """Классифицирует tool по имени: 'write' (user-visible side-effect) | 'read' | 'unknown'.
-
-    Логика:
-    - Точное совпадение/префикс из _WRITE_TOOL_PATTERNS → 'write' (приоритет).
-    - Префикс из _READ_ONLY_TOOL_PATTERNS → 'read'.
-    - Иначе → 'unknown' (по-умолчанию НЕ считаем как success — conservative).
-    """
-    if not name:
-        return "unknown"
-    n = str(name).lower()
-    for pat in _WRITE_TOOL_PATTERNS:
-        if pat in n:
-            return "write"
-    for pat in _READ_ONLY_TOOL_PATTERNS:
-        if pat in n:
-            return "read"
-    return "unknown"
-
-
-def _detect_subtask_success_in_tool_calls(
-    tool_calls: list[dict[str, Any]] | None,
-    *,
-    start_index: int = 0,
-) -> tuple[bool, str | None]:
-    """Возвращает (any_write_succeeded, first_successful_write_name).
-
-    Сканирует tool_calls[start_index:] на предмет записи со status="done"
-    и именем, классифицированным как 'write'.
-    """
-    if not tool_calls:
-        return False, None
-    try:
-        slice_ = tool_calls[start_index:]
-    except Exception:  # noqa: BLE001
-        slice_ = tool_calls
-    for tc in slice_:
-        try:
-            status = str(tc.get("status") or "").lower()
-            name = str(tc.get("name") or "")
-        except Exception:  # noqa: BLE001
-            continue
-        if status != "done":
-            continue
-        if _classify_tool_subtask_kind(name) == "write":
-            return True, name
-    return False, None
-
-
 def _current_runtime_primary_model() -> str:
     """
     Возвращает primary-модель из живого OpenClaw runtime.
@@ -570,8 +457,15 @@ class LLMFlowMixin:
         action_task: asyncio.Task,
         prefer_send_message_for_background: bool = False,
         show_progress_notices: bool = True,
+        preferred_model_override: str | None = None,
     ) -> None:
-        """Общий long-path LLM/tool flow для inline и background режима."""
+        """Общий long-path LLM/tool flow для inline и background режима.
+
+        Wave 14-K: `preferred_model_override` (если задан) заставляет
+        `openclaw_client.send_message_stream` использовать указанную модель
+        вместо routing-default. Используется retry-loop'ом после
+        codex-cli first-chunk hang для принудительного перехода на cloud-fallback.
+        """
         # Ленивые импорты модулей, которые живут в userbot_bridge / соседних пакетах.
         # ВАЖНО: module-level helpers импортируются из userbot_bridge (а не напрямую),
         # чтобы monkeypatch в тестах работал корректно (тесты патчат на userbot_bridge).
@@ -812,6 +706,7 @@ class LLMFlowMixin:
             system_prompt=system_prompt,
             images=images,
             force_cloud=force_cloud,
+            preferred_model=preferred_model_override or None,
             max_output_tokens=max_output_tokens if max_output_tokens > 0 else None,
             disable_tools=_guest_disable_tools,
         )
@@ -951,10 +846,18 @@ class LLMFlowMixin:
                             pass
                     from .llm_retry import LLMRetryableError
 
+                    # Wave 14-K: подсказываем retry-loop'у явный fallback-model,
+                    # чтобы новая попытка не пошла снова в codex-cli (threshold=2,
+                    # после первого hang skip ещё не активирован).
+                    _codex_fallback_model = str(
+                        getattr(config, "KRAB_CODEX_CLI_FALLBACK_MODEL", "") or "openai/gpt-5.5"
+                    ).strip()
                     raise LLMRetryableError(
                         "codex-cli first-chunk hang",
                         f"provider_timeout: codex-cli не отдал первый chunk за "
                         f"{int(_codex_first_chunk_cap_sec)}s",
+                        retry_model_override=_codex_fallback_model or None,
+                        user_progress_notice=_codex_notice,
                     )
 
                 _wc_cap_fires = _wall_clock_cap_sec > 0 and elapsed_wait_sec >= _wall_clock_cap_sec
@@ -1843,39 +1746,6 @@ class LLMFlowMixin:
             else:
                 await _safe_react(mark_completed, self, message)
 
-            # Bug 33-A (Wave 9-A): hallucinated tool-success guard.
-            # Если LLM «рапортует» об отправке/доставке, но в _active_tool_calls
-            # нет ни одного успешного write-tool — prepend warning + log.
-            # Conservative: не блокируем доставку, просто предупреждаем.
-            try:
-                from ..core.hallucination_guard import (
-                    HALLUCINATION_WARNING_PREFIX,
-                    detect_hallucinated_tool_success,
-                )
-                from ..openclaw_client import openclaw_client as _oc_for_halluc
-
-                _halluc_snapshot = list(getattr(_oc_for_halluc, "_active_tool_calls", []) or [])
-                if detect_hallucinated_tool_success(full_response, _halluc_snapshot):
-                    _user_id = (
-                        getattr(getattr(message, "from_user", None), "id", None)
-                        if message is not None
-                        else None
-                    )
-                    logger.warning(
-                        "llm_hallucinated_tool_success",
-                        chat_id=chat_id,
-                        user_id=_user_id,
-                        response_excerpt=(full_response or "")[:300],
-                        tool_calls_count=len(_halluc_snapshot),
-                    )
-                    full_response = HALLUCINATION_WARNING_PREFIX + full_response
-            except Exception as _halluc_exc:  # noqa: BLE001
-                logger.debug(
-                    "hallucination_guard_failed",
-                    chat_id=chat_id,
-                    error=str(_halluc_exc),
-                )
-
             delivery_result = await self._deliver_response_parts(
                 source_message=message,
                 temp_message=temp_msg,
@@ -2164,9 +2034,26 @@ class LLMFlowMixin:
             cap = float(getattr(config, "KRAB_RESPONSE_HARD_CAP_SEC", 60.0) or 0.0)
         return cap
 
-    async def _finish_ai_request_background(self, **kwargs: Any) -> None:
-        """Доводит long LLM/tool path до конца уже после release per-chat lock."""
-        from ..core.chat_ban_cache import BANNED_ERROR_CODES, chat_ban_cache
+    async def _run_llm_request_flow_with_auto_retry(
+        self,
+        *,
+        prefer_send_message_for_background: bool,
+        hard_cap_sec: float,
+        **kwargs: Any,
+    ) -> None:
+        """Wave 14-K: общая retry-обёртка для foreground и background путей.
+
+        Catches `LLMRetryableError` (e.g. codex-cli first-chunk hang from Wave 14-D),
+        shows the embedded user-facing notice (or default retry notice), waits
+        `OPENCLAW_AUTO_RETRY_DELAY_SEC`, and re-runs `_run_llm_request_flow` —
+        passing `retry_model_override` as `preferred_model_override` so the next
+        attempt skips the broken provider (e.g. force `openai/gpt-5.5` instead
+        of `codex-cli/gpt-5.5`).
+
+        Без этой обёртки `LLMRetryableError` пробрасывался к outer-handler
+        в `userbot_bridge._process_message`, который показывал generic
+        "🦀❌ Ошибка: codex-cli first-chunk hang" вместо silent fallback.
+        """
         from .llm_retry import (
             LLMRetryableError,
             build_final_error_notice,
@@ -2174,156 +2061,130 @@ class LLMFlowMixin:
         )
 
         chat_id = str(kwargs.get("chat_id") or "").strip()
-        incoming_item_result = kwargs.get("incoming_item_result")
         temp_msg = kwargs.get("temp_msg")
         message = kwargs.get("message")
         images_kw = kwargs.get("images") or []
-        _hard_cap_sec = self._resolve_response_hard_cap_sec(has_images=bool(images_kw))
 
-        # Конфигурация auto-retry
         max_retries = int(getattr(config, "OPENCLAW_AUTO_RETRY_COUNT", 1))
         retry_delay_sec = float(getattr(config, "OPENCLAW_AUTO_RETRY_DELAY_SEC", 2.0))
         last_retryable_error_text = ""
         retry_attempt = 0
+        # Wave 14-K: на каждой попытке можем поменять preferred_model
+        # (на retry — то, что вернул LLMRetryableError.retry_model_override).
+        current_model_override: str | None = kwargs.pop("preferred_model_override", None)
 
-        try:
-            while True:
+        while True:
+            try:
+                _flow_started_at = time.monotonic()
+                run_kwargs = dict(kwargs)
+                run_kwargs["prefer_send_message_for_background"] = (
+                    prefer_send_message_for_background
+                )
+                run_kwargs["preferred_model_override"] = current_model_override
+                if hard_cap_sec > 0:
+                    await asyncio.wait_for(
+                        self._run_llm_request_flow(**run_kwargs),
+                        timeout=hard_cap_sec,
+                    )
+                else:
+                    await self._run_llm_request_flow(**run_kwargs)
+                return  # успешно — выходим
+            except asyncio.TimeoutError:
+                _elapsed = time.monotonic() - _flow_started_at
+                logger.warning(
+                    "response_generation_hard_cap_exceeded",
+                    chat_id=chat_id,
+                    cap_sec=hard_cap_sec,
+                    elapsed_sec=round(_elapsed, 2),
+                    has_images=bool(images_kw),
+                )
+                fallback_text = (
+                    "⏱️ Ответ занимает слишком долго, попробуй ещё раз или упрости вопрос"
+                )
                 try:
-                    _flow_started_at = time.monotonic()
-                    # Bug 14 Wave 7-B: snapshot tool-calls list before flow start
-                    # для concurrent-safe определения "появились ли НОВЫЕ успешные
-                    # write-tools во время этого run". openclaw_client._active_tool_calls
-                    # очищается в начале chat_with_history; snapshot страхует от
-                    # leak'а из предыдущего вызова в edge cases.
-                    _tool_calls_snapshot_idx = 0
-                    try:
-                        from ..openclaw_client import openclaw_client as _oc_for_snap
-
-                        _tool_calls_snapshot_idx = len(
-                            getattr(_oc_for_snap, "_active_tool_calls", []) or []
-                        )
-                    except Exception:  # noqa: BLE001
-                        pass
-                    if _hard_cap_sec > 0:
-                        await asyncio.wait_for(
-                            self._run_llm_request_flow(
-                                **kwargs, prefer_send_message_for_background=True
-                            ),
-                            timeout=_hard_cap_sec,
-                        )
-                    else:
-                        await self._run_llm_request_flow(
-                            **kwargs, prefer_send_message_for_background=True
-                        )
-                    return  # успешно — выходим
-                except asyncio.TimeoutError:
-                    _elapsed = time.monotonic() - _flow_started_at
+                    if message is not None:
+                        await self._safe_reply_or_send_new(message, fallback_text)
+                    elif temp_msg is not None:
+                        await self._safe_edit(temp_msg, fallback_text)
+                except Exception:  # noqa: BLE001
+                    pass
+                return
+            except asyncio.CancelledError as cancel_err:
+                if LLM_STAGNATION_CANCEL_REASON in str(cancel_err):
                     logger.warning(
-                        "response_generation_hard_cap_exceeded",
+                        "llm_stagnation_cancel_handled",
                         chat_id=chat_id,
-                        cap_sec=_hard_cap_sec,
-                        elapsed_sec=round(_elapsed, 2),
-                        has_images=bool(images_kw),
+                        reason=LLM_STAGNATION_CANCEL_REASON,
                     )
-                    # Bug 14 Wave 7-B: subtask-aware fallback skip.
-                    # Если во время отрезанного flow хоть один write-tool успешно
-                    # завершился (send_message / forward / edit / etc.) — НЕ шлём
-                    # misleading «дольше обычного» message в чат пользователя:
-                    # task уже выполнен, лишний bot-spam только запутает.
-                    _subtask_succeeded = False
-                    _subtask_name: str | None = None
-                    try:
-                        from ..openclaw_client import openclaw_client as _oc_for_check
-
-                        _subtask_succeeded, _subtask_name = _detect_subtask_success_in_tool_calls(
-                            getattr(_oc_for_check, "_active_tool_calls", None),
-                            start_index=_tool_calls_snapshot_idx,
-                        )
-                    except Exception as _detect_exc:  # noqa: BLE001
-                        logger.debug("subtask_success_detect_failed", error=str(_detect_exc))
-                    if _subtask_succeeded:
-                        logger.warning(
-                            "response_hard_cap_subtask_already_completed",
-                            chat_id=chat_id,
-                            cap_sec=_hard_cap_sec,
-                            elapsed_sec=round(_elapsed, 2),
-                            successful_tool=_subtask_name,
-                        )
-                        return
-                    # Session 33 UX fix: cap может сработать даже когда tool-call
-                    # уже успешно выполнился (например, send_message в DM прошло, но
-                    # сборка финального ответа задержалась). Текст сообщения не
-                    # утверждает что задача провалилась — просто что reply задержался.
-                    fallback_text = (
-                        "⏱️ Ответ занимает дольше обычного. "
-                        "Если задача требовала отправить сообщение / вызвать tool — "
-                        "это могло уже выполниться. Иначе — попробуй ещё раз или упрости вопрос."
-                    )
-                    try:
-                        if message is not None:
-                            await self._safe_reply_or_send_new(message, fallback_text)
-                        elif temp_msg is not None:
-                            await self._safe_edit(temp_msg, fallback_text)
-                    except Exception:  # noqa: BLE001
-                        pass
                     return
-                except asyncio.CancelledError as cancel_err:
-                    # Стагнационный cancel через watchdog: сообщение пользователю уже
-                    # показано внутри _run_llm_request_flow. Тихо выходим, не ретраим.
-                    # Любой другой CancelledError пробрасываем наверх (как и раньше).
-                    if LLM_STAGNATION_CANCEL_REASON in str(cancel_err):
-                        logger.warning(
-                            "llm_stagnation_cancel_handled",
-                            chat_id=chat_id,
-                            reason=LLM_STAGNATION_CANCEL_REASON,
-                        )
-                        return
-                    raise
-                except LLMRetryableError as retry_err:
-                    last_retryable_error_text = retry_err.error_text
-                    if retry_attempt >= max_retries:
-                        # Все попытки исчерпаны — показываем финальную ошибку
-                        logger.warning(
-                            "llm_auto_retry_exhausted",
-                            chat_id=chat_id,
-                            attempts=retry_attempt,
-                            max_retries=max_retries,
-                            error_text=last_retryable_error_text[:200],
-                        )
-                        final_text = build_final_error_notice(
-                            original_error=last_retryable_error_text,
-                            attempts_made=retry_attempt,
-                            max_retries=max_retries,
-                        )
-                        try:
-                            if temp_msg is not None:
-                                await self._safe_edit(temp_msg, final_text)
-                        except Exception:  # noqa: BLE001
-                            pass
-                        return
-                    # Уведомляем о retry и делаем паузу
-                    retry_attempt += 1
-                    notice = build_retry_notice(
-                        attempt=retry_attempt,
-                        max_retries=max_retries,
-                        delay_sec=retry_delay_sec,
-                    )
-                    logger.info(
-                        "llm_auto_retry_attempt",
+                raise
+            except LLMRetryableError as retry_err:
+                last_retryable_error_text = retry_err.error_text
+                if retry_attempt >= max_retries:
+                    logger.warning(
+                        "llm_auto_retry_exhausted",
                         chat_id=chat_id,
-                        attempt=retry_attempt,
+                        attempts=retry_attempt,
                         max_retries=max_retries,
-                        delay_sec=retry_delay_sec,
                         error_text=last_retryable_error_text[:200],
+                    )
+                    final_text = build_final_error_notice(
+                        original_error=last_retryable_error_text,
+                        attempts_made=retry_attempt,
+                        max_retries=max_retries,
                     )
                     try:
                         if temp_msg is not None:
-                            temp_msg = await self._safe_edit(temp_msg, notice)
+                            await self._safe_edit(temp_msg, final_text)
                     except Exception:  # noqa: BLE001
                         pass
-                    await asyncio.sleep(retry_delay_sec)
-                    # Продолжаем loop — следующая попытка
-                    continue
+                    return
+                retry_attempt += 1
+                # Wave 14-K: используем embedded user_progress_notice (e.g.
+                # "⏱️ Codex медленно отвечает...") если задан — иначе стандартный.
+                notice = retry_err.user_progress_notice or build_retry_notice(
+                    attempt=retry_attempt,
+                    max_retries=max_retries,
+                    delay_sec=retry_delay_sec,
+                )
+                # Wave 14-K: model override для следующей попытки (force fallback).
+                if retry_err.retry_model_override:
+                    current_model_override = retry_err.retry_model_override
+                logger.info(
+                    "llm_auto_retry_attempt",
+                    chat_id=chat_id,
+                    attempt=retry_attempt,
+                    max_retries=max_retries,
+                    delay_sec=retry_delay_sec,
+                    error_text=last_retryable_error_text[:200],
+                    retry_model_override=current_model_override,
+                )
+                try:
+                    if temp_msg is not None:
+                        temp_msg = await self._safe_edit(temp_msg, notice)
+                        kwargs["temp_msg"] = temp_msg
+                except Exception:  # noqa: BLE001
+                    pass
+                await asyncio.sleep(retry_delay_sec)
+                continue
+
+    async def _finish_ai_request_background(self, **kwargs: Any) -> None:
+        """Доводит long LLM/tool path до конца уже после release per-chat lock."""
+        from ..core.chat_ban_cache import BANNED_ERROR_CODES, chat_ban_cache
+
+        chat_id = str(kwargs.get("chat_id") or "").strip()
+        incoming_item_result = kwargs.get("incoming_item_result")
+        temp_msg = kwargs.get("temp_msg")
+        images_kw = kwargs.get("images") or []
+        _hard_cap_sec = self._resolve_response_hard_cap_sec(has_images=bool(images_kw))
+
+        try:
+            await self._run_llm_request_flow_with_auto_retry(
+                prefer_send_message_for_background=True,
+                hard_cap_sec=_hard_cap_sec,
+                **kwargs,
+            )
+            return
 
         except Exception as exc:  # noqa: BLE001
             error_type_name = type(exc).__name__
