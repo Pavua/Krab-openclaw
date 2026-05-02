@@ -6058,7 +6058,14 @@ class KraabUserbot(
             # сообщения в Saved Messages — это главный use-case forward batching.
             _fwd_from, _fwd_name, _fwd_from_chat = _extract_forward_origin_parts(message)
             _is_fwd_message = bool(not is_command and any([_fwd_from, _fwd_name, _fwd_from_chat]))
-            if _is_fwd_message and message.text:
+            # Wave 14-A coalescing: forwarded photos / video тоже идут в пачку.
+            # Без этого каждое медиа-сообщение запускало independent AI call,
+            # и user видел 3+ ответов на один forward-batch (см. live bug 2026-05-02).
+            _fwd_has_photo = bool(
+                getattr(message, "photo", None) or getattr(message, "video", None)
+            )
+            _fwd_payload = bool(message.text or message.caption or _fwd_has_photo)
+            if _is_fwd_message and _fwd_payload:
                 from .core.message_batcher import PendingMessage, message_batcher  # noqa: PLC0415
 
                 # Извлекаем данные об оригинальном отправителе через единый compat-layer.
@@ -6091,8 +6098,9 @@ class KraabUserbot(
                     # pyrogram может вернуть datetime
                     _fwd_date = int(getattr(_fwd_date, "timestamp", lambda: _fwd_date)())
 
+                _pending_text = str(message.text or message.caption or "")
                 _pending_fwd = PendingMessage(
-                    text=str(message.text),
+                    text=_pending_text,
                     sender_id=str(getattr(user, "id", "") or ""),
                     ts=time.time(),
                     message_id=getattr(message, "id", None),
@@ -6100,7 +6108,17 @@ class KraabUserbot(
                     forward_sender_name=_fwd_display,
                     forward_sender_username=_fwd_uname,
                     forward_date=_fwd_date,
+                    is_photo=_fwd_has_photo,
+                    photo_caption=str(message.caption or ""),
                 )
+                if _fwd_has_photo:
+                    logger.info(
+                        "forward_batch_photo_coalesced",
+                        chat_id=chat_id,
+                        message_id=getattr(message, "id", None),
+                        sender=_fwd_display,
+                        has_caption=bool(message.caption),
+                    )
 
                 # Closure захватывает контекст для обработки пачки
                 _fwd_access_profile = access_profile

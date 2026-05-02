@@ -50,6 +50,10 @@ class PendingMessage:
     forward_sender_name: str = ""  # отображаемое имя отправителя оригинала
     forward_sender_username: str = ""  # @username если известен
     forward_date: Optional[int] = None  # unix timestamp оригинального сообщения
+    # Wave 14-A coalescing: photo / video — буферизуем как часть пачки,
+    # чтобы не плодить independent AI-калы по каждому медиа-сообщению.
+    is_photo: bool = False
+    photo_caption: str = ""
 
 
 @dataclass
@@ -181,7 +185,17 @@ class ForwardBatchBuffer:
                 prefix = f"[{sender_label}, {time_str}]"
             else:
                 prefix = f"[{sender_label}]"
-            lines_parts.append(f"{i}. {prefix}: {m.text}")
+            if m.is_photo:
+                # Wave 14-A: photo coalesced в пачку. Подаём как text-маркер,
+                # чтобы LLM упомянул факт прикреплённого медиа без отдельного
+                # multi-modal call. Caption сохраняем — он часто несёт содержание.
+                cap = (m.photo_caption or m.text or "").strip()
+                if cap:
+                    lines_parts.append(f"{i}. {prefix}: [фото] {cap}")
+                else:
+                    lines_parts.append(f"{i}. {prefix}: [фото без подписи]")
+            else:
+                lines_parts.append(f"{i}. {prefix}: {m.text}")
 
         body = FORWARD_BATCH_PROMPT_HEADER.format(
             senders_info=senders_info,
