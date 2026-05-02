@@ -1064,9 +1064,9 @@ redact (4/4 пойманы) → chunking (7 chunks) → FTS5 index → Model2Vec
 
 ## Session 33 closure (02.05.2026)
 
-**Delivered** (32 commits на ветке `claude/optimistic-ptolemy-e98bdf`, 68 ahead `origin/main`):
+**Delivered** (32 commits на ветке `fix/daily-review-20260421`, 68 ahead `origin/main`):
 
-- **Defense in depth (DB resilience)**: 6-pragma stack (journal_mode=WAL, busy_timeout=30000, synchronous=NORMAL, foreign_keys=ON, temp_store=MEMORY, mmap_size=30000000) + 4-method wrap (`update_state`, generic Pyrogram method wrap via Wave 14-J, malformed-DB retry, LLMRetryableError → fallback retry Wave 14-K).
+- **Defense in depth (DB resilience)**: 6-pragma stack (journal_mode=WAL, busy_timeout=30000, synchronous=FULL, wal_autocheckpoint=1000, temp_store=MEMORY, cache_size=64MB) + 4-method wrap (`update_state`, generic Pyrogram method wrap via Wave 14-J, malformed-DB retry, LLMRetryableError → fallback retry Wave 14-K).
 - **UX fixes**: устранение зависаний `codex-cli` (timeout-bound), фикс галлюцинаций model routing, исправление `chat→codex-cli` (должно быть gemini).
 - **Concurrency**: forward batch consolidation + semaphore для parallel pyrogram calls.
 - **Observability**: Sentry deduplication (frame-aware filter), benign-error markers расширены (`+CancelledError`, `+352 suppressed`).
