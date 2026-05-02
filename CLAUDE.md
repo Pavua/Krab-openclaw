@@ -259,6 +259,26 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - **Sessions 20+21+22**: 88 commits на ветке `fix/daily-review-20260421`; **Session 27+28**: +46 commits, branch total 130+ commits
 - **250+ API endpoints** (live: `/api/endpoints`), 105+ prod команд, **11212 тестов collected** (Session 28 final)
 
+### Session 33 highlights (02.05.2026 — corruption recurrence + auto-recovery architecture)
+
+После 12h после Session 32 close kraab.session снова corrupt (+199 events). Root cause: Session 32 patches **глушили** symptoms (locked/malformed swallow), но **broken pages persisted on disk**, и WAL TRUNCATE на graceful shutdown ironicially writes damaged data back.
+
+**3 commits**:
+- `9c2a6b7` — Symmetric malformed handling в `_safe_update_usernames` (был ASYMMETRIC: только locked); 6 tests
+- `629b003` — Architectural: `_main_session_integrity_preflight` в `_recreate_client` — auto-recovery flow + 10 tests + smoke verified
+- (manual) `sqlite3 .recover` восстановило 76 peers, 31 usernames, 1 sessions row (auth_key preserved)
+
+**Recovery flow**:
+1. Read-only `PRAGMA integrity_check`
+2. Если non-ok + corruption marker → backup `.bak-corrupt-{ts}` + sidecar cleanup
+3. `sqlite3 broken ".recover" | sqlite3 fresh` (subprocess, 30s timeout)
+4. Verify recovered integrity ok → atomic replace
+5. Idempotency: если recent backup < 1h → exit 78 (loud fail для launchd attention)
+
+**Symmetry restored**: swarm sessions имели integrity-gate с Session 32 (4df5410), main session — НЕ имел. Asymmetry (root cause) closed.
+
+**Live verified**: `main_session_integrity_ok` logged at startup, 91 peers (76 + 15 organic from server), no relogin required.
+
 ### Session 22 highlights
 - **Memory Phase 2 LIVE**: hybrid retrieval (FTS5 + vec_chunks RRF + MMR diversity), recall@5 +37.67 verified, 10× MMR speedup через vec-cache
 - **Cron pipeline FIXED** end-to-end (был silent no-op): `cron_native_scheduler` bind LLM-processing sender + numeric chat_id + 90s timeout + `adapter.route_query()` (вместо несуществующего `.stream()`) + context-augmented prompts (sub-30s exec, без tool-calls)

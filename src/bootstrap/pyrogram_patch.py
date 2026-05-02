@@ -27,7 +27,7 @@ Root causes (множественные):
 - Полностью заменяем ``FileStorage.open()`` собственной реализацией вместо
   оборачивания оригинала.  Эта реализация:
   a) Открывает соединение с timeout=10 (вместо timeout=1 в pyrofork).
-  b) Сразу применяет WAL + busy_timeout + synchronous=NORMAL PRAGMA.
+  b) Сразу применяет WAL + busy_timeout + synchronous=FULL + wal_autocheckpoint PRAGMA.
   c) Вызывает create() или update() — без завершающего VACUUM.
   d) Пропускает опасный ``VACUUM`` целиком: он требует exclusive lock и
      несовместим с WAL sidecar-файлами от предыдущего SIGKILL'нутого процесса.
@@ -58,7 +58,16 @@ def _execute_pragmas(conn) -> None:
     Порядок важен:
     1. busy_timeout ПЕРВЫМ — чтобы сами последующие PRAGMA не падали на lock.
     2. journal_mode=WAL — persists в заголовке файла.
-    3. synchronous=NORMAL — безопасно для WAL, даёт ~2x throughput на writes.
+    3. synchronous=FULL — atomic write guarantee, защищает от torn pages при
+       macOS sleep / OS-level write reorder. См. Session 33 forensic report:
+       12+ часов uptime при synchronous=NORMAL + WAL + macOS sleep cycle =
+       textbook risk window для btreeInitPage corruption (произошло утром
+       02.05). Tradeoff: ~2× slower writes на peer cache (rare path,
+       <50ms/write, invisible). Альтернатива была NORMAL — отвергнута после
+       physical page damage на pages 5/11/12/14/16/17/18/19/20/21/22/23.
+    4. wal_autocheckpoint=1000 — auto-checkpoint после 1000 WAL frames
+       (~4MB). Без этого WAL рос unbounded между restarts (12h uptime → MB+
+       WAL → расширенное окно torn-page risk).
 
     Примечание: ``auto_vacuum=INCREMENTAL`` намеренно НЕ применяется здесь.
     SQLite позволяет изменить auto_vacuum только до первой записи на новой базе,
@@ -70,7 +79,8 @@ def _execute_pragmas(conn) -> None:
     for pragma in (
         "PRAGMA busy_timeout=5000",
         "PRAGMA journal_mode=WAL",
-        "PRAGMA synchronous=NORMAL",
+        "PRAGMA synchronous=FULL",
+        "PRAGMA wal_autocheckpoint=1000",
     ):
         try:
             conn.execute(pragma)
