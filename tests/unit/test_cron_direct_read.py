@@ -126,7 +126,10 @@ _NATIVE_JOBS: list[dict[str, Any]] = [
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # Python 3.13: get_event_loop() выкидывает RuntimeError если loop'а нет.
+    # asyncio.run() создаёт фresh loop сам — это правильный pattern для
+    # синхронной обёртки в тестах.
+    return asyncio.run(coro)
 
 
 # ---------------------------------------------------------------------------
