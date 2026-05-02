@@ -3249,22 +3249,44 @@ class KraabUserbot(
         for team, acct in accounts.items():
             session_name = acct.get("session_name", f"swarm_{team}")
             try:
-                # Очистка stale SQLite lock (database is locked)
+                # Corruption-aware preflight: WAL/journal удаляем ТОЛЬКО если
+                # integrity_check провален или DB не открывается. Безусловная
+                # чистка опасна — uncheckpointed peer-cache writes из предыдущего
+                # запуска теряются (Session 32 P1 backlog).
                 _sess_path = Path(self._session_workdir) / f"{session_name}.session"
                 if _sess_path.exists():
+                    from .bootstrap.db_corruption_guard import (
+                        integrity_check as _swarm_integrity_check,
+                    )
+
+                    _ok, _detail = _swarm_integrity_check(_sess_path)
                     _journal = _sess_path.with_suffix(".session-journal")
                     _wal = _sess_path.with_suffix(".session-wal")
-                    for _lockf in (_journal, _wal):
-                        if _lockf.exists():
-                            try:
-                                _lockf.unlink()
-                                logger.info(
-                                    "swarm_stale_lock_cleaned",
-                                    team=team,
-                                    file=str(_lockf),
-                                )
-                            except OSError:
-                                pass
+                    if _ok:
+                        logger.info(
+                            "swarm_session_integrity_ok",
+                            team=team,
+                            file=str(_sess_path),
+                            detail=_detail,
+                        )
+                    else:
+                        logger.warning(
+                            "swarm_session_integrity_failed",
+                            team=team,
+                            file=str(_sess_path),
+                            detail=_detail,
+                        )
+                        for _lockf in (_journal, _wal):
+                            if _lockf.exists():
+                                try:
+                                    _lockf.unlink()
+                                    logger.info(
+                                        "swarm_stale_lock_cleaned",
+                                        team=team,
+                                        file=str(_lockf),
+                                    )
+                                except OSError:
+                                    pass
                 cl = Client(
                     session_name,
                     api_id=config.TELEGRAM_API_ID,
