@@ -224,6 +224,11 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "chatpolicy",  # policy_commands.handle_chatpolicy (Smart Routing 26)
         "cmdblock",  # admin_commands.handle_cmdblock
         "cmdunblock",  # admin_commands.handle_cmdunblock
+        # Session 32 audit-3: handlers existed but no bridge dispatcher → wired now
+        "filter",  # diagnostic_commands.handle_filter (Chado §3 P2 — per-chat filter mode)
+        "mem",  # memory_commands.handle_mem (Memory Layer beta — HybridRetriever)
+        "setpanelauth",  # admin_commands.handle_setpanelauth (owner-only bcrypt panel auth)
+        "top",  # content_commands.handle_top (chat activity leaderboard)
         "members",
         "log",
         "tts",
@@ -286,6 +291,8 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "bench",
         # !diag — полный runtime snapshot для владельца
         "diag",
+        # Session 32 audit-3: bcrypt-пароль для панели — только владелец
+        "setpanelauth",
     }
 )
 

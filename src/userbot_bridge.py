@@ -105,6 +105,7 @@ from .handlers import (
     handle_eval,
     handle_explain,
     handle_export,
+    handle_filter,
     handle_fix,
     handle_forget,
     handle_fwd,
@@ -118,6 +119,7 @@ from .handlers import (
     handle_loglevel,
     handle_ls,
     handle_macos,
+    handle_mem,
     handle_memo,
     handle_memory,
     handle_model,
@@ -153,6 +155,7 @@ from .handlers import (
     handle_screenshot,
     handle_search,
     handle_set,
+    handle_setpanelauth,
     handle_shop,
     handle_silence,
     handle_stats,
@@ -163,6 +166,7 @@ from .handlers import (
     handle_sysinfo,
     handle_timer,
     handle_todo,
+    handle_top,
     handle_tor,
     handle_translate,
     handle_translator,
@@ -808,6 +812,39 @@ class KraabUserbot(
         )
         async def wrap_blocklist(c, m):
             await run_cmd(handle_blocklist, m)
+
+        # Session 32 audit-3: !filter — алиас !listen для per-chat filter mode (Chado §3 P2)
+        @self.client.on_message(
+            filters.command("filter", prefixes=prefixes) & _make_command_filter("filter"),
+            group=-1,
+        )
+        async def wrap_filter(c, m):
+            await run_cmd(handle_filter, m)
+
+        # Session 32 audit-3: !mem — быстрый доступ к Memory Layer (HybridRetriever)
+        @self.client.on_message(
+            filters.command("mem", prefixes=prefixes) & _make_command_filter("mem"),
+            group=-1,
+        )
+        async def wrap_mem(c, m):
+            await run_cmd(handle_mem, m)
+
+        # Session 32 audit-3: !setpanelauth — bcrypt-пароль для Krab Panel (owner-only)
+        @self.client.on_message(
+            filters.command("setpanelauth", prefixes=prefixes)
+            & _make_command_filter("setpanelauth"),
+            group=-1,
+        )
+        async def wrap_setpanelauth(c, m):
+            await run_cmd(handle_setpanelauth, m)
+
+        # Session 32 audit-3: !top — лидерборд активности чата
+        @self.client.on_message(
+            filters.command("top", prefixes=prefixes) & _make_command_filter("top"),
+            group=-1,
+        )
+        async def wrap_top(c, m):
+            await run_cmd(handle_top, m)
 
         @self.client.on_message(
             filters.command("translator", prefixes=prefixes) & _make_command_filter("translator"),
