@@ -1,7 +1,10 @@
 """Тесты для CronNativeScheduler — selection criteria в _tick().
 
-Refactor: trigger только когда due_ts фактически due (due_ts ≤ now),
-без early-pick на _POLL_INTERVAL вперёд.
+Семантика scheduler (formalized Wave 14-G session-33): **look-ahead**.
+Trigger когда ``due_ts <= now + _POLL_INTERVAL`` (до 30s раньше wall-clock
+due-time). Это by-design — ``cron_native_store.next_due()`` всегда возвращает
+будущее время (>= now+60), strict-режим ``due_ts <= now`` никогда бы не fired
+(5-day regression в Session 31, восстановлено c510347).
 """
 
 from __future__ import annotations
@@ -138,20 +141,19 @@ async def test_tick_cooldown_prevents_double_fire() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    reason=(
-        "Session 33: scheduler implementation has 30s look-ahead window "
-        "(due_ts <= now + _POLL_INTERVAL), but test expects strict due_ts <= now. "
-        "Pre-existing contradiction между docstring и кодом. Wave 12 backlog: "
-        "решить — strict mode (early picks bug) или look-ahead (test wrong)."
-    ),
-    strict=False,
-)
-async def test_tick_calendar_boundary_no_early_pick() -> None:
-    """Edge case: cron на Monday 00:00, текущее время Sunday 23:59:30.
+async def test_tick_look_ahead_window_boundary() -> None:
+    """Wave 14-G: formalize look-ahead boundary semantics.
 
-    due_ts = now + 30s — НЕ должен trigger (раньше early-pick на _POLL_INTERVAL=30
-    мог сработать преждевременно с пограничным значением).
+    Scheduler triggers когда ``due_ts <= now + _POLL_INTERVAL`` (30s).
+    Verifies:
+    * due_ts = now + 30 (== _POLL_INTERVAL) → fires (внутри окна, граничный
+      случай ``<=``).
+    * due_ts = now + 31 (> _POLL_INTERVAL) → не fires (за окном).
+
+    Look-ahead by-design: ``cron_native_store.next_due()`` всегда возвращает
+    >= now+60, strict ``<= now`` не fired бы никогда (см. commit c510347).
+    Production impact: digest/notification jobs срабатывают до 30s раньше
+    wall-clock — допустимо для не-realtime tasks.
     """
     sched = CronNativeScheduler()
     job = _make_job()
@@ -161,6 +163,7 @@ async def test_tick_calendar_boundary_no_early_pick() -> None:
     async def fake_run(j: dict) -> None:
         fired.append(str(j.get("id")))
 
+    # Case A: due_ts = now + 30 — на границе окна (_POLL_INTERVAL), должен fire.
     with (
         patch.object(scheduler_module.cron_native_store, "list_jobs", return_value=[job]),
         patch.object(scheduler_module.cron_native_store, "next_due", return_value=now + 30),
@@ -169,4 +172,23 @@ async def test_tick_calendar_boundary_no_early_pick() -> None:
         await sched._tick()
         await asyncio.sleep(0)
 
-    assert fired == [], "Не должен делать early-pick на calendar boundary"
+    assert fired == ["j1"], (
+        "due_ts == now + _POLL_INTERVAL должен trigger (look-ahead окно inclusive)"
+    )
+
+    # Case B: due_ts = now + 31 — за границей окна, НЕ должен fire.
+    sched2 = CronNativeScheduler()
+    fired2: list[str] = []
+
+    async def fake_run2(j: dict) -> None:
+        fired2.append(str(j.get("id")))
+
+    with (
+        patch.object(scheduler_module.cron_native_store, "list_jobs", return_value=[job]),
+        patch.object(scheduler_module.cron_native_store, "next_due", return_value=now + 31),
+        patch.object(sched2, "_run_job", side_effect=fake_run2),
+    ):
+        await sched2._tick()
+        await asyncio.sleep(0)
+
+    assert fired2 == [], "due_ts > now + _POLL_INTERVAL должен НЕ trigger (за пределами look-ahead)"
