@@ -3,7 +3,10 @@
 Pyrofork SQLite session hardening — WAL + busy_timeout + VACUUM suppression.
 
 Фикс Sentry PYTHON-FASTAPI-5A/5B/5C: "OperationalError: database is locked" в
-``pyrogram.storage.sqlite_storage.update_usernames``. При 4+ параллельных
+``pyrogram.storage.sqlite_storage.update_usernames`` и ``update_peers``. Также
+оборачиваем ``update_peers`` в retry-layer, который глотает "database is
+locked" / "database table is locked" / "database disk image is malformed" —
+последняя наблюдалась 25 раз в логах перед Session 32 restart. При 4+ параллельных
 pyrofork-клиентах (main yung_nagato + traders/coders/analysts/creative) SQLite
 roll-back journal блокирует пишущих соседей, даже если файлы .session разные —
 пишущие соседи делят одинаковую схему конкурентных транзакций.
@@ -78,7 +81,8 @@ def _execute_pragmas(conn) -> None:
 
 def apply_pyrogram_sqlite_hardening() -> bool:
     """
-    Monkey-patch ``FileStorage.open`` и ``SQLiteStorage.update_usernames``.
+    Monkey-patch ``FileStorage.open`` и ``SQLiteStorage.update_usernames`` /
+    ``update_peers`` (оба обёрнуты идентичным retry-layer'ом).
 
     Ключевое отличие от предыдущей версии: мы полностью заменяем open() вместо
     оборачивания оригинала, чтобы гарантировать порядок операций:
@@ -145,6 +149,33 @@ def apply_pyrogram_sqlite_hardening() -> bool:
             raise
 
     _ss.SQLiteStorage.update_usernames = _safe_update_usernames
+
+    # Тот же retry-layer для update_peers: эта же storage-процедура, вызывается
+    # чаще, и в логах перед Session 32 restart получали "database disk image is
+    # malformed" 25 раз подряд. Без graceful retry один corrupted call валит
+    # сессию. Глотаем locked + malformed (логируем); прочие — пробрасываем.
+    _orig_update_peers = _ss.SQLiteStorage.update_peers
+
+    async def _safe_update_peers(self, peers):
+        try:
+            await _orig_update_peers(self, peers)
+        except Exception as exc:  # noqa: BLE001 — sqlite3.OperationalError/DatabaseError
+            msg = str(exc).lower()
+            if "database is locked" in msg or "database table is locked" in msg:
+                log.warning(
+                    "pyrogram_sqlite_locked",
+                    extra={"op": "update_peers", "count": len(peers or [])},
+                )
+                return None
+            if "database disk image is malformed" in msg:
+                log.warning(
+                    "pyrogram_sqlite_malformed_swallowed",
+                    extra={"op": "update_peers", "count": len(peers or [])},
+                )
+                return None
+            raise
+
+    _ss.SQLiteStorage.update_peers = _safe_update_peers
 
     _PATCH_APPLIED = True
     log.info("pyrogram_sqlite_hardening_applied")
