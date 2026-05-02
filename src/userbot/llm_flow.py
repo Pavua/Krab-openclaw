@@ -1775,6 +1775,39 @@ class LLMFlowMixin:
             else:
                 await _safe_react(mark_completed, self, message)
 
+            # Bug 33-A (Wave 9-A): hallucinated tool-success guard.
+            # Если LLM «рапортует» об отправке/доставке, но в _active_tool_calls
+            # нет ни одного успешного write-tool — prepend warning + log.
+            # Conservative: не блокируем доставку, просто предупреждаем.
+            try:
+                from ..core.hallucination_guard import (
+                    HALLUCINATION_WARNING_PREFIX,
+                    detect_hallucinated_tool_success,
+                )
+                from ..openclaw_client import openclaw_client as _oc_for_halluc
+
+                _halluc_snapshot = list(getattr(_oc_for_halluc, "_active_tool_calls", []) or [])
+                if detect_hallucinated_tool_success(full_response, _halluc_snapshot):
+                    _user_id = (
+                        getattr(getattr(message, "from_user", None), "id", None)
+                        if message is not None
+                        else None
+                    )
+                    logger.warning(
+                        "llm_hallucinated_tool_success",
+                        chat_id=chat_id,
+                        user_id=_user_id,
+                        response_excerpt=(full_response or "")[:300],
+                        tool_calls_count=len(_halluc_snapshot),
+                    )
+                    full_response = HALLUCINATION_WARNING_PREFIX + full_response
+            except Exception as _halluc_exc:  # noqa: BLE001
+                logger.debug(
+                    "hallucination_guard_failed",
+                    chat_id=chat_id,
+                    error=str(_halluc_exc),
+                )
+
             delivery_result = await self._deliver_response_parts(
                 source_message=message,
                 temp_message=temp_msg,
