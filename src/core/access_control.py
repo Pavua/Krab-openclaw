@@ -214,6 +214,11 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "blocked",
         "invite",
         "contacts",
+        # Tor commands (Session 31 introduced handler но забыли в реестр):
+        # !tor status / ip / newid / fetch <url>. Owner-only.
+        "tor",
+        # Wave 14-I (Session 33): SkillCurator dry-run analyzer (read-only).
+        "curator",
         "members",
         "log",
         "tts",
@@ -276,6 +281,8 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "bench",
         # !diag — полный runtime snapshot для владельца
         "diag",
+        # Wave 14-I: !curator — read-only анализатор, всё равно owner-only
+        "curator",
     }
 )
 

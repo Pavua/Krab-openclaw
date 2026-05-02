@@ -95,6 +95,7 @@ from .handlers import (
     handle_context,
     handle_costs,
     handle_cronstatus,
+    handle_curator,
     handle_debug,
     handle_del,
     handle_diag,
@@ -900,6 +901,13 @@ class KraabUserbot(
         )
         async def wrap_costs(c, m):
             await run_cmd(handle_costs, m)
+
+        @self.client.on_message(
+            filters.command("curator", prefixes=prefixes) & _make_command_filter("curator"),
+            group=-1,
+        )
+        async def wrap_curator(c, m):
+            await run_cmd(handle_curator, m)
 
         @self.client.on_message(
             filters.command("budget", prefixes=prefixes) & _make_command_filter("budget"), group=-1
