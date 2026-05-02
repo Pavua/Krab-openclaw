@@ -46,10 +46,15 @@ class Config:
     # LM Studio (trailing slash stripped for API calls)
     LM_STUDIO_URL: str = os.getenv("LM_STUDIO_URL", "http://192.168.0.171:1234").rstrip("/")
     # Каноничный токен локального LM Studio API.
+    # `LM_API_TOKEN` — короткое имя из официальной ошибки LM Studio (session 32).
     # `LM_STUDIO_AUTH_TOKEN` оставляем как legacy alias, чтобы не ломать старые env.
+    LM_API_TOKEN: str = os.getenv("LM_API_TOKEN", "").strip()
     LM_STUDIO_API_KEY: str = os.getenv(
-        "LM_STUDIO_API_KEY",
-        os.getenv("LM_STUDIO_AUTH_TOKEN", ""),
+        "LM_API_TOKEN",
+        os.getenv(
+            "LM_STUDIO_API_KEY",
+            os.getenv("LM_STUDIO_AUTH_TOKEN", ""),
+        ),
     ).strip()
 
     # Gemini (fallback): free key first, paid key as opt-in
@@ -426,6 +431,33 @@ class Config:
     KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC: float = float(
         os.getenv("KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC", "180")
     )
+    # Bug 14 (Session 32): outer hard cap на весь _run_llm_request_flow pipeline.
+    # Защита от «бесконечной 'печатает...'» — даже если внутренние таймеры/streaming
+    # зависают в любой стадии (smart routing classifier, tool exec loop, retries).
+    # 60s default (текстовый чат). codex-cli model — исключение: получает
+    # KRAB_LLM_WALL_CLOCK_CAP_SEC (180s) для совместимости с медленными CLI subprocess'ами.
+    # 0 = отключено.
+    KRAB_RESPONSE_HARD_CAP_SEC: float = float(os.getenv("KRAB_RESPONSE_HARD_CAP_SEC", "60"))
+    # Wave 14-D (Session 33): codex-cli first-chunk hang detection.
+    # Если codex-cli не отдал первый chunk за этот timeout (default 45s), Краб
+    # отменяет запрос и поднимает LLMRetryableError → auto-fallback (gateway
+    # выберет другую модель). Намного быстрее чем ждать KRAB_LLM_WALL_CLOCK_CAP_SEC=180s.
+    # 0 = отключено (legacy behaviour: ждём wall-clock cap).
+    KRAB_CODEX_CLI_FIRST_CHUNK_TIMEOUT_SEC: float = float(
+        os.getenv("KRAB_CODEX_CLI_FIRST_CHUNK_TIMEOUT_SEC", "45")
+    )
+    # 2+ timeout codex-cli за этот window → отметить unhealthy.
+    KRAB_CODEX_CLI_FAILURES_THRESHOLD: int = int(
+        os.getenv("KRAB_CODEX_CLI_FAILURES_THRESHOLD", "2")
+    )
+    # Сколько секунд скипать codex-cli после трешхолда.
+    KRAB_CODEX_CLI_SKIP_DURATION_SEC: float = float(
+        os.getenv("KRAB_CODEX_CLI_SKIP_DURATION_SEC", "60")
+    )
+    # Окно для счётчика failures (секунды).
+    KRAB_CODEX_CLI_FAILURE_WINDOW_SEC: float = float(
+        os.getenv("KRAB_CODEX_CLI_FAILURE_WINDOW_SEC", "300")
+    )
     # Streaming UI: показывать reasoning (chain-of-thought) в сообщении.
     TELEGRAM_STREAM_SHOW_REASONING: bool = os.getenv(
         "TELEGRAM_STREAM_SHOW_REASONING", "0"
@@ -667,6 +699,8 @@ class Config:
                     cls.KRAB_LLM_WALL_CLOCK_CAP_SEC = float(value)
                 elif key == "KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC":
                     cls.KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC = float(value)
+                elif key == "KRAB_RESPONSE_HARD_CAP_SEC":
+                    cls.KRAB_RESPONSE_HARD_CAP_SEC = float(value)
                 elif key == "LM_STUDIO_NATIVE_REASONING_MODE":
                     cls.LM_STUDIO_NATIVE_REASONING_MODE = value.strip().lower()
                 elif key == "LM_STUDIO_NATIVE_AUTO_CONTINUE_MAX_ROUNDS":

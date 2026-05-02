@@ -84,19 +84,19 @@ def test_stream_timeouts_minimum_floors(monkeypatch) -> None:
 
 
 def test_buffered_response_timeout_text_minimum() -> None:
-    """Для текста минимальный hard timeout >= 900 сек."""
+    """Для текста минимальный hard timeout >= 180 сек (Session 31 cap)."""
     timeout = _resolve_openclaw_buffered_response_timeout(
         has_photo=False, first_chunk_timeout_sec=120.0
     )
-    assert timeout >= 900.0
+    assert timeout >= 180.0
 
 
 def test_buffered_response_timeout_photo_minimum() -> None:
-    """Для фото минимальный hard timeout >= 1020 сек."""
+    """Для фото минимальный hard timeout >= 300 сек (Session 31 cap)."""
     timeout = _resolve_openclaw_buffered_response_timeout(
         has_photo=True, first_chunk_timeout_sec=120.0
     )
-    assert timeout >= 1020.0
+    assert timeout >= 300.0
 
 
 def test_buffered_response_timeout_respects_first_chunk_offset() -> None:

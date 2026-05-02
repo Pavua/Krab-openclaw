@@ -214,6 +214,26 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "blocked",
         "invite",
         "contacts",
+        # Tor commands (Session 31 introduced handler но забыли в реестр):
+        # !tor status / ip / newid / fetch <url>. Owner-only.
+        "tor",
+        # Session 32 audit: handlers с bridge-dispatcher но отсутствовали в
+        # frozenset → silent reject. Все owner-only.
+        # NB: имена соответствуют Pyrogram filters.command(...) trigger,
+        # не имени handler-функции (handle_cmdblock триггерится на !block).
+        "block",  # → handle_cmdblock (filters.command("block"))
+        "unblock",  # → handle_cmdunblock (filters.command("unblock"))
+        "blocklist",  # admin_commands.handle_blocklist
+        "chatpolicy",  # policy_commands.handle_chatpolicy (Smart Routing 26)
+        # Session 32 Wave 4: !chado wired (cron_chado_sync.py + claude routine active)
+        "chado",  # diagnostic_commands.handle_chado (status/ping/digest, Chado §9 P2)
+        # Session 32 audit-3: handlers existed but no bridge dispatcher → wired now
+        "filter",  # diagnostic_commands.handle_filter (Chado §3 P2 — per-chat filter mode)
+        "mem",  # memory_commands.handle_mem (Memory Layer beta — HybridRetriever)
+        "setpanelauth",  # admin_commands.handle_setpanelauth (owner-only bcrypt panel auth)
+        "top",  # content_commands.handle_top (chat activity leaderboard)
+        # Wave 14-I (Session 33): SkillCurator dry-run analyzer (read-only).
+        "curator",
         "members",
         "log",
         "tts",
@@ -276,6 +296,10 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "bench",
         # !diag — полный runtime snapshot для владельца
         "diag",
+        # Session 32 audit-3: bcrypt-пароль для панели — только владелец
+        "setpanelauth",
+        # Wave 14-I: !curator — read-only анализатор, всё равно owner-only
+        "curator",
     }
 )
 

@@ -356,6 +356,23 @@ def open_archive(
     # Закрывает Session 24 finding: db_lock_monitor pragma_baseline показал
     # busy_timeout=0 — ноль defensive поведения при race conditions.
     conn.execute("PRAGMA busy_timeout = 30000;")
+
+    # Session 32: load sqlite-vec extension чтобы vec_chunks virtual table
+    # был доступен. Без этого `SELECT * FROM vec_chunks` падает с
+    # "no such module: vec0" и Memory Phase 2 recluster становится no-op.
+    # Best-effort: если sqlite_vec не установлен — продолжаем без extension
+    # (read будет работать только для нативных таблиц, vec_chunks fail).
+    try:
+        import sqlite_vec  # noqa: PLC0415
+
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+    except ImportError:
+        pass
+    except Exception:  # noqa: BLE001 — load failure не должен ломать open
+        pass
+
     return conn
 
 

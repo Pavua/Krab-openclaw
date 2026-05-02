@@ -76,10 +76,21 @@ class CronNativeScheduler:
     async def _tick(self) -> None:
         """Один цикл: проверяет jobs и запускает просроченные.
 
-        Triggers fire ровно когда due_ts фактически наступил (due_ts ≤ now),
-        без early-pick на _POLL_INTERVAL вперёд. Это устраняет calendar-boundary
-        drift (e.g. Sunday 23:59:30 → Monday 00:00 cron — early pick раньше
-        мог триггерить job до полуночи).
+        Семантика **look-ahead** (by-design, formalized Wave 14-G session-33):
+        triggers fire когда due_ts попадает в окно ``now + _POLL_INTERVAL``
+        (т.е. до 30 секунд раньше wall-clock due-time).
+
+        Почему look-ahead, а не strict ``due_ts <= now``:
+
+        1. ``cron_native_store.next_due()`` всегда округляет вверх к следующей
+           минуте (base ``+60s`` от now). При ``poll_interval=30s`` strict-режим
+           **никогда** не сработал бы — это привело к 5-дневному silent-регрессу
+           (commit 9e67c72 → восстановлено в c510347).
+        2. Krab cron используется для дайджестов/уведомлений/cleanup-задач, где
+           ±30s неточность wall-clock допустима (Weekly Digest at Sun 09:00 →
+           early at Sun 08:59:30 не критично).
+        3. Look-ahead устойчивее к poll-skip из-за рестарта (нет miss-tick).
+        4. Cooldown ``(now - last) > 50s`` защищает от двойного fire.
         """
         now = time.time()
         jobs = cron_native_store.list_jobs()

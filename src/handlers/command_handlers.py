@@ -570,6 +570,9 @@ from .commands.diagnostic_commands import (  # noqa: E402, F401  # Phase 2 Wave 
     handle_typing,
     safe_eval,
 )
+from .commands.curator_commands import (  # noqa: E402, F401  # Wave 14-I Step 1/4 (Session 33)
+    handle_curator,
+)
 from .commands.crypto_commands import (  # noqa: E402, F401  # Phase 2 Wave 19 (Session 28)
     _derive_key,
     _xor_crypt,

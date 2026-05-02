@@ -252,7 +252,7 @@ class MCPClientManager:
         # tor_fetch: анонимный HTTP запрос через Tor (если включён)
         from . import config as _cfg
 
-        if getattr(_cfg, "TOR_ENABLED", False):
+        if getattr(_cfg.config, "TOR_ENABLED", False):
             manifest.append(
                 {
                     "type": "function",

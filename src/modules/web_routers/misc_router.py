@@ -381,6 +381,8 @@ def build_misc_router(ctx: RouterContext) -> APIRouter:
             await userbot.client.send_message(chat_id, text)
             return {"ok": True, "chat_id": chat_id}
         except Exception as exc:
+            import sqlite3
+
             from pyrogram.errors import PeerIdInvalid
 
             if isinstance(exc, PeerIdInvalid):
@@ -392,6 +394,19 @@ def build_misc_router(ctx: RouterContext) -> APIRouter:
                         "detail": f"Unknown chat_id: {chat_id}",
                     },
                 ) from exc
+            # Wave 14-F: pyrogram peer-storage SQLite ошибки → 503 с
+            # Retry-After. Это transient (lock/corruption) — не runtime bug.
+            # Eliminates `PYTHON-FASTAPI-79` Sentry events.
+            if isinstance(exc, (sqlite3.DatabaseError, sqlite3.OperationalError)):
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "ok": False,
+                        "error": "peer_storage_unavailable",
+                        "detail": str(exc),
+                    },
+                    headers={"Retry-After": "5"},
+                )
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return router

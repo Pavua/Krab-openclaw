@@ -729,6 +729,131 @@ class InboxService:
             "target_status": normalized_target,
         }
 
+    #: Allowlist of `kind` values безопасных для автоматического `acked` → `done`.
+    #:
+    #: ВАЖНО: НЕ добавлять сюда:
+    #:   * ``approval_request`` — требует явного human review;
+    #:   * ``reminder`` — user-scheduled, sweep'ать = data loss;
+    #:   * ``owner_task`` / ``owner_mention`` — требуют owner attention.
+    #:
+    #: ``proactive_action`` (Wave 8-A) и ``owner_request`` (Wave 9-C) добавлены
+    #: потому что оба создаются background pipeline-ами как owner-visible trace,
+    #: и ``acked`` для них означает "background processing started", а не
+    #: "owner ack pending".
+    _AUTO_SWEEP_KINDS: frozenset[str] = frozenset({"proactive_action", "owner_request"})
+
+    def sweep_acked_proactive_actions(
+        self,
+        *,
+        kind: str | None = None,
+        age_threshold_minutes: int = 60,
+        actor: str = "system-janitor",
+        note: str = "auto_transition_acked_to_done",
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Janitor: переводит auto-sweep item-ы из ``acked`` → ``done``,
+        если они старше порога.
+
+        Зачем: cron-handler / background processing / LLM workflows создают
+        ``acked`` items как owner-visible trace, но обратного transition к
+        ``done`` часто нет — item висит как stale_processing неделями
+        (см. Wave 7-C / Wave 8-A / Wave 8-B).
+        Этот sweep — safety net, идемпотентен (повторный вызов не делает ничего).
+
+        Args:
+            kind: Опциональный фильтр по конкретному ``kind``. Если ``None``
+                (default), sweep пройдёт по всему ``_AUTO_SWEEP_KINDS``
+                allowlist (``proactive_action`` + ``owner_request``).
+                Если задан явно — должен быть в allowlist, иначе будет
+                использован allowlist целиком (защита от ошибок вызова с
+                ``approval_request`` / ``reminder``).
+            age_threshold_minutes: Минимальный возраст (по `last_action_at_utc`
+                или `updated_at_utc`) для авто-перехода. По умолчанию 60 мин —
+                достаточно, чтобы дать активной обработке завершиться.
+            actor: Записывается в workflow events для аудита.
+            note: Краткое пояснение в workflow event.
+            dry_run: Если True — возвращает кандидатов без изменений.
+
+        Returns:
+            ``{"matched": N, "swept": M, "items": [...], "dry_run": bool}``
+        """
+        normalized_kind = str(kind or "").strip().lower() if kind is not None else ""
+        if normalized_kind and normalized_kind in self._AUTO_SWEEP_KINDS:
+            sweep_kinds: frozenset[str] = frozenset({normalized_kind})
+        else:
+            # Default path или попытка sweep'нуть запрещённый kind → весь allowlist.
+            sweep_kinds = self._AUTO_SWEEP_KINDS
+        threshold_minutes = max(0, int(age_threshold_minutes or 0))
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=threshold_minutes)
+
+        items = self._load_items()
+        matched: list[InboxItem] = []
+        for item in items:
+            if item.status != "acked":
+                continue
+            if item.kind not in sweep_kinds:
+                continue
+            activity_at = self._parse_item_activity_at(item)
+            if activity_at is None:
+                continue
+            if activity_at > cutoff:
+                continue
+            matched.append(item)
+
+        if dry_run:
+            return {
+                "matched": len(matched),
+                "swept": 0,
+                "items": [item.to_dict() for item in matched],
+                "dry_run": True,
+            }
+
+        if not matched:
+            return {"matched": 0, "swept": 0, "items": [], "dry_run": False}
+
+        normalized_actor = str(actor or "system-janitor").strip().lower() or "system-janitor"
+        normalized_note = str(note or "").strip() or "auto_transition_acked_to_done"
+        now_iso = _now_utc_iso()
+        matched_ids = {item.item_id for item in matched}
+        swept_payloads: list[dict[str, Any]] = []
+        for item in items:
+            if item.item_id not in matched_ids:
+                continue
+            item.status = "done"
+            item.updated_at_utc = now_iso
+            metadata = self._normalize_metadata(item.metadata)
+            metadata["last_action_actor"] = normalized_actor
+            metadata["last_action_status"] = "done"
+            metadata["last_action_at_utc"] = now_iso
+            metadata["last_action_note"] = normalized_note
+            metadata["resolved_at_utc"] = now_iso
+            metadata["resolved_by"] = normalized_actor
+            metadata["resolution_note"] = normalized_note
+            item.metadata = self._append_workflow_event(
+                metadata,
+                action="janitor_sweep",
+                actor=normalized_actor,
+                status="done",
+                note=normalized_note,
+            )
+            swept_payloads.append(item.to_dict())
+
+        self._save_items(items)
+        logger.info(
+            "inbox_janitor_swept_acked",
+            kinds=sorted(sweep_kinds),
+            matched=len(matched),
+            swept=len(swept_payloads),
+            age_threshold_minutes=threshold_minutes,
+        )
+        return {
+            "matched": len(matched),
+            "swept": len(swept_payloads),
+            "items": swept_payloads,
+            "dry_run": False,
+        }
+
     def _build_summary(self, items: list[InboxItem]) -> dict[str, Any]:
         """Собирает owner-facing summary из уже загруженного набора item-ов."""
         open_items = [item for item in items if item.status in self._open_statuses]

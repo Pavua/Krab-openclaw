@@ -95,6 +95,73 @@ def test_inbox_stale_open_uses_list_stale_open_items() -> None:
     mock_list.assert_called_once_with(kind="test", limit=3)
 
 
+def test_stale_open_all_kinds_default() -> None:
+    """GET /api/inbox/stale-open без kind → list_stale_open_items(kind="") (все kinds)."""
+    with patch(
+        "src.modules.web_routers.inbox_router.inbox_service.list_stale_open_items",
+        return_value=[{"item_id": "p", "kind": "proactive_action"}, {"item_id": "v", "kind": "vpn_alert"}],
+    ) as mock_list:
+        resp = _client().get("/api/inbox/stale-open")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["count"] == 2
+    assert data["kind"] == "all"
+    mock_list.assert_called_once_with(kind="", limit=20)
+
+
+def test_stale_open_specific_kind() -> None:
+    """GET /api/inbox/stale-open?kind=owner_request → backward-compat фильтрация."""
+    with patch(
+        "src.modules.web_routers.inbox_router.inbox_service.list_stale_open_items",
+        return_value=[{"item_id": "o", "kind": "owner_request"}],
+    ) as mock_list:
+        resp = _client().get("/api/inbox/stale-open?kind=owner_request")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 1
+    assert data["kind"] == "owner_request"
+    mock_list.assert_called_once_with(kind="owner_request", limit=20)
+
+
+def test_stale_open_empty_when_no_stale() -> None:
+    """GET /api/inbox/stale-open на чистом inbox → count=0, kind='all'."""
+    with patch(
+        "src.modules.web_routers.inbox_router.inbox_service.list_stale_open_items",
+        return_value=[],
+    ):
+        resp = _client().get("/api/inbox/stale-open")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["count"] == 0
+    assert data["items"] == []
+    assert data["kind"] == "all"
+
+
+def test_health_lite_matches_stale_open_aggregate() -> None:
+    """
+    Sanity: счётчик stale_open в health.lite-summary считает по всем kinds,
+    и /api/inbox/stale-open без kind возвращает столько же items (схемы совпадают).
+    """
+    fake_items = [
+        {"item_id": "a", "kind": "owner_request"},
+        {"item_id": "b", "kind": "proactive_action"},
+        {"item_id": "c", "kind": "vpn_alert"},
+    ]
+    with patch(
+        "src.modules.web_routers.inbox_router.inbox_service.list_stale_open_items",
+        return_value=fake_items,
+    ) as mock_list:
+        resp = _client().get("/api/inbox/stale-open")
+    assert resp.status_code == 200
+    data = resp.json()
+    # endpoint должен возвращать агрегат (kind="" — все kinds), как и health/lite
+    mock_list.assert_called_once_with(kind="", limit=20)
+    assert data["count"] == len(fake_items)
+    assert data["kind"] == "all"
+
+
 def test_notifications_count_with_attention_severity() -> None:
     """GET /api/notifications/count → разделяет attention (error/warning) vs total."""
     fake_items = [

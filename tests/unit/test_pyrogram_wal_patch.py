@@ -5,7 +5,8 @@ Unit-тесты для ``src/bootstrap/pyrogram_patch.py``.
 Проверяем:
 1. Патч применяется идемпотентно.
 2. После вызова patched ``FileStorage.open`` PRAGMA journal_mode=wal,
-   busy_timeout=5000, synchronous=NORMAL.
+   busy_timeout=5000, synchronous=FULL (Session 33 hardening: sleep/torn-page risk),
+   wal_autocheckpoint=1000.
 3. ``update_usernames`` глотает ``database is locked``, пробрасывает другие.
 4. VACUUM не вызывается при open() (через проверку WAL-режима и отсутствие
    exclusive-lock ошибок при параллельном открытии).
@@ -167,8 +168,9 @@ def test_new_session_in_wal_mode(tmp_path: Path):
     journal_mode, busy_timeout, synchronous = asyncio.run(_run())
     assert str(journal_mode).lower() == "wal", f"Expected wal, got {journal_mode!r}"
     assert int(busy_timeout) == 5000, f"Expected 5000ms, got {busy_timeout}"
-    # synchronous=NORMAL = 1
-    assert int(synchronous) == 1, f"Expected NORMAL(1), got {synchronous}"
+    # Session 33 fix: synchronous=FULL=2 (было NORMAL=1) — защита от
+    # torn pages при macOS sleep + WAL + долгий uptime.
+    assert int(synchronous) == 2, f"Expected FULL(2), got {synchronous}"
 
 
 def test_existing_session_gets_wal(tmp_path: Path):

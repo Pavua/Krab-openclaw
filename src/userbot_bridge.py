@@ -82,6 +82,7 @@ from .handlers import (
     handle_budget,
     handle_cap,
     handle_catchup,
+    handle_chado,
     handle_chatban,
     handle_chatpolicy,
     handle_claude_cli,
@@ -95,6 +96,7 @@ from .handlers import (
     handle_context,
     handle_costs,
     handle_cronstatus,
+    handle_curator,
     handle_debug,
     handle_del,
     handle_diag,
@@ -105,6 +107,7 @@ from .handlers import (
     handle_eval,
     handle_explain,
     handle_export,
+    handle_filter,
     handle_fix,
     handle_forget,
     handle_fwd,
@@ -118,6 +121,7 @@ from .handlers import (
     handle_loglevel,
     handle_ls,
     handle_macos,
+    handle_mem,
     handle_memo,
     handle_memory,
     handle_model,
@@ -153,6 +157,7 @@ from .handlers import (
     handle_screenshot,
     handle_search,
     handle_set,
+    handle_setpanelauth,
     handle_shop,
     handle_silence,
     handle_stats,
@@ -163,6 +168,7 @@ from .handlers import (
     handle_sysinfo,
     handle_timer,
     handle_todo,
+    handle_top,
     handle_tor,
     handle_translate,
     handle_translator,
@@ -809,6 +815,47 @@ class KraabUserbot(
         async def wrap_blocklist(c, m):
             await run_cmd(handle_blocklist, m)
 
+        # Session 32 audit-3: !filter — алиас !listen для per-chat filter mode (Chado §3 P2)
+        @self.client.on_message(
+            filters.command("filter", prefixes=prefixes) & _make_command_filter("filter"),
+            group=-1,
+        )
+        async def wrap_filter(c, m):
+            await run_cmd(handle_filter, m)
+
+        # Session 32 Wave 4: !chado — cross-AI sync с Chado (status/ping/digest)
+        @self.client.on_message(
+            filters.command("chado", prefixes=prefixes) & _make_command_filter("chado"),
+            group=-1,
+        )
+        async def wrap_chado(c, m):
+            await run_cmd(handle_chado, m)
+
+        # Session 32 audit-3: !mem — быстрый доступ к Memory Layer (HybridRetriever)
+        @self.client.on_message(
+            filters.command("mem", prefixes=prefixes) & _make_command_filter("mem"),
+            group=-1,
+        )
+        async def wrap_mem(c, m):
+            await run_cmd(handle_mem, m)
+
+        # Session 32 audit-3: !setpanelauth — bcrypt-пароль для Krab Panel (owner-only)
+        @self.client.on_message(
+            filters.command("setpanelauth", prefixes=prefixes)
+            & _make_command_filter("setpanelauth"),
+            group=-1,
+        )
+        async def wrap_setpanelauth(c, m):
+            await run_cmd(handle_setpanelauth, m)
+
+        # Session 32 audit-3: !top — лидерборд активности чата
+        @self.client.on_message(
+            filters.command("top", prefixes=prefixes) & _make_command_filter("top"),
+            group=-1,
+        )
+        async def wrap_top(c, m):
+            await run_cmd(handle_top, m)
+
         @self.client.on_message(
             filters.command("translator", prefixes=prefixes) & _make_command_filter("translator"),
             group=-1,
@@ -900,6 +947,13 @@ class KraabUserbot(
         )
         async def wrap_costs(c, m):
             await run_cmd(handle_costs, m)
+
+        @self.client.on_message(
+            filters.command("curator", prefixes=prefixes) & _make_command_filter("curator"),
+            group=-1,
+        )
+        async def wrap_curator(c, m):
+            await run_cmd(handle_curator, m)
 
         @self.client.on_message(
             filters.command("budget", prefixes=prefixes) & _make_command_filter("budget"), group=-1
@@ -3249,22 +3303,44 @@ class KraabUserbot(
         for team, acct in accounts.items():
             session_name = acct.get("session_name", f"swarm_{team}")
             try:
-                # Очистка stale SQLite lock (database is locked)
+                # Corruption-aware preflight: WAL/journal удаляем ТОЛЬКО если
+                # integrity_check провален или DB не открывается. Безусловная
+                # чистка опасна — uncheckpointed peer-cache writes из предыдущего
+                # запуска теряются (Session 32 P1 backlog).
                 _sess_path = Path(self._session_workdir) / f"{session_name}.session"
                 if _sess_path.exists():
+                    from .bootstrap.db_corruption_guard import (
+                        integrity_check as _swarm_integrity_check,
+                    )
+
+                    _ok, _detail = _swarm_integrity_check(_sess_path)
                     _journal = _sess_path.with_suffix(".session-journal")
                     _wal = _sess_path.with_suffix(".session-wal")
-                    for _lockf in (_journal, _wal):
-                        if _lockf.exists():
-                            try:
-                                _lockf.unlink()
-                                logger.info(
-                                    "swarm_stale_lock_cleaned",
-                                    team=team,
-                                    file=str(_lockf),
-                                )
-                            except OSError:
-                                pass
+                    if _ok:
+                        logger.info(
+                            "swarm_session_integrity_ok",
+                            team=team,
+                            file=str(_sess_path),
+                            detail=_detail,
+                        )
+                    else:
+                        logger.warning(
+                            "swarm_session_integrity_failed",
+                            team=team,
+                            file=str(_sess_path),
+                            detail=_detail,
+                        )
+                        for _lockf in (_journal, _wal):
+                            if _lockf.exists():
+                                try:
+                                    _lockf.unlink()
+                                    logger.info(
+                                        "swarm_stale_lock_cleaned",
+                                        team=team,
+                                        file=str(_lockf),
+                                    )
+                                except OSError:
+                                    pass
                 cl = Client(
                     session_name,
                     api_id=config.TELEGRAM_API_ID,
@@ -3327,20 +3403,41 @@ class KraabUserbot(
         if not clients:
             return
         # Импорт здесь, чтобы избежать циклической зависимости при загрузке модуля.
-        from .userbot.session import SessionMixin
+        from .userbot.session import SessionMixin, checkpoint_session_wal
 
         for team, cl in list(clients.items()):
+            session_path: Path | None = None
             try:
                 # Перед stop() ставим storage guard на каждый swarm client —
                 # иначе фоновые pyrogram-задачи (Session.restart / update_peers)
                 # после stop() добегают до закрытой sqlite-базы и спамят Sentry
                 # (~10 events/24h × 4 команды = заметная доля PYTHON-FASTAPI-1).
                 SessionMixin._arm_storage_shutdown_guard_for_client(cl)
+                # Session 33 P1: запоминаем путь к .session ДО stop() — после stop()
+                # storage может быть детачена. workdir/name стабильны.
+                try:
+                    _wd = getattr(cl, "workdir", None) or self._session_workdir
+                    _name = getattr(cl, "name", None) or f"swarm_{team}"
+                    session_path = Path(_wd) / f"{_name}.session"
+                except Exception:  # noqa: BLE001
+                    session_path = None
                 if cl.is_connected:
                     await cl.stop()
                 logger.info("swarm_team_client_stopped", team=team)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("swarm_team_client_stop_failed", team=team, error=str(exc))
+            # WAL truncate — best-effort, не зависит от успеха stop().
+            # Каждая команда checkpoint-ится независимо: ошибка одной не валит остальных.
+            if session_path is not None:
+                try:
+                    checkpoint_session_wal(session_path)
+                except Exception as wal_exc:  # noqa: BLE001
+                    logger.warning(
+                        "swarm_team_wal_checkpoint_unexpected_failure",
+                        team=team,
+                        error=str(wal_exc),
+                        non_fatal=True,
+                    )
         clients.clear()
 
     async def _init_swarm_team_clients(self) -> None:
@@ -5688,7 +5785,13 @@ class KraabUserbot(
             self._register_chat_background_task(chat_id, background_task)
             return
 
-        await self._run_llm_request_flow(
+        # Wave 14-K: foreground path goes through _run_llm_request_flow_with_auto_retry
+        # so LLMRetryableError (e.g. codex-cli first-chunk hang from Wave 14-D)
+        # triggers silent fallback to openai/gpt-5.5 instead of bubbling up to
+        # process_message_error → user-visible "🦀❌ Ошибка: codex-cli first-chunk hang".
+        await self._run_llm_request_flow_with_auto_retry(
+            prefer_send_message_for_background=False,
+            hard_cap_sec=0.0,  # foreground: no outer hard cap (existing behavior)
             message=message,
             temp_msg=temp_msg,
             is_self=is_self,
@@ -5703,7 +5806,6 @@ class KraabUserbot(
             system_prompt=system_prompt,
             action_stop_event=_typing_stop_event,
             action_task=_typing_task,
-            prefer_send_message_for_background=False,
             show_progress_notices=_show_progress_notices,
         )
 
@@ -5969,7 +6071,14 @@ class KraabUserbot(
             # сообщения в Saved Messages — это главный use-case forward batching.
             _fwd_from, _fwd_name, _fwd_from_chat = _extract_forward_origin_parts(message)
             _is_fwd_message = bool(not is_command and any([_fwd_from, _fwd_name, _fwd_from_chat]))
-            if _is_fwd_message and message.text:
+            # Wave 14-A coalescing: forwarded photos / video тоже идут в пачку.
+            # Без этого каждое медиа-сообщение запускало independent AI call,
+            # и user видел 3+ ответов на один forward-batch (см. live bug 2026-05-02).
+            _fwd_has_photo = bool(
+                getattr(message, "photo", None) or getattr(message, "video", None)
+            )
+            _fwd_payload = bool(message.text or message.caption or _fwd_has_photo)
+            if _is_fwd_message and _fwd_payload:
                 from .core.message_batcher import PendingMessage, message_batcher  # noqa: PLC0415
 
                 # Извлекаем данные об оригинальном отправителе через единый compat-layer.
@@ -6002,8 +6111,9 @@ class KraabUserbot(
                     # pyrogram может вернуть datetime
                     _fwd_date = int(getattr(_fwd_date, "timestamp", lambda: _fwd_date)())
 
+                _pending_text = str(message.text or message.caption or "")
                 _pending_fwd = PendingMessage(
-                    text=str(message.text),
+                    text=_pending_text,
                     sender_id=str(getattr(user, "id", "") or ""),
                     ts=time.time(),
                     message_id=getattr(message, "id", None),
@@ -6011,7 +6121,17 @@ class KraabUserbot(
                     forward_sender_name=_fwd_display,
                     forward_sender_username=_fwd_uname,
                     forward_date=_fwd_date,
+                    is_photo=_fwd_has_photo,
+                    photo_caption=str(message.caption or ""),
                 )
+                if _fwd_has_photo:
+                    logger.info(
+                        "forward_batch_photo_coalesced",
+                        chat_id=chat_id,
+                        message_id=getattr(message, "id", None),
+                        sender=_fwd_display,
+                        has_caption=bool(message.caption),
+                    )
 
                 # Closure захватывает контекст для обработки пачки
                 _fwd_access_profile = access_profile

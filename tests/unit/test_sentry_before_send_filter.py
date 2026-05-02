@@ -180,54 +180,60 @@ def test_before_send_keeps_real_attribute_error() -> None:
     assert _before_send(event, {}) is event
 
 
-# ── Session 32: CancelledError fix — маркер в ex["type"], не ex["value"] ──
+# ── Session 33 Wave 6: CancelledError frame-aware narrowing ──
+# Раньше ВСЕ CancelledError глотались. Теперь — только те что пришли из
+# uvicorn/starlette lifespan teardown. Подробные тесты в
+# test_sentry_cancelled_narrow.py; здесь только smoke regression-checks.
 
 
-def test_before_send_drops_cancelled_error_via_type_field() -> None:
-    """asyncio.CancelledError: str(exc) == '' (пустая строка), маркер только в ex['type'].
+def test_before_send_drops_cancelled_error_in_lifespan_transaction() -> None:
+    """CancelledError с transaction=lifespan → подавляется (shutdown noise)."""
+    event = {
+        "transaction": "lifespan",
+        "exception": {
+            "values": [
+                {
+                    "type": "CancelledError",
+                    "value": "",
+                },
+            ]
+        },
+    }
+    assert _before_send(event, {}) is None
 
-    Это корневая причина того, что 357+ событий PYTHON-FASTAPI-Z проходили в Sentry
-    несмотря на маркер "CancelledError" в _BENIGN_ERROR_MARKERS: фильтр проверял только
-    ex['value'] (= ''), но не ex['type'] (= 'CancelledError').
+
+def test_before_send_keeps_cancelled_error_outside_lifespan() -> None:
+    """CancelledError без lifespan-маркеров → пропускается в Sentry.
+
+    Это критичный кейс: timeout-induced cancel из asyncio.wait_for(...) в
+    LLM/MCP/memory путях должен быть видимым, а не silent-dropped.
     """
     event = {
         "exception": {
             "values": [
                 {
                     "type": "CancelledError",
-                    "value": "",  # asyncio.CancelledError всегда даёт пустой str()
+                    "value": "",
                 },
             ]
         }
     }
-    assert _before_send(event, {}) is None
+    assert _before_send(event, {}) is event
 
 
-def test_before_send_drops_cancelled_error_with_module_prefix() -> None:
-    """Sentry может выдавать полный qualified name типа из модуля asyncio.exceptions."""
-    # Некоторые версии Sentry SDK могут ставить ex['type'] как 'asyncio.exceptions.CancelledError'
-    # Маркер 'CancelledError' — подстрока, поэтому тоже должна совпадать.
+def test_before_send_drops_cancelled_error_with_starlette_frame() -> None:
+    """CancelledError с frame в starlette/routing → подавляется."""
     event = {
         "exception": {
             "values": [
                 {
                     "type": "asyncio.exceptions.CancelledError",
                     "value": "",
-                },
-            ]
-        }
-    }
-    assert _before_send(event, {}) is None
-
-
-def test_before_send_drops_cancelled_error_with_value_too() -> None:
-    """CancelledError с непустым value (edge case) тоже должен дропаться."""
-    event = {
-        "exception": {
-            "values": [
-                {
-                    "type": "CancelledError",
-                    "value": "Task was cancelled",
+                    "stacktrace": {
+                        "frames": [
+                            {"abs_path": "/site-packages/starlette/routing.py"},
+                        ]
+                    },
                 },
             ]
         }

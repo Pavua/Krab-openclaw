@@ -259,6 +259,26 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - **Sessions 20+21+22**: 88 commits на ветке `fix/daily-review-20260421`; **Session 27+28**: +46 commits, branch total 130+ commits
 - **250+ API endpoints** (live: `/api/endpoints`), 105+ prod команд, **11212 тестов collected** (Session 28 final)
 
+### Session 33 highlights (02.05.2026 — corruption recurrence + auto-recovery architecture)
+
+После 12h после Session 32 close kraab.session снова corrupt (+199 events). Root cause: Session 32 patches **глушили** symptoms (locked/malformed swallow), но **broken pages persisted on disk**, и WAL TRUNCATE на graceful shutdown ironicially writes damaged data back.
+
+**3 commits**:
+- `9c2a6b7` — Symmetric malformed handling в `_safe_update_usernames` (был ASYMMETRIC: только locked); 6 tests
+- `629b003` — Architectural: `_main_session_integrity_preflight` в `_recreate_client` — auto-recovery flow + 10 tests + smoke verified
+- (manual) `sqlite3 .recover` восстановило 76 peers, 31 usernames, 1 sessions row (auth_key preserved)
+
+**Recovery flow**:
+1. Read-only `PRAGMA integrity_check`
+2. Если non-ok + corruption marker → backup `.bak-corrupt-{ts}` + sidecar cleanup
+3. `sqlite3 broken ".recover" | sqlite3 fresh` (subprocess, 30s timeout)
+4. Verify recovered integrity ok → atomic replace
+5. Idempotency: если recent backup < 1h → exit 78 (loud fail для launchd attention)
+
+**Symmetry restored**: swarm sessions имели integrity-gate с Session 32 (4df5410), main session — НЕ имел. Asymmetry (root cause) closed.
+
+**Live verified**: `main_session_integrity_ok` logged at startup, 91 peers (76 + 15 organic from server), no relogin required.
+
 ### Session 22 highlights
 - **Memory Phase 2 LIVE**: hybrid retrieval (FTS5 + vec_chunks RRF + MMR diversity), recall@5 +37.67 verified, 10× MMR speedup через vec-cache
 - **Cron pipeline FIXED** end-to-end (был silent no-op): `cron_native_scheduler` bind LLM-processing sender + numeric chat_id + 90s timeout + `adapter.route_query()` (вместо несуществующего `.stream()`) + context-augmented prompts (sub-30s exec, без tool-calls)
@@ -269,6 +289,24 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - **Models**: GPT-5.5 / GPT-5.5-pro / Opus 4.7 / DeepSeek V4 family добавлены в `models.json`; UI panel hardcoded model names removed across V4
 - **Wake-up message**: 60min rate limit (no more startup spam в Saved Messages)
 - **message_batcher**: preserve buffered messages during LLM processing (no drops)
+
+## LM Studio integration
+
+- Get token in LM Studio app (Settings → Network → API token)
+- Run: `venv/bin/python scripts/setup_lm_studio_token.py <your-token>` (saves `LM_API_TOKEN` to `.env`)
+- Read-only check: `venv/bin/python scripts/setup_lm_studio_token.py --check`
+- Restart Krab to apply
+### Session 33 highlights (02.05.2026 — Wave 5-14, branch `fix/daily-review-20260421`, 31+ session-33 commits / 67 ahead of origin/main)
+
+- **Defense in depth (DB)** — Wave 5-6 + 14-J: WAL + busy_timeout + `synchronous=FULL` + `wal_autocheckpoint` + `temp_store=MEMORY` + 64MB cache, integrity-gate at startup, auto-recover via `sqlite .recover`, **symmetric malformed-swallow в 4 Pyrogram-методах** (`update_usernames` / `update_peers` / `update_state` / `remove_state`) + generic-method wrap.
+- **UX fixes** — Wave 7+9+14: Bug 14 cap UX wording (subtask-aware), hallucination guard (10 patterns) предотвращает фейковые «выполнено», bot/userbot routing разнесён, **codex-cli hang detection 45s + silent fallback** (Wave 14-D/14-K — `LLMRetryableError` wired to fallback retry).
+- **Concurrency** — Wave 14-A+B: `forward_batch` coalescing для дублирующихся forward-ивентов, **OpenClaw semaphore limiter** (3 concurrent default) — backpressure при перегрузке gateway.
+- **Observability** — Wave 14-F: **Sentry per-session event dedupe** (gateway-wide hash bucket) + `notify` 503 wrap (no spam during gateway boot); CancelledError frame-aware narrowing (+352 событий suppressed → benign).
+- **Cron scheduler** — Wave 14-G: look-ahead semantics formalized (5-day silence regression Session 31 закрыт окончательно — see `tests/unit/test_cron_lookahead_semantics.py`).
+- **SkillCurator** — Wave 14-I: dry-run analyzer (Step 1/4) — фундамент для self-improving swarm prompts; design cherry-picked из Hermes исследования.
+- **Hermes investigation** — Wave 12-13: research + dry-run migration + Phase 2 ACP design. **Решение: НЕ мигрируем**, OpenClaw остаётся; design stored для будущего bridge.
+- **CLI Telegram MCP isolation** — Wave 9-B + 10-A: codex-cli + claude-cli — physical disable Telegram MCP (избегаем cross-contamination между прод и CLI).
+- **Inbox janitor** — расширен на `owner_request` kind + `proactive_action acked→done` авто-переход.
 
 ## Smart Message Routing (Session 26 — 26.04.2026 — LIVE)
 
@@ -322,6 +360,20 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - LM Studio 401 — local fallback restore
 - FTS5 watcher + auto-rebuild
 - Named Cloudflare Tunnel (still on quick-tunnel ephemeral URL)
+
+### Wave 15+ backlog (Session 33 carryover)
+
+**Closed in Session 33:**
+- claude-cli telegram MCP isolation (DONE Wave 10-A)
+- 24h Sentry observation post Wave 6-A pragma fix (DONE)
+- Memory Phase 2 full recluster (DONE)
+- Forward_batch + concurrency overload (DONE Wave 14)
+
+**Carryover / new:**
+- **Architectural**: gateway `tool_calls_executed` contract (Wave 11-C doc + 12-C implementation)
+- **Hermes Phase 2 ACP bridge** — implementation (1-2 sessions, design ready, see Wave 12-13 docs)
+- **SkillCurator Steps 2-4** — LLM analyzer + A/B framework + auto-apply (foundation laid Wave 14-I)
+- **KrabEar AppHang investigation** — Wave 14-H found, deferred
 
 ## Ссылки
 
