@@ -21,6 +21,7 @@ SkillCurator — Wave 14-I (Step 1/4): dry-run analyzer (read-only).
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 import json
 import re
@@ -47,6 +48,10 @@ logger = get_logger(__name__)
 CURATOR_BASE_DIR = Path.home() / ".openclaw" / "krab_runtime_state" / "curator"
 CURATOR_REPORTS_DIR = CURATOR_BASE_DIR / "reports"
 CURATOR_PROPOSALS_DIR = CURATOR_BASE_DIR / "proposals"
+CURATOR_ARCHIVE_DIR = CURATOR_BASE_DIR / "prompts_archive"
+
+# Rate-limit: не чаще 1 apply в 7 дней на команду
+_APPLY_RATE_LIMIT_DAYS = 7
 
 
 def ensure_curator_dirs(base: Path | None = None) -> Path:
@@ -296,6 +301,8 @@ class SkillCurator:
         self._memory = memory or default_memory
         self._artifacts = artifact_store or default_artifact_store
         self._base_dir = base_dir or CURATOR_BASE_DIR
+        # Per-team mutex для apply/rollback — не даёт двум apply одной команды конкурировать
+        self._team_locks: dict[str, asyncio.Lock] = {}
 
     # -- public API ----------------------------------------------------------
 
@@ -549,17 +556,292 @@ class SkillCurator:
         data["_path"] = str(path)
         return data
 
-    # -- placeholders для Step 3-4 ------------------------------------------
+    # -- Step 3/4: apply + rollback ------------------------------------------
+
+    def _get_team_lock(self, team: str) -> asyncio.Lock:
+        """Возвращает per-team asyncio.Lock, создавая при первом обращении."""
+
+        key = team.lower()
+        if key not in self._team_locks:
+            self._team_locks[key] = asyncio.Lock()
+        return self._team_locks[key]
 
     async def apply_with_approval(
-        self, team: str, new_prompt: str, *, force: bool = False
-    ) -> bool:  # pragma: no cover - placeholder
-        raise NotImplementedError("Step 4 (Session 36-37) — apply with archive.")
+        self,
+        proposal_id: str,
+        *,
+        force: bool = False,
+        idle_check: bool = True,
+        state_path: Path | None = None,
+    ) -> tuple[bool, str]:
+        """Применяет approved proposal к live team prompt.
+
+        Steps:
+        1. Загрузить proposal из proposals/{proposal_id}.json.
+        2. Проверить status == "pending" (или "approved"). "applied" → отказ.
+        3. Mutex per-team — не даёт двум apply конкурировать.
+        4. Idle check: swarm_channels.is_round_active → если busy и не force → отказ.
+        5. Weekly rate-limit (1 apply / 7 дней / команда), bypassed при force=True.
+        6. Archive snapshot текущего effective prompt.
+        7. Apply overlay + обновить proposal status="applied".
+        8. Return (True, "applied successfully").
+
+        На любую ошибку — log + return (False, msg). Не поднимает исключений наружу.
+        """
+
+        _state_path = state_path or CURATOR_STATE_PATH
+
+        # 1. Загружаем proposal
+        proposal = self.load_proposal(proposal_id)
+        if not proposal:
+            msg = f"proposal not found: {proposal_id}"
+            logger.warning("curator_apply_proposal_not_found", proposal_id=proposal_id)
+            return False, msg
+
+        team = (proposal.get("team") or "").lower()
+        if not team:
+            return False, "proposal missing team field"
+
+        # 2. Проверяем статус
+        status = proposal.get("status", "")
+        if status == "applied":
+            return False, f"proposal {proposal_id} already applied"
+        if status not in {"pending", "approved"}:
+            return False, f"proposal status is '{status}', expected pending/approved"
+
+        proposed_prompt = proposal.get("proposed_prompt") or ""
+        if not proposed_prompt.strip():
+            return False, "proposal has empty proposed_prompt"
+
+        # 3. Mutex per-team
+        lock = self._get_team_lock(team)
+        async with lock:
+            return await self._do_apply(
+                team=team,
+                proposal_id=proposal_id,
+                proposal=proposal,
+                proposed_prompt=proposed_prompt,
+                force=force,
+                idle_check=idle_check,
+                state_path=_state_path,
+            )
+
+    async def _do_apply(
+        self,
+        *,
+        team: str,
+        proposal_id: str,
+        proposal: dict[str, Any],
+        proposed_prompt: str,
+        force: bool,
+        idle_check: bool,
+        state_path: Path,
+    ) -> tuple[bool, str]:
+        """Внутренняя реализация apply (под mutex)."""
+
+        # 4. Idle check
+        if idle_check and not force:
+            try:
+                from .swarm_channels import swarm_channels
+
+                if swarm_channels.is_round_active(team):
+                    return False, f"team {team} is busy (active swarm round), retry later"
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("curator_idle_check_failed", team=team, error=str(exc))
+
+        # 5. Weekly rate-limit
+        if not force:
+            try:
+                state = CuratorState.load(state_path)
+                last_apply_raw = state.last_apply_at.get(team, "")
+                if last_apply_raw:
+                    last_apply_dt = datetime.fromisoformat(last_apply_raw.replace("Z", "+00:00"))
+                    if last_apply_dt.tzinfo is None:
+                        last_apply_dt = last_apply_dt.replace(tzinfo=timezone.utc)
+                    elapsed = datetime.now(timezone.utc) - last_apply_dt
+                    if elapsed.days < _APPLY_RATE_LIMIT_DAYS:
+                        remaining = _APPLY_RATE_LIMIT_DAYS - elapsed.days
+                        return (
+                            False,
+                            f"rate limit: last apply was {elapsed.days}d ago, "
+                            f"wait {remaining}d more (or use force=True)",
+                        )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("curator_rate_limit_check_failed", team=team, error=str(exc))
+
+        # 6. Archive текущего effective prompt
+        try:
+            from .swarm_team_prompts import get_team_system_prompt
+
+            current_effective_prompt = get_team_system_prompt(team)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("curator_get_prompt_failed", team=team, error=str(exc))
+            current_effective_prompt = ""
+
+        archive_path_str = ""
+        try:
+            state = CuratorState.load(state_path)
+            overlay = state.get_overlay(team)
+            version = (overlay.get("version", 0) if overlay else 0) + 1
+
+            archive_dir = self._base_dir / "prompts_archive" / team
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+            archive_path = archive_dir / f"v{version}_{ts}.md"
+            archive_path.write_text(current_effective_prompt, encoding="utf-8")
+            archive_path_str = str(archive_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("curator_archive_failed", team=team, error=str(exc))
+            version = 1
+
+        # 7. Apply overlay + обновить state
+        try:
+            state = CuratorState.load(state_path)
+            applied_at = _now_iso()
+            state.apply_overlay(
+                team,
+                {
+                    "prompt": proposed_prompt,
+                    "proposal_id": proposal_id,
+                    "applied_at": applied_at,
+                    "version": version,
+                    "archive_path": archive_path_str,
+                },
+            )
+            state.mark_apply(team)
+            state.save_atomic(state_path)
+        except Exception as exc:  # noqa: BLE001
+            msg = f"state save failed: {exc}"
+            logger.error("curator_apply_state_failed", team=team, error=str(exc))
+            return False, msg
+
+        # Инвалидируем overlay-кеш в swarm_team_prompts
+        try:
+            from . import swarm_team_prompts as _stp
+
+            _stp._invalidate_overlay_cache(team)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # 8. Помечаем proposal как applied
+        try:
+            proposal_path = self._base_dir / "proposals" / f"{proposal_id}.json"
+            proposal_updated = dict(proposal)
+            proposal_updated.update({"status": "applied", "applied_at": applied_at})
+            proposal_updated.pop("_path", None)
+            proposal_path.write_text(
+                json.dumps(proposal_updated, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "curator_proposal_status_update_failed", proposal_id=proposal_id, error=str(exc)
+            )
+
+        logger.info(
+            "curator_apply_success",
+            team=team,
+            proposal_id=proposal_id,
+            version=version,
+            archive_path=archive_path_str,
+        )
+        return True, f"applied successfully (version={version}, archive={archive_path_str})"
 
     async def rollback(
-        self, team: str, version: int = -1
-    ) -> bool:  # pragma: no cover - placeholder
-        raise NotImplementedError("Step 4 (Session 36-37) — rollback prompt archive.")
+        self,
+        team: str,
+        *,
+        version: int = -1,
+        state_path: Path | None = None,
+    ) -> tuple[bool, str]:
+        """Откатывает overlay команды к предыдущей версии или к baseline.
+
+        version=-1 → удалить overlay (вернуться к TEAM_PROMPTS baseline).
+        version=N  → загрузить prompts_archive/{team}/v{N}_*.md → new overlay.
+        """
+
+        _state_path = state_path or CURATOR_STATE_PATH
+        lock = self._get_team_lock(team.lower())
+        async with lock:
+            return await self._do_rollback(
+                team=team.lower(),
+                version=version,
+                state_path=_state_path,
+            )
+
+    async def _do_rollback(
+        self,
+        *,
+        team: str,
+        version: int,
+        state_path: Path,
+    ) -> tuple[bool, str]:
+        """Внутренняя реализация rollback (под mutex)."""
+
+        state = CuratorState.load(state_path)
+        overlay = state.get_overlay(team)
+
+        if version == -1:
+            # Возврат к baseline
+            if overlay is None:
+                return False, f"team {team} has no active overlay, nothing to rollback"
+            state.clear_overlay(team)
+            state.save_atomic(state_path)
+            # Инвалидируем кеш
+            try:
+                from . import swarm_team_prompts as _stp
+
+                _stp._invalidate_overlay_cache(team)
+            except Exception:  # noqa: BLE001
+                pass
+            logger.info("curator_rollback_baseline", team=team)
+            return True, f"team {team} prompt rolled back to baseline"
+
+        # Rollback к конкретной версии
+        archive_dir = self._base_dir / "prompts_archive" / team
+        if not archive_dir.exists():
+            return False, f"no archive for team {team}"
+
+        # Ищем файл v{N}_*.md
+        candidates = sorted(archive_dir.glob(f"v{version}_*.md"))
+        if not candidates:
+            return False, f"archive version {version} not found for team {team}"
+
+        archive_file = candidates[-1]  # берём последний если несколько (edge case)
+        try:
+            restored_prompt = archive_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            return False, f"failed to read archive file: {exc}"
+
+        if not restored_prompt.strip():
+            return False, f"archive version {version} is empty"
+
+        # Новая версия = (current_version or 0) + 1
+        new_version = (overlay.get("version", 0) if overlay else 0) + 1
+        state.apply_overlay(
+            team,
+            {
+                "prompt": restored_prompt,
+                "proposal_id": f"rollback-v{version}",
+                "applied_at": _now_iso(),
+                "version": new_version,
+                "archive_path": str(archive_file),
+            },
+        )
+        state.save_atomic(state_path)
+
+        try:
+            from . import swarm_team_prompts as _stp
+
+            _stp._invalidate_overlay_cache(team)
+        except Exception:  # noqa: BLE001
+            pass
+
+        logger.info("curator_rollback_version", team=team, version=version, new_version=new_version)
+        return (
+            True,
+            f"team {team} rolled back to archive version {version} (new version={new_version})",
+        )
 
 
 # ---------------------------------------------------------------------------

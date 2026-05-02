@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
-"""!curator — Wave 14-I + 15-C Steps 1-2/4.
+"""!curator — Wave 14-I + 15-C + 16-A Steps 1-3/4.
 
 Подкоманды:
-  !curator dry-run [team]    — read-only анализ последних раундов (Step 1).
-  !curator propose <team>    — LLM-предложение апдейта промпта (Step 2).
-  !curator proposals         — список pending proposals.
-  !curator show <id>         — показать конкретный proposal/diff.
-  !curator help              — usage hint.
+  !curator dry-run [team]           — read-only анализ последних раундов (Step 1).
+  !curator propose <team>           — LLM-предложение апдейта промпта (Step 2).
+  !curator proposals                — список pending proposals.
+  !curator show <id>                — показать конкретный proposal/diff.
+  !curator apply <id> [--force]     — применить approved proposal (Step 3).
+  !curator rollback <team> [--version N] — откатить overlay к baseline или версии N.
+  !curator overlays                 — показать активные overlays.
+  !curator help                     — usage hint.
 
 Owner-only. Step 2 требует доступного Gemini API key — иначе fail-soft.
 """
@@ -30,12 +33,15 @@ logger = get_logger(__name__)
 
 
 _USAGE = (
-    "🧑‍🏫 **SkillCurator** (Waves 14-I + 15-C, Steps 1-2/4)\n\n"
+    "🧑‍🏫 **SkillCurator** (Waves 14-I + 15-C + 16-A, Steps 1-3/4)\n\n"
     "`!curator dry-run [team]` — read-only анализ последних раундов\n"
     "`!curator dry-run` — все 4 команды одним отчётом\n"
     "`!curator propose <team>` — LLM-предложение апдейта промпта (Gemini-3-flash)\n"
     "`!curator proposals` — список pending proposals\n"
     "`!curator show <id>` — показать конкретный proposal/diff\n"
+    "`!curator apply <id> [--force]` — применить proposal к live prompt\n"
+    "`!curator rollback <team> [--version N]` — откатить к baseline или к версии N\n"
+    "`!curator overlays` — показать активные overlays всех команд\n"
     "`!curator help` — эта справка\n\n"
     f"Доступные команды: {', '.join(sorted(TEAM_REGISTRY))}"
 )
@@ -82,6 +88,30 @@ async def handle_curator(bot: "KraabUserbot", message: Message) -> None:
     if sub == "show":
         proposal_id = tokens[1] if len(tokens) > 1 else ""
         await _run_proposal_show(bot, message, proposal_id)
+        return
+
+    if sub == "apply":
+        proposal_id = tokens[1] if len(tokens) > 1 else ""
+        force = "--force" in tokens
+        await _run_apply(bot, message, proposal_id, force=force)
+        return
+
+    if sub == "rollback":
+        team_arg = tokens[1].lower() if len(tokens) > 1 else ""
+        version = -1
+        if "--version" in tokens:
+            idx = tokens.index("--version")
+            if idx + 1 < len(tokens):
+                try:
+                    version = int(tokens[idx + 1])
+                except ValueError:
+                    await bot._safe_reply_or_send_new(message, "❌ `--version` должен быть числом.")
+                    return
+        await _run_rollback(bot, message, team_arg, version=version)
+        return
+
+    if sub == "overlays":
+        await _run_overlays(bot, message)
         return
 
     await bot._safe_reply_or_send_new(
@@ -250,3 +280,89 @@ async def _run_proposal_show(bot: "KraabUserbot", message: Message, proposal_id:
         f"```diff\n{diff}\n```"
     )
     await bot._safe_reply_or_send_new(message, body)
+
+
+async def _run_apply(
+    bot: "KraabUserbot", message: Message, proposal_id: str, *, force: bool
+) -> None:
+    """!curator apply <proposal_id> [--force] — применить proposal к live prompt."""
+
+    if not proposal_id:
+        await bot._safe_reply_or_send_new(
+            message,
+            "❌ Укажи id: `!curator apply <proposal_id> [--force]`",
+        )
+        return
+
+    await bot._safe_reply_or_send_new(message, f"⏳ Применяю proposal `{proposal_id}`…")
+    try:
+        ok, msg = await skill_curator.apply_with_approval(proposal_id, force=force)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("curator_apply_command_failed", proposal_id=proposal_id, error=str(exc))
+        await bot._safe_reply_or_send_new(message, f"❌ Apply error: {exc}")
+        return
+
+    icon = "✅" if ok else "❌"
+    await bot._safe_reply_or_send_new(message, f"{icon} `{proposal_id}`: {msg}")
+
+
+async def _run_rollback(
+    bot: "KraabUserbot", message: Message, team_arg: str, *, version: int
+) -> None:
+    """!curator rollback <team> [--version N] — откатить overlay."""
+
+    if not team_arg:
+        await bot._safe_reply_or_send_new(
+            message,
+            "❌ Укажи команду: `!curator rollback <team> [--version N]`\n"
+            f"Доступны: {', '.join(sorted(TEAM_REGISTRY))}",
+        )
+        return
+    if team_arg not in TEAM_REGISTRY:
+        await bot._safe_reply_or_send_new(
+            message,
+            f"❌ Команда `{team_arg}` не найдена. Доступны: {', '.join(sorted(TEAM_REGISTRY))}",
+        )
+        return
+
+    ver_str = "baseline" if version == -1 else f"version {version}"
+    await bot._safe_reply_or_send_new(message, f"⏳ Rollback `{team_arg}` → {ver_str}…")
+    try:
+        ok, msg = await skill_curator.rollback(team_arg, version=version)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("curator_rollback_command_failed", team=team_arg, error=str(exc))
+        await bot._safe_reply_or_send_new(message, f"❌ Rollback error: {exc}")
+        return
+
+    icon = "✅" if ok else "❌"
+    await bot._safe_reply_or_send_new(message, f"{icon} `{team_arg}`: {msg}")
+
+
+async def _run_overlays(bot: "KraabUserbot", message: Message) -> None:
+    """!curator overlays — список активных overlays."""
+
+    try:
+        from ...core.skill_curator_state import CURATOR_STATE_PATH, CuratorState
+
+        state = CuratorState.load(CURATOR_STATE_PATH)
+        overlays = state.active_overlays
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("curator_overlays_load_failed", error=str(exc))
+        await bot._safe_reply_or_send_new(message, f"❌ Не удалось загрузить state: {exc}")
+        return
+
+    if not overlays:
+        await bot._safe_reply_or_send_new(message, "📭 Активных overlays нет.")
+        return
+
+    lines = [f"🧑‍🏫 **Активные overlays** ({len(overlays)})\n"]
+    for team, ov in sorted(overlays.items()):
+        preview = (ov.get("prompt") or "")[:80].replace("\n", " ")
+        lines.append(
+            f"- `{team}` v{ov.get('version', '?')} "
+            f"(proposal: `{ov.get('proposal_id', '?')}`, "
+            f"applied: {ov.get('applied_at', '?')[:10]})\n"
+            f"  `{preview}…`"
+        )
+    lines.append("\n`!curator rollback <team>` — вернуть к baseline")
+    await bot._safe_reply_or_send_new(message, "\n".join(lines))
