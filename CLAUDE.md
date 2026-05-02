@@ -296,6 +296,17 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - Run: `venv/bin/python scripts/setup_lm_studio_token.py <your-token>` (saves `LM_API_TOKEN` to `.env`)
 - Read-only check: `venv/bin/python scripts/setup_lm_studio_token.py --check`
 - Restart Krab to apply
+### Session 33 highlights (02.05.2026 — Wave 5-14, branch `fix/daily-review-20260421`, 31+ session-33 commits / 67 ahead of origin/main)
+
+- **Defense in depth (DB)** — Wave 5-6 + 14-J: WAL + busy_timeout + `synchronous=FULL` + `wal_autocheckpoint` + `temp_store=MEMORY` + 64MB cache, integrity-gate at startup, auto-recover via `sqlite .recover`, **symmetric malformed-swallow в 4 Pyrogram-методах** (`update_usernames` / `update_peers` / `update_state` / `remove_state`) + generic-method wrap.
+- **UX fixes** — Wave 7+9+14: Bug 14 cap UX wording (subtask-aware), hallucination guard (10 patterns) предотвращает фейковые «выполнено», bot/userbot routing разнесён, **codex-cli hang detection 45s + silent fallback** (Wave 14-D/14-K — `LLMRetryableError` wired to fallback retry).
+- **Concurrency** — Wave 14-A+B: `forward_batch` coalescing для дублирующихся forward-ивентов, **OpenClaw semaphore limiter** (3 concurrent default) — backpressure при перегрузке gateway.
+- **Observability** — Wave 14-F: **Sentry per-session event dedupe** (gateway-wide hash bucket) + `notify` 503 wrap (no spam during gateway boot); CancelledError frame-aware narrowing (+352 событий suppressed → benign).
+- **Cron scheduler** — Wave 14-G: look-ahead semantics formalized (5-day silence regression Session 31 закрыт окончательно — see `tests/unit/test_cron_lookahead_semantics.py`).
+- **SkillCurator** — Wave 14-I: dry-run analyzer (Step 1/4) — фундамент для self-improving swarm prompts; design cherry-picked из Hermes исследования.
+- **Hermes investigation** — Wave 12-13: research + dry-run migration + Phase 2 ACP design. **Решение: НЕ мигрируем**, OpenClaw остаётся; design stored для будущего bridge.
+- **CLI Telegram MCP isolation** — Wave 9-B + 10-A: codex-cli + claude-cli — physical disable Telegram MCP (избегаем cross-contamination между прод и CLI).
+- **Inbox janitor** — расширен на `owner_request` kind + `proactive_action acked→done` авто-переход.
 
 ## Smart Message Routing (Session 26 — 26.04.2026 — LIVE)
 
@@ -349,6 +360,20 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - LM Studio 401 — local fallback restore
 - FTS5 watcher + auto-rebuild
 - Named Cloudflare Tunnel (still on quick-tunnel ephemeral URL)
+
+### Wave 15+ backlog (Session 33 carryover)
+
+**Closed in Session 33:**
+- claude-cli telegram MCP isolation (DONE Wave 10-A)
+- 24h Sentry observation post Wave 6-A pragma fix (DONE)
+- Memory Phase 2 full recluster (DONE)
+- Forward_batch + concurrency overload (DONE Wave 14)
+
+**Carryover / new:**
+- **Architectural**: gateway `tool_calls_executed` contract (Wave 11-C doc + 12-C implementation)
+- **Hermes Phase 2 ACP bridge** — implementation (1-2 sessions, design ready, see Wave 12-13 docs)
+- **SkillCurator Steps 2-4** — LLM analyzer + A/B framework + auto-apply (foundation laid Wave 14-I)
+- **KrabEar AppHang investigation** — Wave 14-H found, deferred
 
 ## Ссылки
 
