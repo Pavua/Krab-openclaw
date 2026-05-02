@@ -219,11 +219,14 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "tor",
         # Session 32 audit: handlers с bridge-dispatcher но отсутствовали в
         # frozenset → silent reject. Все owner-only.
+        # NB: имена соответствуют Pyrogram filters.command(...) trigger,
+        # не имени handler-функции (handle_cmdblock триггерится на !block).
+        "block",  # → handle_cmdblock (filters.command("block"))
+        "unblock",  # → handle_cmdunblock (filters.command("unblock"))
         "blocklist",  # admin_commands.handle_blocklist
-        "chado",  # diagnostic_commands.handle_chado (chado-sync W5.4)
         "chatpolicy",  # policy_commands.handle_chatpolicy (Smart Routing 26)
-        "cmdblock",  # admin_commands.handle_cmdblock
-        "cmdunblock",  # admin_commands.handle_cmdunblock
+        # NB: handle_chado existed но dispatcher не зарегистрирован — это DEAD CODE
+        # на bridge-уровне. Wave 4 backlog: либо wire-up, либо удалить handler.
         # Session 32 audit-3: handlers existed but no bridge dispatcher → wired now
         "filter",  # diagnostic_commands.handle_filter (Chado §3 P2 — per-chat filter mode)
         "mem",  # memory_commands.handle_mem (Memory Layer beta — HybridRetriever)
