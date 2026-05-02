@@ -438,6 +438,26 @@ class Config:
     # KRAB_LLM_WALL_CLOCK_CAP_SEC (180s) для совместимости с медленными CLI subprocess'ами.
     # 0 = отключено.
     KRAB_RESPONSE_HARD_CAP_SEC: float = float(os.getenv("KRAB_RESPONSE_HARD_CAP_SEC", "60"))
+    # Wave 14-D (Session 33): codex-cli first-chunk hang detection.
+    # Если codex-cli не отдал первый chunk за этот timeout (default 45s), Краб
+    # отменяет запрос и поднимает LLMRetryableError → auto-fallback (gateway
+    # выберет другую модель). Намного быстрее чем ждать KRAB_LLM_WALL_CLOCK_CAP_SEC=180s.
+    # 0 = отключено (legacy behaviour: ждём wall-clock cap).
+    KRAB_CODEX_CLI_FIRST_CHUNK_TIMEOUT_SEC: float = float(
+        os.getenv("KRAB_CODEX_CLI_FIRST_CHUNK_TIMEOUT_SEC", "45")
+    )
+    # 2+ timeout codex-cli за этот window → отметить unhealthy.
+    KRAB_CODEX_CLI_FAILURES_THRESHOLD: int = int(
+        os.getenv("KRAB_CODEX_CLI_FAILURES_THRESHOLD", "2")
+    )
+    # Сколько секунд скипать codex-cli после трешхолда.
+    KRAB_CODEX_CLI_SKIP_DURATION_SEC: float = float(
+        os.getenv("KRAB_CODEX_CLI_SKIP_DURATION_SEC", "60")
+    )
+    # Окно для счётчика failures (секунды).
+    KRAB_CODEX_CLI_FAILURE_WINDOW_SEC: float = float(
+        os.getenv("KRAB_CODEX_CLI_FAILURE_WINDOW_SEC", "300")
+    )
     # Streaming UI: показывать reasoning (chain-of-thought) в сообщении.
     TELEGRAM_STREAM_SHOW_REASONING: bool = os.getenv(
         "TELEGRAM_STREAM_SHOW_REASONING", "0"
