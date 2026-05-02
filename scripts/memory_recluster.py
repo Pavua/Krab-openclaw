@@ -27,8 +27,15 @@ def _project_root() -> Path:
 def _load_embeddings_from_archive(limit: int | None) -> dict[str, list[float]]:
     """Читает embedding'и chunks из vec_chunks (если доступно).
 
+    Реальная схема (sqlite-vec virtual table):
+        CREATE VIRTUAL TABLE vec_chunks USING vec0(vector float[N] ...);
+    → доступны только `rowid` (= chunks.id) и `vector` (BLOB float32-LE).
+    Стабильный текстовый chunk_id живёт в таблице `chunks` (INTEGER id alias rowid),
+    поэтому JOIN: `vec_chunks v JOIN chunks c ON c.id = v.rowid`.
+
     Без sqlite-vec extension вернём {} — в этом случае рекластер не сработает,
-    но скрипт корректно отрапортует и выйдет.
+    но скрипт корректно отрапортует и выйдет. open_archive() уже грузит расширение
+    (session 32 fix, commit 4d03018).
     """
     from src.core.memory_archive import open_archive
 
@@ -42,10 +49,12 @@ def _load_embeddings_from_archive(limit: int | None) -> dict[str, list[float]]:
                     "vec_chunks table missing — нет embedding'ов для кластеризации", file=sys.stderr
                 )
                 return {}
-            # vec_chunks имеет схему (chunk_id TEXT, embedding BLOB) — формат blob
-            # зависит от sqlite-vec, поэтому пробуем сначала через json-extract.
-            # Если не получится — вернём {} и попросим использовать external feeder.
-            sql = "SELECT chunk_id, embedding FROM vec_chunks"
+            # JOIN с chunks: rowid (vec) ↔ id (chunks) → stable chunk_id (TEXT).
+            # vec0 возвращает vector как float32-LE bytes; декодим в _decode_embedding_blob.
+            sql = (
+                "SELECT c.chunk_id, v.vector "
+                "FROM vec_chunks v JOIN chunks c ON c.id = v.rowid"
+            )
             if limit:
                 sql += f" LIMIT {int(limit)}"
             rows = cur.execute(sql).fetchall()
