@@ -82,6 +82,7 @@ from .handlers import (
     handle_budget,
     handle_cap,
     handle_catchup,
+    handle_chado,
     handle_chatban,
     handle_chatpolicy,
     handle_claude_cli,
@@ -820,6 +821,14 @@ class KraabUserbot(
         )
         async def wrap_filter(c, m):
             await run_cmd(handle_filter, m)
+
+        # Session 32 Wave 4: !chado — cross-AI sync с Chado (status/ping/digest)
+        @self.client.on_message(
+            filters.command("chado", prefixes=prefixes) & _make_command_filter("chado"),
+            group=-1,
+        )
+        async def wrap_chado(c, m):
+            await run_cmd(handle_chado, m)
 
         # Session 32 audit-3: !mem — быстрый доступ к Memory Layer (HybridRetriever)
         @self.client.on_message(

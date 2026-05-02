@@ -225,8 +225,8 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "unblock",  # → handle_cmdunblock (filters.command("unblock"))
         "blocklist",  # admin_commands.handle_blocklist
         "chatpolicy",  # policy_commands.handle_chatpolicy (Smart Routing 26)
-        # NB: handle_chado existed но dispatcher не зарегистрирован — это DEAD CODE
-        # на bridge-уровне. Wave 4 backlog: либо wire-up, либо удалить handler.
+        # Session 32 Wave 4: !chado wired (cron_chado_sync.py + claude routine active)
+        "chado",  # diagnostic_commands.handle_chado (status/ping/digest, Chado §9 P2)
         # Session 32 audit-3: handlers existed but no bridge dispatcher → wired now
         "filter",  # diagnostic_commands.handle_filter (Chado §3 P2 — per-chat filter mode)
         "mem",  # memory_commands.handle_mem (Memory Layer beta — HybridRetriever)
