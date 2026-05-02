@@ -232,6 +232,8 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "mem",  # memory_commands.handle_mem (Memory Layer beta — HybridRetriever)
         "setpanelauth",  # admin_commands.handle_setpanelauth (owner-only bcrypt panel auth)
         "top",  # content_commands.handle_top (chat activity leaderboard)
+        # Wave 14-I (Session 33): SkillCurator dry-run analyzer (read-only).
+        "curator",
         "members",
         "log",
         "tts",
@@ -296,6 +298,8 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "diag",
         # Session 32 audit-3: bcrypt-пароль для панели — только владелец
         "setpanelauth",
+        # Wave 14-I: !curator — read-only анализатор, всё равно owner-only
+        "curator",
     }
 )
 
