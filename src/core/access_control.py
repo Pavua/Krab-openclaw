@@ -214,6 +214,9 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "blocked",
         "invite",
         "contacts",
+        # Tor commands (Session 31 introduced handler но забыли в реестр):
+        # !tor status / ip / newid / fetch <url>. Owner-only.
+        "tor",
         "members",
         "log",
         "tts",

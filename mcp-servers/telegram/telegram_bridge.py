@@ -25,6 +25,17 @@ from pyrogram.types import Message
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+# Lazy-import резолвера: src/ добавляется в sys.path в server.py при старте,
+# но bridge может быть импортирован раньше — поэтому используем try/except.
+try:
+    import sys
+
+    if str(_PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PROJECT_ROOT))
+    from src.core.telegram_resolver import resolve_peer as _full_resolve_peer
+except Exception:  # noqa: BLE001
+    _full_resolve_peer = None  # fallback на локальный 2-strategy resolver
+
 
 def _session_dir() -> Path:
     """Директория для хранения Telegram session-файла MCP."""
@@ -268,12 +279,29 @@ class TelegramBridge:
             if disable_web_page_preview:
                 kwargs["disable_web_page_preview"] = True
 
+            # Wire 4-strategy resolver (Session 32): для строковых targets
+            # (@username, "+phone", "Name") идём через src.core.telegram_resolver
+            # — он использует contact cache + 4 fallback strategies. Возвращает
+            # числовой peer_id, готовый для client.send_message без PeerIdInvalid.
+            # Числовые chat_id оставляем как есть — Pyrogram сам их разрулит.
+            # Спец-токен "me" (Saved Messages) Pyrogram понимает напрямую —
+            # оставляем строкой, не парсим в int.
+            target = chat_id
+            if isinstance(chat_id, str) and _full_resolve_peer is not None:
+                resolved = await _full_resolve_peer(client, chat_id)
+                if resolved.get("ok"):
+                    peer_id = resolved.get("peer_id")
+                    if isinstance(peer_id, int):
+                        target = peer_id
+                    elif peer_id == "me":
+                        target = "me"
+
             # Auto-resolve attempt: если chat_id числовой и peer не в кэше,
             # try get_chat для populate access_hash. Безопасный no-op если
             # peer уже знаком. См. Session 25 lesson:
             # https://docs.pyrogram.org/topics/peer-id-invalid
             try:
-                msg = await client.send_message(chat_id, text, **kwargs)
+                msg = await client.send_message(target, text, **kwargs)
                 return _msg_to_dict(msg)
             except Exception as exc:  # noqa: BLE001
                 exc_name = type(exc).__name__
@@ -291,10 +319,11 @@ class TelegramBridge:
                 if not is_peer_invalid:
                     raise
 
-                # Fallback: попробовать get_chat для populate cache
+                # Fallback: попробовать get_chat для populate cache.
+                # Используем target (если резолвер дал peer_id) или исходный chat_id.
                 try:
-                    await client.get_chat(chat_id)
-                    msg = await client.send_message(chat_id, text, **kwargs)
+                    await client.get_chat(target)
+                    msg = await client.send_message(target, text, **kwargs)
                     return _msg_to_dict(msg)
                 except Exception as retry_exc:  # noqa: BLE001
                     # Structured error с hint вместо raise — LLM получит
