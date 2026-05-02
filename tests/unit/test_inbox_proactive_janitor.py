@@ -2,13 +2,16 @@
 """
 Tests для `InboxService.sweep_acked_proactive_actions`.
 
-Wave 8-A janitor: переводит `proactive_action` items из `acked` → `done`,
-если они старше порога. Safety net против накопления stale_processing items.
+Wave 8-A + Wave 9-C janitor: переводит items из `acked` → `done`, если они
+старше порога и kind входит в `_AUTO_SWEEP_KINDS` allowlist
+(``proactive_action`` + ``owner_request``). Safety net против накопления
+stale_processing items.
 
 Проверяем:
-- старые `acked` proactive_action sweep'ятся в `done`;
+- старые `acked` proactive_action sweep'ятся в `done` (Wave 8-A);
+- старые `acked` owner_request sweep'ятся в `done` (Wave 9-C);
 - свежие (< 1ч) `acked` НЕ трогаются;
-- items других kinds (owner_request, approval) НЕ трогаются;
+- approval_request / reminder / owner_task НЕ трогаются (явный human review);
 - janitor идемпотентен (повторный вызов = noop);
 - dry_run режим не мутирует state.
 """
@@ -115,15 +118,12 @@ def test_janitor_doesnt_touch_recent(tmp_path: Path) -> None:
 
 
 def test_janitor_doesnt_touch_other_kinds(tmp_path: Path) -> None:
-    """Другие kinds (owner_request, approval, reminder) НЕ трогаются."""
+    """approval_request / reminder / owner_task НЕ трогаются (требуют human review)."""
     now = datetime.now(timezone.utc)
     old = now - timedelta(hours=4)
     service = _service(
         tmp_path,
         [
-            _make_item(
-                item_id="oreq", kind="owner_request", status="acked", activity_at=old
-            ),
             _make_item(
                 item_id="appr", kind="approval_request", status="acked", activity_at=old
             ),
@@ -131,21 +131,137 @@ def test_janitor_doesnt_touch_other_kinds(tmp_path: Path) -> None:
                 item_id="rem", kind="reminder", status="acked", activity_at=old
             ),
             _make_item(
+                item_id="otask", kind="owner_task", status="acked", activity_at=old
+            ),
+            _make_item(
                 item_id="prox", kind="proactive_action", status="acked", activity_at=old
+            ),
+            _make_item(
+                item_id="oreq", kind="owner_request", status="acked", activity_at=old
             ),
         ],
     )
 
     result = service.sweep_acked_proactive_actions(age_threshold_minutes=60)
 
-    # Только proactive_action sweep'нут
-    assert result["matched"] == 1
-    assert result["swept"] == 1
+    # Sweep'нуты только allowlist: proactive_action + owner_request
+    assert result["matched"] == 2
+    assert result["swept"] == 2
     items_after = {it["item_id"]: it["status"] for it in service.list_items(status="all", limit=100)}
-    assert items_after["oreq"] == "acked"
     assert items_after["appr"] == "acked"
     assert items_after["rem"] == "acked"
+    assert items_after["otask"] == "acked"
     assert items_after["prox"] == "done"
+    assert items_after["oreq"] == "done"
+
+
+def test_janitor_sweeps_owner_request(tmp_path: Path) -> None:
+    """Wave 9-C: старые `acked` owner_request item-ы переходят в `done`."""
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(hours=2)
+    service = _service(
+        tmp_path,
+        [
+            _make_item(
+                item_id="oreq1", kind="owner_request", status="acked", activity_at=old
+            ),
+            _make_item(
+                item_id="oreq2", kind="owner_request", status="acked", activity_at=old
+            ),
+        ],
+    )
+
+    result = service.sweep_acked_proactive_actions(age_threshold_minutes=60)
+
+    assert result["matched"] == 2
+    assert result["swept"] == 2
+    items_after = service.list_items(status="all", limit=100)
+    assert all(it["status"] == "done" for it in items_after)
+    for it in items_after:
+        events = it["metadata"].get("workflow_events") or []
+        assert any(e.get("action") == "janitor_sweep" for e in events)
+
+
+def test_janitor_doesnt_touch_approval(tmp_path: Path) -> None:
+    """approval_request требует explicit human ack — janitor НЕ trogает."""
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=7)
+    service = _service(
+        tmp_path,
+        [
+            _make_item(
+                item_id="appr_old",
+                kind="approval_request",
+                status="acked",
+                activity_at=old,
+            ),
+        ],
+    )
+
+    result = service.sweep_acked_proactive_actions(age_threshold_minutes=60)
+
+    assert result["matched"] == 0
+    assert result["swept"] == 0
+    items_after = service.list_items(status="all", limit=100)
+    assert items_after[0]["status"] == "acked"
+
+
+def test_janitor_doesnt_touch_reminder(tmp_path: Path) -> None:
+    """reminder — user-scheduled, sweep = data loss. НЕ трогаем."""
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=3)
+    service = _service(
+        tmp_path,
+        [
+            _make_item(
+                item_id="rem_old", kind="reminder", status="acked", activity_at=old
+            ),
+        ],
+    )
+
+    result = service.sweep_acked_proactive_actions(age_threshold_minutes=60)
+
+    assert result["matched"] == 0
+    assert result["swept"] == 0
+    items_after = service.list_items(status="all", limit=100)
+    assert items_after[0]["status"] == "acked"
+
+
+def test_janitor_explicit_kind_outside_allowlist_falls_back(tmp_path: Path) -> None:
+    """
+    Защита от ошибочного вызова: если kind задан явно но НЕ в allowlist,
+    janitor использует весь allowlist (а не пытается sweep'нуть запрещённый kind).
+    """
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(hours=4)
+    service = _service(
+        tmp_path,
+        [
+            _make_item(
+                item_id="appr",
+                kind="approval_request",
+                status="acked",
+                activity_at=old,
+            ),
+            _make_item(
+                item_id="prox",
+                kind="proactive_action",
+                status="acked",
+                activity_at=old,
+            ),
+        ],
+    )
+
+    # Попытка sweep'нуть `approval_request` явно → fallback на allowlist
+    result = service.sweep_acked_proactive_actions(
+        kind="approval_request", age_threshold_minutes=60
+    )
+
+    items_after = {it["item_id"]: it["status"] for it in service.list_items(status="all", limit=100)}
+    # approval_request НЕ задели, proactive_action sweep'нут (allowlist использован)
+    assert items_after["appr"] == "acked"
+    assert items_after["prox"] == "done"
+    assert result["swept"] == 1
 
 
 def test_janitor_doesnt_touch_open_or_done(tmp_path: Path) -> None:
