@@ -5089,23 +5089,40 @@ class KraabUserbot(
             query = _forward_batch_prompt
         else:
             query = self._get_clean_text(text)
-        if not _forward_batch_prompt and not query and has_audio_message:
-            query, voice_error = await self._transcribe_audio_message(message)
+        if not _forward_batch_prompt and has_audio_message:
+            # Wave 16-E (Session 35): транскрибируем audio ВСЕГДА. Раньше гейт
+            # `not query` пропускал audio с подписью — Краб видел только caption,
+            # не файл. Симметрично photo-handling: и подпись, и контент попадают
+            # в LLM.
+            transcript, voice_error = await self._transcribe_audio_message(message)
             if not query:
-                await self._safe_reply_or_send_new(
-                    message,
-                    voice_error or "❌ Не удалось распознать голосовое сообщение.",
-                )
-                return
-            # Translator MVP: если сессия активна для этого чата — переводим вместо LLM
-            if query and self._is_translator_active_for_chat(chat_id):
-                handled = await self._handle_translator_voice(message, query, chat_id)
-                if handled:
+                # Audio-only: транскрипт обязателен для дальнейшего пути
+                if not transcript:
+                    await self._safe_reply_or_send_new(
+                        message,
+                        voice_error or "❌ Не удалось распознать голосовое сообщение.",
+                    )
                     return
-            # Idea 1: voice dispatcher решает формат (full/summary/both) и
-            # подмешивает структурированный контекст в LLM prompt. Fail-open:
-            # любая ошибка возвращает raw transcript.
-            query = await self._apply_voice_dispatcher(message, query)
+                query = transcript
+                # Translator MVP: если сессия активна для этого чата — переводим вместо LLM
+                if self._is_translator_active_for_chat(chat_id):
+                    handled = await self._handle_translator_voice(message, query, chat_id)
+                    if handled:
+                        return
+                # Idea 1: voice dispatcher решает формат (full/summary/both) и
+                # подмешивает структурированный контекст в LLM prompt. Fail-open:
+                # любая ошибка возвращает raw transcript.
+                query = await self._apply_voice_dispatcher(message, query)
+            else:
+                # Audio + caption: caption — explicit prompt, транскрипт — материал.
+                # Translator/voice_dispatcher НЕ применяем (caption явный).
+                if transcript:
+                    query = f"{query}\n\n[Транскрипция аудио]: {transcript}"
+                else:
+                    query = (
+                        f"{query}\n\n[Аудио прислано, но транскрипция не удалась: "
+                        f"{voice_error or 'unknown'}]"
+                    )
         elif query and not message.photo and not has_audio_message and not _forward_batch_prompt:
             message, query = await self._coalesce_text_burst(
                 message=message,
