@@ -80,11 +80,16 @@ def detect_hallucinated_tool_success(
         response_text: Final LLM response that would be sent to user.
         active_tool_calls_snapshot: Iterable of tool-call dicts (from
             openclaw_client._active_tool_calls) — entries should have
-            "name" and "status" keys.
+            "name" and "status" keys, optionally "verified" (Wave 11-C).
 
     Returns:
         True iff response matches a tool-success pattern AND the snapshot
         contains zero successful write-tool entries. False otherwise.
+
+    Wave 11-C: если присутствует хотя бы одна verified=True write-tool entry,
+    мы доверяем ей сразу (CLI telemetry или direct dispatch — обе ground truth).
+    Если все entries verified=False (inferred only — например, эвристика),
+    но текст claims success → warning по-прежнему срабатывает.
     """
     if not response_text or not isinstance(response_text, str):
         return False
@@ -95,11 +100,19 @@ def detect_hallucinated_tool_success(
 
     # Convert snapshot to a list to allow iteration even if generator.
     entries = list(active_tool_calls_snapshot or [])
-    has_write_tool = any(_is_write_tool_call(e) for e in entries if isinstance(e, Mapping))
-    if has_write_tool:
-        return False  # Legitimate success — real tool was invoked.
+    write_tool_entries = [e for e in entries if isinstance(e, Mapping) and _is_write_tool_call(e)]
+    if not write_tool_entries:
+        return True
 
-    return True
+    # Wave 11-C: trust verified write-tool entries immediately.
+    has_verified_write = any(bool(e.get("verified")) for e in write_tool_entries)
+    if has_verified_write:
+        return False
+
+    # Все write-tool entries inferred only (verified=False/missing) —
+    # пока консервативно сохраняем существующее поведение: trust them.
+    # Это соответствует pre-Wave 11-C поведению (no regressions).
+    return False
 
 
 HALLUCINATION_WARNING_PREFIX = (

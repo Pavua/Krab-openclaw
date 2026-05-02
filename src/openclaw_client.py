@@ -99,6 +99,76 @@ def _supports_vision(model: str) -> bool:
     return any(p in model_lower for p in _VISION_CAPABLE_PATTERNS)
 
 
+def parse_tool_calls_executed(response_dict: Any) -> list[dict[str, Any]]:
+    """Извлечь и нормализовать `tool_calls_executed` из ответа OpenClaw.
+
+    Wave 11-C contract (см. docs/architecture/CLI_TOOL_CALLS_TELEMETRY_CONTRACT.md):
+    OpenClaw добавляет top-level `tool_calls_executed` для CLI-провайдеров,
+    у которых model.tool_calls пустой (codex-cli/claude-cli/opencode/gemini-cli).
+
+    Backward-compat: отсутствие поля → пустой список (legacy behaviour).
+    Malformed entries skipped с warning, остальные нормализуются.
+
+    Returns: list of dicts с полями {name, status, args, result, elapsed_ms,
+    provider, trace_id, started_at, verified=True}. Schema совместима
+    с _active_tool_calls (name/status есть всегда).
+    """
+    if not isinstance(response_dict, dict):
+        return []
+    raw = response_dict.get("tool_calls_executed")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        try:
+            from .core.logger import get_logger as _get_logger  # local to avoid cycle
+
+            _get_logger(__name__).warning(
+                "tool_calls_executed_invalid_type",
+                got_type=type(raw).__name__,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return []
+
+    parsed: list[dict[str, Any]] = []
+    skipped = 0
+    for entry in raw:
+        if not isinstance(entry, dict):
+            skipped += 1
+            continue
+        tool_name = entry.get("tool") or entry.get("name")
+        if not tool_name or not isinstance(tool_name, str):
+            skipped += 1
+            continue
+        status = str(entry.get("status") or "done").lower()
+        normalized: dict[str, Any] = {
+            "name": tool_name,
+            "status": status,
+            "args": entry.get("args_redacted") or entry.get("args") or {},
+            "result": entry.get("result_summary") or entry.get("result"),
+            "elapsed_ms": entry.get("elapsed_ms"),
+            "provider": entry.get("provider"),
+            "trace_id": entry.get("trace_id"),
+            "started_at": entry.get("started_at_ms"),
+            "verified": True,
+        }
+        parsed.append(normalized)
+
+    if skipped > 0:
+        try:
+            from .core.logger import get_logger as _get_logger
+
+            _get_logger(__name__).warning(
+                "tool_calls_executed_entries_skipped",
+                skipped=skipped,
+                total=len(raw),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    return parsed
+
+
 class OpenClawClient:
     """Клиент OpenClaw Gateway API."""
 
@@ -2178,6 +2248,23 @@ class OpenClawClient:
         if normalized_usage:
             usage_snapshot = normalized_usage
 
+        # Wave 11-C: parse optional CLI telemetry (tool_calls_executed).
+        # Backward-compat: отсутствие поля → empty list, no behaviour change.
+        try:
+            cli_tool_calls = parse_tool_calls_executed(data)
+        except Exception:  # noqa: BLE001
+            cli_tool_calls = []
+        if cli_tool_calls:
+            providers = sorted({str(e.get("provider") or "unknown") for e in cli_tool_calls})
+            logger.info(
+                "tool_calls_executed_received",
+                count=len(cli_tool_calls),
+                providers=providers,
+                model=model_id,
+            )
+            # Merge в _active_tool_calls — entries уже verified=True.
+            self._active_tool_calls.extend(cli_tool_calls)
+
         choices = data.get("choices") or [{}]
         message_obj = choices[0].get("message") or {}
         full_response = message_obj.get("content", "") or ""
@@ -2200,11 +2287,14 @@ class OpenClawClient:
                 except Exception:
                     args = {}
 
-                # Трекинг для Telegram progress notices
+                # Трекинг для Telegram progress notices.
+                # verified=True — Krab сам dispatched tool через mcp_manager,
+                # это direct ground truth (как и tool_calls_executed telemetry).
                 tool_entry = {
                     "name": func_name,
                     "status": "running",
                     "started_at": time.monotonic(),
+                    "verified": True,
                 }
                 self._active_tool_calls.append(tool_entry)
 
