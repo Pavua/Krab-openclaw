@@ -46,10 +46,15 @@ class Config:
     # LM Studio (trailing slash stripped for API calls)
     LM_STUDIO_URL: str = os.getenv("LM_STUDIO_URL", "http://192.168.0.171:1234").rstrip("/")
     # Каноничный токен локального LM Studio API.
+    # `LM_API_TOKEN` — короткое имя из официальной ошибки LM Studio (session 32).
     # `LM_STUDIO_AUTH_TOKEN` оставляем как legacy alias, чтобы не ломать старые env.
+    LM_API_TOKEN: str = os.getenv("LM_API_TOKEN", "").strip()
     LM_STUDIO_API_KEY: str = os.getenv(
-        "LM_STUDIO_API_KEY",
-        os.getenv("LM_STUDIO_AUTH_TOKEN", ""),
+        "LM_API_TOKEN",
+        os.getenv(
+            "LM_STUDIO_API_KEY",
+            os.getenv("LM_STUDIO_AUTH_TOKEN", ""),
+        ),
     ).strip()
 
     # Gemini (fallback): free key first, paid key as opt-in

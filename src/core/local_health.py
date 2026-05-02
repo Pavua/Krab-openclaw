@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 import httpx
 import structlog
 
-from .lm_studio_auth import build_lm_studio_auth_headers
+from .lm_studio_auth import build_lm_studio_auth_headers, resolve_lm_studio_api_key
 from .model_types import ModelInfo, ModelStatus, ModelType
 
 if TYPE_CHECKING:
@@ -23,6 +23,30 @@ logger = structlog.get_logger(__name__)
 
 # Таймаут по умолчанию для запросов к LM Studio
 DEFAULT_LM_STUDIO_TIMEOUT = 30.0
+
+
+def _maybe_warn_auth_required(status_code: int, *, url: str) -> None:
+    """Логирует структурный warning, если LM Studio вернул 401 без токена.
+
+    LM Studio с включённой опцией `Require Authentication` возвращает 401
+    с сообщением вида: `An LM Studio API token is required ... Authorization: Bearer $LM_API_TOKEN`.
+    Если токен пустой — подсказываем оператору установить env var.
+    """
+    if status_code != 401:
+        return
+    if resolve_lm_studio_api_key():
+        # Токен задан, но всё равно 401 — это уже invalid token, не missing.
+        logger.warning(
+            "lm_studio_auth_invalid",
+            url=url,
+            hint="LM_API_TOKEN/LM_STUDIO_API_KEY is set but rejected (401)",
+        )
+        return
+    logger.warning(
+        "lm_studio_auth_required",
+        url=url,
+        hint="Set LM_API_TOKEN env var (or LM_STUDIO_API_KEY) to authenticate to LM Studio",
+    )
 
 
 def _detect_model_type(model_id: str) -> ModelType:
@@ -58,6 +82,7 @@ async def is_lm_studio_available(
                 resp = await client.get(url, timeout=timeout, headers=headers or None)
                 if resp.status_code == 200:
                     return True
+                _maybe_warn_auth_required(resp.status_code, url=url)
                 continue
             except (httpx.HTTPError, OSError):
                 continue
@@ -66,6 +91,7 @@ async def is_lm_studio_available(
                 resp = await ac.get(url)
                 if resp.status_code == 200:
                     return True
+                _maybe_warn_auth_required(resp.status_code, url=url)
             except (httpx.HTTPError, OSError):
                 continue
     return False
@@ -120,6 +146,7 @@ async def fetch_lm_studio_models_list(
                 async with httpx.AsyncClient(timeout=timeout, headers=headers or None) as ac:
                     resp = await ac.get(url, timeout=timeout)
             if resp.status_code != 200:
+                _maybe_warn_auth_required(resp.status_code, url=url)
                 continue
             data = resp.json()
             # v1: {"models": [...]}
