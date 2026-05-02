@@ -78,6 +78,13 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     # состоянии. Генерируется Python при gc pending tasks во время event loop
     # teardown (Sentry issue 6T, 3 events). Штатное поведение при остановке.
     "Task was destroyed but it is pending",
+    # Session 33 Wave 5: main session integrity preflight events. Локально
+    # логируются + при необходимости escalate через capture_message с tag
+    # db_corruption=true (см. report_corruption_to_sentry). Не дублируем
+    # шум через logging integration.
+    "main_session_integrity_ok",
+    "main_session_integrity_failed",
+    "main_session_recovered_auto",
 )
 
 

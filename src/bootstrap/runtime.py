@@ -425,6 +425,18 @@ async def run_app() -> None:
             sys.exit(DB_CORRUPTION_EXIT_CODE)
         logger.error("fatal_error", error=str(exc), error_type=type(exc).__name__)
     except Exception as e:
+        # Session 33 Wave 5: DBCorruptionError (raised by main session integrity
+        # preflight when auto-recovery failed) → exit 78 like other corruption
+        # paths, не fatal_error → НЕ retry-loop в _run_with_retry.
+        from .db_corruption_guard import DBCorruptionError  # noqa: PLC0415
+
+        if isinstance(e, DBCorruptionError):
+            logger.error(
+                "boot_aborted_main_session_corrupt",
+                error=str(e),
+                exit_code=DB_CORRUPTION_EXIT_CODE,
+            )
+            sys.exit(DB_CORRUPTION_EXIT_CODE)
         logger.error("fatal_error", error=str(e), error_type=type(e).__name__)
     finally:
         if warmup_task is not None and not warmup_task.done():

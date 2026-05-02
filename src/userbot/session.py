@@ -206,18 +206,154 @@ class SessionMixin:
     # Client create / start / stop
     # ------------------------------------------------------------------
 
+    def _main_session_integrity_preflight(self) -> bool:
+        """
+        Pre-flight integrity check + auto-recovery для main kraab.session.
+
+        Симметричен swarm preflight (`_start_swarm_team_clients`, ~line 3300
+        в `userbot_bridge.py`). Закрывает асимметрию: swarm clients защищены,
+        а main session раньше шёл прямо в `Client(...)` — corruption всплывала
+        только при первом read и могла вешать процесс.
+
+        Поток:
+        1. Если файл отсутствует → return True (фрэш auth flow handled выше).
+        2. Если backup `.bak-corrupt-*` моложе 1h существует → ТОЛЬКО integrity
+           check (skip recovery loop, чтобы не зацикливаться).
+        3. integrity_check на read-only connection.
+        4. На corruption → backup + WAL/SHM cleanup + `.recover` → integrity
+           recheck → atomic replace.
+        5. На irrecoverable → DBCorruptionError (runtime.py выходит exit 78).
+
+        Returns:
+            True если session готова к открытию Pyrogram client'ом.
+
+        Raises:
+            DBCorruptionError — recovery провалилась, либо повторная попытка
+            (idempotency guard).
+        """
+        from ..bootstrap.db_corruption_guard import (
+            DBCorruptionError,
+            attempt_session_recovery,
+            has_recent_recovery_backup,
+            integrity_check,
+            is_corruption_error,
+            report_corruption_to_sentry,
+        )
+
+        sess_path = self._primary_session_file()
+        if not sess_path.exists():
+            # Fresh session — nothing to check. Pyrogram сам создаст файл
+            # при первом start (либо запросит phone-code в interactive flow).
+            return True
+
+        ok, detail = integrity_check(sess_path)
+        if ok:
+            logger.info(
+                "main_session_integrity_ok",
+                file=str(sess_path),
+                detail=detail,
+            )
+            return True
+
+        # Non-ok. Различаем: реальная corruption vs transient locked / disk
+        # I/O. Только corruption-маркеры триггерят recovery.
+        if not is_corruption_error(detail):
+            # Transient (locked / disk i/o). Не recover — пускай Pyrogram
+            # сам отретраит на реальной open. Это согласовано с поведением
+            # bootstrap'а runtime.py.
+            logger.warning(
+                "main_session_integrity_non_corruption",
+                file=str(sess_path),
+                detail=detail,
+            )
+            return True
+
+        logger.error(
+            "main_session_integrity_failed",
+            file=str(sess_path),
+            detail=detail,
+        )
+
+        # Idempotency guard: если recovery уже была в последний час и мы опять
+        # видим corruption — повторный .recover вряд ли поможет. Fail loudly.
+        if has_recent_recovery_backup(sess_path, within_seconds=3600):
+            logger.error(
+                "main_session_recovery_skipped_recent_backup",
+                file=str(sess_path),
+                detail=detail,
+            )
+            report_corruption_to_sentry(
+                path=str(sess_path),
+                kind="session",
+                detail=detail,
+                quarantine_path="",
+            )
+            raise DBCorruptionError(
+                f"Main session {sess_path} corrupt and recent recovery did not help: {detail}"
+            )
+
+        # Auto-recovery (sqlite3 .recover).
+        recovery = attempt_session_recovery(sess_path, timeout_sec=30.0)
+        if recovery.get("recovered"):
+            logger.info(
+                "main_session_recovered_auto",
+                file=str(sess_path),
+                backup_path=recovery.get("backup_path", ""),
+                peer_count=recovery.get("peer_count"),
+                username_count=recovery.get("username_count"),
+                sessions_count=recovery.get("sessions_count"),
+            )
+            return True
+
+        logger.error(
+            "main_session_recovery_failed",
+            file=str(sess_path),
+            detail=recovery.get("detail", ""),
+            backup_path=recovery.get("backup_path", ""),
+        )
+        report_corruption_to_sentry(
+            path=str(sess_path),
+            kind="session",
+            detail=recovery.get("detail", "") or detail,
+            quarantine_path=recovery.get("backup_path", ""),
+        )
+        raise DBCorruptionError(
+            f"Main session {sess_path} corrupt; .recover failed: {recovery.get('detail', '')}"
+        )
+
     def _recreate_client(self) -> None:
         """
         Полностью пересоздает экземпляр Pyrogram Client и регистрирует хендлеры заново.
         Нужен для recovery после протухшей/битой сессии.
+
+        Перед созданием Pyrogram Client проводит integrity preflight + auto-recovery
+        — симметрично swarm clients (см. `_start_swarm_team_clients`).
         """
+        # Гарантируем, что session workdir существует ДО любого open()
+        # (integrity_check открывает в read-only mode, но parent dir нужен
+        # для будущих recover-сайдкаров).
+        self._session_workdir.mkdir(parents=True, exist_ok=True)
+        # Wave 5: integrity-gate. Поднимет DBCorruptionError если auto-recovery
+        # не помог — runtime.py поймает sqlite3.DatabaseError-родственника
+        # и выйдет с DB_CORRUPTION_EXIT_CODE.
+        try:
+            self._main_session_integrity_preflight()
+        except Exception as exc:  # noqa: BLE001
+            # Re-raise после явного логирования. Класс — наследник RuntimeError,
+            # bootstrap его не залапает как DatabaseError, поэтому добавляем
+            # стабильный лог здесь.
+            logger.error(
+                "main_session_preflight_aborted_boot",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            raise
         self.client = Client(
             config.TELEGRAM_SESSION_NAME,
             api_id=config.TELEGRAM_API_ID,
             api_hash=config.TELEGRAM_API_HASH,
             workdir=str(self._session_workdir),
         )
-        self._session_workdir.mkdir(parents=True, exist_ok=True)
         logger.info(
             "telegram_client_created",
             session_name=config.TELEGRAM_SESSION_NAME,
