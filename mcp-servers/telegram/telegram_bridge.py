@@ -437,7 +437,19 @@ class TelegramBridge:
                 kwargs["parse_mode"] = _resolve_parse_mode(parse_mode)
             if disable_web_page_preview:
                 kwargs["disable_web_page_preview"] = True
-            msg = await client.send_photo(chat_id, photo, **kwargs)
+
+            # Wire 4-strategy resolver (Session 32 Wave 3-D): см. send_message.
+            target = chat_id
+            if isinstance(chat_id, str) and _full_resolve_peer is not None:
+                resolved = await _full_resolve_peer(client, chat_id)
+                if resolved.get("ok"):
+                    peer_id = resolved.get("peer_id")
+                    if isinstance(peer_id, int):
+                        target = peer_id
+                    elif peer_id == "me":
+                        target = "me"
+
+            msg = await client.send_photo(target, photo, **kwargs)
             return _msg_to_dict(msg)
 
         return await self._run_client_call(_op)
@@ -452,8 +464,19 @@ class TelegramBridge:
         emojis = [emoji] if isinstance(emoji, str) else list(emoji)
 
         async def _op(client: Client) -> dict[str, Any]:
+            # Wire 4-strategy resolver (Session 32 Wave 3-D): см. send_message.
+            target = chat_id
+            if isinstance(chat_id, str) and _full_resolve_peer is not None:
+                resolved = await _full_resolve_peer(client, chat_id)
+                if resolved.get("ok"):
+                    peer_id = resolved.get("peer_id")
+                    if isinstance(peer_id, int):
+                        target = peer_id
+                    elif peer_id == "me":
+                        target = "me"
+
             # pyrofork send_reaction принимает emoji напрямую как str | list[str]
-            await client.send_reaction(chat_id, message_id, emoji=emojis)
+            await client.send_reaction(target, message_id, emoji=emojis)
             return {"ok": True, "chat_id": str(chat_id), "message_id": message_id, "emoji": emojis}
 
         return await self._run_client_call(_op)
@@ -545,7 +568,19 @@ class TelegramBridge:
                 kwargs["duration"] = duration
             if reply_to_message_id is not None:
                 kwargs["reply_to_message_id"] = reply_to_message_id
-            msg = await client.send_voice(chat_id, voice_path, **kwargs)
+
+            # Wire 4-strategy resolver (Session 32 Wave 3-D): см. send_message.
+            target = chat_id
+            if isinstance(chat_id, str) and _full_resolve_peer is not None:
+                resolved = await _full_resolve_peer(client, chat_id)
+                if resolved.get("ok"):
+                    peer_id = resolved.get("peer_id")
+                    if isinstance(peer_id, int):
+                        target = peer_id
+                    elif peer_id == "me":
+                        target = "me"
+
+            msg = await client.send_voice(target, voice_path, **kwargs)
             return _msg_to_dict(msg)
 
         return await self._run_client_call(_op)
