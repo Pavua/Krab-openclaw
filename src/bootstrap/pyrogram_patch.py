@@ -67,10 +67,20 @@ def _execute_pragmas(conn) -> None:
     что является опасной операцией. Пространство освобождается органически через
     free-page list при обновлениях.
     """
+    # Wave 14-J additions:
+    # - ``temp_store=MEMORY`` — temp tables/indexes держим в RAM. SQLite по
+    #   default может писать temp в /tmp, и при OOM/disk-pressure это даёт
+    #   torn writes → "disk image is malformed". RAM-temp полностью исключает
+    #   этот класс corruption для intermediate-операций.
+    # - ``cache_size=-65536`` — 64MB page cache (negative = KB). Default 2MB
+    #   слишком мало для нагрузки 4+ pyrofork-клиентов: страницы постоянно
+    #   эвиктятся, page-checksum errors при concurrent reads/writes.
     for pragma in (
         "PRAGMA busy_timeout=5000",
         "PRAGMA journal_mode=WAL",
         "PRAGMA synchronous=NORMAL",
+        "PRAGMA temp_store=MEMORY",
+        "PRAGMA cache_size=-65536",
     ):
         try:
             conn.execute(pragma)
@@ -130,52 +140,92 @@ def apply_pyrogram_sqlite_hardening() -> bool:
 
     _fs.FileStorage.open = _patched_open
 
-    # Graceful retry-layer поверх update_usernames: под редкой конкуренцией
-    # даже с WAL возможен OperationalError (например, schema upgrade на
-    # старте). Логируем warning и глотаем — имена подтянутся в следующий раз.
-    _orig_update_usernames = _ss.SQLiteStorage.update_usernames
+    # ------------------------------------------------------------------
+    # Wave 14-J: generic safe-wrapper factory для write-методов SQLiteStorage.
+    # ------------------------------------------------------------------
+    # Все wrapped-методы — write-only path (нет полезного return value).
+    # Глотаем три класса recoverable-ошибок:
+    #   - "database is locked" / "database table is locked" — concurrency lock
+    #   - "database disk image is malformed" — page checksum / WAL replay race;
+    #     Telegram пересинхронизируется на следующем event'е.
+    # Прочие исключения (no such table, syntax errors etc.) — пробрасываем.
+    #
+    # Wrapped methods:
+    #   - update_usernames (Wave 5-B Session 33)
+    #   - update_peers     (Session 32 — был отдельный wrap)
+    #   - update_state     (Wave 14-J — fires on EVERY Telegram event)
+    #   - remove_state     (Wave 14-J — write path, та же риск-поверхность)
+    #
+    # Не оборачиваем:
+    #   - get_peer_by_* — read-path, raise KeyError для not-found
+    #     (silent swallow здесь сломал бы peer resolution)
+    #   - accessors (api_id/dc_id/...) — отдельный layer ниже с last-good cache
+    def _make_safe_method(orig, op_name, *, fallback=None):
+        """
+        Factory: оборачивает async-метод SQLiteStorage в graceful-retry.
+        Threadsafe, idempotent, single source of truth.
 
-    async def _safe_update_usernames(self, usernames):
-        try:
-            await _orig_update_usernames(self, usernames)
-        except Exception as exc:  # noqa: BLE001 — sqlite3.OperationalError и др.
-            msg = str(exc).lower()
-            if "database is locked" in msg or "database table is locked" in msg:
-                log.warning(
-                    "pyrogram_sqlite_locked",
-                    extra={"op": "update_usernames", "count": len(usernames or [])},
-                )
-                return None
-            raise
+        ``fallback`` — значение, возвращаемое при swallow. Для большинства
+        write-методов None достаточно; для ``update_state`` в read-mode
+        нужен пустой list (Telegram resync на следующем event).
+        """
 
-    _ss.SQLiteStorage.update_usernames = _safe_update_usernames
+        async def _safe(self, *args, **kwargs):
+            try:
+                return await orig(self, *args, **kwargs)
+            except Exception as exc:  # noqa: BLE001 — sqlite3.OperationalError/DatabaseError
+                msg = str(exc).lower()
+                # Best-effort размер payload для логирования (пропускаем
+                # sentinel ``object`` — это read-mode без аргументов).
+                count = None
+                if args:
+                    first = args[0]
+                    if first is not object:
+                        try:
+                            count = len(first) if first is not None else 0
+                        except TypeError:
+                            count = None
+                if "database is locked" in msg or "database table is locked" in msg:
+                    log.warning(
+                        "pyrogram_sqlite_locked",
+                        extra={"op": op_name, "count": count},
+                    )
+                    return fallback() if callable(fallback) else fallback
+                if "database disk image is malformed" in msg:
+                    log.warning(
+                        "pyrogram_sqlite_malformed_swallowed",
+                        extra={"op": op_name, "count": count},
+                    )
+                    return fallback() if callable(fallback) else fallback
+                raise
 
-    # Тот же retry-layer для update_peers: эта же storage-процедура, вызывается
-    # чаще, и в логах перед Session 32 restart получали "database disk image is
-    # malformed" 25 раз подряд. Без graceful retry один corrupted call валит
-    # сессию. Глотаем locked + malformed (логируем); прочие — пробрасываем.
-    _orig_update_peers = _ss.SQLiteStorage.update_peers
+        _safe.__name__ = orig.__name__
+        _safe.__qualname__ = getattr(orig, "__qualname__", orig.__name__)
+        return _safe
 
-    async def _safe_update_peers(self, peers):
-        try:
-            await _orig_update_peers(self, peers)
-        except Exception as exc:  # noqa: BLE001 — sqlite3.OperationalError/DatabaseError
-            msg = str(exc).lower()
-            if "database is locked" in msg or "database table is locked" in msg:
-                log.warning(
-                    "pyrogram_sqlite_locked",
-                    extra={"op": "update_peers", "count": len(peers or [])},
-                )
-                return None
-            if "database disk image is malformed" in msg:
-                log.warning(
-                    "pyrogram_sqlite_malformed_swallowed",
-                    extra={"op": "update_peers", "count": len(peers or [])},
-                )
-                return None
-            raise
-
-    _ss.SQLiteStorage.update_peers = _safe_update_peers
+    # Список write-методов для wrap. Если в будущей pyrofork-версии метод
+    # отсутствует — пропускаем без падения. Per-method fallback: для
+    # update_state в read-mode возвращаем [] (empty list — Telegram resync),
+    # для прочих None.
+    wrapped_methods = (
+        ("update_usernames", None),
+        ("update_peers", None),
+        ("update_state", list),  # read-mode возвращает list; write — игнорим return
+        ("remove_state", None),
+    )
+    for _method_name, _fallback in wrapped_methods:
+        _orig = getattr(_ss.SQLiteStorage, _method_name, None)
+        if _orig is None:
+            log.warning(
+                "pyrogram_storage_method_missing",
+                extra={"method": _method_name},
+            )
+            continue
+        setattr(
+            _ss.SQLiteStorage,
+            _method_name,
+            _make_safe_method(_orig, _method_name, fallback=_fallback),
+        )
 
     _PATCH_APPLIED = True
     log.info("pyrogram_sqlite_hardening_applied")
