@@ -11,17 +11,9 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
-
-pytest.skip(
-    "Pre-existing hang on starlette TestClient — Wave 16 backlog. "
-    "Tests timeout indefinitely waiting for AI runtime that's not "
-    "mocked in fixtures. See Wave 13-B investigation.",
-    allow_module_level=True,
-)
-
-from unittest.mock import patch  # noqa: E402
-
 from fastapi.testclient import TestClient
 
 from src.modules.web_app import WebApp
