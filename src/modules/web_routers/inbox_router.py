@@ -77,14 +77,22 @@ def build_inbox_router(ctx: RouterContext) -> APIRouter:
 
     @router.get("/api/inbox/stale-open")
     async def inbox_stale_open(
-        kind: str = Query(default="owner_request"),
+        kind: str = Query(default=""),
         limit: int = Query(default=20),
     ) -> dict:
-        """Старые `open` item-ы для owner remediation runbook."""
+        """
+        Старые `open` item-ы для owner remediation runbook.
+
+        Без параметра ``kind`` возвращает stale-open items по ВСЕМ kinds —
+        чтобы соответствовать агрегатному счётчику ``stale_open_items`` в
+        ``/api/health/lite``. Передача ``?kind=owner_request`` (или другого)
+        фильтрует список как раньше — backward-compat сохранён.
+        """
         items = inbox_service.list_stale_open_items(kind=kind, limit=limit)
+        normalized_kind = str(kind or "").strip().lower()
         return {
             "ok": True,
-            "kind": str(kind or "").strip().lower(),
+            "kind": normalized_kind or "all",
             "count": len(items),
             "items": items,
         }
