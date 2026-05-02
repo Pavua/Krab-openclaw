@@ -290,6 +290,13 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - **Wake-up message**: 60min rate limit (no more startup spam в Saved Messages)
 - **message_batcher**: preserve buffered messages during LLM processing (no drops)
 
+## LM Studio integration
+
+- Get token in LM Studio app (Settings → Network → API token)
+- Run: `venv/bin/python scripts/setup_lm_studio_token.py <your-token>` (saves `LM_API_TOKEN` to `.env`)
+- Read-only check: `venv/bin/python scripts/setup_lm_studio_token.py --check`
+- Restart Krab to apply
+
 ## Smart Message Routing (Session 26 — 26.04.2026 — LIVE)
 
 5-stage pipeline для intelligent group message routing — ответ на user issue «Krab отвечает не всегда вовремя».
