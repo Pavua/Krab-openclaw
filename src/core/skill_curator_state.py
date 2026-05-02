@@ -3,10 +3,10 @@
 src/core/skill_curator_state.py
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Atomic JSON store для CuratorState (Wave 15-C → 16-A, Steps 2-3/4).
+Atomic JSON store для CuratorState (Wave 15-C → 16-A → 16-D, Steps 2-4/4).
 
-Хранит per-team метаданные curator runs + global pause flag + active overlays в
-``~/.openclaw/krab_runtime_state/curator/state.json``.
+Хранит per-team метаданные curator runs + global pause flag + active overlays +
+active_ab_tests в ``~/.openclaw/krab_runtime_state/curator/state.json``.
 
 Запись через `tempfile + os.replace` — atomic, безопасно при concurrent
 writes из cron + ручных команд.
@@ -42,6 +42,7 @@ class CuratorState:
     - ``last_proposal_paths`` — путь к последнему LLM-proposal per team.
     - ``active_overlays`` — активные overlays: {team: {prompt, proposal_id, applied_at, version, archive_path}}.
     - ``last_apply_at`` — ISO8601 (UTC) per team, момент последнего apply (rate-limit).
+    - ``active_ab_tests`` — Step 4: активные A/B тесты: {team: ab_id}.
     """
 
     last_run_at: dict[str, str] = field(default_factory=dict)
@@ -52,6 +53,8 @@ class CuratorState:
     # Step 3: overlays (backward compat — пустой dict если ключа нет)
     active_overlays: dict[str, dict[str, Any]] = field(default_factory=dict)
     last_apply_at: dict[str, str] = field(default_factory=dict)
+    # Step 4: A/B тесты (backward compat — пустой dict если ключа нет)
+    active_ab_tests: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "CuratorState":
@@ -76,6 +79,8 @@ class CuratorState:
             # Backward compat: поле может отсутствовать в старых state.json
             active_overlays=dict(data.get("active_overlays") or {}),
             last_apply_at=dict(data.get("last_apply_at") or {}),
+            # Step 4 backward compat
+            active_ab_tests=dict(data.get("active_ab_tests") or {}),
         )
 
     def save_atomic(self, path: Path | None = None) -> Path:
@@ -139,3 +144,20 @@ class CuratorState:
         """Обновляет last_apply_at для rate-limit проверок."""
 
         self.last_apply_at[team.lower()] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    # -- Step 4: A/B tests API -----------------------------------------------
+
+    def set_active_ab_test(self, team: str, ab_id: str) -> None:
+        """Регистрирует активный A/B тест для команды."""
+
+        self.active_ab_tests[team.lower()] = ab_id
+
+    def clear_active_ab_test(self, team: str) -> None:
+        """Снимает активный A/B тест для команды."""
+
+        self.active_ab_tests.pop(team.lower(), None)
+
+    def get_active_ab_test(self, team: str) -> str | None:
+        """Возвращает ab_id активного теста команды или None."""
+
+        return self.active_ab_tests.get(team.lower())
