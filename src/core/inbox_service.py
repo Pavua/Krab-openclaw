@@ -729,6 +729,111 @@ class InboxService:
             "target_status": normalized_target,
         }
 
+    def sweep_acked_proactive_actions(
+        self,
+        *,
+        kind: str = "proactive_action",
+        age_threshold_minutes: int = 60,
+        actor: str = "system-janitor",
+        note: str = "auto_transition_acked_to_done",
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Janitor: переводит `proactive_action` item-ы из ``acked`` → ``done``,
+        если они старше порога.
+
+        Зачем: cron-handler / background processing создают `acked` items как
+        owner-visible trace, но обратного transition к `done` часто нет —
+        item висит как stale_processing неделями (см. Wave 7-C / Wave 8-A).
+        Этот sweep — safety net, идемпотентен (повторный вызов не делает ничего).
+
+        Args:
+            kind: По умолчанию `proactive_action` — единственный kind, для
+                которого `acked` означает "background-processing-started" без
+                ожидаемого owner ack. Другие kinds (owner_request, approval)
+                требуют явного ack от человека и НЕ должны автоматически
+                закрываться.
+            age_threshold_minutes: Минимальный возраст (по `last_action_at_utc`
+                или `updated_at_utc`) для авто-перехода. По умолчанию 60 мин —
+                достаточно, чтобы дать активной обработке завершиться.
+            actor: Записывается в workflow events для аудита.
+            note: Краткое пояснение в workflow event.
+            dry_run: Если True — возвращает кандидатов без изменений.
+
+        Returns:
+            ``{"matched": N, "swept": M, "items": [...], "dry_run": bool}``
+        """
+        normalized_kind = str(kind or "").strip().lower() or "proactive_action"
+        threshold_minutes = max(0, int(age_threshold_minutes or 0))
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=threshold_minutes)
+
+        items = self._load_items()
+        matched: list[InboxItem] = []
+        for item in items:
+            if item.status != "acked":
+                continue
+            if item.kind != normalized_kind:
+                continue
+            activity_at = self._parse_item_activity_at(item)
+            if activity_at is None:
+                continue
+            if activity_at > cutoff:
+                continue
+            matched.append(item)
+
+        if dry_run:
+            return {
+                "matched": len(matched),
+                "swept": 0,
+                "items": [item.to_dict() for item in matched],
+                "dry_run": True,
+            }
+
+        if not matched:
+            return {"matched": 0, "swept": 0, "items": [], "dry_run": False}
+
+        normalized_actor = str(actor or "system-janitor").strip().lower() or "system-janitor"
+        normalized_note = str(note or "").strip() or "auto_transition_acked_to_done"
+        now_iso = _now_utc_iso()
+        matched_ids = {item.item_id for item in matched}
+        swept_payloads: list[dict[str, Any]] = []
+        for item in items:
+            if item.item_id not in matched_ids:
+                continue
+            item.status = "done"
+            item.updated_at_utc = now_iso
+            metadata = self._normalize_metadata(item.metadata)
+            metadata["last_action_actor"] = normalized_actor
+            metadata["last_action_status"] = "done"
+            metadata["last_action_at_utc"] = now_iso
+            metadata["last_action_note"] = normalized_note
+            metadata["resolved_at_utc"] = now_iso
+            metadata["resolved_by"] = normalized_actor
+            metadata["resolution_note"] = normalized_note
+            item.metadata = self._append_workflow_event(
+                metadata,
+                action="janitor_sweep",
+                actor=normalized_actor,
+                status="done",
+                note=normalized_note,
+            )
+            swept_payloads.append(item.to_dict())
+
+        self._save_items(items)
+        logger.info(
+            "inbox_janitor_swept_acked",
+            kind=normalized_kind,
+            matched=len(matched),
+            swept=len(swept_payloads),
+            age_threshold_minutes=threshold_minutes,
+        )
+        return {
+            "matched": len(matched),
+            "swept": len(swept_payloads),
+            "items": swept_payloads,
+            "dry_run": False,
+        }
+
     def _build_summary(self, items: list[InboxItem]) -> dict[str, Any]:
         """Собирает owner-facing summary из уже загруженного набора item-ов."""
         open_items = [item for item in items if item.status in self._open_statuses]
