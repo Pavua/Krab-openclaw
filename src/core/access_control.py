@@ -217,6 +217,13 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         # Tor commands (Session 31 introduced handler но забыли в реестр):
         # !tor status / ip / newid / fetch <url>. Owner-only.
         "tor",
+        # Session 32 audit: handlers с bridge-dispatcher но отсутствовали в
+        # frozenset → silent reject. Все owner-only.
+        "blocklist",  # admin_commands.handle_blocklist
+        "chado",  # diagnostic_commands.handle_chado (chado-sync W5.4)
+        "chatpolicy",  # policy_commands.handle_chatpolicy (Smart Routing 26)
+        "cmdblock",  # admin_commands.handle_cmdblock
+        "cmdunblock",  # admin_commands.handle_cmdunblock
         "members",
         "log",
         "tts",
