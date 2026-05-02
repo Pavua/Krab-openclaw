@@ -1250,6 +1250,15 @@ _COMMANDS: list[CommandInfo] = [
         owner_only=True,
         stage="beta",
     ),
+    # ── AgentEngine routing (Wave 16-B, Hermes Phase B) ──────────────────────
+    CommandInfo(
+        name="engine",
+        category="dev",
+        description="Управление AgentEngine routing (OpenClaw/Hermes)",
+        usage="!engine [here <engine|clear> | room <name> <engine|clear> | status]",
+        owner_only=True,
+        stage="beta",
+    ),
 ]
 
 
