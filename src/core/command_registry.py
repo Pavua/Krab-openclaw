@@ -1241,6 +1241,15 @@ _COMMANDS: list[CommandInfo] = [
         owner_only=True,
         stage="beta",
     ),
+    # ── Swarm curator (Wave 14-I) ─────────────────────────────────────────────
+    CommandInfo(
+        name="curator",
+        category="swarm",
+        description="Анализ swarm team prompts (read-only)",
+        usage="!curator [dry-run|help]",
+        owner_only=True,
+        stage="beta",
+    ),
 ]
 
 

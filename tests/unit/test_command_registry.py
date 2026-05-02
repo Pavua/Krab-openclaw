@@ -212,6 +212,13 @@ class TestGlobalRegistry:
     def test_registry_monitor_exists(self) -> None:
         assert registry.get("monitor") is not None
 
+    def test_curator_command_registered(self) -> None:
+        # Wave 15-B: !curator must be registered with owner_only=True
+        cmd = registry.get("curator")
+        assert cmd is not None
+        assert cmd.owner_only is True
+        assert cmd.category == "swarm"
+
     def test_registry_has_basic_category(self) -> None:
         assert "basic" in registry.categories()
 
