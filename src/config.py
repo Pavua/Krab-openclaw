@@ -431,6 +431,13 @@ class Config:
     KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC: float = float(
         os.getenv("KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC", "180")
     )
+    # Bug 14 (Session 32): outer hard cap на весь _run_llm_request_flow pipeline.
+    # Защита от «бесконечной 'печатает...'» — даже если внутренние таймеры/streaming
+    # зависают в любой стадии (smart routing classifier, tool exec loop, retries).
+    # 60s default (текстовый чат). codex-cli model — исключение: получает
+    # KRAB_LLM_WALL_CLOCK_CAP_SEC (180s) для совместимости с медленными CLI subprocess'ами.
+    # 0 = отключено.
+    KRAB_RESPONSE_HARD_CAP_SEC: float = float(os.getenv("KRAB_RESPONSE_HARD_CAP_SEC", "60"))
     # Streaming UI: показывать reasoning (chain-of-thought) в сообщении.
     TELEGRAM_STREAM_SHOW_REASONING: bool = os.getenv(
         "TELEGRAM_STREAM_SHOW_REASONING", "0"
@@ -672,6 +679,8 @@ class Config:
                     cls.KRAB_LLM_WALL_CLOCK_CAP_SEC = float(value)
                 elif key == "KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC":
                     cls.KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC = float(value)
+                elif key == "KRAB_RESPONSE_HARD_CAP_SEC":
+                    cls.KRAB_RESPONSE_HARD_CAP_SEC = float(value)
                 elif key == "LM_STUDIO_NATIVE_REASONING_MODE":
                     cls.LM_STUDIO_NATIVE_REASONING_MODE = value.strip().lower()
                 elif key == "LM_STUDIO_NATIVE_AUTO_CONTINUE_MAX_ROUNDS":
