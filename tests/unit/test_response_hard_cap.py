@@ -64,7 +64,8 @@ async def test_hard_cap_fires_on_long_call(monkeypatch):
 
     obj._safe_reply_or_send_new.assert_awaited_once()
     sent_text = obj._safe_reply_or_send_new.await_args.args[1]
-    assert "слишком долго" in sent_text
+    # Session 33 UX wording: "дольше обычного" вместо старого "слишком долго"
+    assert "дольше обычного" in sent_text
 
 
 @pytest.mark.asyncio

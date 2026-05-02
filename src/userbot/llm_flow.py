@@ -128,6 +128,119 @@ async def _safe_react(func, bot, message, *args):
 # ---------------------------------------------------------------------------
 
 
+# Bug 14 (Session 33, Wave 7-B): denylist of read-only tool name patterns.
+# При срабатывании hard-cap проверяем _active_tool_calls openclaw_client'а —
+# если хоть один write/send tool успешно завершился ("done"), пропускаем
+# misleading fallback message. Read-only вызовы НЕ считаются user-visible
+# subtask success'ом.
+_READ_ONLY_TOOL_PATTERNS: tuple[str, ...] = (
+    "get_",
+    "list_",
+    "read_",
+    "fetch_",
+    "search",
+    "recall",
+    "find_",
+    "history",
+    "inspect",
+    "show_",
+    "view_",
+    "describe",
+    "status",
+    "snapshot",
+    "lookup",
+    "query",
+    "resolve_",
+    "transcribe",
+    "ocr",
+    "screenshot",
+)
+
+# Имена/префиксы, которые однозначно являются write/side-effect — даже если
+# совпадает с read pattern (например `send_query` теоретически), приоритет — write.
+_WRITE_TOOL_PATTERNS: tuple[str, ...] = (
+    "send_",
+    "forward_",
+    "post_",
+    "create",
+    "write_",
+    "edit_",
+    "delete",
+    "remove",
+    "pin_",
+    "unpin_",
+    "react",
+    "reply",
+    "publish",
+    "schedule_",
+    "execute_",
+    "run_",
+    "invoke_",
+    "deploy",
+    "commit",
+    "push",
+    "save_",
+    "update_",
+    "add_",
+    "set_",
+    "apply_",
+    "trigger_",
+    "notify",
+    "mark_",
+    "upload",
+    "download",
+)
+
+
+def _classify_tool_subtask_kind(name: str | None) -> str:
+    """Классифицирует tool по имени: 'write' (user-visible side-effect) | 'read' | 'unknown'.
+
+    Логика:
+    - Точное совпадение/префикс из _WRITE_TOOL_PATTERNS → 'write' (приоритет).
+    - Префикс из _READ_ONLY_TOOL_PATTERNS → 'read'.
+    - Иначе → 'unknown' (по-умолчанию НЕ считаем как success — conservative).
+    """
+    if not name:
+        return "unknown"
+    n = str(name).lower()
+    for pat in _WRITE_TOOL_PATTERNS:
+        if pat in n:
+            return "write"
+    for pat in _READ_ONLY_TOOL_PATTERNS:
+        if pat in n:
+            return "read"
+    return "unknown"
+
+
+def _detect_subtask_success_in_tool_calls(
+    tool_calls: list[dict[str, Any]] | None,
+    *,
+    start_index: int = 0,
+) -> tuple[bool, str | None]:
+    """Возвращает (any_write_succeeded, first_successful_write_name).
+
+    Сканирует tool_calls[start_index:] на предмет записи со status="done"
+    и именем, классифицированным как 'write'.
+    """
+    if not tool_calls:
+        return False, None
+    try:
+        slice_ = tool_calls[start_index:]
+    except Exception:  # noqa: BLE001
+        slice_ = tool_calls
+    for tc in slice_:
+        try:
+            status = str(tc.get("status") or "").lower()
+            name = str(tc.get("name") or "")
+        except Exception:  # noqa: BLE001
+            continue
+        if status != "done":
+            continue
+        if _classify_tool_subtask_kind(name) == "write":
+            return True, name
+    return False, None
+
+
 def _current_runtime_primary_model() -> str:
     """
     Возвращает primary-модель из живого OpenClaw runtime.
@@ -1976,6 +2089,20 @@ class LLMFlowMixin:
             while True:
                 try:
                     _flow_started_at = time.monotonic()
+                    # Bug 14 Wave 7-B: snapshot tool-calls list before flow start
+                    # для concurrent-safe определения "появились ли НОВЫЕ успешные
+                    # write-tools во время этого run". openclaw_client._active_tool_calls
+                    # очищается в начале chat_with_history; snapshot страхует от
+                    # leak'а из предыдущего вызова в edge cases.
+                    _tool_calls_snapshot_idx = 0
+                    try:
+                        from ..openclaw_client import openclaw_client as _oc_for_snap
+
+                        _tool_calls_snapshot_idx = len(
+                            getattr(_oc_for_snap, "_active_tool_calls", []) or []
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                     if _hard_cap_sec > 0:
                         await asyncio.wait_for(
                             self._run_llm_request_flow(
@@ -1997,6 +2124,31 @@ class LLMFlowMixin:
                         elapsed_sec=round(_elapsed, 2),
                         has_images=bool(images_kw),
                     )
+                    # Bug 14 Wave 7-B: subtask-aware fallback skip.
+                    # Если во время отрезанного flow хоть один write-tool успешно
+                    # завершился (send_message / forward / edit / etc.) — НЕ шлём
+                    # misleading «дольше обычного» message в чат пользователя:
+                    # task уже выполнен, лишний bot-spam только запутает.
+                    _subtask_succeeded = False
+                    _subtask_name: str | None = None
+                    try:
+                        from ..openclaw_client import openclaw_client as _oc_for_check
+
+                        _subtask_succeeded, _subtask_name = _detect_subtask_success_in_tool_calls(
+                            getattr(_oc_for_check, "_active_tool_calls", None),
+                            start_index=_tool_calls_snapshot_idx,
+                        )
+                    except Exception as _detect_exc:  # noqa: BLE001
+                        logger.debug("subtask_success_detect_failed", error=str(_detect_exc))
+                    if _subtask_succeeded:
+                        logger.warning(
+                            "response_hard_cap_subtask_already_completed",
+                            chat_id=chat_id,
+                            cap_sec=_hard_cap_sec,
+                            elapsed_sec=round(_elapsed, 2),
+                            successful_tool=_subtask_name,
+                        )
+                        return
                     # Session 33 UX fix: cap может сработать даже когда tool-call
                     # уже успешно выполнился (например, send_message в DM прошло, но
                     # сборка финального ответа задержалась). Текст сообщения не
