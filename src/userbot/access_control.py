@@ -410,6 +410,27 @@ class AccessControlMixin:
             if vpn_hint not in base:
                 base = f"{base}\n\n{vpn_hint}".strip()
 
+        # Telegram identity routing (session-33, Дашуля incident):
+        # Owner-у нужно, чтобы личные DM шли через userbot (Yung Nagato),
+        # а не через bot-API канал «Краб» — иначе получатели путаются
+        # («что за Краб мне написал?»). Bot-API оставляем только для
+        # системных алертов владельцу.
+        identity_hint = (
+            "Telegram identity для отправки сообщений:\n"
+            "- Личные сообщения третьим лицам («напиши маме / другу / X в ЛС / в личку»,"
+            " «пошли Y что-то») отправлять ТОЛЬКО через userbot identity:"
+            " инструмент `mcp__krab-yung-nagato__telegram_send_message`."
+            " Это аккаунт пользователя — сообщения приходят от его имени,"
+            " получатель видит знакомого человека.\n"
+            "- Bot-API канал (display name «Краб»,"
+            " `OPENCLAW_TELEGRAM_BOT_*`/reserve_bot) использовать ТОЛЬКО для:"
+            " системных алертов владельцу и пересылки запросов внутрь себя.\n"
+            "- НИКОГДА не использовать bot для личной переписки с третьими лицами —"
+            " это создаёт confusion у получателя («кто этот Краб?»)."
+        )
+        if identity_hint not in base:
+            base = f"{base}\n\n{identity_hint}".strip()
+
         return base
 
     @staticmethod
