@@ -78,15 +78,17 @@ def resolve_lm_studio_api_key(env: Mapping[str, str] | None = None) -> str:
     Возвращает токен LM Studio из env.
 
     Порядок приоритета:
-    1) `LM_STUDIO_API_KEY` — каноничное имя в проекте;
-    2) `LM_STUDIO_AUTH_TOKEN` — совместимый legacy alias.
+    1) `LM_API_TOKEN` — короткое имя из официальной ошибки LM Studio
+       ("`Authorization: Bearer $LM_API_TOKEN`"); session 32.
+    2) `LM_STUDIO_API_KEY` — каноничное имя в проекте;
+    3) `LM_STUDIO_AUTH_TOKEN` — совместимый legacy alias.
     """
     scope: Mapping[str, str]
     if env is None:
         scope = {**_project_env_scope(), **os.environ}
     else:
         scope = env
-    for key in ("LM_STUDIO_API_KEY", "LM_STUDIO_AUTH_TOKEN"):
+    for key in ("LM_API_TOKEN", "LM_STUDIO_API_KEY", "LM_STUDIO_AUTH_TOKEN"):
         value = _strip_wrapping_quotes(str(scope.get(key, "") or ""))
         if value:
             return value
