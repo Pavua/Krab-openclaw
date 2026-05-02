@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Wave 15-D: Hermes ACP standalone LaunchAgent (Phase 2 Phase A).
+
+  WARNING: Hermes ACP uses STDIO JSON-RPC (not a network service). A daemon
+  with no client attached to its stdin/stdout will idle without serving any
+  traffic. This plist is provided for completeness per the Phase A spec, but
+  in practice the Phase B ACP bridge will spawn `hermes acp` itself as a
+  subprocess (per design doc HERMES_ACP_BRIDGE_DESIGN.md, lines 57-89).
+
+  RECOMMENDATION: Do NOT load this LaunchAgent in production. Keep it on
+  disk only as a reference template. The bridge will manage Hermes process
+  lifecycle directly. If a long-running Hermes web UI is desired instead,
+  use `hermes dashboard` (port 9119) — that IS a network service.
+
+  KeepAlive.SuccessfulExit=false: only respawn on non-zero exit. Without an
+  ACP client connected, hermes will block on stdin and never exit, so this
+  guard at least prevents a respawn storm.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.hermes.acp</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/start_hermes_standalone.command</string>
+  </array>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/hermes.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/hermes.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+  </dict>
+</dict>
+</plist>
