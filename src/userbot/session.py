@@ -23,6 +23,52 @@ from ..core.logger import get_logger
 logger = get_logger(__name__)
 
 
+def checkpoint_session_wal(session_path: str | Path) -> dict | None:
+    """
+    Best-effort `PRAGMA wal_checkpoint(TRUNCATE)` для Pyrogram .session файла.
+
+    Зачем: при graceful shutdown Pyrogram закрывает sqlite без явного truncate,
+    оставляя многомегабайтный *.session-wal sidecar. На многих рестартах WAL
+    растёт неограниченно (см. session 32: 4MB → ручной truncate).
+
+    Контракт:
+    - Вызывается ПОСЛЕ `client.stop()` (storage уже закрыта, файл существует).
+    - Идемпотентен: если файла нет (первый запуск) — silent skip, возвращает None.
+    - Никогда не бросает наружу: все ошибки логируются как warning.
+    - Возвращает dict с `frames_checkpointed` / `pages_in_wal` при успехе.
+
+    PRAGMA wal_checkpoint(TRUNCATE) семантика:
+        result = (busy, log_frames, checkpointed_frames)
+        — busy: 0 если успешно, 1 если был writer
+        — log_frames: всего фреймов в WAL до checkpoint
+        — checkpointed_frames: сколько перенесено в основной файл
+    """
+    path = Path(session_path)
+    if not path.exists():
+        return None
+    try:
+        with sqlite3.connect(str(path), timeout=2.0) as conn:
+            cur = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            row = cur.fetchone() or (None, None, None)
+            busy, log_frames, checkpointed = row
+            payload = {
+                "session_path": str(path),
+                "frames_checkpointed": checkpointed,
+                "pages_in_wal": log_frames,
+                "busy": busy,
+            }
+            logger.info("pyrogram_wal_checkpoint_truncated", **payload)
+            return payload
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "pyrogram_wal_checkpoint_failed",
+            session_path=str(path),
+            error=str(exc),
+            non_fatal=True,
+        )
+        return None
+
+
 class SessionMixin:
     """
     Pyrogram session lifecycle: client create/stop, watchdog, recovery, purge.
@@ -205,6 +251,16 @@ class SessionMixin:
                 self._arm_storage_shutdown_guard()
                 await self._cancel_client_restart_tasks()
                 await self.client.stop()
+                # Session 33 P1: TRUNCATE WAL чтобы sidecar не рос неограниченно.
+                # Best-effort, не блокирует shutdown.
+                try:
+                    checkpoint_session_wal(self._primary_session_file())
+                except Exception as wal_exc:  # noqa: BLE001
+                    logger.warning(
+                        "pyrogram_wal_checkpoint_unexpected_failure",
+                        error=str(wal_exc),
+                        non_fatal=True,
+                    )
             except Exception as exc:  # noqa: BLE001
                 if self._is_sqlite_io_error(exc):
                     logger.warning(

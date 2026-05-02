@@ -3349,20 +3349,41 @@ class KraabUserbot(
         if not clients:
             return
         # Импорт здесь, чтобы избежать циклической зависимости при загрузке модуля.
-        from .userbot.session import SessionMixin
+        from .userbot.session import SessionMixin, checkpoint_session_wal
 
         for team, cl in list(clients.items()):
+            session_path: Path | None = None
             try:
                 # Перед stop() ставим storage guard на каждый swarm client —
                 # иначе фоновые pyrogram-задачи (Session.restart / update_peers)
                 # после stop() добегают до закрытой sqlite-базы и спамят Sentry
                 # (~10 events/24h × 4 команды = заметная доля PYTHON-FASTAPI-1).
                 SessionMixin._arm_storage_shutdown_guard_for_client(cl)
+                # Session 33 P1: запоминаем путь к .session ДО stop() — после stop()
+                # storage может быть детачена. workdir/name стабильны.
+                try:
+                    _wd = getattr(cl, "workdir", None) or self._session_workdir
+                    _name = getattr(cl, "name", None) or f"swarm_{team}"
+                    session_path = Path(_wd) / f"{_name}.session"
+                except Exception:  # noqa: BLE001
+                    session_path = None
                 if cl.is_connected:
                     await cl.stop()
                 logger.info("swarm_team_client_stopped", team=team)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("swarm_team_client_stop_failed", team=team, error=str(exc))
+            # WAL truncate — best-effort, не зависит от успеха stop().
+            # Каждая команда checkpoint-ится независимо: ошибка одной не валит остальных.
+            if session_path is not None:
+                try:
+                    checkpoint_session_wal(session_path)
+                except Exception as wal_exc:  # noqa: BLE001
+                    logger.warning(
+                        "swarm_team_wal_checkpoint_unexpected_failure",
+                        team=team,
+                        error=str(wal_exc),
+                        non_fatal=True,
+                    )
         clients.clear()
 
     async def _init_swarm_team_clients(self) -> None:
