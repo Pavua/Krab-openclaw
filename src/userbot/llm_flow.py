@@ -874,6 +874,18 @@ class LLMFlowMixin:
         if _wall_clock_cap_sec > 0:
             no_tool_activity_timeout_sec = min(no_tool_activity_timeout_sec, _wall_clock_cap_sec)
 
+        # Wave 14-D (Session 33): codex-cli first-chunk hang detection.
+        # codex-cli subprocess иногда зависает на первом chunk. Не ждём весь
+        # KRAB_LLM_WALL_CLOCK_CAP_SEC (180s) — отменяем за 45s и поднимаем
+        # LLMRetryableError → fallback на другую модель почти мгновенно.
+        from ..core import codex_cli_health as _codex_health
+
+        _codex_state = _codex_health.get_state()
+        _is_codex_cli_route = _codex_health.is_codex_cli_model(startup_route_model)
+        _codex_first_chunk_cap_sec = (
+            _codex_state.get_first_chunk_timeout() if _is_codex_cli_route else 0.0
+        )
+
         try:
             while True:
                 if received_any_chunk:
@@ -893,6 +905,58 @@ class LLMFlowMixin:
                 # Background: cap жёсткий независимо от чанков (Sentry 6S/6V fix).
                 # В background-режиме `received_any_chunk` может стать True от промежуточных
                 # tool-chunks, после которых модель зависает — без этого патча cap обходился.
+                # Wave 14-D: codex-cli first-chunk hang — fast fallback.
+                # Срабатывает только если: (а) текущая модель codex-cli,
+                # (б) первый chunk ещё не пришёл, (в) elapsed > 45s.
+                # Поднимаем LLMRetryableError → внешний retry-loop переключит модель.
+                if (
+                    _codex_first_chunk_cap_sec > 0
+                    and _is_codex_cli_route
+                    and not received_any_chunk
+                    and elapsed_wait_sec >= _codex_first_chunk_cap_sec
+                ):
+                    _codex_state.record_timeout()
+                    logger.warning(
+                        "codex_cli_first_chunk_hang_detected",
+                        chat_id=chat_id,
+                        elapsed_sec=round(elapsed_wait_sec, 1),
+                        cap_sec=_codex_first_chunk_cap_sec,
+                        model=startup_route_model,
+                        marked_unhealthy=_codex_state.should_skip(),
+                    )
+                    if next_chunk_task and not next_chunk_task.done():
+                        next_chunk_task.cancel()
+                        try:
+                            await next_chunk_task
+                        except (asyncio.CancelledError, StopAsyncIteration):
+                            pass
+                        except Exception:  # noqa: BLE001
+                            pass
+                    try:
+                        await stream.aclose()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    # User-facing notice (auto-fallback handled by external retry loop)
+                    _codex_notice = (
+                        f"⏱️ Codex медленно отвечает (>{int(_codex_first_chunk_cap_sec)}s). "
+                        "Переключаюсь на резервную модель..."
+                    )
+                    if _show_progress:
+                        try:
+                            if is_self:
+                                await self._safe_edit(message, f"🦀 {query}\n\n{_codex_notice}")
+                            else:
+                                await self._safe_edit(temp_msg, _codex_notice)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    from .llm_retry import LLMRetryableError
+
+                    raise LLMRetryableError(
+                        "codex-cli first-chunk hang",
+                        f"provider_timeout: codex-cli не отдал первый chunk за "
+                        f"{int(_codex_first_chunk_cap_sec)}s",
+                    )
+
                 _wc_cap_fires = _wall_clock_cap_sec > 0 and elapsed_wait_sec >= _wall_clock_cap_sec
                 if _wc_cap_fires and (prefer_send_message_for_background or not received_any_chunk):
                     _wc_model = startup_route_model or getattr(config, "MODEL", "") or "unknown"
@@ -908,14 +972,12 @@ class LLMFlowMixin:
                     )
                     if received_any_chunk:
                         full_response = (
-                            f"❌ Запрос превысил лимит {int(_wall_clock_cap_sec)} сек "
-                            f"(частичный ответ получен). Попробуй `!model switch` или повтори позже."
+                            f"⏱️ Запрос превысил лимит {int(_wall_clock_cap_sec)} сек "
+                            "(частичный ответ получен). Попробуй ещё раз или упрости вопрос."
                         )
                     else:
                         full_response = (
-                            f"❌ Запрос отменён: gateway обрабатывал дольше "
-                            f"{int(_wall_clock_cap_sec)} сек без ответа. "
-                            f"Попробуй `!model switch` или повтори позже."
+                            "⏱️ Все провайдеры сейчас медленны. Попробуй ещё раз или упрости вопрос."
                         )
                     timeout_error_was_sent = True
                     if _show_progress:
@@ -1458,6 +1520,12 @@ class LLMFlowMixin:
                     continue
 
                 full_response_raw += chunk
+                if not received_any_chunk and _is_codex_cli_route:
+                    # Wave 14-D: первый chunk codex-cli — сбрасываем health-state.
+                    try:
+                        _codex_state.record_success()
+                    except Exception:  # noqa: BLE001
+                        pass
                 received_any_chunk = True
                 last_tool_activity_ts = time.monotonic()
                 stream_display = (
