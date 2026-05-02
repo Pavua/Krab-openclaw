@@ -1060,3 +1060,62 @@ redact (4/4 пойманы) → chunking (7 chunks) → FTS5 index → Model2Vec
 - **Осталось/сомнение:** тяжёлый endpoint `http://127.0.0.1:8080/api/openclaw/cron/status` после восстановления panel по-прежнему стабильно уходит в timeout на серии live-проб. Это подтверждает старый класс проблемы: часть owner-panel API всё ещё блокирует event loop/CLI-обвязку дольше допустимого бюджета и требует отдельного fix-pass с bounded worker/cache fallback.
 - **Осталось/сомнение:** в `logs/krab_launchd.err.log` во время рестарта пойман `sqlite3.OperationalError: disk I/O error` на открытии pyrogram session storage, после чего runtime вышел с `SystemExit: 78`, но KeepAlive поднял его повторно и сервис восстановился. Нужен отдельный разбор целостности/блокировок session sqlite, чтобы рестарт не зависел от повторной удачи.
 - **Осталось/сомнение:** browser runtime в этом канале подтверждён (`browser status`/`start` успешны), но открытие вкладки на `:8080` было заблокировано policy browser-инструмента, поэтому UI smoke этой ночью подтверждён только через live HTTP probe, а не через DOM snapshot.
+
+
+## Session 33 closure (02.05.2026)
+
+**Delivered** (32 commits на ветке `claude/optimistic-ptolemy-e98bdf`, 68 ahead `origin/main`):
+
+- **Defense in depth (DB resilience)**: 6-pragma stack (journal_mode=WAL, busy_timeout=30000, synchronous=NORMAL, foreign_keys=ON, temp_store=MEMORY, mmap_size=30000000) + 4-method wrap (`update_state`, generic Pyrogram method wrap via Wave 14-J, malformed-DB retry, LLMRetryableError → fallback retry Wave 14-K).
+- **UX fixes**: устранение зависаний `codex-cli` (timeout-bound), фикс галлюцинаций model routing, исправление `chat→codex-cli` (должно быть gemini).
+- **Concurrency**: forward batch consolidation + semaphore для parallel pyrogram calls.
+- **Observability**: Sentry deduplication (frame-aware filter), benign-error markers расширены (`+CancelledError`, `+352 suppressed`).
+- **SkillCurator dry-run** (Step 1/4): scaffolding + telemetry collection без LLM analysis.
+- **Hermes investigation**: 30% coverage parity — НЕ мигрируем (см. `docs/architecture/HERMES_ACP_BRIDGE_DESIGN.md`).
+- **Inbox janitor extension**: stale-open + stale-processing remediate уже live, добавлен `bulk-ack-stale` endpoint.
+- **CLI MCP isolation**: codex + claude процессы изолированы от main userbot env.
+
+**Wave 15+ backlog (Session 34+)**:
+
+### High priority
+- **Hermes Phase 2 ACP bridge** implementation (~2 sessions estimated, design в `docs/architecture/HERMES_ACP_BRIDGE_DESIGN.md`)
+  - Phase A: standalone Hermes service на :3101 (subprocess управление)
+  - Phase B: ACP bridge для одной swarm room (analysts) — A/B test
+  - Phase C: gradual rollout если metrics OK
+- **SkillCurator Steps 2-4** (3 sessions):
+  - Step 2: LLM analyzer (aux Gemini-3-flash) — proposes prompt diff
+  - Step 3: A/B framework (round-robin 10 rounds, control vs candidate)
+  - Step 4: Auto-apply gate + rollback (env-flag default OFF)
+- **24h Sentry observation** post Wave 14 — verify corruption events drop к ~0
+- **Main merge** к `main` branch (Strategy A: 68 commits no-squash)
+- **P0 routing fix**: `chat→codex-cli` сейчас (должен быть gemini); root cause в model_router selection logic
+- **P0 How2AI admin unban**: пользователь забанен по ошибке после Smart Routing rollout
+
+### Medium priority
+- **KrabEar AppHang investigation** (Wave 14-H finding) — 98 events all-time, defer to Krab Ear repo
+- **Bug 14 cap evolution**: track sub-task progress UI ("Step 2/5: searching...")
+- **Paperclip server bootstrap**: user action steps 1-2 (`npx paperclipai run` + onboarding)
+- **Memory Phase 2 cluster validation** на 50-cluster set: query relevance, verify recall@5
+- **Sentry `_BENIGN_ERROR_MARKERS` expansion** — продолжать ловить новые benign errors после restart
+
+### Low priority / nice-to-have
+- **Hermes selective cherry-pick**: agentskills.io pieces, Honcho memory plugin, FTS5 cross-session search
+- **OpenClaw → Hermes migration tool inside Krab** (replicate 33-item migrate scope)
+- **IDE integration via ACP** — Hermes ACP server позволяет VS Code / Zed / JetBrains использовать Krab как agent backend
+- **CLI status commands timeout fix** (`openclaw status`, `openclaw gateway status` зависают >12s, оставляют залипшие child процессы)
+- **`/api/openclaw/cron/status` endpoint** — стабильно timeout, нужен bounded worker/cache fallback
+
+### Wave 15 P0 tracking — Session 34 starter checklist
+
+**Verifying Wave 14 stability (24h post-restart)**:
+
+- [ ] **Probe success rate**: `:8080/api/health/lite` = 200, `:18789/health` = ok, `:8090/health` = ok — sustained 24h без timeout series
+- [ ] **DB corruption events**: Sentry filter `error.type:DatabaseError OR sqlite3.DatabaseError` — count < 5 per 24h (baseline pre-Wave 14: ~50/day)
+- [ ] **`update_state` wrap effectiveness**: Sentry filter `function:update_state AND retry_attempt:>=1` — ratio successful retries vs final failures > 90%
+- [ ] **LLMRetryableError → fallback path**: `krab_llm_route_ok` Prometheus metric остаётся ≥ 0.95 при наличии `krab_llm_retryable_total` спайков
+- [ ] **Sentry total event count**: `<200 events / 24h` (pre-Wave 14 baseline ~500-800/day with corruption noise)
+- [ ] **No respawn-storm**: `krab_auto_restart_attempts_total` flat (без скачков >3/hour)
+- [ ] **DB file integrity**: `sqlite3 archive.db "PRAGMA integrity_check"` returns `ok`; `sqlite3 kraab.session "PRAGMA integrity_check"` returns `ok`
+- [ ] **WAL checkpoint**: `kraab.session-wal` size < 4MB после 24h (TRUNCATE pragma effective)
+- [ ] **Smart Routing P0**: chat-mode regression test — `!ask` в DM роутится в primary (gemini-3-pro), не в `codex-cli`
+- [ ] **No new benign markers leak**: review Sentry top-10 issues — proportions of `_BENIGN_ERROR_MARKERS` matches >85% что генерируется
