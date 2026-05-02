@@ -51,6 +51,100 @@ from .core.sentry_perf import start_transaction as _sentry_txn
 
 logger = get_logger(__name__)
 
+
+def _resolve_max_concurrent_requests() -> int:
+    """Read KRAB_OPENCLAW_MAX_CONCURRENT (default 3, range 1-10)."""
+    raw = os.getenv("KRAB_OPENCLAW_MAX_CONCURRENT", "").strip()
+    if not raw:
+        return 3
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 3
+    if value < 1:
+        return 1
+    if value > 10:
+        return 10
+    return value
+
+
+# Module-level concurrency limiter to OpenClaw gateway (Wave 14-B / session-33).
+# Bounds parallel outbound HTTP requests so a burst (e.g. forwarded batch with 5
+# parallel AI calls) cannot overwhelm gateway and trigger health probe failures.
+_OPENCLAW_MAX_CONCURRENT = _resolve_max_concurrent_requests()
+_openclaw_request_semaphore: asyncio.Semaphore = asyncio.Semaphore(_OPENCLAW_MAX_CONCURRENT)
+_OPENCLAW_QUEUE_WARN_SEC = 2.0
+_OPENCLAW_QUEUE_TIMEOUT_SEC = 30.0
+
+
+class OpenClawSemaphoreTimeoutError(ProviderError):
+    """Raised when waiting for the gateway semaphore exceeds OPENCLAW_QUEUE_TIMEOUT_SEC."""
+
+    def __init__(self, waited_sec: float):
+        super().__init__(
+            message=f"openclaw_semaphore_timeout after {waited_sec:.1f}s",
+            user_message="Сервер перегружен, попробуйте чуть позже",
+            retryable=True,
+        )
+
+
+class _GatewaySlot:
+    """
+    Async context manager wrapping the module-level OpenClaw gateway semaphore.
+
+    - Logs `openclaw_request_queued` warning if wait > _OPENCLAW_QUEUE_WARN_SEC.
+    - Raises `OpenClawSemaphoreTimeoutError` if wait exceeds _OPENCLAW_QUEUE_TIMEOUT_SEC.
+    """
+
+    __slots__ = ("_chat_id", "_request_id", "_acquired", "_waited_ms")
+
+    def __init__(self, chat_id: Any = None, request_id: Any = None):
+        self._chat_id = chat_id
+        self._request_id = request_id
+        self._acquired = False
+        self._waited_ms: float = 0.0
+
+    async def __aenter__(self) -> "_GatewaySlot":
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        try:
+            await asyncio.wait_for(
+                _openclaw_request_semaphore.acquire(),
+                timeout=_OPENCLAW_QUEUE_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError as exc:
+            waited = loop.time() - started
+            logger.error(
+                "openclaw_semaphore_timeout",
+                waited_sec=round(waited, 2),
+                chat_id=self._chat_id,
+                request_id=self._request_id,
+                max_concurrent=_OPENCLAW_MAX_CONCURRENT,
+            )
+            raise OpenClawSemaphoreTimeoutError(waited) from exc
+        self._acquired = True
+        self._waited_ms = (loop.time() - started) * 1000.0
+        if self._waited_ms >= _OPENCLAW_QUEUE_WARN_SEC * 1000.0:
+            logger.warning(
+                "openclaw_request_queued",
+                queue_wait_ms=round(self._waited_ms, 1),
+                chat_id=self._chat_id,
+                request_id=self._request_id,
+                max_concurrent=_OPENCLAW_MAX_CONCURRENT,
+            )
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        if self._acquired:
+            _openclaw_request_semaphore.release()
+            self._acquired = False
+
+
+def _gateway_slot(chat_id: Any = None, request_id: Any = None) -> _GatewaySlot:
+    """Acquire a slot on the OpenClaw gateway concurrency semaphore."""
+    return _GatewaySlot(chat_id=chat_id, request_id=request_id)
+
+
 AUTH_UNAUTHORIZED_CODE = "openclaw_auth_unauthorized"
 LEGACY_AUTH_CODES = {AUTH_UNAUTHORIZED_CODE, "auth_invalid", "unsupported_key_type"}
 MODEL_FALLBACK_LOG_RE = re.compile(
@@ -2095,13 +2189,31 @@ class OpenClawClient:
             # Чисто инструментация (X-Request-ID header). Не отправляем в Sentry,
             # чтобы не плодить noise; debug для локального трейса при необходимости.
             logger.debug("openclaw_request_id_extract_failed", error=str(exc))
+        # Wave 14-B: bound concurrent gateway requests to avoid overwhelming OpenClaw
+        # during parallel-request bursts (e.g. forwarded batch). Slot wait > 2s logs
+        # `openclaw_request_queued`; > 30s raises OpenClawSemaphoreTimeoutError.
+        _slot_chat_id: Any = None
         try:
-            response = await self._http_client.post(
-                f"{self.base_url}/v1/chat/completions",
-                json=payload,
-                timeout=request_timeout,
-                headers=_extra_headers,
-            )
+            from structlog.contextvars import get_contextvars as _get_ctxvars2
+
+            _ctxvars = _get_ctxvars2()
+            _slot_chat_id = _ctxvars.get("chat_id")
+        except Exception:  # noqa: BLE001
+            _slot_chat_id = None
+        try:
+            async with _gateway_slot(
+                chat_id=_slot_chat_id,
+                request_id=_extra_headers.get("X-Request-ID") if _extra_headers else None,
+            ):
+                response = await self._http_client.post(
+                    f"{self.base_url}/v1/chat/completions",
+                    json=payload,
+                    timeout=request_timeout,
+                    headers=_extra_headers,
+                )
+        except OpenClawSemaphoreTimeoutError:
+            metrics.inc("llm_error")
+            raise
         except httpx.TimeoutException as exc:
             # Пробрасываем как ProviderError(retryable=True), чтобы fallback-loop
             # (for attempt in range(4)) поймал его через except (ProviderAuthError, ProviderError)
@@ -2516,8 +2628,14 @@ class OpenClawClient:
     async def health_check(self) -> bool:
         """Проверка доступности OpenClaw."""
         try:
-            response = await self._http_client.get(f"{self.base_url}/health")
+            # Wave 14-B: health probe also goes through semaphore so that during
+            # an overload burst the probe is naturally queued (not racing inflight chats).
+            async with _gateway_slot(chat_id="_health"):
+                response = await self._http_client.get(f"{self.base_url}/health")
             return response.status_code == 200
+        except OpenClawSemaphoreTimeoutError as exc:
+            logger.error("openclaw_health_check_failed", error=str(exc))
+            return False
         except (httpx.RequestError, httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
             logger.error("openclaw_health_check_failed", error=str(exc))
             return False
