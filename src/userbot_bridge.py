@@ -4797,6 +4797,8 @@ class KraabUserbot(
 
         text = message.text or message.caption or ""
         has_audio_message = self._message_has_audio(message)
+        # Wave 16-G: аудио в reply_to_message, а не в самом сообщении
+        has_reply_audio = self._message_has_reply_audio(message)
 
         # Разрешаем алиасы ПЕРЕД routing: !t привет → !translate привет
         if text and text.lstrip()[:1] in ("!", "/", "."):
@@ -4893,6 +4895,7 @@ class KraabUserbot(
             not text
             and not message.photo
             and not has_audio_message
+            and not has_reply_audio  # Wave 16-G: reply audio без caption тоже валиден
             and not has_document
             and not has_video
             and not has_sticker
@@ -5123,6 +5126,40 @@ class KraabUserbot(
                         f"{query}\n\n[Аудио прислано, но транскрипция не удалась: "
                         f"{voice_error or 'unknown'}]"
                     )
+        elif not _forward_batch_prompt and has_reply_audio:
+            # Wave 16-G: reply_to_message содержит voice/audio + user написал текст
+            # ("оцени трек", "переведи это") или просто reply без текста.
+            # Direct audio (has_audio_message) имеет приоритет — эта ветка не
+            # достигается при has_audio_message=True.
+            transcript, voice_error = await self._transcribe_audio_message(
+                message, target_message=message.reply_to_message
+            )
+            if query:
+                # Reply audio + явный caption/текст → дополняем prompt транскриптом.
+                # Обновляем message.text, чтобы reply_preprocessor / segmented_prompt
+                # видел полный текст (не только исходный caption без транскрипта).
+                if transcript:
+                    query = f"{query}\n\n[Транскрипция reply-аудио]: {transcript}"
+                else:
+                    query = (
+                        f"{query}\n\n[Reply-аудио прислано, но транскрипция не удалась: "
+                        f"{voice_error or 'unknown'}]"
+                    )
+                # Синхронизируем message.text, чтобы reply_preprocessor
+                # (build_segmented_prompt) подхватил расширенный текст как current_text.
+                try:
+                    message.text = query  # type: ignore[assignment]
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                # Reply audio без явного текста → транскрипт становится query
+                if not transcript:
+                    await self._safe_reply_or_send_new(
+                        message,
+                        voice_error or "❌ Не удалось распознать аудио из reply.",
+                    )
+                    return
+                query = transcript
         elif query and not message.photo and not has_audio_message and not _forward_batch_prompt:
             message, query = await self._coalesce_text_burst(
                 message=message,
@@ -5134,6 +5171,7 @@ class KraabUserbot(
             not query
             and not message.photo
             and not has_audio_message
+            and not has_reply_audio
             and not is_reply_to_me
             and not has_document
         ):
