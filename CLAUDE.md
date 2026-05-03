@@ -134,11 +134,15 @@ src/
     stealth_metrics.py  — метрики stealth-режима (session 17)
     memory_retrieval_scores.py — скоры поиска памяти (session 17)
     memory_doctor.py    — диагностика и авторемонт индекса памяти (session 17)
+    agent_engine.py     — AgentEngine Protocol (session 35, Wave 16-B)
+    agent_engine_router.py — выбор engine (openclaw/hermes/auto) (session 35, Wave 16-B)
+    skill_curator.py    — SkillCurator Steps 1-4: analyzer + apply_with_approval + A/B framework (session 33-35)
   handlers/
     command_handlers.py — 105+ команд (auto-counted), _AgentRoomRouterAdapter; 4430 LOC (Session 28, −77.4% от 19637)
-    commands/           — 22 модуля (Waves 1-18): text_utils/chat/scheduler/voice/memory/social/ai/swarm/translator/system/admin/cli/fileio/group_admin/content/state/observability/memory_admin + policy + _shared
+    commands/           — 24 модуля (Waves 1-18 + session 35): text_utils/chat/scheduler/voice/memory/social/ai/swarm/translator/system/admin/cli/fileio/group_admin/content/state/observability/memory_admin + policy + _shared + engine_commands + curator_commands
   integrations/
     tor_bridge.py       — Tor SOCKS5 proxy (httpx + Playwright)
+    hermes_acp_bridge.py — Hermes Phase B ACP bridge foundation (session 35, Wave 16-B)
     browser_bridge.py   — CDP подключение к Chrome
     browser_ai_provider.py — AI через браузер
     hammerspoon_bridge.py — HTTP bridge к Hammerspoon :10101
@@ -147,6 +151,10 @@ src/
     voice_gateway_client.py — клиент Voice Gateway
     voice_gateway_subscriber.py — подписчик Voice Gateway событий
     cli_runner.py       — запуск CLI инструментов (codex/gemini/claude)
+  bootstrap/
+    session_recovery.py — shared recovery module: attempt_recovery/has_recent_recovery_backup/cleanup_sidecars/verify_key_tables (session 35, Wave 16-N)
+  scripts/
+    openclaw_runtime_repair.py — recovery chain: validate+probe+sqlite .recover+stale plugins (session 35, Wave 16-J)
   userbot/
     access_control.py   — ACL на уровне userbot
     auto_translate.py   — авто-перевод сообщений
@@ -296,6 +304,25 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - Run: `venv/bin/python scripts/setup_lm_studio_token.py <your-token>` (saves `LM_API_TOKEN` to `.env`)
 - Read-only check: `venv/bin/python scripts/setup_lm_studio_token.py --check`
 - Restart Krab to apply
+
+## Ключевые env vars (актуально Session 35)
+
+```bash
+# Codex-cli timeout и fallback (Wave 14-D/16-I)
+KRAB_CODEX_CLI_FIRST_CHUNK_TIMEOUT_SEC=600
+KRAB_CODEX_CLI_FALLBACK_MODEL=google/gemini-3.1-pro-preview
+
+# Idle-aware liveness (Wave 16-I)
+KRAB_LLM_IDLE_TIMEOUT_SEC=180        # молчание без tool_calls → kill
+KRAB_LLM_HEARTBEAT_INTERVAL_SEC=60   # интервал heartbeat edit
+
+# Paid Gemini + reasoning
+GEMINI_PAID_KEY_ENABLED=1            # paid Gemini активен (Session 35)
+LM_STUDIO_NATIVE_REASONING_MODE=medium
+KRAB_REASONING_LEVEL=medium
+OPENCLAW_REASONING_EFFORT=medium
+```
+
 ### Session 33 highlights (02.05.2026 — Wave 5-14, branch `fix/daily-review-20260421`, 31+ session-33 commits / 67 ahead of origin/main)
 
 - **Defense in depth (DB)** — Wave 5-6 + 14-J: WAL + busy_timeout + `synchronous=FULL` + `wal_autocheckpoint` + `temp_store=MEMORY` + 64MB cache, integrity-gate at startup, auto-recover via `sqlite .recover`, **symmetric malformed-swallow в 4 Pyrogram-методах** (`update_usernames` / `update_peers` / `update_state` / `remove_state`) + generic-method wrap.
@@ -307,6 +334,21 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - **Hermes investigation** — Wave 12-13: research + dry-run migration + Phase 2 ACP design. **Решение: НЕ мигрируем**, OpenClaw остаётся; design stored для будущего bridge.
 - **CLI Telegram MCP isolation** — Wave 9-B + 10-A: codex-cli + claude-cli — physical disable Telegram MCP (избегаем cross-contamination между прод и CLI).
 - **Inbox janitor** — расширен на `owner_request` kind + `proactive_action acked→done` авто-переход.
+
+### Session 35 highlights (04.05.2026 — Wave 16 series, 22 commits)
+
+- **Production incident**: gateway crash loop — `tools.web.search.provider: brave` после OpenClaw upgrade → плагин исчез → respawn loop 1667 проб. Fix: `brave → gemini` (bundled). Session corruption recurrence: `_safe_update_usernames` swallow'ил malformed но `conn` оставался corrupt → следующий read → SystemExit(78). Health probe false-positive: `sqlite3.connect(timeout=0.7)` lock contention → cached `state=corrupted`.
+- **Wave 16-A**: SkillCurator Step 3 — `apply_with_approval` + mutex + archive (carryover)
+- **Wave 16-B**: Hermes Phase B — `AgentEngine` Protocol + `agent_engine_router.py` + `hermes_acp_bridge.py` foundation
+- **Wave 16-D**: SkillCurator Step 4 — A/B framework (round-robin + decision loop)
+- **Wave 16-F**: Pyrogram conn invalidate после malformed swallow — `_corrupt_flag` + early raise на READ methods
+- **Wave 16-G**: reply→audio extraction — `_message_has_reply_audio()` + `_transcribe_audio_message(target_message=)`
+- **Wave 16-H**: health probe lock-contention → read-only URI + async retry
+- **Wave 16-I**: idle-aware liveness — tool_calls считаются как activity, idle gate 180s, heartbeat edit 60s
+- **Wave 16-J**: `scripts/openclaw_runtime_repair.py` (520 LOC) — recovery chain, exit 0/1/78
+- **Wave 16-N**: `src/bootstrap/session_recovery.py` — auto-invoke из preflight, idempotency 1h cooldown
+- **Wave 16-O**: code-review fixes — HIGH-1: async health snapshot; HIGH-2: `/api/runtime/recover` exit 78 → HTTP 503 + `recovery_loop_detected=true`
+- **5 subagents (Sonnet)** параллельно через worktree isolation, 0 merge conflicts
 
 ## Smart Message Routing (Session 26 — 26.04.2026 — LIVE)
 
@@ -385,7 +427,7 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - `.remember/next_session.md` — handoff следующей сессии
 - Memory: `~/.claude/projects/-Users-pablito-Antigravity-AGENTS-----/memory/`
 
-## Накопленные команды (~175+)
+## Накопленные команды (~185+)
 
 ```
 # AI и контент
@@ -606,6 +648,22 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 !write <path> <content>      — записать файл
 !remember <key> <value>      — сохранить в память
 !recall <key>                — прочитать из памяти
+
+# Agent Engine (session 35)
+!engine show                 — текущий engine для чата
+!engine here <openclaw|hermes|auto> — сменить engine для чата
+!engine room                 — engine для всей AgentRoom
+!engine status               — статус всех engine
+
+# SkillCurator (session 35 — Steps 1-4 LIVE)
+!curator ab start <skill_id>          — запустить A/B тест промпта
+!curator ab status [id]               — статус A/B теста
+!curator ab evaluate <id> <win|lose>  — завершить тест с результатом
+!curator ab cancel <id>               — отменить тест
+!curator ab list                      — список активных тестов
+!curator apply <skill_id>             — применить предложение с подтверждением
+!curator rollback <skill_id>          — откатить последнее изменение
+!curator overlays                     — список активных оверлеев промптов
 ```
 
 ## Owner Panel API (актуально на 12.04.2026)
@@ -678,7 +736,7 @@ Endpoints session 7 (добавлены, ~249 итого после Session 22):
 | `/api/silence/toggle` | POST | Переключить режим тишины |
 | `/api/notify/status` | GET | Статус уведомлений |
 | `/api/notify/toggle` | POST | Переключить уведомления |
-| `/api/runtime/recover` | POST | Восстановить runtime |
+| `/api/runtime/recover` | POST | Восстановить runtime (exit 78 → HTTP 503 + `recovery_loop_detected=true`, Wave 16-O) |
 | `/api/runtime/chat-session/clear` | POST | Очистить сессию чата |
 | `/api/runtime/operator-profile` | GET | Профиль оператора |
 | `/api/runtime/repair-active-shared-permissions` | POST | Починить permissions |
@@ -779,10 +837,11 @@ Endpoints session 7 (добавлены, ~249 итого после Session 22):
 | Session 26 | **+128 tests** Smart Routing (28 chat_response_policy + 29 llm_intent_classifier + 21 feedback_tracker + 12 chat_policy_router + 11 policy_commands + 14 smart_trigger_integration). +DB corruption circuit breaker (16 tests). +Phase 2 Wave YY/ZZ — costs cluster (7) + swarm leaked (12 endpoints). +inbox dual-patch (6 pre-existing failures fixed). +launchd auto-load fix (Stop Krab.command). +session recovery (kraab.session corrupt → sqlite .recover, 380 peers preserved) |
 | Session 27 | **10561 passed**, 93 skipped, **8 pre-existing fails**, 0 hangers (pytest-timeout=30). Phase 2 command_handlers split: 19637 → 6637 LOC (**−66.2%**) через **15 waves**: text_utils / chat / scheduler / voice / memory / social / ai / swarm / translator / system / **admin** (Wave 11) / **cli** (Wave 12) / **fileio** (Wave 13) / **group_admin** (Wave 14) / **content** (Wave 15). +Dual-namespace lookup pattern (fbf3262 + 847786f). +Bug fixes: mention trigger (e1ac040), reply_to context (5cf00ec), TTS 600→1800 (2e873a9), media filter video (80221b3), sender_name group attribution (28850e4), REACTION_INVALID whitelist (1866376). +Smart Routing analyzer (22 tests, 0c7f89d). +5-layer LLM recovery 27.04. +pytest-timeout 2.4.0 + 7 hangers RCA (3ca34a0). +memory_indexer shutdown race fix (0e6337c). +subprocess hot-path 60s cache (66ae8b8) |
 | Session 28 | **11212 collected** (~10650+ passed), +~651 tests. Phase 2 command_handlers split продолжен: **Wave 16** state_commands (clear/forget/reset/model/web/macos/browser, −1114 LOC) + **Wave 17** observability_commands (watch/inbox/context/memo/bookmark/note, −711 LOC) + **Wave 18** memory_admin_commands (memory recent/stats/clear/rebuild). command_handlers.py **19637 → 4430 LOC (−77.4%)**, 18 waves total. +`POST /api/inbox/bulk-ack-stale` endpoint. +Bug fixes: launchd respawn-storm root cause (KeepAlive Crashed + ThrottleInterval), video media wire-up в bridge, Bug 9 (openclaw model_apply test unhang), !swarm в additional_response_chats (How2AI). Environment bootstrap: multi-account Codex dev-layer, `scripts/sync_codex_dev_layer.py`, `docs/MULTI_ACCOUNT_CODEX_SETUP.md`, pablito MCP baseline 18 servers. P0 failures → 0: 55 passed (document/message batching/buffered/photo/analyzer). Smart Routing analyzer починен под ANSI structlog. 19 commits Session 28. |
+| Session 35 | **~10670+ collected**, +120+ тестов Session 35. **117/117 Wave 16 тестов pass**. SkillCurator Steps 3-4 (apply+A/B), Hermes ACP bridge, session auto-recovery (Wave 16-N, 22 тестов), idle-aware liveness (Wave 16-I, 21 тест), health probe false-positive fix (Wave 16-H), reply→audio (Wave 16-G, 10 тестов), Pyrogram conn invalidation (Wave 16-F, 10+ тестов), repair script (Wave 16-J, 12 тестов). |
 
 <!-- BEGIN:auto-endpoints -->
 
-### Auto-generated endpoints table (248 routes; **29 routers** в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern — Phase 2 Wave A→XX + Session 28-29 memory doctor/coverage-audit/backfill)
+### Auto-generated endpoints table (248 routes; **29 routers** в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern — Phase 2 Wave A→XX + Session 28-29 memory doctor/coverage-audit/backfill; updated Session 35: +!engine, +!curator ab/apply/rollback/overlays subcommands, +/api/runtime/recover 503 path)
 
 | Endpoint | Метод |
 |----------|-------|
