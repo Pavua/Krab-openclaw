@@ -2777,7 +2777,7 @@ class KraabUserbot(
             # Это гарантирует что How2AI (и любой другой permanently banned чат)
             # не будет обрабатываться LLM даже после истечения обычного cache TTL.
             try:
-                _perm_bans = self.config.CHAT_PERMANENT_BAN_LIST if self.config else []
+                _perm_bans = getattr(config, "CHAT_PERMANENT_BAN_LIST", []) or []
                 for _perm_chat_id_str in _perm_bans:
                     _perm_chat_id_str = _perm_chat_id_str.strip()
                     if _perm_chat_id_str:

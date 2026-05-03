@@ -99,7 +99,7 @@ Auto-generated overview of `docs/` directory — **88 documents**.
 
 - **`2026-03-21/`** — 14 markdown files
 - **`2026-03-29/`** — 1 markdown files
-- **`architecture/`** — 5 markdown files
+- **`architecture/`** — 6 markdown files
 - **`artifacts/`** — 1 markdown files
 - **`design_briefs/`** — 1 markdown files
 - **`handoff/`** — 13 markdown files

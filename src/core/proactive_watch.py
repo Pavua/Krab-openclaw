@@ -221,7 +221,9 @@ class ProactiveWatchService:
         macos_status: dict[str, Any] = {}
         if macos_automation.is_available():
             try:
-                macos_status = await macos_automation.status(apps_limit=2)
+                # Сигнатура status() больше не принимает apps_limit.
+                # Держим вызов совместимым, чтобы proactive watch не спамил ложными warning.
+                macos_status = await macos_automation.status()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("proactive_watch_macos_status_failed", error=str(exc))
                 macos_status = {}
