@@ -1,6 +1,6 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-04-28 (session 28)
+> Составлен: 2026-03-23 | Обновлён: 2026-05-04 (session 35)
 > Статус: Активная разработка
 > Владелец: По
 
@@ -1061,6 +1061,43 @@ redact (4/4 пойманы) → chunking (7 chunks) → FTS5 index → Model2Vec
 - **Осталось/сомнение:** в `logs/krab_launchd.err.log` во время рестарта пойман `sqlite3.OperationalError: disk I/O error` на открытии pyrogram session storage, после чего runtime вышел с `SystemExit: 78`, но KeepAlive поднял его повторно и сервис восстановился. Нужен отдельный разбор целостности/блокировок session sqlite, чтобы рестарт не зависел от повторной удачи.
 - **Осталось/сомнение:** browser runtime в этом канале подтверждён (`browser status`/`start` успешны), но открытие вкладки на `:8080` было заблокировано policy browser-инструмента, поэтому UI smoke этой ночью подтверждён только через live HTTP probe, а не через DOM snapshot.
 
+
+## Session 35 closure (2026-05-04)
+
+22 commits Wave 16 series (a6ed8cc → ba02171). Production incident разобран:
+- Gateway crash loop (brave plugin missing) — FIXED
+- Session corruption recurrence — FIXED architectural Wave 16-F + auto-recovery Wave 16-N
+- Audio extraction (caption + reply) — FIXED Wave 16-E + 16-G
+- Codex liveness (idle-aware, tool calls = signal) — Wave 16-I
+- Health probe lock-contention false-positive — Wave 16-H
+- Code review consolidated fixes — Wave 16-O (2 high + 3 medium)
+- 117/117 Wave 16 tests pass, 0 critical issues, B+ grade
+
+**[DONE Session 35]** SkillCurator Steps 3-4 (apply_with_approval + A/B framework) — Wave 16-A + 16-D
+**[DONE Session 35]** Hermes Phase B (ACP bridge prototype) — Wave 16-B
+**[DONE Session 35]** Audio transcription bugs (caption + reply extraction) — Wave 16-E + 16-G
+**[DONE Session 35]** Session corruption recurrence — architectural fix Wave 16-F + 16-N
+**[DONE Session 35]** Gateway recovery integration (scripts/openclaw_runtime_repair.py) — Wave 16-J
+
+### High priority (Session 36 P0)
+- **Hermes Phase C — live wiring**: wrap OpenClawClient под Protocol, modify `llm_flow.py` engine resolution, `archive.db` migration `agent_engine_runs` table, endpoints + Prometheus
+- **SkillCurator integration в swarm.py** (Phase D): wire `select_variant` + `record_round_metric` + cron `evaluate_ab_test_and_apply`
+- **HermesACPBridge singleton thread-safety** (review LOW-1): нужен `asyncio.Lock` + `asynccontextmanager` вместо bare singleton
+- **SkillCurator evaluate+apply atomicity** (review LOW-2): combine под одной lock во избежание race condition
+
+### Medium priority (Session 36+)
+- Wave 16-J `_SESSION_PATH` hardcoded — добавить `--session-path` как обязательный аргумент или env override
+- Test gaps: async-integration test для Wave 16-H backoff, e2e test exit-78 в `system_router`, full integration test Wave 16-I с динамическим `_active_tool_calls`
+- Liveness через subprocess heartbeat psutil check (дополнение к idle-gate Wave 16-I)
+- Hermes binary install (Wave 15-D Phase A настроен, бинарь не установлен)
+- Paperclip server start (user action steps 1-2)
+
+### Low priority
+- Hermes selective cherry-picks (agentskills.io / Honcho / FTS5 cross-session)
+- OpenClaw → Hermes migration tool
+- IDE integration via ACP
+
+---
 
 ## Session 33 closure (02.05.2026)
 
