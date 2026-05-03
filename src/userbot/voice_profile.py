@@ -367,6 +367,14 @@ class VoiceProfileMixin:
         return bool(getattr(message, "voice", None) or getattr(message, "audio", None))
 
     @staticmethod
+    def _message_has_reply_audio(message) -> bool:
+        """True если reply_to_message содержит voice/audio attachment (Wave 16-G)."""
+        reply = getattr(message, "reply_to_message", None)
+        if not reply:
+            return False
+        return bool(getattr(reply, "voice", None) or getattr(reply, "audio", None))
+
+    @staticmethod
     def _voice_download_suffix(message) -> str:
         """Подбирает расширение для временного voice/audio файла."""
         voice = getattr(message, "voice", None)
@@ -380,18 +388,25 @@ class VoiceProfileMixin:
                 return suffix if suffix.startswith(".") else f".{suffix}"
         return ".ogg"
 
-    async def _transcribe_audio_message(self, message) -> tuple[str, str]:
+    async def _transcribe_audio_message(self, message, *, target_message=None) -> tuple[str, str]:
         """
         Скачивает входящее аудио и прогоняет его через Perceptor.
 
         Возвращает `(текст, ошибка)`, чтобы вызывающий код мог честно показать
         пользователю реальную причину сбоя, а не маскировать её placeholder-ом.
+
+        target_message — сообщение из которого скачивать аудио. Если не передан —
+        используется `message`. Wave 16-G: передаётся message.reply_to_message
+        для reply-audio пути.
         """
         from ..config import config  # noqa: PLC0415
         from ..core.logger import get_logger  # noqa: PLC0415
         from ..model_manager import model_manager  # noqa: PLC0415
 
         logger = get_logger("krab.userbot")
+
+        # Выбираем источник аудио: direct или reply_to_message (Wave 16-G)
+        src = target_message if target_message is not None else message
 
         perceptor = getattr(self, "perceptor", None)
         if not perceptor or not hasattr(perceptor, "transcribe"):
@@ -401,9 +416,9 @@ class VoiceProfileMixin:
 
         voice_dir = config.BASE_DIR / "data" / "voice_inbox"
         voice_dir.mkdir(parents=True, exist_ok=True)
-        message_id = int(getattr(message, "id", 0) or 0)
+        message_id = int(getattr(src, "id", 0) or 0)
         file_path = voice_dir / (
-            f"voice_{int(time.time() * 1000)}_{message_id}{self._voice_download_suffix(message)}"
+            f"voice_{int(time.time() * 1000)}_{message_id}{self._voice_download_suffix(src)}"
         )
         download_timeout_sec = float(getattr(config, "VOICE_DOWNLOAD_TIMEOUT_SEC", 45.0))
         stt_timeout_sec = float(
@@ -416,7 +431,7 @@ class VoiceProfileMixin:
 
         try:
             downloaded = await asyncio.wait_for(
-                self.client.download_media(message, file_name=str(file_path)),
+                self.client.download_media(src, file_name=str(file_path)),
                 timeout=max(5.0, download_timeout_sec),
             )
             if downloaded:
