@@ -458,6 +458,15 @@ class Config:
     KRAB_CODEX_CLI_FAILURE_WINDOW_SEC: float = float(
         os.getenv("KRAB_CODEX_CLI_FAILURE_WINDOW_SEC", "300")
     )
+    # Wave 16-I: idle-aware liveness detection.
+    # Если LLM был активен (tool calls или text), но потом молчит > этого порога — это hang.
+    # Default 180s (3 мин тишины после activity = зависание post-tool-call).
+    # 0 = отключено.
+    KRAB_LLM_IDLE_TIMEOUT_SEC: float = float(os.getenv("KRAB_LLM_IDLE_TIMEOUT_SEC", "180"))
+    # Интервал heartbeat-обновлений temp_msg с прогрессом (секунды).
+    KRAB_LLM_HEARTBEAT_INTERVAL_SEC: float = float(
+        os.getenv("KRAB_LLM_HEARTBEAT_INTERVAL_SEC", "60")
+    )
     # Streaming UI: показывать reasoning (chain-of-thought) в сообщении.
     TELEGRAM_STREAM_SHOW_REASONING: bool = os.getenv(
         "TELEGRAM_STREAM_SHOW_REASONING", "0"
@@ -701,6 +710,10 @@ class Config:
                     cls.KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC = float(value)
                 elif key == "KRAB_RESPONSE_HARD_CAP_SEC":
                     cls.KRAB_RESPONSE_HARD_CAP_SEC = float(value)
+                elif key == "KRAB_LLM_IDLE_TIMEOUT_SEC":
+                    cls.KRAB_LLM_IDLE_TIMEOUT_SEC = float(value)
+                elif key == "KRAB_LLM_HEARTBEAT_INTERVAL_SEC":
+                    cls.KRAB_LLM_HEARTBEAT_INTERVAL_SEC = max(10.0, float(value))
                 elif key == "LM_STUDIO_NATIVE_REASONING_MODE":
                     cls.LM_STUDIO_NATIVE_REASONING_MODE = value.strip().lower()
                 elif key == "LM_STUDIO_NATIVE_AUTO_CONTINUE_MAX_ROUNDS":

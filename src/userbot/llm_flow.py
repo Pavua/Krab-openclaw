@@ -743,6 +743,16 @@ class LLMFlowMixin:
             getattr(config, "OPENCLAW_NO_TOOL_ACTIVITY_TIMEOUT_SEC", 300.0) or 300.0
         )
         no_tool_activity_timeout_sec = max(60.0, no_tool_activity_timeout_sec)
+        # Wave 16-I: idle-aware liveness — отдельные сигналы активности.
+        # received_any_tool_event: видели хотя бы один tool_call через openclaw.
+        # tool_call_count: total unique вызовов инструментов за сессию.
+        # last_activity_at: last_any_activity (text chunk OR tool event) — для idle gate.
+        received_any_tool_event = False
+        tool_call_count = 0
+        last_activity_at = time.monotonic()  # reset на ЛЮБОМ сигнале активности
+        _idle_cap_sec = float(getattr(config, "KRAB_LLM_IDLE_TIMEOUT_SEC", 180.0))
+        _heartbeat_interval_sec = float(getattr(config, "KRAB_LLM_HEARTBEAT_INTERVAL_SEC", 60.0))
+        _next_heartbeat_at = started_wait_at + _heartbeat_interval_sec
         # Gateway watchdog: интервал HTTP health-check (каждые 30 сек)
         gateway_http_check_interval_sec = 30.0
         next_gateway_http_check_sec = gateway_http_check_interval_sec
@@ -804,10 +814,70 @@ class LLMFlowMixin:
                 # Срабатывает только если: (а) текущая модель codex-cli,
                 # (б) первый chunk ещё не пришёл, (в) elapsed > 45s.
                 # Поднимаем LLMRetryableError → внешний retry-loop переключит модель.
+                # Wave 16-I: idle gate — если LLM был активен (tool_events),
+                # но потом завис > _idle_cap_sec → kill даже если text чанков не было.
+                # Это ловит: codex делает tool calls, потом зависает post-tool-call.
+                _idle_since_activity = time.monotonic() - last_activity_at
+                if (
+                    _idle_cap_sec > 0
+                    and received_any_tool_event  # был активен через tool calls
+                    and not received_any_chunk  # text ещё не получен — иначе stream живой
+                    and _idle_since_activity >= _idle_cap_sec
+                ):
+                    _idle_since = _idle_since_activity
+                    logger.warning(
+                        "llm_idle_hang_after_tool_activity",
+                        chat_id=chat_id,
+                        idle_sec=round(_idle_since, 1),
+                        cap_sec=_idle_cap_sec,
+                        tool_call_count=tool_call_count,
+                        model=startup_route_model,
+                    )
+                    if next_chunk_task and not next_chunk_task.done():
+                        next_chunk_task.cancel()
+                        try:
+                            await next_chunk_task
+                        except (asyncio.CancelledError, StopAsyncIteration):
+                            pass
+                        except Exception:  # noqa: BLE001
+                            pass
+                    try:
+                        await stream.aclose()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _idle_notice = (
+                        f"⏱️ LLM завис после инструментов "
+                        f"({int(_idle_since)}s тишины, вызовов: {tool_call_count}). "
+                        "Переключаюсь на резервную модель..."
+                    )
+                    if _show_progress:
+                        try:
+                            if is_self:
+                                await self._safe_edit(message, f"🦀 {query}\n\n{_idle_notice}")
+                            else:
+                                await self._safe_edit(temp_msg, _idle_notice)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    from .llm_retry import LLMRetryableError
+
+                    _codex_fallback_model = str(
+                        getattr(config, "KRAB_CODEX_CLI_FALLBACK_MODEL", "") or "openai/gpt-5.5"
+                    ).strip()
+                    raise LLMRetryableError(
+                        "codex-cli idle hang after activity",
+                        f"provider_timeout: silence > {int(_idle_cap_sec)}s после activity "
+                        f"(tools={tool_call_count})",
+                        retry_model_override=_codex_fallback_model or None,
+                        user_progress_notice=_idle_notice,
+                    )
+
+                # Wave 14-D first-activity gate: если ВООБЩЕ ничего не было (ни text, ни tool)
+                # > codex timeout → deadlock на старте. Wave 16-I: пропускаем если tool activity.
                 if (
                     _codex_first_chunk_cap_sec > 0
                     and _is_codex_cli_route
                     and not received_any_chunk
+                    and not received_any_tool_event  # Wave 16-I: tool activity = liveness
                     and elapsed_wait_sec >= _codex_first_chunk_cap_sec
                 ):
                     _codex_state.record_timeout()
@@ -1035,6 +1105,18 @@ class LLMFlowMixin:
                     if tool_summary != last_tool_summary:
                         last_tool_activity_ts = time.monotonic()
 
+                    # Wave 16-I: обновляем liveness-сигналы на tool-активность.
+                    # _active_tool_calls — source of truth для количества вызовов.
+                    if tool_summary and tool_summary != last_tool_summary:
+                        received_any_tool_event = True
+                        last_activity_at = time.monotonic()
+                        try:
+                            _atc = getattr(openclaw_client, "_active_tool_calls", None)
+                            if _atc is not None:
+                                tool_call_count = max(tool_call_count, len(_atc))
+                        except Exception:  # noqa: BLE001
+                            pass
+
                     # Auto-reaction: агентный режим при первом появлении tool_summary
                     if tool_summary and not _agent_marked:
                         _agent_marked = True
@@ -1076,6 +1158,31 @@ class LLMFlowMixin:
                         break
 
                     handled_interval = False
+
+                    # Wave 16-I: Heartbeat — обновляем temp_msg каждые N секунд с прогрессом.
+                    # Показываем сколько tool calls было и сколько прошло времени.
+                    # Гейт: только _show_progress and not is_self и есть tool activity.
+                    _heartbeat_due = (
+                        _show_progress
+                        and not is_self
+                        and received_any_tool_event
+                        and not received_any_chunk
+                        and _heartbeat_interval_sec > 0
+                        and elapsed_wait_sec >= (_next_heartbeat_at - started_wait_at)
+                    )
+                    if _heartbeat_due:
+                        handled_interval = True
+                        _elapsed_int = int(elapsed_wait_sec)
+                        _tools_str = (
+                            f", инструментов: {tool_call_count}" if tool_call_count > 0 else ""
+                        )
+                        _heartbeat_notice = f"🦀 Думаю... ({_elapsed_int}s{_tools_str})"
+                        try:
+                            await self._safe_edit(temp_msg, _heartbeat_notice)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        # Следующий heartbeat через _heartbeat_interval_sec от сейчас
+                        _next_heartbeat_at = time.monotonic() + _heartbeat_interval_sec
 
                     # Handle Tool Progress
                     if elapsed_wait_sec >= next_tool_progress_sec - 1e-6:
@@ -1430,6 +1537,7 @@ class LLMFlowMixin:
                     except Exception:  # noqa: BLE001
                         pass
                 received_any_chunk = True
+                last_activity_at = time.monotonic()  # Wave 16-I: text chunk = liveness
                 last_tool_activity_ts = time.monotonic()
                 stream_display = (
                     self._extract_live_stream_text(
