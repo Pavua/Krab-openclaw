@@ -27,9 +27,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.core.skill_curator import SkillCurator, _APPLY_RATE_LIMIT_DAYS
+from src.core.skill_curator import _APPLY_RATE_LIMIT_DAYS, SkillCurator
 from src.core.skill_curator_state import CuratorState
-
 
 # ---------------------------------------------------------------------------
 # Вспомогательные фикстуры
@@ -343,9 +342,7 @@ def test_rollback_to_baseline(tmp_path: Path) -> None:
     assert state.get_overlay("analysts") is not None
 
     # Rollback к baseline
-    ok_rb, msg_rb = asyncio.run(
-        curator.rollback("analysts", version=-1, state_path=state_path)
-    )
+    ok_rb, msg_rb = asyncio.run(curator.rollback("analysts", version=-1, state_path=state_path))
     assert ok_rb, f"Rollback failed: {msg_rb}"
     assert "baseline" in msg_rb.lower() or "rolled back" in msg_rb.lower()
 
@@ -367,9 +364,7 @@ def test_rollback_no_overlay(tmp_path: Path) -> None:
     # Пустой state
     CuratorState().save_atomic(state_path)
 
-    ok, msg = asyncio.run(
-        curator.rollback("analysts", version=-1, state_path=state_path)
-    )
+    ok, msg = asyncio.run(curator.rollback("analysts", version=-1, state_path=state_path))
     assert not ok
     assert "nothing" in msg.lower() or "no active overlay" in msg.lower()
 
@@ -416,9 +411,7 @@ def test_rollback_to_specific_version(tmp_path: Path) -> None:
     assert overlay["prompt"] == "Промпт версия 2."
 
     # Rollback к версии 1
-    ok_rb, msg_rb = asyncio.run(
-        curator.rollback("analysts", version=1, state_path=state_path)
-    )
+    ok_rb, msg_rb = asyncio.run(curator.rollback("analysts", version=1, state_path=state_path))
     assert ok_rb, f"Rollback to v1 failed: {msg_rb}"
 
     state_after = CuratorState.load(state_path)
@@ -487,7 +480,9 @@ def test_get_team_system_prompt_cache_invalidation(tmp_path: Path) -> None:
 
     # После инвалидации — возвращает baseline (из TEAM_PROMPTS или state без overlay)
     with patch("src.core.skill_curator_state.CURATOR_STATE_PATH", tmp_path / "nostate.json"):
-        with patch("src.core.swarm_team_prompts.CURATOR_STATE_PATH", tmp_path / "nostate.json", create=True):
+        with patch(
+            "src.core.swarm_team_prompts.CURATOR_STATE_PATH", tmp_path / "nostate.json", create=True
+        ):
             result = stp.get_team_system_prompt("analysts")
 
     assert "аналитик" in result.lower() or "Analysts" in result  # TEAM_PROMPTS["analysts"]
@@ -586,7 +581,9 @@ def test_curator_apply_command_success() -> None:
 
     with (
         patch.object(curator_commands, "is_owner_user_id", return_value=True),
-        patch.object(curator_commands.skill_curator, "apply_with_approval", side_effect=_fake_apply),
+        patch.object(
+            curator_commands.skill_curator, "apply_with_approval", side_effect=_fake_apply
+        ),
     ):
         asyncio.run(curator_commands.handle_curator(bot, msg))
 
@@ -661,6 +658,78 @@ def test_curator_overlays_command_with_overlay(tmp_path: Path) -> None:
     out = bot.replies[-1]
     assert "coders" in out
     assert "coders-test-1" in out
+
+
+# ---------------------------------------------------------------------------
+# MEDIUM-2 (Wave 16-O): subsecond precision — elapsed.total_seconds() vs .days
+# ---------------------------------------------------------------------------
+
+
+def test_apply_rate_limit_subsecond_precision_blocked(tmp_path: Path) -> None:
+    """7d − 1h → blocked (elapsed.total_seconds() < 7 * 86400)."""
+    from datetime import datetime, timedelta, timezone
+
+    curator = _make_curator(tmp_path)
+    state_path = tmp_path / "state.json"
+
+    # Ставим last_apply_at = сейчас − (7 дней − 1 час) → должно заблокировать
+    last_apply_dt = datetime.now(timezone.utc) - timedelta(days=7) + timedelta(hours=1)
+    state = CuratorState(
+        last_apply_at={"analysts": last_apply_dt.isoformat()},
+    )
+    state.save_atomic(state_path)
+
+    _write_proposal(
+        tmp_path,
+        proposal_id="analysts-rate-test",
+        team="analysts",
+        proposed_prompt="Rate limit test prompt.",
+    )
+
+    ok, msg = asyncio.run(
+        curator.apply_with_approval(
+            "analysts-rate-test",
+            force=False,
+            idle_check=False,
+            state_path=state_path,
+        )
+    )
+
+    assert not ok, "Должно быть заблокировано: прошло < 7d (total_seconds precision)"
+    assert "rate limit" in msg.lower(), f"Ожидали 'rate limit' в сообщении, получили: {msg!r}"
+
+
+def test_apply_rate_limit_subsecond_precision_allowed(tmp_path: Path) -> None:
+    """7d + 1h → allowed (elapsed.total_seconds() >= 7 * 86400)."""
+    from datetime import datetime, timedelta, timezone
+
+    curator = _make_curator(tmp_path)
+    state_path = tmp_path / "state.json"
+
+    # Ставим last_apply_at = сейчас − (7 дней + 1 час) → должно пропустить
+    last_apply_dt = datetime.now(timezone.utc) - timedelta(days=7) - timedelta(hours=1)
+    state = CuratorState(
+        last_apply_at={"analysts": last_apply_dt.isoformat()},
+    )
+    state.save_atomic(state_path)
+
+    _write_proposal(
+        tmp_path,
+        proposal_id="analysts-rate-test-allowed",
+        team="analysts",
+        proposed_prompt="Rate limit allowed test prompt.",
+    )
+
+    ok, msg = asyncio.run(
+        curator.apply_with_approval(
+            "analysts-rate-test-allowed",
+            force=False,
+            idle_check=False,
+            state_path=state_path,
+        )
+    )
+
+    assert ok, f"Должно быть разрешено: прошло > 7d, получили: {msg!r}"
 
 
 if __name__ == "__main__":

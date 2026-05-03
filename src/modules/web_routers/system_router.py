@@ -444,12 +444,31 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
 
         runtime_after = await ctx.collect_runtime_lite()
         ok = all(bool(item.get("ok")) for item in steps)
-        return {
+
+        # HIGH-2: exit_code=78 означает recovery loop detected — нужно manual intervention.
+        # Возвращаем HTTP 503 чтобы мониторинг не пропустил критическую проблему.
+        recovery_loop_detected = any(
+            int(item.get("exit_code", 0)) == 78 for item in steps if not item.get("skipped")
+        )
+        response_body: dict[str, Any] = {
             "ok": ok,
             "steps": steps,
             "runtime_after": runtime_after,
             "cloud_runtime": cloud_runtime,
         }
+        if recovery_loop_detected:
+            response_body["recovery_loop_detected"] = True
+            response_body["requires_manual_intervention"] = True
+            import json as _json
+
+            from fastapi.responses import Response as _Response
+
+            return _Response(
+                status_code=503,
+                content=_json.dumps(response_body),
+                media_type="application/json",
+            )
+        return response_body
 
     # ── /api/session10/summary (Wave TT) ────────────────────────────────────
 

@@ -51,6 +51,11 @@ _PATCH_APPLIED = False
 # при конкурентном доступе swarm-клиентов.
 _SQLITE_CONNECT_TIMEOUT = 10
 
+# MEDIUM-3: Module-level fallback для _corrupt_flag если storage использует __slots__.
+# При setattr → AttributeError на __slots__-классе флаг пишется сюда.
+# is_storage_corrupt() проверяет оба пути — attr и этот dict.
+_STORAGE_CORRUPT_FLAGS: dict[int, bool] = {}
+
 
 def _execute_pragmas(conn) -> None:
     """Применяет hardening-PRAGMA к уже открытому sqlite3-соединению.
@@ -210,15 +215,27 @@ def apply_pyrogram_sqlite_hardening() -> bool:
                         "pyrogram_sqlite_malformed_swallowed",
                         extra={"op": op_name, "count": count},
                     )
-                    # Wave 16-F: инвалидируем connection — ставим _corrupt_flag,
+                    # Wave 16-F / MEDIUM-3: инвалидируем connection — ставим _corrupt_flag,
                     # чтобы следующий READ call немедленно получил DatabaseError
                     # вместо того, чтобы взорваться с необработанным crash в
                     # pyrogram event loop. Чистый recovery loop подхватит флаг
                     # в preflight и запустит sqlite3 .recover.
+                    # __slots__-safe: если storage не поддерживает dynamic attrs —
+                    # пишем в module-level fallback dict (is_storage_corrupt проверяет оба).
                     try:
                         self._corrupt_flag = True
-                    except Exception:  # noqa: BLE001 — __slots__ guard
-                        pass
+                    except (AttributeError, TypeError) as _flag_exc:
+                        log.warning(
+                            "pyrogram_corrupt_flag_set_failed",
+                            extra={
+                                "storage_class": type(self).__name__,
+                                "error": str(_flag_exc),
+                                "hint": (
+                                    "storage may use __slots__; using module-level fallback dict"
+                                ),
+                            },
+                        )
+                        _STORAGE_CORRUPT_FLAGS[id(self)] = True
                     return fallback() if callable(fallback) else fallback
                 raise
 
@@ -537,8 +554,16 @@ _CORRUPT_MARKER = "storage marked corrupt"
 
 
 def is_storage_corrupt(storage: object) -> bool:
-    """Возвращает True если storage помечен corrupt после malformed swallow."""
-    return bool(getattr(storage, _CORRUPT_FLAG_ATTR, False))
+    """Возвращает True если storage помечен corrupt после malformed swallow.
+
+    Проверяет оба пути:
+    1. _corrupt_flag attr на объекте (стандартный случай).
+    2. _STORAGE_CORRUPT_FLAGS[id(storage)] — fallback для __slots__-классов,
+       у которых setattr(_corrupt_flag) вызывает AttributeError.
+    """
+    return bool(getattr(storage, _CORRUPT_FLAG_ATTR, False)) or _STORAGE_CORRUPT_FLAGS.get(
+        id(storage), False
+    )
 
 
 def clear_storage_corrupt_flag(storage: object) -> None:

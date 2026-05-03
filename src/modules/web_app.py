@@ -6313,7 +6313,7 @@ class WebApp:
             live_trial_preflight=live_trial_preflight,
         )
 
-    def _telegram_session_snapshot(self) -> dict[str, Any]:
+    async def _telegram_session_snapshot(self) -> dict[str, Any]:
         """
         Возвращает файловый snapshot Telegram session SQLite.
 
@@ -6358,7 +6358,8 @@ class WebApp:
                     last_exc = exc
                     if "locked" in str(exc).lower() or "busy" in str(exc).lower():
                         locked_attempts += 1
-                        time.sleep(0.05 * (attempt + 1))  # exponential-ish backoff
+                        # HIGH-1: await asyncio.sleep вместо time.sleep — не блокируем event loop
+                        await asyncio.sleep(0.05 * (attempt + 1))
                         continue
                     # Не-lock OperationalError (e.g. malformed) — реальная проблема, выходим
                     break
@@ -7020,7 +7021,7 @@ class WebApp:
                 telegram_userbot_state = {}
 
         telegram_session = self._normalize_telegram_session_truth(
-            self._telegram_session_snapshot(),
+            await self._telegram_session_snapshot(),
             telegram_userbot_state,
         )
         lmstudio = await self._lmstudio_model_snapshot()

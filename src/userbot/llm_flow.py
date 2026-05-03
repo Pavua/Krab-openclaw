@@ -814,14 +814,18 @@ class LLMFlowMixin:
                 # Срабатывает только если: (а) текущая модель codex-cli,
                 # (б) первый chunk ещё не пришёл, (в) elapsed > 45s.
                 # Поднимаем LLMRetryableError → внешний retry-loop переключит модель.
-                # Wave 16-I: idle gate — если LLM был активен (tool_events),
-                # но потом завис > _idle_cap_sec → kill даже если text чанков не было.
-                # Это ловит: codex делает tool calls, потом зависает post-tool-call.
+                # Wave 16-I idle gate: тишина между любыми событиями (text chunk ИЛИ tool event).
+                # Работает ВСЕГДА после первой активности — не только до получения text chunk.
+                # last_activity_at сбрасывается на каждый text chunk и на каждый tool event.
+                # Разница от first-activity gate ниже: тот ловит заморозку ДО ЛЮБОЙ активности;
+                # этот ловит провалы активности ПОСЛЕ неё (e.g. codex завис post-tool-call
+                # и больше не присылает ни chunks, ни tool events).
                 _idle_since_activity = time.monotonic() - last_activity_at
                 if (
                     _idle_cap_sec > 0
-                    and received_any_tool_event  # был активен через tool calls
-                    and not received_any_chunk  # text ещё не получен — иначе stream живой
+                    and (
+                        received_any_tool_event or received_any_chunk
+                    )  # была хоть какая-то активность
                     and _idle_since_activity >= _idle_cap_sec
                 ):
                     _idle_since = _idle_since_activity

@@ -665,12 +665,16 @@ class SkillCurator:
                     if last_apply_dt.tzinfo is None:
                         last_apply_dt = last_apply_dt.replace(tzinfo=timezone.utc)
                     elapsed = datetime.now(timezone.utc) - last_apply_dt
-                    if elapsed.days < _APPLY_RATE_LIMIT_DAYS:
-                        remaining = _APPLY_RATE_LIMIT_DAYS - elapsed.days
+                    # MEDIUM-2: используем total_seconds() вместо .days — иначе 23ч59м
+                    # считалось бы 0 дней и blocking проходил некорректно.
+                    _rate_limit_sec = _APPLY_RATE_LIMIT_DAYS * 86_400
+                    if elapsed.total_seconds() < _rate_limit_sec:
+                        elapsed_days_approx = elapsed.total_seconds() / 86_400
+                        remaining_days_approx = (_rate_limit_sec - elapsed.total_seconds()) / 86_400
                         return (
                             False,
-                            f"rate limit: last apply was {elapsed.days}d ago, "
-                            f"wait {remaining}d more (or use force=True)",
+                            f"rate limit: last apply was {elapsed_days_approx:.2f}d ago, "
+                            f"wait {remaining_days_approx:.2f}d more (or use force=True)",
                         )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("curator_rate_limit_check_failed", team=team, error=str(exc))

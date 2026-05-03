@@ -5,10 +5,15 @@
 Wave 16-H: проверяем исправление lock-contention false-positive — когда
 Pyrogram держит SQLite session открытой, probe не должен возвращать
 state="corrupted".
+
+Wave 16-O (HIGH-1): _telegram_session_snapshot стала async — тесты
+используют asyncio.run() и проверяют отсутствие blocking time.sleep.
 """
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -65,7 +70,7 @@ def test_snapshot_ready_when_session_clean(tmp_path: Path) -> None:
     conn.close()
 
     wa = _make_webapp(project_root)
-    snap = wa._telegram_session_snapshot()
+    snap = asyncio.run(wa._telegram_session_snapshot())
 
     assert snap["state"] == "ready"
     assert snap["sqlite_quick_check_ok"] is True
@@ -88,7 +93,7 @@ def test_snapshot_corrupted_on_real_malformed(
     wa = _make_webapp(project_root)
 
     # Не патчим connect — реальный sqlite3 должен поднять "file is not a database"
-    snap = wa._telegram_session_snapshot()
+    snap = asyncio.run(wa._telegram_session_snapshot())
 
     assert snap["state"] == "corrupted"
     assert snap["sqlite_quick_check_ok"] is False
@@ -118,7 +123,7 @@ def test_snapshot_busy_returns_none_then_normalized_ready(
             MagicMock(side_effect=locked_exc),
         )
         wa = _make_webapp(project_root)
-        snap = wa._telegram_session_snapshot()
+        snap = asyncio.run(wa._telegram_session_snapshot())
 
     assert snap["sqlite_quick_check_ok"] is None, "должен быть None, а не False"
     assert "busy_after_" in snap["sqlite_error"]
@@ -157,7 +162,7 @@ def test_snapshot_busy_persisted_returns_open_or_unclean(
             MagicMock(side_effect=locked_exc),
         )
         wa = _make_webapp(project_root)
-        snap = wa._telegram_session_snapshot()
+        snap = asyncio.run(wa._telegram_session_snapshot())
 
     # userbot НЕ running
     from src.modules.web_app import WebApp
@@ -197,7 +202,7 @@ def test_snapshot_uses_read_only_uri(tmp_path: Path, monkeypatch: pytest.MonkeyP
     with monkeypatch.context() as m:
         m.setattr(webapp_module.sqlite3, "connect", fake_connect)
         wa = _make_webapp(project_root)
-        wa._telegram_session_snapshot()
+        asyncio.run(wa._telegram_session_snapshot())
 
     assert len(connect_calls) >= 1
     uri_str, uri_flag, _ = connect_calls[0]
@@ -232,9 +237,44 @@ def test_snapshot_retry_count_logged_in_error(
     with monkeypatch.context() as m:
         m.setattr(webapp_module.sqlite3, "connect", counting_connect)
         wa = _make_webapp(project_root)
-        snap = wa._telegram_session_snapshot()
+        snap = asyncio.run(wa._telegram_session_snapshot())
 
     assert "busy_after_3_retries" in snap["sqlite_error"], (
         f"Ожидали busy_after_3_retries, получили: {snap['sqlite_error']!r}"
     )
     assert call_count == 3, f"Ожидали 3 попытки, получили {call_count}"
+
+
+# ---------------------------------------------------------------------------
+# 7. HIGH-1: _telegram_session_snapshot — async и без time.sleep
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_is_async_coroutine() -> None:
+    """_telegram_session_snapshot должна быть async-функцией (не блокирует event loop)."""
+    import src.modules.web_app as webapp_module
+
+    method = webapp_module.WebApp._telegram_session_snapshot
+    # inspect.iscoroutinefunction проверяет async def на уровне интроспекции
+    assert inspect.iscoroutinefunction(method), (
+        "_telegram_session_snapshot должна быть async def (HIGH-1 fix)"
+    )
+
+
+def test_snapshot_no_time_sleep_in_source() -> None:
+    """Исходный код _telegram_session_snapshot не должен содержать вызов time.sleep (только asyncio.sleep)."""
+    import src.modules.web_app as webapp_module
+
+    source = inspect.getsource(webapp_module.WebApp._telegram_session_snapshot)
+
+    # Фильтруем строки-комментарии и проверяем только реальный код.
+    # Комментарии могут упоминать time.sleep для сравнения — это OK.
+    code_lines = [ln for ln in source.splitlines() if not ln.lstrip().startswith("#")]
+    code_only = "\n".join(code_lines)
+    assert "time.sleep" not in code_only, (
+        "time.sleep обнаружен в коде _telegram_session_snapshot (не в комментарии) — "
+        "должен быть заменён на await asyncio.sleep (HIGH-1)"
+    )
+    assert "asyncio.sleep" in source, (
+        "asyncio.sleep не найден в _telegram_session_snapshot — backoff должен быть async"
+    )
