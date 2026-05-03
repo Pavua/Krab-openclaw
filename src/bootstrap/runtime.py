@@ -401,10 +401,38 @@ async def run_app() -> None:
         )
         network_failure = exc
     except sqlite3.DatabaseError as exc:
-        # Late corruption detection: PRAGMA integrity_check мог пропустить
-        # повреждение (например, locked во время preflight) — и SQLite
-        # возразил уже при kraab.start(). Reactive quarantine + exit.
-        if is_corruption_error(exc):
+        # Wave 16-F: если DatabaseError содержит наш маркер "storage marked corrupt"
+        # (raised by read-wrapper после malformed swallow в write path) —
+        # это не внешний corruption, а сигнал от pyrogram_patch о том, что
+        # storage._corrupt_flag=True. Немедленно запускаем recovery cycle
+        # без sys.exit (чтобы избежать launchd respawn storm): логируем,
+        # quarantine DB, Sentry — и поднимаем network_failure (retry в
+        # _run_with_retry с чистым storage после recovery).
+        from .pyrogram_patch import is_corrupt_marker_error  # noqa: PLC0415
+
+        if is_corrupt_marker_error(exc):
+            logger.error(
+                "db_corrupt_flag_triggered_recovery",
+                error=str(exc),
+                detail="read method rejected corrupt storage; triggering preflight recovery",
+            )
+            try:
+                preflight_known_dbs()
+            except Exception:  # noqa: BLE001
+                pass
+            report_corruption_to_sentry(
+                path="runtime",
+                kind="corrupt_flag",
+                detail=str(exc),
+                quarantine_path="",
+            )
+            # Поднимаем как network_failure → retry loop в _run_with_retry
+            # попробует поднять Pyrogram с fresh storage после recovery.
+            network_failure = exc
+        elif is_corruption_error(exc):
+            # Late corruption detection: PRAGMA integrity_check мог пропустить
+            # повреждение (например, locked во время preflight) — и SQLite
+            # возразил уже при kraab.start(). Reactive quarantine + exit.
             logger.error(
                 "db_corruption_detected_runtime",
                 error=str(exc),
@@ -423,7 +451,8 @@ async def run_app() -> None:
                 quarantine_path="",
             )
             sys.exit(DB_CORRUPTION_EXIT_CODE)
-        logger.error("fatal_error", error=str(exc), error_type=type(exc).__name__)
+        else:
+            logger.error("fatal_error", error=str(exc), error_type=type(exc).__name__)
     except Exception as e:
         # Session 33 Wave 5: DBCorruptionError (raised by main session integrity
         # preflight when auto-recovery failed) → exit 78 like other corruption

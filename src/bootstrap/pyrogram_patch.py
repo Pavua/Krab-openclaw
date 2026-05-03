@@ -153,6 +153,7 @@ def apply_pyrogram_sqlite_hardening() -> bool:
 
     # ------------------------------------------------------------------
     # Wave 14-J: generic safe-wrapper factory для write-методов SQLiteStorage.
+    # Wave 16-F: после swallow malformed устанавливаем _corrupt_flag на storage.
     # ------------------------------------------------------------------
     # Все wrapped-методы — write-only path (нет полезного return value).
     # Глотаем три класса recoverable-ошибок:
@@ -169,7 +170,9 @@ def apply_pyrogram_sqlite_hardening() -> bool:
     #
     # Не оборачиваем:
     #   - get_peer_by_* — read-path, raise KeyError для not-found
-    #     (silent swallow здесь сломал бы peer resolution)
+    #     (silent swallow здесь сломал бы peer resolution);
+    #     вместо этого Wave 16-F wrap'ит их через _make_safe_read_method ниже:
+    #     при _corrupt_flag=True сразу raise DatabaseError ("storage marked corrupt")
     #   - accessors (api_id/dc_id/...) — отдельный layer ниже с last-good cache
     def _make_safe_method(orig, op_name, *, fallback=None):
         """
@@ -207,6 +210,15 @@ def apply_pyrogram_sqlite_hardening() -> bool:
                         "pyrogram_sqlite_malformed_swallowed",
                         extra={"op": op_name, "count": count},
                     )
+                    # Wave 16-F: инвалидируем connection — ставим _corrupt_flag,
+                    # чтобы следующий READ call немедленно получил DatabaseError
+                    # вместо того, чтобы взорваться с необработанным crash в
+                    # pyrogram event loop. Чистый recovery loop подхватит флаг
+                    # в preflight и запустит sqlite3 .recover.
+                    try:
+                        self._corrupt_flag = True
+                    except Exception:  # noqa: BLE001 — __slots__ guard
+                        pass
                     return fallback() if callable(fallback) else fallback
                 raise
 
@@ -236,6 +248,62 @@ def apply_pyrogram_sqlite_hardening() -> bool:
             _ss.SQLiteStorage,
             _method_name,
             _make_safe_method(_orig, _method_name, fallback=_fallback),
+        )
+
+    # ------------------------------------------------------------------
+    # Wave 16-F: wrap READ-методов с проверкой _corrupt_flag.
+    # ------------------------------------------------------------------
+    # При swallow malformed в write-пути выше _corrupt_flag=True.
+    # Если conn в corrupt state — следующий READ гарантированно взорвётся
+    # с необработанным sqlite3.DatabaseError прямо в pyrogram event loop.
+    # Мы перехватываем это ДО crash: при _corrupt_flag raise DatabaseError
+    # с маркером "storage marked corrupt", который runtime.py поймает
+    # в except sqlite3.DatabaseError → trigger immediate recovery cycle.
+    #
+    # READ методы: get_peer_by_id / get_peer_by_username / get_peer_by_phone_number.
+    # Они raise KeyError при not-found — это нормально; мы только добавляем
+    # ранний выход при corrupt flag.
+    def _make_safe_read_method(orig, op_name):
+        """
+        Factory: оборачивает async read-метод SQLiteStorage.
+        Если storage помечен corrupt (_corrupt_flag=True) — немедленно
+        raise sqlite3.DatabaseError с маркером для preflight.
+        """
+
+        async def _safe_read(self, *args, **kwargs):
+            # Проверяем corrupt flag ДО любого обращения к conn.
+            if getattr(self, "_corrupt_flag", False):
+                log.warning(
+                    "pyrogram_read_rejected_corrupt_flag",
+                    extra={"op": op_name},
+                )
+                raise sqlite3.DatabaseError(
+                    "storage marked corrupt — connection invalidated after malformed write"
+                )
+            return await orig(self, *args, **kwargs)
+
+        _safe_read.__name__ = orig.__name__
+        _safe_read.__qualname__ = getattr(orig, "__qualname__", orig.__name__)
+        return _safe_read
+
+    # Список read-методов для защиты.
+    read_methods = (
+        "get_peer_by_id",
+        "get_peer_by_username",
+        "get_peer_by_phone_number",
+    )
+    for _rmethod_name in read_methods:
+        _rorig = getattr(_ss.SQLiteStorage, _rmethod_name, None)
+        if _rorig is None:
+            log.warning(
+                "pyrogram_storage_read_method_missing",
+                extra={"method": _rmethod_name},
+            )
+            continue
+        setattr(
+            _ss.SQLiteStorage,
+            _rmethod_name,
+            _make_safe_read_method(_rorig, _rmethod_name),
         )
 
     _PATCH_APPLIED = True
@@ -458,3 +526,29 @@ def apply_pyrogram_session_guard() -> bool:
 def is_session_guard_applied() -> bool:
     """Тестовый хук."""
     return _SESSION_GUARD_APPLIED
+
+
+# ---------------------------------------------------------------------------
+# Wave 16-F: публичный API для проверки и сброса _corrupt_flag на storage.
+# ---------------------------------------------------------------------------
+
+_CORRUPT_FLAG_ATTR = "_corrupt_flag"
+_CORRUPT_MARKER = "storage marked corrupt"
+
+
+def is_storage_corrupt(storage: object) -> bool:
+    """Возвращает True если storage помечен corrupt после malformed swallow."""
+    return bool(getattr(storage, _CORRUPT_FLAG_ATTR, False))
+
+
+def clear_storage_corrupt_flag(storage: object) -> None:
+    """Сбрасывает corrupt flag после успешного recovery."""
+    try:
+        setattr(storage, _CORRUPT_FLAG_ATTR, False)
+    except Exception:  # noqa: BLE001 — __slots__ guard
+        pass
+
+
+def is_corrupt_marker_error(exc: BaseException) -> bool:
+    """Проверяет, что DatabaseError содержит наш маркер от read-wrapper."""
+    return isinstance(exc, sqlite3.DatabaseError) and _CORRUPT_MARKER in str(exc)
