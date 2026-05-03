@@ -6334,22 +6334,57 @@ class WebApp:
 
         sqlite_ok: bool | None = None
         sqlite_error = ""
+        locked_attempts = 0
         if session_file.exists():
-            try:
-                conn = sqlite3.connect(str(session_file), timeout=0.7)
-                cur = conn.cursor()
-                cur.execute("PRAGMA quick_check;")
-                row = cur.fetchone()
-                sqlite_ok = bool(row and str(row[0]).lower() == "ok")
-                conn.close()
-            except Exception as exc:
-                sqlite_ok = False
-                sqlite_error = str(exc)
+            # Read-only URI + retry с backoff чтобы избежать lock contention false-positives.
+            # Pyrogram держит session открытой; жёсткий timeout 0.7s → OperationalError →
+            # ложный corrupted state. Read-only mode не conflict'ит с writer, но всё ещё
+            # может ловить SQLITE_BUSY если WAL checkpoint в процессе.
+            uri = f"file:{session_file}?mode=ro"
+            last_exc: Exception | None = None
+            for attempt in range(3):
+                try:
+                    conn = sqlite3.connect(uri, uri=True, timeout=2.0)
+                    try:
+                        cur = conn.cursor()
+                        cur.execute("PRAGMA quick_check;")
+                        row = cur.fetchone()
+                        sqlite_ok = bool(row and str(row[0]).lower() == "ok")
+                        last_exc = None
+                        break
+                    finally:
+                        conn.close()
+                except sqlite3.OperationalError as exc:
+                    last_exc = exc
+                    if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+                        locked_attempts += 1
+                        time.sleep(0.05 * (attempt + 1))  # exponential-ish backoff
+                        continue
+                    # Не-lock OperationalError (e.g. malformed) — реальная проблема, выходим
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    break
+            if sqlite_ok is None and last_exc is not None:
+                # Если все попытки получили "locked" — НЕ помечаем corrupted, считаем "busy".
+                # Вернём None → state=open_or_unclean → _normalize_telegram_session_truth
+                # переведёт в ready если userbot connected.
+                if isinstance(last_exc, sqlite3.OperationalError) and (
+                    "locked" in str(last_exc).lower() or "busy" in str(last_exc).lower()
+                ):
+                    sqlite_ok = None  # unknown, не False
+                    sqlite_error = f"busy_after_{locked_attempts}_retries: {last_exc}"
+                else:
+                    sqlite_ok = False
+                    sqlite_error = str(last_exc)
 
         if not session_file.exists():
             state = "missing"
         elif sqlite_ok is False:
             state = "corrupted"
+        elif sqlite_ok is None:
+            # Lock contention persisted — считаем open (если userbot running, normalize fix'ит на ready)
+            state = "open_or_unclean"
         elif wal_file.exists() or shm_file.exists() or journal_file.exists():
             state = "open_or_unclean"
         else:
@@ -6396,20 +6431,28 @@ class WebApp:
         snapshot["state_file_raw"] = raw_state
         snapshot["state_source"] = "file"
 
-        # Если userbot уже живой и SQLite проходит quick_check, sidecar-файлы считаем
-        # признаком активной сессии, а не "грязного" завершения.
+        # Если userbot уже живой и SQLite проходит quick_check (или был busy при probe),
+        # sidecar-файлы считаем признаком активной сессии, а не "грязного" завершения.
+        # sqlite_ok=None означает lock contention (не malformed) — при живом userbot
+        # это нормально: Pyrogram держит session открытой.
         if (
             raw_state == "open_or_unclean"
             and startup_state == "running"
             and client_connected
-            and sqlite_ok is not False
-            and sidecars_present
+            and sqlite_ok is not False  # None (busy) или True OK
+            and (sidecars_present or sqlite_ok is None)  # locked-but-running тоже считаем ready
         ):
             snapshot["state"] = "ready"
             snapshot["state_source"] = "runtime+file"
-            snapshot["state_reason"] = "sqlite_sidecars_expected_while_userbot_running"
+            snapshot["state_reason"] = (
+                "sqlite_busy_during_active_userbot"
+                if sqlite_ok is None
+                else "sqlite_sidecars_expected_while_userbot_running"
+            )
             snapshot["state_detail"] = (
-                "Userbot подключён; sidecar-файлы SQLite считаются штатным признаком открытой сессии."
+                "Userbot подключён; SQLite busy при probe — Pyrogram держит session открытой."
+                if sqlite_ok is None
+                else "Userbot подключён; sidecar-файлы SQLite считаются штатным признаком открытой сессии."
             )
         elif raw_state == "ready":
             snapshot["state_reason"] = "sqlite_ready"
