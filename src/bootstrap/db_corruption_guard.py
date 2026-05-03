@@ -556,146 +556,22 @@ def attempt_session_recovery(
     """
     Auto-recovery corrupt SQLite через `.recover` команду sqlite3 CLI.
 
-    Поток:
-    1. Backup `<path>` → `<path>.bak-corrupt-<ts>` (forensics preserved).
-    2. Best-effort cleanup WAL/SHM/journal sidecars (stale pages не
-       должны попасть в recovered базу).
-    3. `sqlite3 broken.session ".recover" | sqlite3 fresh.session` (subprocess,
-       30s timeout).
-    4. integrity_check на fresh.session — должен пройти.
-    5. Atomic rename fresh → original.
+    Wave 16-N: делегирует в shared module `src/bootstrap/session_recovery.py`
+    (DRY — та же логика используется preflight'ом и repair-скриптом).
 
-    Returns:
-        dict с ключами:
-        - `recovered: bool` — True если файл успешно заменён.
-        - `backup_path: str` — путь к сохранённому corrupt-файлу.
-        - `peer_count: int | None` — best-effort peer-count после recovery.
-        - `username_count: int | None`
-        - `sessions_count: int | None`
-        - `detail: str` — диагностика.
+    Backward-compatible обёртка: возвращает dict с теми же ключами, что и
+    оригинальная реализация (recovered, backup_path, peer_count, username_count,
+    sessions_count, detail). Дополнительные ключи (idempotency_blocked, dry_run,
+    sidecars_removed) caller'у не мешают — он их не проверяет.
 
     Не бросает исключения: caller сам решает (raise DBCorruptionError или
     продолжить с fail-state).
     """
-    import subprocess
+    # Импорт здесь (не на уровне модуля) — чтобы избежать circular import
+    # при bootstrapping (db_corruption_guard импортируется очень рано).
+    from .session_recovery import attempt_recovery  # noqa: PLC0415
 
-    result: dict = {
-        "recovered": False,
-        "backup_path": "",
-        "peer_count": None,
-        "username_count": None,
-        "sessions_count": None,
-        "detail": "",
-    }
-    if not path.exists():
-        result["detail"] = "missing"
-        return result
-
-    ts = int(time.time())
-    backup_path = path.with_name(f"{path.name}.bak-corrupt-{ts}")
-    fresh_path = path.with_name(f"{path.name}.recovered-{ts}")
-
-    # 1. Backup current corrupt file (preserve for forensics).
-    try:
-        import shutil
-
-        shutil.copy2(path, backup_path)
-        result["backup_path"] = str(backup_path)
-    except OSError as exc:
-        result["detail"] = f"backup_failed: {exc}"
-        logger.error("session_recovery_backup_failed", path=str(path), error=str(exc))
-        return result
-
-    # 2. Cleanup sidecars (mirroring swarm preflight on corrupt path).
-    removed_sidecars = _cleanup_session_sidecars(path)
-    if removed_sidecars:
-        logger.info("session_recovery_sidecars_cleaned", removed=removed_sidecars)
-
-    # 3. Run sqlite3 .recover | sqlite3 fresh.
-    try:
-        dump = subprocess.run(
-            ["sqlite3", str(path), ".recover"],
-            capture_output=True,
-            timeout=timeout_sec,
-            check=False,
-        )
-        if dump.returncode != 0 and not dump.stdout:
-            result["detail"] = (
-                f"recover_dump_failed rc={dump.returncode} "
-                f"stderr={dump.stderr.decode('utf-8', errors='replace')[:200]}"
-            )
-            return result
-        load = subprocess.run(
-            ["sqlite3", str(fresh_path)],
-            input=dump.stdout,
-            capture_output=True,
-            timeout=timeout_sec,
-            check=False,
-        )
-        if load.returncode != 0:
-            result["detail"] = (
-                f"recover_load_failed rc={load.returncode} "
-                f"stderr={load.stderr.decode('utf-8', errors='replace')[:200]}"
-            )
-            return result
-    except subprocess.TimeoutExpired:
-        result["detail"] = "recover_timeout"
-        return result
-    except FileNotFoundError:
-        result["detail"] = "sqlite3_not_in_path"
-        return result
-    except Exception as exc:  # noqa: BLE001
-        result["detail"] = f"recover_unexpected: {exc}"
-        return result
-
-    # 4. Verify recovered file passes integrity_check.
-    ok, detail = integrity_check(fresh_path)
-    if not ok:
-        result["detail"] = f"recovered_still_corrupt: {detail}"
-        try:
-            fresh_path.unlink()
-        except OSError:
-            pass
-        return result
-
-    # 5. Best-effort: count rows for forensic logging.
-    try:
-        conn = sqlite3.connect(str(fresh_path), timeout=2.0)
-        try:
-            cur = conn.cursor()
-            for table, key in (
-                ("peers", "peer_count"),
-                ("usernames", "username_count"),
-                ("sessions", "sessions_count"),
-            ):
-                try:
-                    cur.execute(f"SELECT COUNT(*) FROM {table}")
-                    row = cur.fetchone()
-                    if row:
-                        result[key] = int(row[0])
-                except sqlite3.Error:
-                    # Pyrogram session schemas vary across versions; missing
-                    # table is not a fatal — продолжаем с None.
-                    continue
-        finally:
-            conn.close()
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("session_recovery_row_count_failed", error=str(exc))
-
-    # 6. Atomic replace.
-    try:
-        fresh_path.replace(path)
-    except OSError as exc:
-        result["detail"] = f"atomic_replace_failed: {exc}"
-        try:
-            fresh_path.unlink()
-        except OSError:
-            pass
-        return result
-
-    result["recovered"] = True
-    result["detail"] = "ok"
-    return result
+    return attempt_recovery(path, timeout_sec=timeout_sec)
 
 
 __all__ = [

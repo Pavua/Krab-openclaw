@@ -249,11 +249,15 @@ def repair_session_integrity(
     """
     Шаг 3: Проверяем и при необходимости восстанавливаем kraab.session.
 
+    Wave 16-N: делегирует recovery в shared module src/bootstrap/session_recovery.py
+    (DRY — та же логика используется preflight'ом и этим скриптом).
+    Внешний API (имена ключей, exit codes) НЕ изменён — backward-compatible.
+
     - PRAGMA quick_check (read-only)
     - Если corrupt и check_only=False:
         - Idempotency guard: recent backup < 1h → exit 78
         - Backup → bak-corrupt-{ts}
-        - sqlite3 .recover | sqlite3 fresh
+        - sqlite3 .recover | sqlite3 fresh  (через shared attempt_recovery)
         - Verify integrity → atomic replace
     """
     path = session_path or _SESSION_PATH
@@ -295,7 +299,37 @@ def repair_session_integrity(
         result["exit_code_override"] = 78
         return result
 
-    # Recovery flow
+    # Recovery flow — делегируем в shared module (Wave 16-N DRY).
+    # Пробуем импортировать из src/ (если запущены из repo root),
+    # иначе падаем обратно на inline recovery (stand-alone run).
+    try:
+        repo_root = Path(__file__).parent.parent
+        _src_root = str(repo_root / "src")
+        if _src_root not in sys.path:
+            sys.path.insert(0, _src_root)
+        from bootstrap.session_recovery import (
+            attempt_recovery as _attempt_recovery,  # type: ignore[import]
+        )
+
+        recovery = _attempt_recovery(path, idempotency_sec=0)  # idempotency уже проверена выше
+        if recovery.get("recovered"):
+            result["ok"] = True
+            result["action"] = "recovered"
+            result["backup_path"] = recovery.get("backup_path", "")
+            result["detail"] = "recovered_ok"
+            if verbose and recovery.get("sidecars_removed"):
+                result["sidecars_removed"] = recovery["sidecars_removed"]
+            return result
+        # Recovery failed — возвращаем detail из shared module.
+        result["detail"] = f"corrupt:{detail} — {recovery.get('detail', 'recovery_failed')}"
+        return result
+
+    except ImportError:
+        # Fallback: inline recovery если shared module недоступен
+        # (например, скрипт запущен вне repo context).
+        pass
+
+    # Inline recovery (fallback для stand-alone run без src/ в PATH).
     ts = int(time.time())
     backup_path = path.with_name(f"{path.name}.bak-corrupt-{ts}")
     fresh_path = path.with_name(f"{path.name}.recovered-{ts}")
