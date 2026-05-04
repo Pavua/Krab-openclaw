@@ -57,11 +57,13 @@ def test_permanent_ban_config_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_permanent_ban_config_default_when_env_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Пустая CHAT_PERMANENT_BAN_LIST → дефолт ["-1001587432709"]."""
+    """Пустая CHAT_PERMANENT_BAN_LIST → пустой список (How2AI НЕ в дефолте — fix Wave 17-C)."""
     monkeypatch.setenv("CHAT_PERMANENT_BAN_LIST", "")
     raw = os.getenv("CHAT_PERMANENT_BAN_LIST", "")
-    result = [s.strip() for s in raw.split(",") if s.strip()] or [HOW2AI_STR]
-    assert result == [HOW2AI_STR]
+    # Нет or-fallback — по умолчанию пусто
+    result = [s.strip() for s in raw.split(",") if s.strip()]
+    assert result == []
+    assert HOW2AI_STR not in result
 
 
 def test_permanent_ban_config_strips_whitespace(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -186,23 +188,27 @@ def test_clear_then_reban_works(cache: ChatBanCache) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Дефолтный список содержит How2AI
+# 5. Дефолтный список НЕ содержит How2AI (fix Wave 17-C)
 # ---------------------------------------------------------------------------
 
 
-def test_default_includes_how2ai() -> None:
-    """Config.CHAT_PERMANENT_BAN_LIST по умолчанию содержит How2AI chat_id."""
-    from src.config import Config
+def test_default_does_not_include_how2ai(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Config.CHAT_PERMANENT_BAN_LIST по умолчанию пуст — How2AI НЕ забанен."""
+    monkeypatch.delenv("CHAT_PERMANENT_BAN_LIST", raising=False)
 
-    assert HOW2AI_STR in Config.CHAT_PERMANENT_BAN_LIST
+    # После удаления env — список должен быть пустым (не содержать How2AI)
+    result = [s.strip() for s in os.getenv("CHAT_PERMANENT_BAN_LIST", "").split(",") if s.strip()]
+    assert HOW2AI_STR not in result
 
 
-def test_default_how2ai_as_int_form() -> None:
-    """How2AI должен быть в дефолтном списке (int-форма через str conversion)."""
-    from src.config import Config
+def test_default_ban_list_empty_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Без env CHAT_PERMANENT_BAN_LIST = пустой список."""
+    import os
 
-    # Список хранится как str, проверяем что нормализованный int совпадает
-    assert str(HOW2AI_CHAT_ID) in Config.CHAT_PERMANENT_BAN_LIST
+    monkeypatch.delenv("CHAT_PERMANENT_BAN_LIST", raising=False)
+    raw = os.getenv("CHAT_PERMANENT_BAN_LIST", "")
+    result = [s.strip() for s in raw.split(",") if s.strip()]
+    assert result == []
 
 
 # ---------------------------------------------------------------------------
