@@ -16,6 +16,7 @@ import asyncio
 import os
 import shutil
 import time
+import warnings
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -278,9 +279,17 @@ async def get_hermes_bridge() -> HermesACPBridge:
 def get_hermes_bridge_sync() -> HermesACPBridge:
     """Sync version — НЕ thread-safe для первого создания.
 
-    DEPRECATED — используй async версию get_hermes_bridge().
-    Оставлен для backward compat с callsites вне async контекста.
+    .. deprecated::
+        Используй async версию ``await get_hermes_bridge()``.
+        Оставлен для backward compat — удалить в Session 38+
+        (callsites только в тестах, production src мигрирован в Wave 16-P).
     """
+    warnings.warn(
+        "get_hermes_bridge_sync() устарел — используй async get_hermes_bridge(). "
+        "Запланировано удаление в Session 38+.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     global _bridge  # noqa: PLW0603
     if _bridge is None:
         _bridge = HermesACPBridge()
