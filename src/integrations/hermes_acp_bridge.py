@@ -207,10 +207,33 @@ def _now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 _bridge: HermesACPBridge | None = None
+# Async lock для double-checked locking при конкурентном создании синглтона
+_bridge_lock = asyncio.Lock()
 
 
-def get_hermes_bridge() -> HermesACPBridge:
-    """Возвращает синглтон HermesACPBridge. Thread-safe для sync контекста."""
+async def get_hermes_bridge() -> HermesACPBridge:
+    """Async singleton accessor с asyncio.Lock — защита от concurrent создания.
+
+    Использует double-checked locking: быстрый путь без lock если уже создан,
+    иначе захватывает lock и проверяет ещё раз внутри.
+    """
+    global _bridge  # noqa: PLW0603
+    # Быстрый путь — без lock если синглтон уже инициализирован
+    if _bridge is not None:
+        return _bridge
+    async with _bridge_lock:
+        # Double-checked locking: повторная проверка внутри lock
+        if _bridge is None:
+            _bridge = HermesACPBridge()
+        return _bridge
+
+
+def get_hermes_bridge_sync() -> HermesACPBridge:
+    """Sync version — НЕ thread-safe для первого создания.
+
+    DEPRECATED — используй async версию get_hermes_bridge().
+    Оставлен для backward compat с callsites вне async контекста.
+    """
     global _bridge  # noqa: PLW0603
     if _bridge is None:
         _bridge = HermesACPBridge()

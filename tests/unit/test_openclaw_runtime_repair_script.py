@@ -291,7 +291,7 @@ def test_output_is_valid_json(
     with (
         patch.object(repair_mod, "_OPENCLAW_JSON", cfg_path),
         patch("urllib.request.urlopen", side_effect=urllib.error.URLError("no gateway")),
-        patch.object(repair_mod, "_SESSION_PATH", sess_path),
+        patch.object(repair_mod, "_SESSION_PATH_DEFAULT", sess_path),
     ):
         sys.argv = ["openclaw_runtime_repair.py"]
         try:
@@ -348,7 +348,7 @@ def test_exit_codes_correct(
 
         with (
             patch.object(repair_mod, "_OPENCLAW_JSON", cfg_path),
-            patch.object(repair_mod, "_SESSION_PATH", sess_path),
+            patch.object(repair_mod, "_SESSION_PATH_DEFAULT", sess_path),
             gw_patch,
         ):
             sys.argv = ["openclaw_runtime_repair.py"]
@@ -362,7 +362,7 @@ def test_exit_codes_correct(
 
         with (
             patch.object(repair_mod, "_OPENCLAW_JSON", cfg_path),
-            patch.object(repair_mod, "_SESSION_PATH", sess_path),
+            patch.object(repair_mod, "_SESSION_PATH_DEFAULT", sess_path),
             gw_patch,
         ):
             sys.argv = ["openclaw_runtime_repair.py"]
@@ -381,7 +381,7 @@ def test_exit_codes_correct(
 
         with (
             patch.object(repair_mod, "_OPENCLAW_JSON", cfg_path),
-            patch.object(repair_mod, "_SESSION_PATH", sess_path),
+            patch.object(repair_mod, "_SESSION_PATH_DEFAULT", sess_path),
             patch.object(repair_mod, "_integrity_check", return_value=(False, "malformed")),
             gw_patch,
         ):

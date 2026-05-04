@@ -193,7 +193,7 @@ async def _show_status(bot: "KraabUserbot", message: Message) -> None:
     try:
         from ...integrations.hermes_acp_bridge import get_hermes_bridge
 
-        bridge = get_hermes_bridge()
+        bridge = await get_hermes_bridge()
         health = await bridge.health()
         if health.is_healthy:
             latency = f", {health.latency_ms}ms" if health.latency_ms is not None else ""
