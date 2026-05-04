@@ -1,0 +1,213 @@
+"""Wave 22-A: CLI subprocess bypass для codex-cli и google-gemini-cli providers.
+
+OpenClaw 2026.5.x broke WebSocket → openresponses HTTP transport. Прямые
+CLI вызовы (codex/gemini) работают, но Krab по умолчанию идёт через broken
+OpenClaw layer. Этот модуль вызывает CLI binaries как subprocess
+(аналогично Wave 18-B для google/*).
+
+Поддерживаемые префиксы:
+- 'codex-cli/'         → spawn 'codex -p ...' (subscription via ChatGPT account)
+- 'google-gemini-cli/' → spawn 'gemini -p ...' (OAuth, free tier)
+
+Activated only когда модель starts с одним из префиксов AND env
+KRAB_CLI_SUBPROCESS_BYPASS_ENABLED=1 (default ON).
+
+Симметрично OpenClawClient._openclaw_completion_once() — возвращает str.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import shutil
+from typing import Any
+
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+# Маппинг префиксов провайдеров на имена CLI-бинарей
+CLI_BINARIES: dict[str, str] = {
+    "codex-cli/": "codex",
+    "google-gemini-cli/": "gemini",
+}
+
+
+def is_cli_subprocess_enabled() -> bool:
+    """Включён ли CLI subprocess bypass. Default ON."""
+    return str(os.environ.get("KRAB_CLI_SUBPROCESS_BYPASS_ENABLED", "1")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def is_cli_model(model: str) -> tuple[bool, str | None]:
+    """Проверяет, является ли модель CLI-моделью.
+
+    Returns:
+        (is_cli_match, binary_name). binary_name=None если не cli model.
+    """
+    if not model:
+        return False, None
+    for prefix, binary in CLI_BINARIES.items():
+        if model.startswith(prefix):
+            return True, binary
+    return False, None
+
+
+def _strip_provider_prefix(model: str) -> str:
+    """Убирает провайдер-префикс: 'codex-cli/gpt-5.5' -> 'gpt-5.5'."""
+    return model.split("/", 1)[1] if "/" in model else model
+
+
+def _resolve_binary(binary_name: str) -> str | None:
+    """PATH lookup для CLI binary."""
+    return shutil.which(binary_name)
+
+
+def _build_messages_text(messages: list[dict[str, Any]]) -> str:
+    """Конвертирует OpenAI-style messages → плоский текст для CLI -p флага.
+
+    Формат:
+        [Контекст]: ...
+        [Пользователь]: ...
+        [Ассистент]: ...
+        [Пользователь]: <last>
+    """
+    parts = []
+    for msg in messages:
+        role = str(msg.get("role") or "").strip().lower()
+        content = msg.get("content") or ""
+        # Поддержка мультимодальных messages (list of content parts)
+        if isinstance(content, list):
+            text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and "text" in p]
+            content = " ".join(text_parts)
+        content_str = str(content).strip()
+        if not content_str:
+            continue
+        if role == "system":
+            parts.append(f"[Контекст]: {content_str}")
+        elif role == "user":
+            parts.append(f"[Пользователь]: {content_str}")
+        elif role == "assistant":
+            parts.append(f"[Ассистент]: {content_str}")
+    return "\n\n".join(parts)
+
+
+def _build_cmd(
+    binary_path: str,
+    binary_name: str,  # noqa: ARG001 — reserved для future per-binary logic
+    model_id: str,
+    prompt_text: str,
+) -> list[str]:
+    """Строит команду для spawn subprocess с учётом специфики каждой binary."""
+    # Оба codex и gemini поддерживают --model и -p флаги
+    if model_id and model_id not in ("default", ""):
+        return [binary_path, "--model", model_id, "-p", prompt_text]
+    return [binary_path, "-p", prompt_text]
+
+
+async def complete_via_cli(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    timeout_sec: float = 300.0,
+    max_output_tokens: int | None = None,  # noqa: ARG001
+) -> str:
+    """Спавнит CLI binary и возвращает text response.
+
+    Args:
+        model: e.g. 'codex-cli/gpt-5.5' или 'google-gemini-cli/gemini-3.1-pro-preview'
+        messages: OpenAI-style messages list
+        timeout_sec: kill subprocess после этого таймаута (default 300s)
+        max_output_tokens: не используется (CLI binaries не имеют такого флага)
+
+    Returns:
+        text response (str). Пустая строка если CLI вернул empty.
+
+    Raises:
+        RuntimeError: если binary не найден или subprocess fails
+    """
+    is_cli, binary_name = is_cli_model(model)
+    if not is_cli or binary_name is None:
+        raise RuntimeError(f"Not a CLI model: {model}")
+
+    binary_path = _resolve_binary(binary_name)
+    if not binary_path:
+        raise RuntimeError(
+            f"CLI binary '{binary_name}' не найден в PATH. Установка: brew install {binary_name}"
+        )
+
+    model_id = _strip_provider_prefix(model)
+    prompt_text = _build_messages_text(messages)
+
+    if not prompt_text.strip():
+        logger.warning("cli_subprocess_no_messages", model=model_id, binary=binary_name)
+        return ""
+
+    logger.info(
+        "cli_subprocess_complete_start",
+        model=model_id,
+        binary=binary_name,
+        prompt_len=len(prompt_text),
+    )
+
+    cmd = _build_cmd(binary_path, binary_name, model_id, prompt_text)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_data, stderr_data = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            # Принудительно завершаем процесс при таймауте
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:  # noqa: BLE001
+                pass
+            raise RuntimeError(f"CLI subprocess timeout после {timeout_sec}s: {binary_name}")
+
+        if proc.returncode != 0:
+            stderr_text = stderr_data.decode("utf-8", errors="ignore")[:500]
+            logger.warning(
+                "cli_subprocess_nonzero_exit",
+                model=model_id,
+                binary=binary_name,
+                returncode=proc.returncode,
+                stderr=stderr_text,
+            )
+            # codex/gemini могут вернуть текст в stdout даже при non-zero exit (warnings)
+
+        text = stdout_data.decode("utf-8", errors="ignore").strip()
+
+        logger.info(
+            "cli_subprocess_complete_done",
+            model=model_id,
+            binary=binary_name,
+            response_len=len(text),
+            returncode=proc.returncode,
+        )
+        return text
+
+    except RuntimeError:
+        # Перебрасываем RuntimeError (timeout, binary not found) без wrap
+        raise
+    except Exception as exc:
+        logger.warning(
+            "cli_subprocess_failed",
+            model=model_id,
+            binary=binary_name,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        raise

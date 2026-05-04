@@ -466,6 +466,14 @@ class Config:
         "KRAB_GOOGLE_DIRECT_BYPASS_ENABLED", "1"
     ).strip().lower() in {"1", "true", "yes", "on"}
 
+    # Wave 22-A: CLI subprocess bypass для codex-cli/* и google-gemini-cli/*.
+    # OpenClaw 2026.5.x regression затронул ВСЕ providers, не только google/*.
+    # Прямые CLI вызовы (codex -p / gemini -p) работают независимо от OpenClaw.
+    # Default ON (opt-out через KRAB_CLI_SUBPROCESS_BYPASS_ENABLED=0 в .env).
+    KRAB_CLI_SUBPROCESS_BYPASS_ENABLED: bool = os.getenv(
+        "KRAB_CLI_SUBPROCESS_BYPASS_ENABLED", "1"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
     # Wave 16-I: idle-aware liveness detection.
     # Если LLM был активен (tool calls или text), но потом молчит > этого порога — это hang.
     # Default 180s (3 мин тишины после activity = зависание post-tool-call).

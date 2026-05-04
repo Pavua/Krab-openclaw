@@ -3208,6 +3208,29 @@ class OpenClawClient:
             final_response = ""
             last_semantic: dict[str, str] | None = None
 
+            # Wave 22-A: CLI subprocess bypass для codex-cli/* и google-gemini-cli/*.
+            # OpenClaw 2026.5.x regression затронул ВСЕ providers (не только google/*).
+            # Прямые CLI вызовы (codex -p / gemini -p) работают независимо от OpenClaw layer.
+            # Bypass проверяется ВНУТРИ for loop, до Google SDK bypass.
+            _cli_bypass_attempted = False
+            try:
+                from .config import config as _cfg_cli
+                from .integrations.cli_subprocess_bypass import (
+                    complete_via_cli as _cli_complete,
+                )
+                from .integrations.cli_subprocess_bypass import (
+                    is_cli_model as _is_cli_model,
+                )
+                from .integrations.cli_subprocess_bypass import (
+                    is_cli_subprocess_enabled as _cli_bypass_enabled,
+                )
+            except ImportError as _cli_imp_exc:
+                logger.warning("cli_subprocess_bypass_imports_failed", error=str(_cli_imp_exc))
+                _cfg_cli = None  # type: ignore
+                _cli_complete = None  # type: ignore
+                _cli_bypass_enabled = lambda: False  # type: ignore  # noqa: E731
+                _is_cli_model = lambda m: (False, None)  # type: ignore  # noqa: E731
+
             # Wave 18-B + 18-D: Google direct SDK bypass (OpenClaw 2026.5.2 regression).
             # OpenClaw 2026.5.2 ломает WebSocket → openresponses HTTP path для google/*:
             # HTTP 500 internal error. Direct API + CLI local transport работают.
@@ -3242,12 +3265,82 @@ class OpenClawClient:
             for attempt in range(4):
                 logger.info("openclaw_attempt", attempt=attempt + 1, model=attempt_model)
 
+                # Wave 18-E: вычисляем _has_photo_bypass явно (раньше был NameError в этом scope)
+                _has_photo_bypass = bool(images)
+
+                # Wave 22-A: CLI subprocess bypass — проверяется ДО Google SDK bypass.
+                # codex-cli/* → codex binary; google-gemini-cli/* → gemini binary.
+                # Фото не поддерживаются CLI (только текст), поэтому skip если есть images.
+                if not _cli_bypass_attempted and not _has_photo_bypass:
+                    try:
+                        _is_cli, _cli_binary = _is_cli_model(attempt_model)
+                        if (
+                            _is_cli
+                            and _cli_bypass_enabled()
+                            and _cfg_cli is not None
+                            and getattr(_cfg_cli, "KRAB_CLI_SUBPROCESS_BYPASS_ENABLED", True)
+                        ):
+                            _cli_bypass_attempted = True
+                            logger.info(
+                                "cli_subprocess_bypass_engaged",
+                                model=attempt_model,
+                                binary=_cli_binary,
+                                attempt=attempt + 1,
+                            )
+                            self._set_last_runtime_route(
+                                channel="cli_subprocess",
+                                model=attempt_model,
+                                route_reason="cli_subprocess_bypass",
+                                route_detail=f"CLI subprocess bypass через {_cli_binary} binary",
+                                status="pending",
+                                force_cloud=effective_force_cloud,
+                            )
+                            try:
+                                _cli_text = await _cli_complete(
+                                    model=attempt_model,
+                                    messages=messages_to_send,
+                                    timeout_sec=300.0,
+                                    max_output_tokens=max_output_tokens,
+                                )
+                                if _cli_text and _cli_text.strip():
+                                    sanitized = self._sanitize_assistant_response(_cli_text)
+                                    if sanitized:
+                                        _cli_text = sanitized
+                                    self._set_last_runtime_route(
+                                        channel="cli_subprocess",
+                                        model=attempt_model,
+                                        route_reason="cli_subprocess_ok",
+                                        route_detail=f"Ответ через {_cli_binary} CLI",
+                                        force_cloud=effective_force_cloud,
+                                    )
+                                    self._finalize_chat_response(chat_id, _cli_text)
+                                    yield _cli_text
+                                    return
+                                else:
+                                    logger.warning(
+                                        "cli_subprocess_empty_response_falling_back",
+                                        model=attempt_model,
+                                        binary=_cli_binary,
+                                    )
+                            except Exception as _cli_exc:  # noqa: BLE001
+                                logger.warning(
+                                    "cli_subprocess_failed_falling_back",
+                                    model=attempt_model,
+                                    binary=_cli_binary,
+                                    error=str(_cli_exc),
+                                    error_type=type(_cli_exc).__name__,
+                                )
+                    except (NameError, ImportError) as _cli_init_exc:
+                        logger.warning(
+                            "cli_subprocess_bypass_init_skip",
+                            error=str(_cli_init_exc),
+                            error_type=type(_cli_init_exc).__name__,
+                            model=attempt_model,
+                        )
+
                 # Wave 18-D: bypass проверяется КАЖДЫЙ attempt (не только initial),
                 # чтобы fallback'и из chain тоже шли через direct SDK для google/* моделей.
                 # Wave 18-B имел bypass только перед loop → срабатывал только если primary = google/*.
-                # Wave 18-E (Session 36 fix): has_photo НЕ был определён в этом scope (только images
-                # параметр) — bypass попадал в except NameError silent. Теперь вычисляем явно.
-                _has_photo_bypass = bool(images)
                 if not _google_bypass_attempted and not _has_photo_bypass:
                     try:
                         if (
