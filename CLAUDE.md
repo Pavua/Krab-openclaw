@@ -49,6 +49,8 @@ src/
   voice_engine.py       — TTS/STT движок
   web_session.py        — сессии браузера
   core/
+    agent_engine_openclaw.py — OpenClawAdapter (реализует AgentEngineClient Protocol, Wave 17-B)
+    agent_engine_resolver.py — get_engine_for_route() (chat→room→env priority + health gate, Wave 17-B)
     swarm.py            — AgentRoom: мультиагентные роли, delegation
     swarm_bus.py        — SwarmBus + TEAM_REGISTRY (traders/coders/analysts/creative)
     swarm_memory.py     — персистентная память свёрма (JSON, FIFO 50/team)
@@ -141,6 +143,7 @@ src/
     command_handlers.py — 105+ команд (auto-counted), _AgentRoomRouterAdapter; 4430 LOC (Session 28, −77.4% от 19637)
     commands/           — 24 модуля (Waves 1-18 + session 35): text_utils/chat/scheduler/voice/memory/social/ai/swarm/translator/system/admin/cli/fileio/group_admin/content/state/observability/memory_admin + policy + _shared + engine_commands + curator_commands
   integrations/
+    google_genai_direct.py — direct google.genai SDK bypass (минует OpenClaw WebSocket→openresponses, Wave 18-B)
     tor_bridge.py       — Tor SOCKS5 proxy (httpx + Playwright)
     hermes_acp_bridge.py — Hermes Phase B ACP bridge foundation (session 35, Wave 16-B)
     browser_bridge.py   — CDP подключение к Chrome
@@ -305,7 +308,7 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - Read-only check: `venv/bin/python scripts/setup_lm_studio_token.py --check`
 - Restart Krab to apply
 
-## Ключевые env vars (актуально Session 35)
+## Ключевые env vars (актуально Session 36)
 
 ```bash
 # Codex-cli timeout и fallback (Wave 14-D/16-I)
@@ -315,6 +318,12 @@ KRAB_CODEX_CLI_FALLBACK_MODEL=google/gemini-3.1-pro-preview
 # Idle-aware liveness (Wave 16-I)
 KRAB_LLM_IDLE_TIMEOUT_SEC=180        # молчание без tool_calls → kill
 KRAB_LLM_HEARTBEAT_INTERVAL_SEC=60   # интервал heartbeat edit
+
+# Google direct SDK bypass (Wave 18-B) — обходит OpenClaw WebSocket→openresponses
+KRAB_GOOGLE_DIRECT_BYPASS_ENABLED=1  # default ON; =0 чтобы отключить
+
+# Hermes Agent Engine dispatch (Wave 17-B) — default OFF, безопасно включать на тест
+KRAB_AGENT_ENGINE_DISPATCH_ENABLED=0
 
 # Paid Gemini + reasoning
 GEMINI_PAID_KEY_ENABLED=1            # paid Gemini активен (Session 35)
@@ -349,6 +358,17 @@ OPENCLAW_REASONING_EFFORT=medium
 - **Wave 16-N**: `src/bootstrap/session_recovery.py` — auto-invoke из preflight, idempotency 1h cooldown
 - **Wave 16-O**: code-review fixes — HIGH-1: async health snapshot; HIGH-2: `/api/runtime/recover` exit 78 → HTTP 503 + `recovery_loop_detected=true`
 - **5 subagents (Sonnet)** параллельно через worktree isolation, 0 merge conflicts
+
+### Session 36 highlights (04.05.2026 — Waves 16-P → 18-H, 30+ commits)
+
+- **Wave 16-P**: code review LOW fixes — HermesACPBridge async singleton (asyncio.Lock + double-checked), SkillCurator evaluate+apply atomicity (под одной team-lock), `openclaw_runtime_repair.py` `--session-path` CLI arg + `KRAB_SESSION_PATH` env
+- **Wave 17-A**: test coverage gaps — async integration test для health snapshot, `/api/runtime/recover` HTTP 503 e2e, Wave 16-I full integration с dynamic `_active_tool_calls`
+- **Wave 17-B**: **Hermes Phase C live wiring** — `agent_engine_openclaw.py` (OpenClawAdapter), `agent_engine_resolver.py` (get_engine_for_route), archive.db migration `agent_engine_runs`, 3 новых endpoints, 3 Prometheus метрики; ENV gate `KRAB_AGENT_ENGINE_DISPATCH_ENABLED=0` (zero risk)
+- **Wave 17-C**: убран hardcoded How2AI fallback — `or ['-1001587432709']` удалён из `config.py`, +3 теста
+- **Wave 18-A**: session backup retention — `cleanup_old_backups()` 7 категорий, keep_recent=3, max_age_days=14
+- **Wave 18-B → 18-H**: **Google direct SDK bypass** — `src/integrations/google_genai_direct.py`, wire-up в `openclaw_client.py`, fix chain (18-D: per-attempt check; 18-E: NameError fix; 18-G: relative import; 18-H: flat `GenerateContentConfig` fields). **Production verified**: HTTP query за 5.5s через google_direct channel ✅
+- **3× MacBook OOM reboot** — Krab Ear подозревается; Krab пережил все 3 (integrity ok, auto-recovery Wave 16-N отработал)
+- **~68 тестов добавлено** (16-P: 9, 17-A: 10, 17-B: 18, 17-C: 3, 18-A: 9, 18-B: 19)
 
 ## Smart Message Routing (Session 26 — 26.04.2026 — LIVE)
 
@@ -838,14 +858,18 @@ Endpoints session 7 (добавлены, ~249 итого после Session 22):
 | Session 27 | **10561 passed**, 93 skipped, **8 pre-existing fails**, 0 hangers (pytest-timeout=30). Phase 2 command_handlers split: 19637 → 6637 LOC (**−66.2%**) через **15 waves**: text_utils / chat / scheduler / voice / memory / social / ai / swarm / translator / system / **admin** (Wave 11) / **cli** (Wave 12) / **fileio** (Wave 13) / **group_admin** (Wave 14) / **content** (Wave 15). +Dual-namespace lookup pattern (fbf3262 + 847786f). +Bug fixes: mention trigger (e1ac040), reply_to context (5cf00ec), TTS 600→1800 (2e873a9), media filter video (80221b3), sender_name group attribution (28850e4), REACTION_INVALID whitelist (1866376). +Smart Routing analyzer (22 tests, 0c7f89d). +5-layer LLM recovery 27.04. +pytest-timeout 2.4.0 + 7 hangers RCA (3ca34a0). +memory_indexer shutdown race fix (0e6337c). +subprocess hot-path 60s cache (66ae8b8) |
 | Session 28 | **11212 collected** (~10650+ passed), +~651 tests. Phase 2 command_handlers split продолжен: **Wave 16** state_commands (clear/forget/reset/model/web/macos/browser, −1114 LOC) + **Wave 17** observability_commands (watch/inbox/context/memo/bookmark/note, −711 LOC) + **Wave 18** memory_admin_commands (memory recent/stats/clear/rebuild). command_handlers.py **19637 → 4430 LOC (−77.4%)**, 18 waves total. +`POST /api/inbox/bulk-ack-stale` endpoint. +Bug fixes: launchd respawn-storm root cause (KeepAlive Crashed + ThrottleInterval), video media wire-up в bridge, Bug 9 (openclaw model_apply test unhang), !swarm в additional_response_chats (How2AI). Environment bootstrap: multi-account Codex dev-layer, `scripts/sync_codex_dev_layer.py`, `docs/MULTI_ACCOUNT_CODEX_SETUP.md`, pablito MCP baseline 18 servers. P0 failures → 0: 55 passed (document/message batching/buffered/photo/analyzer). Smart Routing analyzer починен под ANSI structlog. 19 commits Session 28. |
 | Session 35 | **~10670+ collected**, +120+ тестов Session 35. **117/117 Wave 16 тестов pass**. SkillCurator Steps 3-4 (apply+A/B), Hermes ACP bridge, session auto-recovery (Wave 16-N, 22 тестов), idle-aware liveness (Wave 16-I, 21 тест), health probe false-positive fix (Wave 16-H), reply→audio (Wave 16-G, 10 тестов), Pyrogram conn invalidation (Wave 16-F, 10+ тестов), repair script (Wave 16-J, 12 тестов). |
+| Session 36 | **~10738+ collected** (+~68 тестов). Wave 16-P code review LOW fixes (HermesACPBridge singleton, SkillCurator atomicity, session-path CLI). Wave 17-B Hermes Phase C wiring (agent_engine_openclaw + resolver + 3 endpoints + Prometheus). Wave 17-C hardcoded How2AI fallback removed. Wave 18-A backup retention policy. Wave 18-B→H Google direct SDK bypass (production-verified 5.5s, fix chain D/E/G/H). |
 
 <!-- BEGIN:auto-endpoints -->
 
-### Auto-generated endpoints table (248 routes; **29 routers** в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern — Phase 2 Wave A→XX + Session 28-29 memory doctor/coverage-audit/backfill; updated Session 35: +!engine, +!curator ab/apply/rollback/overlays subcommands, +/api/runtime/recover 503 path)
+### Auto-generated endpoints table (251 routes; **29 routers** в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern — Phase 2 Wave A→XX + Session 28-29 memory doctor/coverage-audit/backfill; updated Session 36: +/api/agent-engine/comparison, +/api/agent-engine/runs, +/api/agent-engine/status)
 
 | Endpoint | Метод |
 |----------|-------|
 | `/` | GET |
+| `/api/agent-engine/comparison` | GET |
+| `/api/agent-engine/runs` | GET |
+| `/api/agent-engine/status` | GET |
 | `/api/archive/growth` | GET |
 | `/api/assistant/attachment` | POST |
 | `/api/assistant/capabilities` | GET |

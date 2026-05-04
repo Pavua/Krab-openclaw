@@ -1,141 +1,125 @@
-# Session 35 — Starter Handoff (after Session 34 close, 2026-05-03 ~00:30)
+# Session 37 — Starter Handoff (after Session 36 close, 2026-05-04)
 
 ## TL;DR
 
-- **main HEAD**: `9cd6f5f` — Session 34 добавил **8 commits** над `a6ed8cc`
-- **Krab live**: status=up, telegram_session=ready, integrity=ok, новая fallback chain активна
-- **Все P0/P1 Session 34 закрыты** (включая P1.4 Step 4 A/B framework)
-- **3 параллельных worktree-agent (Sonnet)** → 4 ветки merge clean без конфликтов
-- **Fallback chain переделан**: Gemini 3.1 Pro теперь #1 (был openai/gpt-5.5 — нет баланса)
+- **main HEAD**: `f6a6861` — **30+ commits** Session 36 over `ba02171`
+- **Krab live**: running, integrity ok после 3 OOM reboot'ов MacBook (Krab Ear подозревается)
+- **Wave 18-H последний**: GenerateContentConfig flat fields fix — google_direct bypass PRODUCTION-VERIFIED
+- **Google direct bypass работает**: `google_direct_bypass_engaged` + `google_genai_direct_complete_done` в логах, HTTP query за 5.5s
+- **~68 тестов добавлено** в Session 36 (Waves 16-P + 17-A/B/C + 18-A/B)
 
-## Что сделано в Session 34
+## Что сделано в Session 36 (Wave 16-P → 18-H, 30+ commits)
 
-### Production stability ✅
-- 14h post-Wave-14 verified: `krab_session_corruption_total=0`, integrity ok
-- Live-confirm: Wave 14-K codex-cli first-chunk hang 45s + silent fallback **видим в Telegram** ("⏱️ Переключаюсь на резервную модель…")
+### Wave 16-P: code review LOW fixes
+- **HermesACPBridge async singleton**: `get_hermes_bridge()` — asyncio.Lock + double-checked locking, thread-safe
+- **SkillCurator evaluate+apply atomicity**: `evaluate_ab_test_and_apply` под одной team-lock — нет gap между evaluate+apply
+- **openclaw_runtime_repair.py**: `--session-path` CLI arg + `KRAB_SESSION_PATH` env override (нет hardcoded path)
+- +9 тестов
 
-### Wave 16-A: SkillCurator Step 3 (apply_with_approval)
-- `active_overlays` + `last_apply_at` в `CuratorState` (atomic, backward compat)
-- `apply_with_approval(proposal_id, *, force=False, idle_check=True)`:
-  - per-team `asyncio.Lock` mutex
-  - idle-check через swarm_channels
-  - weekly rate-limit (7 days) per team
-  - snapshot текущего effective prompt в `~/.openclaw/krab_runtime_state/curator/prompts_archive/{team}/v{N}_{ts}.md`
-  - atomic overlay persist в state.json
-- `rollback(team, *, version=-1)` к baseline или конкретной версии
-- `get_team_system_prompt()` теперь overlay-aware с **30s TTL cache** + invalidate-on-apply
-- Команды: `!curator apply <proposal_id> [--force] / rollback <team> [--version N] / overlays`
-- **+16 тестов**, 51 passed total в `test_skill_curator_*.py`
+### Wave 17-A: test coverage gaps
+- `_telegram_session_snapshot` async non-blocking integration test
+- `/api/runtime/recover` HTTP 503 e2e test для exit 78
+- Wave 16-I full integration test с dynamic `_active_tool_calls`
+- +10 тестов
 
-### Wave 16-B: Hermes Phase B (ACP bridge foundation)
-- `agent-client-protocol==0.9.0` pinned в `requirements.txt`
-- `src/core/agent_engine.py` — `AgentEngineClient` Protocol + `StreamChunk`/`EngineHealth` dataclasses
-- `src/integrations/hermes_acp_bridge.py` — `HermesACPBridge`:
-  - lazy subprocess spawn (`hermes acp` stdio)
-  - 60s health caching
-  - graceful degrade когда binary не найден (тихо `is_healthy=False`)
-  - singleton `get_hermes_bridge()`
-- `src/core/agent_engine_router.py` — `resolve_engine()`:
-  - priority: chat override → room policy → env default
-  - persist в `agent_engine_overrides.json` / `swarm_engine.json`
-- Команда `!engine` (owner-only): show / here / room / status, `engine` зарегистрирован в `command_registry.py`
-- **+25 тестов**: 15 router + 10 bridge
-- ⚠️ **БЕЗ интеграции в `llm_flow.py`** — defer Phase C
+### Wave 17-B: Hermes Phase C live wiring
+- `src/core/agent_engine_openclaw.py` — OpenClawAdapter (реализует AgentEngineClient Protocol)
+- `src/core/agent_engine_resolver.py` — `get_engine_for_route()` (chat→room→env priority + health gate)
+- archive.db migration: `agent_engine_runs` таблица
+- `/api/agent-engine/comparison`, `/api/agent-engine/runs`, `/api/agent-engine/status` endpoints
+- Prometheus: `krab_agent_engine_runs_total`, `_latency_seconds`, `_fallback_total`
+- ENV gate `KRAB_AGENT_ENGINE_DISPATCH_ENABLED` (default OFF — zero risk в production)
+- +18 тестов
 
-### Wave 16-C: 3 starlette test unskips (Wave 15-A backlog)
-- Все 3 файла были **false-positive скипы** (Session 33 wrongly diagnosed как starlette hangs)
-- Реальность: `test_photo_dm_owner.py` и `test_reply_media_extraction.py` вообще не используют starlette
-- `test_web_acl_api.py`: dual-namespace patches работают корректно
-- **24 теста pass** (12+5+7) за 2.2с
+### Wave 17-C: убран hardcoded How2AI fallback
+- `src/config.py`: убран `or ['-1001587432709']` — How2AI больше НЕ автоматом в CHAT_PERMANENT_BAN_LIST
+- Удалена переменная `CHAT_PERMANENT_BAN_LIST=disabled` из .env
+- +3 теста против регрессии
 
-### Wave 16-D: SkillCurator Step 4 (A/B framework)
-- `start_ab_test(team, candidate_proposal_id, *, n_rounds=10)` — file-backed JSON в `curator/ab_tests/`
-- `select_variant(ab_id, round_id) -> "control"|"candidate"` (round-robin deterministic via hash)
-- `record_round_metric(ab_id, round_id, metrics)` — atomic append
-- `evaluate_ab_test(ab_id) -> dict` decision criteria per design §4:
-  - candidate wins: `success_rate >= control + 0.05` AND `cost <= control * 1.10` AND `latency <= control * 1.10`
-- `evaluate_ab_test_and_apply(ab_id) -> tuple[dict, bool]` async auto-apply pattern
-- `cancel_ab_test(ab_id, *, reason)`, `list_ab_tests(team, status)`, `get_ab_test(ab_id)`
-- per-team A/B mutex + `state.active_ab_tests: dict[team, ab_id]`
-- Команды: `!curator ab start/status/evaluate/cancel/list`
-- **+15 тестов**, 66 passed total в `test_skill_curator_*.py`
-- ⚠️ **НЕ интегрировано в `swarm.py`** — wire-up Phase D
+### Wave 18-A: session backup retention policy
+- `src/bootstrap/session_recovery.py`: `cleanup_old_backups()` — 7 категорий бэкапов, keep_recent=3, max_age_days=14
+- `scripts/openclaw_runtime_repair.py`: Step 5 cleanup integration
+- +9 тестов
 
-### Fallback chain rebuild (live config)
-В `~/.openclaw/openclaw.json` (backup в `~/.openclaw/openclaw.json.bak-<ts>`):
+### Wave 18-B: Google direct SDK bypass (КЛЮЧЕВАЯ ФИЧА)
+- `src/integrations/google_genai_direct.py` — direct google.genai SDK call, минует OpenClaw WebSocket→openresponses
+- `src/openclaw_client.py`: bypass wire-up в `send_message_stream`
+- Новая dep: `google-genai>=1.62`
+- ENV gate `KRAB_GOOGLE_DIRECT_BYPASS_ENABLED` (default ON)
+- +19 тестов
+
+### Wave 18-D/E/G/H: fix chain для bypass
+- **18-D**: bypass проверяется КАЖДЫЙ attempt в for loop (был только initial)
+- **18-E**: `_has_photo_bypass = bool(images)` — explicit local (silent NameError fix)
+- **18-G**: relative import fix `from ..config` → `from .config` (silent ImportError fix)
+- **18-H**: `GenerateContentConfig` flat fields (`max_output_tokens` плоско, не вложенный `generation_config`) — legacy SDK pattern исправлен
+
+### Production verification (Session 36 close)
 ```
-primary:    codex-cli/gpt-5.5         (оставлен)
-fallbacks:  google/gemini-3.1-pro-preview         ← #1 (был openai/gpt-5.5 — мёртвый ключ)
-            google-gemini-cli/gemini-3.1-pro-preview
-            google/gemini-3-pro-preview
-            anthropic/claude-opus-4-7
-            google/gemini-2.5-pro-preview-06-05
-```
-`.env`: `KRAB_CODEX_CLI_FALLBACK_MODEL=google/gemini-3.1-pro-preview` (Wave 14-K override для codex first-chunk hang).
-
-⚠️ **Google API $300 бонус активен ещё несколько дней** — после истечения пересмотреть приоритеты в цепочке.
-
-## Session 34 final state
-
-```
-Branch: main (HEAD = 9cd6f5f)
-Commits Session 34: 8 (4 feat + 4 merge --no-ff)
-Krab process: running, telegram session ready
-Pragmas live: synchronous=FULL, temp_store=MEMORY, 64MB cache, WAL+autocheckpoint
-Corruption events (current process): 0
-Test additions Session 34: +56 (16 apply + 25 hermes/router + 15 ab + unskip 24=fix)
-  - test_skill_curator_*.py: 66 passed (3 файла)
-  - test_agent_engine_router.py: 15 passed
-  - test_hermes_acp_bridge.py: 10 passed
-  - test_web_acl_api/photo_dm_owner/reply_media_extraction: 24 passed (unskipped)
-Worktrees: cleaned (4 agent-* removed)
-agent-client-protocol: 0.9.0 в shared venv
+HTTP query → "Привет." за 5.5s через google_direct channel ✅
+Logs: google_direct_bypass_engaged + google_genai_direct_complete_done
+OpenClaw 2026.5.2 broken WebSocket→openresponses обходится
 ```
 
-## Backlog для Session 35+
+## Settings обновлены (.env)
 
-### High priority
+```
+CHAT_PERMANENT_BAN_LIST=disabled  → УДАЛЕНА (Wave 17-C)
+MODEL=codex/gpt-5.5              → codex-cli/gpt-5.5
+KRAB_GOOGLE_DIRECT_BYPASS_ENABLED=1  (implicit default ON)
+```
 
-1. **Bug: media transcription для audio files** (НЕ voice messages):
-   - User прислал audio file (`kubael — Лестат`, 02:15, 2.9MB) → Краб всё-таки получил его в reply context (после repeat), но **транскрипция не сработала** — Краб ушёл по обычному chat-пути → codex-cli timeout
-   - Voice messages (Telegram voice) транскрибируются ✅
-   - Audio files (Telegram audio/document mime=audio/mpeg) — НЕТ
-   - Investigate: media extraction в `src/userbot/llm_flow.py` + transcription pipeline
-   - Симметрично с voice transcription pipeline
+## OpenClaw config (`~/.openclaw/openclaw.json`) — fallback chain
 
-2. **24h Sentry observation post Session 34 restart**:
-   - Verify corruption events trend
-   - Track `pyrogram_sqlite_malformed_swallowed` count
-   - Health probe success rate
-   - Sentry transaction errors trend (особенно с новой fallback chain — Gemini ratelimits?)
+```
+primary:    codex-cli/gpt-5.5
+fallbacks:
+  - google/gemini-3.1-pro-preview          ← #1, bypass engages здесь
+  - google/gemini-3-pro-preview
+  - google/gemini-flash-latest
+  - google-gemini-cli/gemini-3.1-pro-preview  (OAuth — token EXPIRED ~2026-04-13, last resort)
+```
 
-3. **SkillCurator integration в swarm.py** (Phase D):
-   - Wire `select_variant` в `swarm.py` round execution path
-   - `record_round_metric` после каждого round (cost/latency/tool_calls/verifier_pass/user_reaction)
-   - `evaluate_ab_test_and_apply` cron trigger (weekly)
-   - Endpoints: `GET /api/curator/state`, `/api/curator/ab/<ab_id>`, `POST /api/curator/dry-run`
+## Session 36 final state
 
-4. **Hermes Phase C — live wiring**:
-   - Wrap `OpenClawClient` чтобы satisfy `AgentEngineClient` Protocol
-   - Modify `llm_flow.py` чтобы выбирать engine через `agent_engine_router.resolve_engine()`
-   - archive.db migration: `agent_engine_runs` table
-   - Endpoints: `GET /api/agent-engine/comparison`, `/api/agent-engine/runs`
-   - Prometheus: `krab_agent_engine_latency_seconds{engine}`, `runs_total`, `fallback_total`
-   - Roll out analysts swarm room на Hermes (когда Hermes binary будет установлен)
+```
+Branch: main (HEAD = f6a6861)
+Commits Session 36: 30+ (ba02171 → f6a6861)
+Krab process: running, integrity ok
+Google direct bypass: LIVE (5.5s response verified)
+Test additions Session 36: ~68 новых тестов
+3× MacBook OOM reboots: Krab пережил, Krab Ear подозреваемый виновник
+agent-client-protocol: 0.9.0 (Wave 16-B, Session 35)
+```
 
-### Medium priority
+## Backlog для Session 37
 
-5. **Hermes binary install** (Phase C trigger):
-   - User действие: `~/.hermes/` уже configured (Wave 15-D), launch script готов
-   - После install bridge сам поднимется через `_ensure_started()`
-6. **A/B framework UI**: dashboard endpoint + frontend (Phase D)
-7. **Paperclip server start** (carryover Session 33): `nohup npx paperclipai run` + Krab integration через `src/integrations/paperclip_bridge.py`
+### P0 / Критические
 
-### Low priority
+1. **Memory leak / OOM investigation** — MacBook перегружался 3 раза за Session 36. Подозревается параллельная Krab Ear сессия. Нужно: psutil baseline для Krab процесса + Krab Ear процесса, memory growth graph, потенциальный leak в audio buffering или embedding pipeline. Action: `pip install psutil` + мониторинг RSS 30 мин.
 
-8. **Hermes selective cherry-picks** (agentskills.io, Honcho memory plugin)
-9. **OpenClaw → Hermes migration tool**
-10. **IDE integration via ACP** (VS Code/Zed)
+2. **gemini-cli OAuth re-auth** — `google-gemini-cli/gemini-3.1-pro-preview` token expired ~2026-04-13. Fallback chain деградирован если codex+gemini-direct упадут. Action: `gemini auth login` в терминале.
+
+3. **Wave 18-I (in flight)** — empty response retry с `thinking_budget=0`. Bypass иногда возвращает пустой text при thinking-heavy моделях. Fix: после пустого ответа — retry без thinking budget.
+
+### Hermes / Agent Engine
+
+4. **Hermes Phase D** — wire-up SkillCurator A/B → `swarm.py`. Foundation готова (Waves 16-A/D + 17-B). Нужно: `select_variant()` в `AgentRoom.run()`, `record_round_metric()` после каждого раунда, `evaluate_ab_test_and_apply` cron trigger.
+
+5. **Hermes binary install** — `hermes` не в PATH, Phase C (Wave 17-B) создала adapter но активация требует `KRAB_AGENT_ENGINE_DISPATCH_ENABLED=1` + hermes binary. Пока безопасный stub.
+
+6. **OpenClaw upstream issue report** — WebSocket→openresponses transport regression для Google в OpenClaw 2026.5.2 нужно репортить upstream (если есть канал). Bypass обходит симптом, но не фиксит root cause в OpenClaw.
+
+### Test coverage
+
+7. **Integration test full bypass flow** — mock google.genai SDK + проверить что NameError/ImportError paths не silent. Wave 18 fix chain (D/E/G/H) показал что 4 silent bugs прошли review.
+
+8. **Agent engine dispatch integration test** — когда `KRAB_AGENT_ENGINE_DISPATCH_ENABLED=1`, проверить что `get_engine_for_route()` возвращает корректный engine и fallback работает.
+
+### Carryover
+
+9. **Paperclip server start** (carryover Session 33+) — до сих пор не сделано
+10. **Hermes selective cherry-picks** (agentskills.io, Honcho memory plugin)
 
 ## Operational quick reference
 
@@ -148,36 +132,46 @@ cd /Users/pablito/Antigravity_AGENTS/Краб
 
 # Health
 curl -sS http://127.0.0.1:8080/api/health/lite | python3 -m json.tool
-curl -sS http://127.0.0.1:8080/api/uptime
+curl -sS http://127.0.0.1:18789/health  # gateway direct
 
-# Curator full suite (Steps 1-4):
-# !curator dry-run [team]                 — read-only analyzer
-# !curator propose <team>                 — LLM proposes prompt diff
-# !curator proposals                      — list pending
-# !curator show <id>                      — display diff
-# !curator apply <id> [--force]           — apply approved proposal
-# !curator rollback <team> [--version N]  — rollback to baseline or version
-# !curator overlays                       — show active overlays
-# !curator ab start <team> <id> [--rounds N]  — start A/B test
-# !curator ab status [team]               — current A/B test
-# !curator ab evaluate <ab_id> [--apply]  — decision + optional auto-apply
-# !curator ab cancel <ab_id>
-# !curator ab list [team]
+# Google direct bypass verify
+grep "google_direct_bypass_engaged\|google_genai_direct" ~/.openclaw/logs/krab.log | tail -5
 
-# Engine (Hermes Phase B):
-# !engine                                 — show resolution + health
-# !engine here <openclaw|hermes|auto>     — per-chat override
-# !engine room <name> <engine|clear>      — per-swarm-room policy
-# !engine status                          — both engines health
+# Manual recovery (если session corrupt)
+venv/bin/python scripts/openclaw_runtime_repair.py --check-only
+venv/bin/python scripts/openclaw_runtime_repair.py
+
+# Agent engine (Phase C, default OFF)
+# Активировать: KRAB_AGENT_ENGINE_DISPATCH_ENABLED=1 в .env
+# Status: GET /api/agent-engine/status
+# Сравнение: GET /api/agent-engine/comparison
+
+# SkillCurator (Steps 1-4):
+# !curator dry-run [team] / propose <team> / proposals / show <id>
+# !curator apply <proposal_id> [--force] / rollback <team>
+# !curator ab start <team> <id> [--rounds N] / status / evaluate / cancel / list
+
+# Engine commands (Hermes Phase B):
+# !engine show / here <openclaw|hermes|auto> / room <name> <engine|clear> / status
 ```
 
 ## Critical operational notes
 
 - **НИКОГДА** не использовать `launchctl kickstart -k` (causes session corruption)
-- **30s settle** между Stop+Start (rapid cycle = disk I/O error)
-- **Pre-commit hook** иногда auto-stage'ит соседние файлы — verify после dispatch
-- **Multi-agent dispatch** работает плотно (5-7 sonnet OK), используй `isolation: "worktree"` чтобы избежать conflicts (Session 34 4 agents без overlap = 0 conflicts)
-- **Reasoning depth**: medium для оркестрации/merge, high для архитектурных решений
+- **30s settle** между Stop+Start
+- **Google direct bypass ON по умолчанию** — если нужно отключить: `KRAB_GOOGLE_DIRECT_BYPASS_ENABLED=0`
+- **KRAB_AGENT_ENGINE_DISPATCH_ENABLED** — default OFF, безопасно включать на тест
 - **OpenAI ключ мёртвый** — НЕ возвращать `openai/*` в fallback chain
-- **Google API $300 bonus** активен ещё несколько дней — пересмотреть приоритеты после истечения
-- **Wave 14-K fallback message visible to user** — UX-страховка от codex-cli hangs работает в проде
+- **gemini-cli OAuth expired** — последний резерв в chain неработоспособен, нужен re-auth
+- **Krab Ear + Krab параллельно** — risk OOM на 36GB M4 Max, мониторить RSS
+- **Wave 16-N auto-recovery** — session recovery автоматический при preflight corrupt detect
+- **google-genai>=1.62 требуется** — добавлена в requirements (Wave 18-B)
+
+## Session 36 stats
+
+- **30+ commits** (ba02171 → f6a6861)
+- **5 новых модулей**: `google_genai_direct.py`, `agent_engine_openclaw.py`, `agent_engine_resolver.py` + 2 test modules
+- **~68 тестов добавлено** (Wave 16-P: 9, 17-A: 10, 17-B: 18, 17-C: 3, 18-A: 9, 18-B: 19)
+- **3× MacBook OOM reboot** — Krab выжил все 3 раза, integrity ok
+- **Production bypass verified** — 5.5s Google response без OpenClaw WebSocket path
+- **0 critical bugs** в финальном code review

@@ -1,8 +1,43 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-05-04 (session 35)
+> Составлен: 2026-03-23 | Обновлён: 2026-05-04 (session 36)
 > Статус: Активная разработка
 > Владелец: По
+
+---
+
+## 📋 Session 36 (04.05.2026) — GOOGLE DIRECT BYPASS + HERMES PHASE C + REVIEW FIXES
+
+### DONE (Session 36)
+
+- **Wave 16-P**: HermesACPBridge async singleton (asyncio.Lock + double-checked), SkillCurator evaluate+apply atomicity, `--session-path` CLI arg в runtime_repair.py
+- **Wave 17-A**: покрытие тестами — async health snapshot integration test, `/api/runtime/recover` HTTP 503 e2e, Wave 16-I dynamic tool_calls integration
+- **Wave 17-B**: Hermes Phase C live wiring — `agent_engine_openclaw.py` (OpenClawAdapter), `agent_engine_resolver.py` (get_engine_for_route), archive.db migration `agent_engine_runs`, 3 endpoints, 3 Prometheus метрики. ENV gate `KRAB_AGENT_ENGINE_DISPATCH_ENABLED=0` (zero risk default)
+- **Wave 17-C**: убран hardcoded How2AI fallback (`or ['-1001587432709']`) из `config.py`
+- **Wave 18-A**: session backup retention — `cleanup_old_backups()` 7 категорий, keep_recent=3, max_age_days=14, Step 5 в repair script
+- **Wave 18-B→H**: Google direct SDK bypass — `src/integrations/google_genai_direct.py`; wire-up в `send_message_stream`; fix chain (18-D: per-attempt; 18-E: NameError; 18-G: relative import; 18-H: flat GenerateContentConfig). **Production verified**: 5.5s HTTP response через google_direct channel, OpenClaw 2026.5.2 WebSocket regression обходится
+- **Hermes Phase B**: DONE (Session 35) — `agent_engine_router.py`, `hermes_acp_bridge.py`, Protocol + stub
+- **SkillCurator Steps 3-4**: DONE (Session 35) — `apply_with_approval`, A/B framework, commands (`!curator ab/apply/rollback/overlays`)
+
+### Backlog Session 37
+
+#### P0
+- **Memory leak / OOM investigation**: Krab Ear + Krab параллельно → 3× OOM reboot за Session 36. Нужен psutil baseline, RSS мониторинг, audit audio buffering / embedding pipeline в Krab Ear
+- **gemini-cli OAuth re-auth**: `google-gemini-cli/*` token expired ~2026-04-13, `gemini auth login`
+- **Wave 18-I**: empty response retry с `thinking_budget=0` (in flight)
+
+#### Hermes / Agent Engine
+- **Hermes Phase D**: wire SkillCurator A/B → `swarm.py` — `select_variant()` в `AgentRoom.run()`, `record_round_metric()` после каждого раунда, `evaluate_ab_test_and_apply` cron
+- **Hermes binary install**: `hermes` в PATH для активации Phase C (`KRAB_AGENT_ENGINE_DISPATCH_ENABLED=1`)
+- **OpenClaw upstream issue**: WebSocket→openresponses transport regression для Google в OpenClaw 2026.5.2 — репортить upstream
+
+#### Tests
+- Integration test full bypass flow (mock google.genai SDK)
+- Agent engine dispatch integration test (with `KRAB_AGENT_ENGINE_DISPATCH_ENABLED=1`)
+
+#### Carryover
+- **Paperclip server start** (carryover Session 33+)
+- Hermes selective cherry-picks (agentskills.io, Honcho memory plugin)
 
 ---
 
