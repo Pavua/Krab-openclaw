@@ -1208,30 +1208,42 @@ class SkillCurator:
     ) -> tuple[dict[str, Any], bool]:
         """Async обёртка: evaluate + auto-apply если candidate wins.
 
+        Весь блок evaluate→apply выполняется под одним team lock — это
+        гарантирует атомарность: конкурентный вызов для той же team не
+        увидит частичного состояния между evaluate и apply.
+
         Returns (evaluation_result, applied: bool).
         """
+        # Определяем team из ab_id для получения правильного lock.
+        # _load_ab_test читает только файл — без side-effects до lock.
+        ab_data_pre = self._load_ab_test(ab_id)
+        team = (ab_data_pre or {}).get("team", ab_id)
+        lock = self._get_ab_team_lock(team)
 
-        result = self.evaluate_ab_test(ab_id)
-        applied = False
+        async with lock:
+            # Под lock: evaluate и apply неразделимы — второй конкурентный
+            # вызов будет ждать снаружи и увидит уже applied состояние.
+            result = self.evaluate_ab_test(ab_id)
+            applied = False
 
-        if result.get("winner") == "candidate":
-            data = self._load_ab_test(ab_id)
-            proposal_id = (data or {}).get("candidate_proposal_id", "")
-            if proposal_id:
-                try:
-                    ok, msg = await self.apply_with_approval(
-                        proposal_id,
-                        force=True,
-                        idle_check=False,
-                        state_path=state_path,
-                    )
-                    applied = ok
-                    result["auto_apply_msg"] = msg
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("curator_ab_auto_apply_failed", ab_id=ab_id, error=str(exc))
-                    result["auto_apply_error"] = str(exc)
+            if result.get("winner") == "candidate":
+                data = self._load_ab_test(ab_id)
+                proposal_id = (data or {}).get("candidate_proposal_id", "")
+                if proposal_id:
+                    try:
+                        ok, msg = await self.apply_with_approval(
+                            proposal_id,
+                            force=True,
+                            idle_check=False,
+                            state_path=state_path,
+                        )
+                        applied = ok
+                        result["auto_apply_msg"] = msg
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("curator_ab_auto_apply_failed", ab_id=ab_id, error=str(exc))
+                        result["auto_apply_error"] = str(exc)
 
-        return result, applied
+            return result, applied
 
     def cancel_ab_test(
         self,

@@ -15,12 +15,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.integrations.hermes_acp_bridge import (
-    HermesACPBridge,
     _HEALTH_CACHE_TTL,
+    HermesACPBridge,
     get_hermes_bridge,
+    get_hermes_bridge_sync,
     reset_hermes_bridge,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -161,9 +161,11 @@ async def test_bridge_close_idempotent(bridge_no_binary: HermesACPBridge) -> Non
 
 
 def test_get_hermes_bridge_singleton() -> None:
-    """get_hermes_bridge() дважды возвращает тот же объект."""
-    a = get_hermes_bridge()
-    b = get_hermes_bridge()
+    """get_hermes_bridge_sync() (deprecated) дважды возвращает тот же объект."""
+    # Используем sync version для совместимости с sync test context.
+    # Async version проверяется в test_wave16p_fixes.py.
+    a = get_hermes_bridge_sync()
+    b = get_hermes_bridge_sync()
     assert a is b
 
 

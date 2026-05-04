@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -34,6 +36,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 # ── константы ────────────────────────────────────────────────────────────────
 
@@ -49,8 +53,37 @@ _VALID_SEARCH_PROVIDERS = frozenset(
     {"brave", "duckduckgo", "exa", "firecrawl", "gemini", "kimi", "perplexity", "tavily"}
 )
 
-# Kraab session — источник истины (critical DB)
-_SESSION_PATH = Path(__file__).parent.parent / "data" / "sessions" / "kraab.session"
+# Kraab session — вычисленный дефолт (override через CLI arg или ENV)
+_SESSION_PATH_DEFAULT = Path(__file__).parent.parent / "data" / "sessions" / "kraab.session"
+
+# ENV-переменная для override без CLI arg (удобно для web_app /api/runtime/recover)
+_SESSION_PATH_ENV = "KRAB_SESSION_PATH"
+
+
+def _resolve_session_path(cli_arg: Path | None = None) -> Path:
+    """Resolves kraab.session path по приоритету: CLI arg > ENV > computed default.
+
+    Логирует WARNING если используется дефолтный путь, т.к. он может быть
+    fragile при symlink-раскладке или нестандартном cwd.
+    """
+    if cli_arg is not None:
+        # Наивысший приоритет: явный CLI arg
+        return cli_arg
+
+    env_val = os.environ.get(_SESSION_PATH_ENV)
+    if env_val:
+        # Средний приоритет: ENV override
+        return Path(env_val)
+
+    # Fallback: вычисленный default (fragile при symlink/нестандартном cwd)
+    _log.warning(
+        "session_path_fallback: используется computed default %s — "
+        "установи %s или передай --session-path для надёжности",
+        _SESSION_PATH_DEFAULT,
+        _SESSION_PATH_ENV,
+    )
+    return _SESSION_PATH_DEFAULT
+
 
 # Idempotency cooldown: повторная попытка recovery в пределах 1h → exit 78
 _RECENT_BACKUP_COOLDOWN_SEC = 3600
@@ -260,7 +293,7 @@ def repair_session_integrity(
         - sqlite3 .recover | sqlite3 fresh  (через shared attempt_recovery)
         - Verify integrity → atomic replace
     """
-    path = session_path or _SESSION_PATH
+    path = session_path or _SESSION_PATH_DEFAULT
     result: dict[str, Any] = {
         "name": "session_integrity",
         "ok": False,
@@ -482,9 +515,14 @@ def main() -> int:
         "--session-path",
         type=Path,
         default=None,
-        help="Путь к kraab.session (по умолчанию: data/sessions/kraab.session)",
+        help=(
+            f"Путь к kraab.session. Приоритет: CLI arg > {_SESSION_PATH_ENV} env > computed default"
+        ),
     )
     args = parser.parse_args()
+
+    # Разрешаем session path по приоритету (CLI > ENV > default с warning)
+    resolved_session_path = _resolve_session_path(args.session_path)
 
     t_start = time.monotonic()
 
@@ -509,7 +547,7 @@ def main() -> int:
 
     # Шаг 3: session integrity + repair
     sess_check = repair_session_integrity(
-        session_path=args.session_path,
+        session_path=resolved_session_path,
         check_only=args.check_only,
         verbose=args.verbose,
     )
