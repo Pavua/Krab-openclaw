@@ -56,6 +56,64 @@ _SQLITE_CONNECT_TIMEOUT = 10
 # is_storage_corrupt() проверяет оба пути — attr и этот dict.
 _STORAGE_CORRUPT_FLAGS: dict[int, bool] = {}
 
+# Wave 21-A: счётчик последовательных успешных read/write операций per-storage.
+# При достижении порога (KRAB_STORAGE_CORRUPT_AUTO_CLEAR_THRESHOLD, default 100)
+# автоматически сбрасываем _corrupt_flag — stale flag больше не блокирует
+# обработку Telegram-сообщений бесконечно. Lazy init из Config при первом вызове.
+_STORAGE_SUCCESS_COUNTS: dict[int, int] = {}  # id(storage) → consecutive successes
+_STORAGE_AUTO_CLEAR_THRESHOLD: int | None = None  # lazy из Config
+
+
+def _get_auto_clear_threshold() -> int:
+    """Возвращает порог авто-очистки, lazy-loaded из Config."""
+    global _STORAGE_AUTO_CLEAR_THRESHOLD
+    if _STORAGE_AUTO_CLEAR_THRESHOLD is None:
+        try:
+            from src.config import Config as _Cfg
+
+            _STORAGE_AUTO_CLEAR_THRESHOLD = _Cfg.KRAB_STORAGE_CORRUPT_AUTO_CLEAR_THRESHOLD
+        except Exception:  # noqa: BLE001 — до init config
+            _STORAGE_AUTO_CLEAR_THRESHOLD = 100
+    return _STORAGE_AUTO_CLEAR_THRESHOLD
+
+
+def _record_storage_success(storage) -> None:
+    """Увеличивает счётчик успешных операций; при достижении порога — сбрасывает corrupt flag.
+
+    Вызывается из success-path read/write wrapper'ов. Idempotent: повторные
+    вызовы после сброса флага безопасны (счётчик тоже обнуляется при сбросе).
+    """
+    sid = id(storage)
+    cnt = _STORAGE_SUCCESS_COUNTS.get(sid, 0) + 1
+    _STORAGE_SUCCESS_COUNTS[sid] = cnt
+    if cnt >= _get_auto_clear_threshold():
+        was_corrupt = is_storage_corrupt(storage)
+        if was_corrupt:
+            # Storage реально работоспособен: N успешных операций подряд.
+            # Сбрасываем stale flag — Krab перестанет рейзить DatabaseError
+            # на каждом входящем Telegram-сообщении.
+            try:
+                if hasattr(storage, "_corrupt_flag"):
+                    storage._corrupt_flag = False
+                _STORAGE_CORRUPT_FLAGS.pop(sid, None)
+                _STORAGE_SUCCESS_COUNTS.pop(sid, None)
+                log.info(
+                    "storage_corrupt_flag_auto_cleared",
+                    extra={
+                        "storage_class": type(storage).__name__,
+                        "success_count": cnt,
+                        "reason": "threshold_reached",
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "storage_corrupt_flag_auto_clear_failed",
+                    extra={"error": str(exc)},
+                )
+        else:
+            # Порог достигнут, но флаг уже не был set — просто сбрасываем счётчик.
+            _STORAGE_SUCCESS_COUNTS.pop(sid, None)
+
 
 def _execute_pragmas(conn) -> None:
     """Применяет hardening-PRAGMA к уже открытому sqlite3-соединению.
@@ -191,7 +249,10 @@ def apply_pyrogram_sqlite_hardening() -> bool:
 
         async def _safe(self, *args, **kwargs):
             try:
-                return await orig(self, *args, **kwargs)
+                result = await orig(self, *args, **kwargs)
+                # Wave 21-A: write succeeded → фиксируем успех для авто-очистки.
+                _record_storage_success(self)
+                return result
             except Exception as exc:  # noqa: BLE001 — sqlite3.OperationalError/DatabaseError
                 msg = str(exc).lower()
                 # Best-effort размер payload для логирования (пропускаем
@@ -289,7 +350,7 @@ def apply_pyrogram_sqlite_hardening() -> bool:
 
         async def _safe_read(self, *args, **kwargs):
             # Проверяем corrupt flag ДО любого обращения к conn.
-            if getattr(self, "_corrupt_flag", False):
+            if getattr(self, "_corrupt_flag", False) or _STORAGE_CORRUPT_FLAGS.get(id(self), False):
                 log.warning(
                     "pyrogram_read_rejected_corrupt_flag",
                     extra={"op": op_name},
@@ -297,7 +358,10 @@ def apply_pyrogram_sqlite_hardening() -> bool:
                 raise sqlite3.DatabaseError(
                     "storage marked corrupt — connection invalidated after malformed write"
                 )
-            return await orig(self, *args, **kwargs)
+            result = await orig(self, *args, **kwargs)
+            # Wave 21-A: read succeeded → фиксируем успех для авто-очистки stale flag.
+            _record_storage_success(self)
+            return result
 
         _safe_read.__name__ = orig.__name__
         _safe_read.__qualname__ = getattr(orig, "__qualname__", orig.__name__)
@@ -339,6 +403,11 @@ def _reset_for_tests() -> None:
     _PATCH_APPLIED = False
     global _SESSION_GUARD_APPLIED
     _SESSION_GUARD_APPLIED = False
+    # Wave 21-A: сброс счётчиков и threshold-кэша между тестами.
+    global _STORAGE_AUTO_CLEAR_THRESHOLD
+    _STORAGE_AUTO_CLEAR_THRESHOLD = None
+    _STORAGE_SUCCESS_COUNTS.clear()
+    _STORAGE_CORRUPT_FLAGS.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -567,11 +636,26 @@ def is_storage_corrupt(storage: object) -> bool:
 
 
 def clear_storage_corrupt_flag(storage: object) -> None:
-    """Сбрасывает corrupt flag после успешного recovery."""
+    """Сбрасывает corrupt flag и счётчик успехов после ручного recovery.
+
+    Wave 21-A: также очищает _STORAGE_SUCCESS_COUNTS — счётчик должен
+    начать с нуля после явного сброса, чтобы авто-очистка не срабатывала
+    по накопленным до recovery данным.
+    """
+    sid = id(storage)
+    was_corrupt = is_storage_corrupt(storage)
     try:
         setattr(storage, _CORRUPT_FLAG_ATTR, False)
     except Exception:  # noqa: BLE001 — __slots__ guard
         pass
+    # Убираем из fallback dict и счётчика независимо от __slots__.
+    _STORAGE_CORRUPT_FLAGS.pop(sid, None)
+    _STORAGE_SUCCESS_COUNTS.pop(sid, None)
+    if was_corrupt:
+        log.info(
+            "storage_corrupt_flag_cleared_manual",
+            extra={"storage_class": type(storage).__name__},
+        )
 
 
 def is_corrupt_marker_error(exc: BaseException) -> bool:

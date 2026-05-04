@@ -610,6 +610,16 @@ class Config:
         "yes",
     )
 
+    # Wave 21-A: порог автоматической очистки _corrupt_flag после N успешных
+    # read-операций подряд. Когда storage реально восстановлен (Wave 16-N
+    # rename + sqlite .recover), но flag залипает в памяти — каждый входящий
+    # Telegram message рейзит DatabaseError и Krab молчит до ручного restart'а.
+    # 100 успешных reads достаточно, чтобы убедиться в recovery, и достаточно
+    # быстро (обычно < 30 секунд при нормальной нагрузке).
+    KRAB_STORAGE_CORRUPT_AUTO_CLEAR_THRESHOLD: int = int(
+        os.getenv("KRAB_STORAGE_CORRUPT_AUTO_CLEAR_THRESHOLD", "100") or "100"
+    )
+
     @classmethod
     def validate(cls) -> list[str]:
         """Проверяет обязательные настройки и возвращает список ошибок"""
