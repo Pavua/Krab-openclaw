@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 # Префикс провайдера для Vertex AI моделей
 VERTEX_PREFIX = "google-vertex/"
 DEFAULT_PROJECT = "caramel-anvil-492816-t5"
-DEFAULT_LOCATION = "us-central1"
+DEFAULT_LOCATION = "global"  # Wave 23-B: gemini-3.1 + другие preview работают только в global
 
 
 def is_vertex_enabled() -> bool:
