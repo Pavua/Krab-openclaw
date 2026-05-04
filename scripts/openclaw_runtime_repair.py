@@ -494,6 +494,70 @@ def check_stale_plugins(verbose: bool = False) -> dict[str, Any]:
     return result
 
 
+# ── Step 5: retention cleanup backup files (Wave 18-A) ───────────────────────
+
+
+def cleanup_session_backups_step(
+    session_path: Path | None = None,
+    *,
+    keep_recent: int = 3,
+    max_age_days: int = 14,
+) -> dict[str, Any]:
+    """
+    Шаг 5: retention policy для session backup-файлов.
+
+    Удаляет старые bak-corrupt-*, corrupt-*, broken-* и т.п.,
+    оставляя keep_recent свежих в каждой категории + все файлы
+    моложе max_age_days дней.
+
+    Делегирует в src/bootstrap/session_recovery.cleanup_old_backups —
+    DRY-принцип, та же логика используется в тестах и в userbot.
+
+    Returns dict с ключами: ok, removed_count, bytes_freed, detail.
+    """
+    result: dict[str, Any] = {
+        "name": "session_backup_cleanup",
+        "ok": True,
+        "removed_count": 0,
+        "bytes_freed": 0,
+        "detail": "",
+        "action": "cleanup",
+    }
+
+    # Определяем директорию session-файлов
+    path = session_path or _resolve_session_path()
+    session_dir = path.parent
+
+    try:
+        # Импортируем cleanup_old_backups из shared module
+        repo_root = Path(__file__).parent.parent
+        _src_root = str(repo_root / "src")
+        if _src_root not in sys.path:
+            sys.path.insert(0, _src_root)
+        from bootstrap.session_recovery import (  # type: ignore[import]
+            cleanup_old_backups as _cleanup,
+        )
+
+        report = _cleanup(session_dir, keep_recent=keep_recent, max_age_days=max_age_days)
+        result["removed_count"] = len(report.get("removed", []))
+        result["bytes_freed"] = report.get("bytes_freed", 0)
+        result["detail"] = (
+            f"removed={result['removed_count']} freed={result['bytes_freed'] // 1024}KB"
+        )
+        result["categories"] = report.get("categories", {})
+    except ImportError:
+        # Shared module недоступен — graceful degradation, не ломаем repair flow
+        result["detail"] = "skipped:import_error (session_recovery not available)"
+        result["action"] = "skipped"
+    except Exception as exc:  # noqa: BLE001
+        # Cleanup не должен ронять repair chain
+        result["detail"] = f"cleanup_error:{exc}"
+        result["action"] = "error"
+        _log.warning("session_backup_cleanup_failed", error=str(exc))
+
+    return result
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 
@@ -564,6 +628,12 @@ def main() -> int:
     checks.append(plugin_check)
     if plugin_check.get("stale_plugins"):
         warnings.append(f"stale_plugins: {plugin_check['detail']}")
+
+    # Шаг 5: retention cleanup backup files (Wave 18-A, report-only, не ронять chain)
+    cleanup_check = cleanup_session_backups_step(session_path=resolved_session_path)
+    checks.append(cleanup_check)
+    if cleanup_check.get("action") == "error":
+        warnings.append(f"session_backup_cleanup: {cleanup_check['detail']}")
 
     duration_ms = int((time.monotonic() - t_start) * 1000)
 

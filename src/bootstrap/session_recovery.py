@@ -402,9 +402,176 @@ def attempt_recovery(
     return result
 
 
+# ── Wave 18-A: retention policy constants ─────────────────────────────────────
+
+# Категории backup-файлов и glob-паттерны для каждой.
+_BACKUP_CATEGORIES: dict[str, str] = {
+    "bak-corrupt": "*.bak-corrupt-*",
+    "bak-malformed": "*.bak-malformed-*",
+    "corrupt": "*.corrupt-*",
+    "broken": "*.broken-*",
+    "pre-recover": "*.pre-recover-*",
+    "empty": "*.empty-*",
+    "legacy-bak": "*.bak.*",
+}
+
+# Защищённые live-файлы — никогда не удаляются.
+_PROTECTED_NAMES: frozenset[str] = frozenset(
+    {
+        "kraab.session",
+        "kraab.session-wal",
+        "kraab.session-shm",
+    }
+)
+
+# Суффиксы sidecar-файлов, которые удаляются вместе с main backup.
+_SIDECAR_SUFFIXES: tuple[str, ...] = ("-wal", "-shm", "-journal")
+
+
+def cleanup_old_backups(
+    session_dir: Path,
+    *,
+    keep_recent: int = 3,
+    max_age_days: int = 14,
+    dry_run: bool = False,
+) -> dict:
+    """
+    Retention policy для session backup-файлов (Wave 18-A).
+
+    Удаляет старые backup files, оставляя по N свежих в каждой категории.
+    Файлы моложе max_age_days всегда сохраняются (независимо от keep_recent).
+
+    Категории:
+        bak-corrupt-*, bak-malformed-*, corrupt-*, broken-*, pre-recover-*,
+        empty-*, legacy-bak (bak.*)
+
+    Защищённые live-файлы (kraab.session, -wal, -shm) никогда не удаляются.
+
+    Sidecar-файлы (-wal, -shm) удаляются вместе с main backup файлом.
+
+    Args:
+        session_dir: Директория с session-файлами (data/sessions/).
+        keep_recent: Сколько свежих файлов оставить в каждой категории.
+        max_age_days: Файлы моложе этого порога не удаляются.
+        dry_run: Если True — только анализ, без удаления.
+
+    Returns:
+        dict: {
+            "removed": list[str],    — удалённые пути
+            "kept": list[str],       — оставленные пути
+            "bytes_freed": int,      — освобождено байт
+            "dry_run": bool,
+            "categories": dict,      — по-категориям: {cat: {removed, kept}}
+        }
+    """
+    if not session_dir.exists():
+        return {
+            "removed": [],
+            "kept": [],
+            "bytes_freed": 0,
+            "dry_run": dry_run,
+            "categories": {},
+        }
+
+    # Порог возраста (Unix timestamp)
+    age_cutoff = time.time() - max_age_days * 86400
+
+    all_removed: list[str] = []
+    all_kept: list[str] = []
+    bytes_freed: int = 0
+    categories_report: dict = {}
+
+    for category, glob_pattern in _BACKUP_CATEGORIES.items():
+        # Найти все файлы категории, исключая защищённые и сайдкары (обрабатываем отдельно)
+        candidates: list[Path] = []
+        for p in session_dir.glob(glob_pattern):
+            # Пропускаем защищённые live-файлы
+            if p.name in _PROTECTED_NAMES:
+                continue
+            # Пропускаем сайдкары: они будут удалены вместе с main backup
+            if any(p.name.endswith(sfx) for sfx in _SIDECAR_SUFFIXES):
+                continue
+            candidates.append(p)
+
+        if not candidates:
+            categories_report[category] = {"removed": [], "kept": []}
+            continue
+
+        # Сортировка по mtime descending (свежие первые)
+        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+        cat_removed: list[str] = []
+        cat_kept: list[str] = []
+
+        for idx, fpath in enumerate(candidates):
+            try:
+                mtime = fpath.stat().st_mtime
+            except OSError:
+                # Файл исчез между glob и stat — пропускаем
+                continue
+
+            # Условие удаления: файл за пределами top-N И старее max_age_days
+            is_within_top_n = idx < keep_recent
+            is_young_enough = mtime >= age_cutoff
+
+            if is_within_top_n or is_young_enough:
+                # Оставляем
+                cat_kept.append(str(fpath))
+                all_kept.append(str(fpath))
+            else:
+                # Удаляем: сначала считаем байты, потом удаляем
+                files_to_delete = [fpath]
+                # Добавляем sidecar-файлы
+                for sfx in _SIDECAR_SUFFIXES:
+                    sidecar = fpath.with_name(fpath.name + sfx)
+                    if sidecar.exists():
+                        files_to_delete.append(sidecar)
+
+                for del_path in files_to_delete:
+                    try:
+                        size = del_path.stat().st_size
+                        bytes_freed += size
+                        if not dry_run:
+                            del_path.unlink()
+                        cat_removed.append(str(del_path))
+                        all_removed.append(str(del_path))
+                        logger.debug(
+                            "session_backup_removed",
+                            path=str(del_path),
+                            size_kb=size // 1024,
+                            dry_run=dry_run,
+                        )
+                    except OSError as exc:
+                        logger.warning(
+                            "session_backup_remove_failed",
+                            path=str(del_path),
+                            error=str(exc),
+                        )
+
+        categories_report[category] = {"removed": cat_removed, "kept": cat_kept}
+
+    if all_removed or all_kept:
+        logger.info(
+            "session_backup_cleanup_done",
+            removed=len(all_removed),
+            kept=len(all_kept),
+            bytes_freed=bytes_freed,
+            dry_run=dry_run,
+        )
+
+    return {
+        "removed": all_removed,
+        "kept": all_kept,
+        "bytes_freed": bytes_freed,
+        "dry_run": dry_run,
+        "categories": categories_report,
+    }
+
+
 __all__ = [
     "attempt_recovery",
     "has_recent_recovery_backup",
     "cleanup_sidecars",
     "verify_key_tables",
+    "cleanup_old_backups",
 ]
