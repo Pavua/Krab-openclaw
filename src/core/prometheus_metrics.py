@@ -43,6 +43,18 @@ _SESSION_CORRUPTION_COUNTER: dict[str, int] = {}
 # 0.0 означает «ещё не замерено».
 _STARTUP_DURATION_SECONDS: list[float] = [0.0]
 
+# Agent Engine run counters (Phase C / Wave 17-B).
+# {engine: {success: count}} — инкрементируются из record_agent_engine_metrics().
+_AGENT_ENGINE_RUNS_COUNTER: dict[str, dict[str, int]] = {}
+
+# Agent Engine fallback counter.
+# {from_engine: {to_engine: count}} — fallback при unhealthy Hermes.
+_AGENT_ENGINE_FALLBACK_COUNTER: dict[str, dict[str, int]] = {}
+
+# Agent Engine latency (накопитель для avg — list сумм и count).
+# {engine: [total_latency_sec, count]}
+_AGENT_ENGINE_LATENCY_ACC: dict[str, list[float]] = {}
+
 
 def inc_telegram_flood_wait(caller: str) -> None:
     """Инкремент krab_telegram_flood_wait_total{caller=...}.
@@ -73,6 +85,44 @@ def set_startup_duration(elapsed_sec: float) -> None:
     """
     try:
         _STARTUP_DURATION_SECONDS[0] = max(0.0, float(elapsed_sec))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def record_agent_engine_run(
+    engine: str,
+    success: bool,
+    latency_sec: float,
+) -> None:
+    """Инкремент krab_agent_engine_runs_total и накопитель latency.
+
+    engine ∈ {'openclaw', 'hermes'}. Вызывается из llm_flow engine dispatch.
+    Не бросает, не I/O.
+    """
+    try:
+        key = (engine or "unknown")[:40]
+        success_label = "1" if success else "0"
+        engine_bucket = _AGENT_ENGINE_RUNS_COUNTER.setdefault(key, {})
+        engine_bucket[success_label] = engine_bucket.get(success_label, 0) + 1
+
+        acc = _AGENT_ENGINE_LATENCY_ACC.setdefault(key, [0.0, 0])
+        acc[0] += max(0.0, latency_sec)
+        acc[1] += 1
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def record_agent_engine_fallback(from_engine: str, to_engine: str) -> None:
+    """Инкремент krab_agent_engine_fallback_total{from_engine, to_engine}.
+
+    Вызывается из agent_engine_resolver при fallback Hermes → OpenClaw.
+    Не бросает.
+    """
+    try:
+        from_key = (from_engine or "unknown")[:40]
+        to_key = (to_engine or "unknown")[:40]
+        bucket = _AGENT_ENGINE_FALLBACK_COUNTER.setdefault(from_key, {})
+        bucket[to_key] = bucket.get(to_key, 0) + 1
     except Exception:  # noqa: BLE001
         pass
 
@@ -615,6 +665,52 @@ def collect_metrics() -> str:
             help_text="Время от старта процесса до kraab_running (секунды)",
         )
     )
+
+    # === Agent Engine runs (Phase C / Wave 17-B) ===
+    # krab_agent_engine_runs_total{engine, success}
+    lines.append(
+        "# HELP krab_agent_engine_runs_total Total agent engine runs by engine and success"
+    )
+    lines.append("# TYPE krab_agent_engine_runs_total counter")
+    if not _AGENT_ENGINE_RUNS_COUNTER:
+        lines.append('krab_agent_engine_runs_total{engine="openclaw",success="0"} 0')
+    else:
+        for _ae_engine, _ae_bucket in _AGENT_ENGINE_RUNS_COUNTER.items():
+            for _ae_success, _ae_count in _ae_bucket.items():
+                label_str = f'engine="{_sanitize_label(_ae_engine)}",success="{_ae_success}"'
+                lines.append(f"krab_agent_engine_runs_total{{{label_str}}} {_ae_count}")
+
+    # krab_agent_engine_latency_seconds_avg{engine} — накопленный avg
+    lines.append(
+        "# HELP krab_agent_engine_latency_seconds_avg Average latency of agent engine runs"
+    )
+    lines.append("# TYPE krab_agent_engine_latency_seconds_avg gauge")
+    if not _AGENT_ENGINE_LATENCY_ACC:
+        lines.append('krab_agent_engine_latency_seconds_avg{engine="openclaw"} 0')
+    else:
+        for _ae_engine, _ae_acc in _AGENT_ENGINE_LATENCY_ACC.items():
+            total_sec, count = _ae_acc[0], int(_ae_acc[1])
+            avg = round(total_sec / count, 4) if count > 0 else 0.0
+            label_str = f'engine="{_sanitize_label(_ae_engine)}"'
+            lines.append(f"krab_agent_engine_latency_seconds_avg{{{label_str}}} {avg}")
+
+    # krab_agent_engine_fallback_total{from_engine, to_engine}
+    lines.append(
+        "# HELP krab_agent_engine_fallback_total Fallback events when requested engine is unhealthy"
+    )
+    lines.append("# TYPE krab_agent_engine_fallback_total counter")
+    if not _AGENT_ENGINE_FALLBACK_COUNTER:
+        lines.append(
+            'krab_agent_engine_fallback_total{from_engine="hermes",to_engine="openclaw"} 0'
+        )
+    else:
+        for _ae_from, _ae_to_bucket in _AGENT_ENGINE_FALLBACK_COUNTER.items():
+            for _ae_to, _ae_cnt in _ae_to_bucket.items():
+                label_str = (
+                    f'from_engine="{_sanitize_label(_ae_from)}",'
+                    f'to_engine="{_sanitize_label(_ae_to)}"'
+                )
+                lines.append(f"krab_agent_engine_fallback_total{{{label_str}}} {_ae_cnt}")
 
     # === Timestamps ===
     lines.append(

@@ -9155,6 +9155,13 @@ class WebApp:
 
         self.app.include_router(_build_chat_policy(self._make_router_context()))
 
+        # Agent Engine metrics (Phase C / Wave 17-B) — /api/agent-engine/*
+        from .web_routers.agent_engine_metrics_router import (
+            build_agent_engine_metrics_router as _build_agent_engine_metrics,
+        )
+
+        self.app.include_router(_build_agent_engine_metrics(self._make_router_context()))
+
         # ── Chat Window Manager endpoints ────────────────────────────────────
 
     async def start(self):
