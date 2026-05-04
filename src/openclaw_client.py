@@ -3262,6 +3262,30 @@ class OpenClawClient:
                 _google_bypass_enabled = lambda: False  # type: ignore  # noqa: E731
                 _is_google_model = lambda m: False  # type: ignore  # noqa: E731
 
+            # Wave 23-A: Vertex AI direct SDK bypass для google-vertex/* моделей.
+            # Использует ADC + Google Cloud project (€848 credits до 2027-03)
+            # вместо paid AI Studio API key. Bypass проверяется ВНУТРИ for loop,
+            # ПОСЛЕ CLI bypass и ПЕРЕД Google AI Studio bypass.
+            _vertex_bypass_attempted = False
+            try:
+                from .integrations.google_vertex_direct import (
+                    complete_via_vertex as _vertex_complete,
+                )
+                from .integrations.google_vertex_direct import (
+                    is_vertex_enabled as _vertex_bypass_enabled,
+                )
+                from .integrations.google_vertex_direct import (
+                    is_vertex_model as _is_vertex_model,
+                )
+            except ImportError as _vertex_imp_exc:
+                logger.warning(
+                    "vertex_bypass_imports_failed",
+                    error=str(_vertex_imp_exc),
+                )
+                _vertex_complete = None  # type: ignore
+                _vertex_bypass_enabled = lambda: False  # type: ignore  # noqa: E731
+                _is_vertex_model = lambda m: False  # type: ignore  # noqa: E731
+
             for attempt in range(4):
                 logger.info("openclaw_attempt", attempt=attempt + 1, model=attempt_model)
 
@@ -3335,6 +3359,65 @@ class OpenClawClient:
                             "cli_subprocess_bypass_init_skip",
                             error=str(_cli_init_exc),
                             error_type=type(_cli_init_exc).__name__,
+                            model=attempt_model,
+                        )
+
+                # Wave 23-A: Vertex AI direct SDK bypass — проверяется ПОСЛЕ CLI и ДО Google AI Studio.
+                # Использует ADC + GCP project credits (€848 до 2027-03), не paid API key.
+                # Поддерживает только google-vertex/* префикс (2.5 модели; 3.x — через CLI).
+                if not _vertex_bypass_attempted and not _has_photo_bypass:
+                    try:
+                        if _vertex_bypass_enabled() and _is_vertex_model(attempt_model):
+                            logger.info(
+                                "google_vertex_bypass_engaged",
+                                model=attempt_model,
+                                attempt=attempt + 1,
+                            )
+                            _vertex_bypass_attempted = True
+                            self._set_last_runtime_route(
+                                channel="google_vertex",
+                                model=attempt_model,
+                                route_reason="google_vertex_bypass",
+                                route_detail="Vertex AI direct SDK bypass (ADC, GCP credits)",
+                                status="pending",
+                                force_cloud=effective_force_cloud,
+                            )
+                            try:
+                                _vertex_text = await _vertex_complete(
+                                    model=attempt_model,
+                                    messages=messages_to_send,
+                                )
+                                if _vertex_text and _vertex_text.strip():
+                                    sanitized = self._sanitize_assistant_response(_vertex_text)
+                                    if sanitized:
+                                        _vertex_text = sanitized
+                                    self._set_last_runtime_route(
+                                        channel="google_vertex",
+                                        model=attempt_model,
+                                        route_reason="google_vertex_ok",
+                                        route_detail="Ответ через Vertex AI direct SDK",
+                                        force_cloud=effective_force_cloud,
+                                    )
+                                    self._finalize_chat_response(chat_id, _vertex_text)
+                                    yield _vertex_text
+                                    return
+                                logger.warning(
+                                    "vertex_empty_response_fallback",
+                                    model=attempt_model,
+                                )
+                            except Exception as _vertex_exc:  # noqa: BLE001
+                                logger.warning(
+                                    "vertex_bypass_failed",
+                                    model=attempt_model,
+                                    error=str(_vertex_exc)[:200],
+                                    error_type=type(_vertex_exc).__name__,
+                                )
+                                # Fall through на следующий bypass / OpenClaw path
+                    except (NameError, ImportError) as _vertex_init_exc:
+                        logger.warning(
+                            "vertex_bypass_init_skip",
+                            error=str(_vertex_init_exc),
+                            error_type=type(_vertex_init_exc).__name__,
                             model=attempt_model,
                         )
 

@@ -474,6 +474,16 @@ class Config:
         "KRAB_CLI_SUBPROCESS_BYPASS_ENABLED", "1"
     ).strip().lower() in {"1", "true", "yes", "on"}
 
+    # Wave 23-A: Vertex AI direct SDK bypass для google-vertex/* моделей.
+    # Использует Google Cloud Vertex AI (€848 credits до 2027-03) вместо paid
+    # AI Studio API key. Auth через ADC (~/.config/gcloud/application_default_credentials.json).
+    # Default ON (opt-out через KRAB_VERTEX_BYPASS_ENABLED=0).
+    KRAB_VERTEX_BYPASS_ENABLED: bool = os.getenv(
+        "KRAB_VERTEX_BYPASS_ENABLED", "1"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    KRAB_VERTEX_PROJECT: str = os.getenv("KRAB_VERTEX_PROJECT", "caramel-anvil-492816-t5")
+    KRAB_VERTEX_LOCATION: str = os.getenv("KRAB_VERTEX_LOCATION", "us-central1")
+
     # Wave 16-I: idle-aware liveness detection.
     # Если LLM был активен (tool calls или text), но потом молчит > этого порога — это hang.
     # Default 180s (3 мин тишины после activity = зависание post-tool-call).
