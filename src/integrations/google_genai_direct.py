@@ -189,8 +189,9 @@ async def complete_direct(
         )
 
         # Извлекаем текст из response
+        text = ""
         try:
-            return response.text or ""
+            text = response.text or ""
         except Exception:  # noqa: BLE001
             # Иногда .text кидает исключение при blocked content
             try:
@@ -199,9 +200,54 @@ async def complete_direct(
                     for part in candidate.content.parts:
                         if hasattr(part, "text") and part.text:
                             parts.append(part.text)
-                return "".join(parts)
+                text = "".join(parts)
             except Exception:  # noqa: BLE001
-                return ""
+                text = ""
+
+        if not text.strip():
+            # Wave 18-I: empty response — Gemini 3-pro/3.1-pro имеют thinking включён
+            # по умолчанию. Короткие prompts (warmup 'ping') тратят весь output budget
+            # на thinking и возвращают response.text=''. Retry с thinking отключённым.
+            prompt_tokens = getattr(
+                getattr(response, "usage_metadata", None), "prompt_token_count", None
+            )
+            thoughts_tokens = getattr(
+                getattr(response, "usage_metadata", None), "thoughts_token_count", None
+            )
+            logger.warning(
+                "google_genai_direct_empty_text_retrying_no_thinking",
+                model=model_id,
+                prompt_token_count=prompt_tokens,
+                thoughts_token_count=thoughts_tokens,
+            )
+
+            # Проверяем доступность ThinkingConfig в установленной версии SDK
+            thinking_config_cls = getattr(genai_types, "ThinkingConfig", None)
+            if thinking_config_cls is None:
+                # Старая версия SDK без ThinkingConfig — graceful degrade
+                logger.warning(
+                    "google_genai_direct_thinking_config_unavailable",
+                    model=model_id,
+                    sdk_version="unknown",
+                )
+                return text
+
+            # Retry с thinking_budget=0 чтобы модель не тратила токены на думание
+            config_kwargs_no_think = dict(config_kwargs)
+            config_kwargs_no_think["thinking_config"] = thinking_config_cls(thinking_budget=0)
+            no_think_config = genai_types.GenerateContentConfig(**config_kwargs_no_think)
+
+            response2 = client.models.generate_content(
+                model=model_id,
+                contents=contents,  # type: ignore[arg-type]
+                config=no_think_config,
+            )
+            try:
+                text = response2.text or ""
+            except Exception:  # noqa: BLE001
+                text = ""
+
+        return text
 
     try:
         text = await asyncio.wait_for(
