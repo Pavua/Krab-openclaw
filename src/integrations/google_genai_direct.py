@@ -164,23 +164,19 @@ async def complete_direct(
         has_system=bool(system_instruction),
     )
 
-    # Конфигурация генерации
-    generation_config: dict[str, Any] = {}
-    if max_output_tokens and max_output_tokens > 0:
-        generation_config["max_output_tokens"] = max_output_tokens
-
     def _blocking_complete() -> str:
         """Синхронный вызов генерации в thread pool."""
         # Новый google-genai SDK: google.genai.Client
         client = genai.Client(api_key=resolved_key)
 
+        # Wave 18-H fix: GenerateContentConfig принимает плоские поля (max_output_tokens,
+        # system_instruction), а не вложенный generation_config — старый pattern из
+        # legacy google-generativeai SDK ломался валидацией pydantic в google.genai.
         config_kwargs: dict[str, Any] = {}
         if system_instruction:
             config_kwargs["system_instruction"] = system_instruction
-        if generation_config:
-            config_kwargs["generation_config"] = genai_types.GenerateContentConfig(
-                **generation_config
-            )
+        if max_output_tokens and max_output_tokens > 0:
+            config_kwargs["max_output_tokens"] = max_output_tokens
 
         generate_config = (
             genai_types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
