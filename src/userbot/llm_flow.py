@@ -907,6 +907,11 @@ class LLMFlowMixin:
             _codex_state.get_first_chunk_timeout() if _is_codex_cli_route else 0.0
         )
 
+        # Wave 19-D: счётчик grace-extensions для codex-cli idle gate.
+        # Если процесс реально работает (CPU active), продлеваем timeout max 3 раза.
+        _codex_grace_grants: int = 0
+        _max_codex_grace_grants: int = 3
+
         try:
             while True:
                 if received_any_chunk:
@@ -1250,11 +1255,44 @@ class LLMFlowMixin:
                         not tool_summary  # нет активных tool-вызовов
                         and idle_sec >= no_tool_activity_timeout_sec
                     ):
+                        # Wave 19-D: process-level liveness check для codex-cli.
+                        # Если codex-cli маршрут и subprocess реально работает
+                        # (CPU > 0.5%) — даём grace extension (max 3 раза).
+                        # Это защищает от ложных timeout'ов на задачах 30-60 мин.
+                        if _is_codex_cli_route and _codex_grace_grants < _max_codex_grace_grants:
+                            try:
+                                from ..integrations.codex_cli_liveness import is_codex_alive
+
+                                _liveness = is_codex_alive()
+                                if _liveness["active_count"] > 0:
+                                    # Процесс реально грузит CPU — сбрасываем idle-таймер
+                                    _cpu_total = sum(d["cpu_percent"] for d in _liveness["details"])
+                                    _codex_grace_grants += 1
+                                    last_tool_activity_ts = time.monotonic()
+                                    logger.info(
+                                        "codex_cli_alive_extending_grace",
+                                        chat_id=chat_id,
+                                        idle_sec=round(idle_sec, 1),
+                                        cpu_total=round(_cpu_total, 2),
+                                        active_procs=_liveness["active_count"],
+                                        extension_count=_codex_grace_grants,
+                                        max_grants=_max_codex_grace_grants,
+                                    )
+                                    continue  # назад в начало цикла — без break
+                            except Exception as _live_exc:  # noqa: BLE001
+                                # psutil недоступен или ошибка — не блокируем основной путь
+                                logger.warning(
+                                    "codex_liveness_check_failed",
+                                    error=str(_live_exc),
+                                )
                         logger.error(
                             "openclaw_no_tool_activity_timeout",
                             chat_id=chat_id,
                             idle_sec=round(idle_sec, 1),
                             timeout_sec=no_tool_activity_timeout_sec,
+                            codex_grace_grants_used=_codex_grace_grants
+                            if _is_codex_cli_route
+                            else 0,
                         )
                         _hung_model = startup_route_model or "неизвестная модель"
                         full_response = (
