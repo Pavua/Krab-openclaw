@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from typing import Any
 
 from ..core.logger import get_logger
@@ -249,23 +250,54 @@ async def complete_direct(
 
         return text
 
+    # Замеряем полную latency bypass-вызова для Prometheus
+    _t0 = time.monotonic()
+
     try:
         text = await asyncio.wait_for(
             asyncio.to_thread(_blocking_complete),
             timeout=timeout_sec,
         )
     except asyncio.TimeoutError:
+        _elapsed = time.monotonic() - _t0
         logger.warning("google_genai_direct_timeout", model=model_id, timeout_sec=timeout_sec)
+        # Таймаут — записываем как error (timeout variant)
+        try:
+            from ..core.prometheus_metrics import record_google_bypass_call
+
+            record_google_bypass_call(model=model, outcome="error", latency_sec=_elapsed)
+        except Exception:  # noqa: BLE001
+            pass
         return ""
     except Exception as exc:  # noqa: BLE001
+        _elapsed = time.monotonic() - _t0
         logger.warning("google_genai_direct_error", model=model_id, error=str(exc))
+        # Исключение — записываем outcome=error
+        try:
+            from ..core.prometheus_metrics import record_google_bypass_call
+
+            record_google_bypass_call(model=model, outcome="error", latency_sec=_elapsed)
+        except Exception:  # noqa: BLE001
+            pass
         raise
+
+    _elapsed = time.monotonic() - _t0
 
     logger.info(
         "google_genai_direct_complete_done",
         model=model_id,
         response_len=len(text),
     )
+
+    # Записываем метрики: success если text non-empty, empty иначе
+    try:
+        from ..core.prometheus_metrics import record_google_bypass_call
+
+        _outcome = "success" if text.strip() else "empty"
+        record_google_bypass_call(model=model, outcome=_outcome, latency_sec=_elapsed)
+    except Exception:  # noqa: BLE001
+        pass
+
     return text
 
 

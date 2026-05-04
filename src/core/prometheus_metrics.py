@@ -127,6 +127,73 @@ def record_agent_engine_fallback(from_engine: str, to_engine: str) -> None:
         pass
 
 
+# === Wave 20-B: Google direct bypass метрики. ===
+# Счётчик invocations + histogram latency + histogram thoughts-tokens.
+# Если prometheus_client недоступен — все объекты None, helper record_google_bypass_call()
+# делает None-check → no-op. Никогда не ломает hot path.
+try:
+    from prometheus_client import Counter as _CounterBypass  # type: ignore[import-not-found]
+    from prometheus_client import Histogram as _HistogramBypass  # type: ignore[import-not-found]
+
+    # Счётчик по модели и исходу (success / empty / error / fallback).
+    krab_google_direct_bypass_total = _CounterBypass(
+        "krab_google_direct_bypass_total",
+        "Google direct bypass invocations (обходит OpenClaw WebSocket transport regression)",
+        ["model", "outcome"],
+    )
+
+    # Полная latency одного bypass-вызова (от request до ответа).
+    # Buckets 0.5–55s: охватывают и быстрый gemini-3-flash (~1s) и thinking-heavy (~30s).
+    krab_google_direct_bypass_latency_seconds = _HistogramBypass(
+        "krab_google_direct_bypass_latency_seconds",
+        "Google direct bypass полная latency одного completion (секунды)",
+        ["model"],
+        buckets=(0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0),
+    )
+
+    # Токены на «думание» (thoughts) в Gemini extended thinking.
+    # Помогает мониторить quota-расход thinking-mode.
+    krab_google_direct_bypass_thoughts_tokens = _HistogramBypass(
+        "krab_google_direct_bypass_thoughts_tokens",
+        "Thoughts-токены, использованные Gemini extended thinking в bypass-вызове",
+        ["model"],
+        buckets=(0, 50, 100, 200, 500, 1000, 2000, 5000, 10000),
+    )
+except Exception:  # noqa: BLE001 - prometheus_client optional
+    krab_google_direct_bypass_total = None  # type: ignore[assignment]
+    krab_google_direct_bypass_latency_seconds = None  # type: ignore[assignment]
+    krab_google_direct_bypass_thoughts_tokens = None  # type: ignore[assignment]
+
+
+def record_google_bypass_call(
+    *,
+    model: str,
+    outcome: str,
+    latency_sec: float,
+    thoughts_tokens: int = 0,
+) -> None:
+    """Записать metrics для одного bypass invocation.
+
+    outcome ∈ {success, empty, error, fallback}.
+    Fail-safe: никогда не бросает исключения, не ломает hot path.
+    """
+    try:
+        m = (model or "unknown")[:80]
+        o = (outcome or "unknown")[:20]
+        if krab_google_direct_bypass_total is not None:
+            krab_google_direct_bypass_total.labels(model=m, outcome=o).inc()
+        if krab_google_direct_bypass_latency_seconds is not None:
+            krab_google_direct_bypass_latency_seconds.labels(model=m).observe(
+                max(0.0, float(latency_sec))
+            )
+        if thoughts_tokens > 0 and krab_google_direct_bypass_thoughts_tokens is not None:
+            krab_google_direct_bypass_thoughts_tokens.labels(model=m).observe(
+                float(thoughts_tokens)
+            )
+    except Exception:  # noqa: BLE001
+        pass  # никогда не ломаем hot path
+
+
 # === C6: Memory retrieval метрики (prometheus_client). ===
 # Регистрируем один раз на уровне модуля. Если prometheus_client отсутствует —
 # объекты становятся None, а вызывающий код (memory_retrieval.search) делает
