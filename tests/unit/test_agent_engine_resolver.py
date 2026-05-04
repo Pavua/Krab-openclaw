@@ -97,13 +97,11 @@ async def test_dispatch_on_hermes_healthy(monkeypatch):
 
     bridge = _healthy_hermes_bridge()
 
-    # get_hermes_bridge вызывается внутри функции через late import,
-    # патчим на уровне модуля integrations.hermes_acp_bridge.
-    # Wave 16-P: get_hermes_bridge теперь async — используем AsyncMock-style patch.
-    async def _async_bridge():
+    # Wave 16-P: get_hermes_bridge async → нужно patch на async функцию (new=, не return_value).
+    async def _fake_get_bridge():
         return bridge
 
-    with patch("src.integrations.hermes_acp_bridge.get_hermes_bridge", side_effect=_async_bridge):
+    with patch("src.integrations.hermes_acp_bridge.get_hermes_bridge", new=_fake_get_bridge):
         import importlib
         import src.core.agent_engine_resolver as mod
         importlib.reload(mod)
@@ -125,10 +123,10 @@ async def test_dispatch_on_hermes_unhealthy_fallback(monkeypatch):
 
     bridge = _unhealthy_hermes_bridge()
 
-    async def _async_bridge():
+    async def _fake_get_bridge():
         return bridge
 
-    with patch("src.integrations.hermes_acp_bridge.get_hermes_bridge", side_effect=_async_bridge):
+    with patch("src.integrations.hermes_acp_bridge.get_hermes_bridge", new=_fake_get_bridge):
         import importlib
         import src.core.agent_engine_resolver as mod
         importlib.reload(mod)
