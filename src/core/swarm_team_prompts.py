@@ -45,6 +45,32 @@ TEAM_PROMPTS: dict[str, str] = {
 }
 
 
+# Wave 16-D: in-memory overlay для A/B-тестирования промптов.
+# set_team_prompt_overlay() записывает, get_team_system_prompt() читает overlay
+# с приоритетом над TEAM_PROMPTS. Сброс — set_team_prompt_overlay(team, None).
+_PROMPT_OVERLAYS: dict[str, str] = {}
+
+
 def get_team_system_prompt(team_name: str) -> str:
-    """Возвращает system prompt для team-аккаунта."""
-    return TEAM_PROMPTS.get(team_name.lower(), _BASE.format(team=team_name))
+    """Возвращает system prompt для team-аккаунта.
+
+    Сначала проверяет overlay (A/B candidate), затем TEAM_PROMPTS, затем базовый шаблон.
+    """
+    key = team_name.lower()
+    # Overlay имеет наивысший приоритет — позволяет A/B применить кандидатный промпт
+    if key in _PROMPT_OVERLAYS and _PROMPT_OVERLAYS[key]:
+        return _PROMPT_OVERLAYS[key]
+    return TEAM_PROMPTS.get(key, _BASE.format(team=team_name))
+
+
+def set_team_prompt_overlay(team_name: str, prompt: str | None) -> None:
+    """Устанавливает (или снимает при prompt=None) overlay-промпт для команды.
+
+    Используется SkillCurator при apply кандидатного промпта после A/B-теста.
+    Изменение вступает в силу немедленно (in-memory, не персистируется).
+    """
+    key = team_name.lower()
+    if prompt:
+        _PROMPT_OVERLAYS[key] = prompt
+    else:
+        _PROMPT_OVERLAYS.pop(key, None)

@@ -22,7 +22,17 @@ from typing import Any, Callable
 from .logger import get_logger
 from .swarm_channels import swarm_channels
 from .swarm_memory import swarm_memory
+from .swarm_team_prompts import get_team_system_prompt
 from .swarm_tool_scope import format_tool_hint
+
+# Wave 16-D: lazy-импорт SkillCurator для A/B wire-up.
+# Если импорт не удался — логируем предупреждение и продолжаем без A/B.
+try:
+    from .skill_curator import skill_curator as _skill_curator
+except Exception as _sc_import_exc:  # noqa: BLE001
+    _skill_curator = None  # type: ignore[assignment]
+    logger_import = __import__("logging").getLogger(__name__)
+    logger_import.warning("skill_curator_import_failed: %s", _sc_import_exc)
 
 logger = get_logger(__name__)
 
@@ -152,9 +162,51 @@ class AgentRoom:
         накопленный контекст для следующих ролей.
         """
         t0 = time.monotonic()
+        started_at_iso = (
+            __import__("datetime")
+            .datetime.now(__import__("datetime").timezone.utc)
+            .isoformat(timespec="seconds")
+        )
         accumulated_context = ""
         round_results: list[dict[str, str]] = []
         delegation_results: list[str] = []
+
+        # -- Wave 16-D: A/B variant selection для team-specific промпта --------
+        # Если активен A/B-тест для данной команды — выбираем вариант детерминированно.
+        # Нет теста / импорт не удался → variant=None (baseline behaviour unchanged).
+        _ab_id: str | None = None
+        _ab_variant: str | None = None
+        _ab_team_prompt: str | None = None
+        if _team_name and _skill_curator is not None:
+            try:
+                _ab_id = _skill_curator.get_active_ab_test(_team_name)
+                if _ab_id:
+                    # round_id строится из topic + timestamp для детерминированности
+                    _round_id = f"{_team_name}:{topic[:60]}:{started_at_iso}"
+                    _ab_variant = _skill_curator.select_variant(_ab_id, _round_id)
+                    if _ab_variant == "candidate":
+                        _ab_data = _skill_curator.get_ab_test(_ab_id)
+                        if _ab_data:
+                            _ab_team_prompt = _ab_data.get(
+                                "candidate_prompt"
+                            ) or get_team_system_prompt(_team_name)
+                        else:
+                            _ab_team_prompt = get_team_system_prompt(_team_name)
+                    else:
+                        _ab_team_prompt = get_team_system_prompt(_team_name)
+                    logger.info(
+                        "agent_room_ab_variant_selected",
+                        team=_team_name,
+                        ab_id=_ab_id,
+                        variant=_ab_variant,
+                    )
+            except Exception as _ab_exc:  # noqa: BLE001
+                # A/B ошибка не должна ломать раунд
+                logger.warning("agent_room_ab_select_failed", team=_team_name, error=str(_ab_exc))
+                _ab_id = None
+                _ab_variant = None
+                _ab_team_prompt = None
+        # -----------------------------------------------------------------------
 
         # Inject контекста из памяти предыдущих прогонов
         memory_context = ""
@@ -202,14 +254,20 @@ class AgentRoom:
                 role_idx=role_idx,
             )
 
+            # Wave 16-D: первая роль (role_idx==0) получает A/B team_prompt как prefix.
+            # Остальные роли используют свои role-specific hint'ы без изменений.
+            ab_prefix = ""
+            if role_idx == 0 and _ab_team_prompt:
+                ab_prefix = f"{_ab_team_prompt}\n\n"
+
             if accumulated_context:
                 prompt = (
-                    f"{hint}{tool_hint}\n\n"
+                    f"{ab_prefix}{hint}{tool_hint}\n\n"
                     f"--- Контекст предыдущих ролей ---\n{accumulated_context}\n"
                     f"---\n\nТема: {topic}"
                 )
             else:
-                prompt = f"{hint}{tool_hint}\n\nТема: {topic}"
+                prompt = f"{ab_prefix}{hint}{tool_hint}\n\nТема: {topic}"
 
             try:
                 response = await router.route_query(prompt, skip_swarm=True)
@@ -346,6 +404,56 @@ class AgentRoom:
                     )
             except Exception:  # noqa: BLE001
                 pass
+
+            # Wave 16-D: записываем метрики раунда в A/B-тест (если активен)
+            if _ab_id and _ab_variant and _skill_curator is not None:
+                try:
+                    _finished_at_iso = (
+                        __import__("datetime")
+                        .datetime.now(__import__("datetime").timezone.utc)
+                        .isoformat(timespec="seconds")
+                    )
+                    _latency_s = round(time.monotonic() - t0, 3)
+                    # Считаем tool_calls из ответов ролей (упрощённо: ищем «Tool:»)
+                    _tool_calls_count = sum(r.get("text", "").count("Tool:") for r in round_results)
+                    # verifier_pass из heuristic verification (если был)
+                    _verifier_pass = False
+                    try:
+                        from .swarm_verifier import quick_heuristic_check as _qhc  # noqa: PLC0415
+
+                        _vr = _qhc(full_result)
+                        _verifier_pass = bool(_vr.passed)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _round_metric_id = f"{_team_name}:{topic[:60]}:{started_at_iso}"
+                    _skill_curator.record_round_metric(
+                        _ab_id,
+                        _round_metric_id,
+                        {
+                            "round_id": _round_metric_id,
+                            "variant": _ab_variant,
+                            "started_at": started_at_iso,
+                            "finished_at": _finished_at_iso,
+                            "cost_usd": None,  # cost_analytics not wired (future)
+                            "latency_s": _latency_s,
+                            "tool_calls": _tool_calls_count,
+                            "verifier_pass": _verifier_pass,
+                            "user_reaction": None,  # обновляется позже через reaction tracker
+                            "success": len(round_results) == len(self.roles),
+                        },
+                    )
+                    logger.info(
+                        "agent_room_ab_metric_recorded",
+                        team=_team_name,
+                        ab_id=_ab_id,
+                        variant=_ab_variant,
+                    )
+                except Exception as _ab_metric_exc:  # noqa: BLE001
+                    logger.warning(
+                        "agent_room_ab_record_metric_failed",
+                        team=_team_name,
+                        error=str(_ab_metric_exc),
+                    )
 
             # Task board: автоматическая фиксация раунда как completed task
             try:

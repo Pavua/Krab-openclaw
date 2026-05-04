@@ -47,6 +47,8 @@ class CuratorState:
     run_count: dict[str, int] = field(default_factory=dict)
     last_report_paths: dict[str, str] = field(default_factory=dict)
     last_proposal_paths: dict[str, str] = field(default_factory=dict)
+    # Wave 16-D: активные A/B-тесты {team → ab_id}
+    active_ab_tests: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "CuratorState":
@@ -68,6 +70,8 @@ class CuratorState:
             run_count={k: int(v) for k, v in (data.get("run_count") or {}).items()},
             last_report_paths=dict(data.get("last_report_paths") or {}),
             last_proposal_paths=dict(data.get("last_proposal_paths") or {}),
+            # Wave 16-D: backward-compat — отсутствующее поле → {}
+            active_ab_tests=dict(data.get("active_ab_tests") or {}),
         )
 
     def save_atomic(self, path: Path | None = None) -> Path:

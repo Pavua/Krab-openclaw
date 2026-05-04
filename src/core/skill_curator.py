@@ -549,6 +549,344 @@ class SkillCurator:
         data["_path"] = str(path)
         return data
 
+    # -- Wave 16-D: A/B framework primitives --------------------------------
+    #
+    # Хранение: ab_tests/<ab_id>.json — JSON-запись с полями:
+    #   team, ab_id, candidate_prompt, status (active|concluded|cancelled),
+    #   created_at, metrics: {round_id: {variant, cost_usd, latency_s, ...}}.
+    #
+    # Ключ `active_ab_tests` в CuratorState связывает team → ab_id (только одного
+    # активного теста на команду). Variant selection — детерминированное хэширование
+    # round_id, что даёт воспроизводимость без sticky-store.
+
+    def _ab_tests_dir(self) -> Path:
+        """Директория хранения ab_tests JSON-файлов."""
+        return self._base_dir / "ab_tests"
+
+    def _ab_path(self, ab_id: str) -> Path:
+        """Путь к JSON-файлу конкретного A/B-теста."""
+        return self._ab_tests_dir() / f"{ab_id}.json"
+
+    def _load_ab_test(self, ab_id: str) -> dict[str, Any] | None:
+        """Читает JSON A/B-теста по id. None если не найден или повреждён."""
+        path = self._ab_path(ab_id)
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            logger.warning("curator_ab_load_failed", ab_id=ab_id, error=str(exc))
+            return None
+
+    def _save_ab_test(self, data: dict[str, Any]) -> None:
+        """Атомарная запись JSON A/B-теста."""
+        ensure_curator_dirs(self._base_dir)
+        self._ab_tests_dir().mkdir(parents=True, exist_ok=True)
+        ab_id = data.get("ab_id", "unknown")
+        path = self._ab_path(ab_id)
+        try:
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("curator_ab_save_failed", ab_id=ab_id, error=str(exc))
+
+    def start_ab_test(self, team: str, candidate_prompt: str) -> str:
+        """Регистрирует новый A/B-тест для команды и возвращает ab_id.
+
+        Одновременно может быть только один активный тест на команду.
+        Возбуждает ValueError если для этой команды уже есть активный тест.
+
+        Args:
+            team: имя команды (traders/coders/analysts/creative).
+            candidate_prompt: текст кандидатного промпта (вариант B).
+
+        Returns:
+            Строковый ab_id вида ``<team>-<timestamp>``.
+        """
+        existing = self.get_active_ab_test(team)
+        if existing:
+            raise ValueError(
+                f"A/B-тест уже активен для команды {team!r}: {existing}. "
+                "Завершите или отмените текущий тест перед запуском нового."
+            )
+        ensure_curator_dirs(self._base_dir)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        ab_id = f"{_safe_team(team)}-{ts}"
+        data: dict[str, Any] = {
+            "ab_id": ab_id,
+            "team": team,
+            "candidate_prompt": candidate_prompt,
+            "status": "active",
+            "created_at": _now_iso(),
+            "concluded_at": None,
+            "metrics": {},  # round_id → metric dict
+        }
+        self._save_ab_test(data)
+        # Обновляем CuratorState: active_ab_tests[team] = ab_id
+        try:
+            state = CuratorState.load(CURATOR_STATE_PATH)
+            if not hasattr(state, "active_ab_tests"):
+                # Graceful если state.json старый без этого поля
+                object.__setattr__(state, "active_ab_tests", {})
+            state.active_ab_tests[team] = ab_id  # type: ignore[attr-defined]
+            state.save_atomic(CURATOR_STATE_PATH)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("curator_ab_state_update_failed", team=team, error=str(exc))
+        logger.info("curator_ab_test_started", team=team, ab_id=ab_id)
+        return ab_id
+
+    def get_active_ab_test(self, team: str) -> str | None:
+        """Возвращает ab_id активного теста для команды или None.
+
+        Проверяет файл на диске — если статус не 'active' (мог быть
+        concluded/cancelled напрямую), снимает запись из state.
+        """
+        try:
+            state = CuratorState.load(CURATOR_STATE_PATH)
+            active: dict[str, str] = getattr(state, "active_ab_tests", {}) or {}
+            ab_id = active.get(team)
+        except Exception:  # noqa: BLE001
+            return None
+        if not ab_id:
+            return None
+        # Верификация: файл на диске должен быть active
+        data = self._load_ab_test(ab_id)
+        if not data or data.get("status") != "active":
+            return None
+        return ab_id
+
+    def get_ab_test(self, ab_id: str) -> dict[str, Any] | None:
+        """Читает данные A/B-теста по id. None если не существует."""
+        return self._load_ab_test(ab_id)
+
+    def select_variant(self, ab_id: str, round_id: str) -> str:
+        """Детерминированно выбирает вариант ('control' или 'candidate').
+
+        Хэшируется пара (ab_id, round_id) через SHA-256 → [0, 1).
+        Порог 0.5 — равный 50/50 split. Детерминированность позволяет
+        воспроизвести назначение без хранения per-round журнала.
+
+        Args:
+            ab_id: идентификатор A/B-теста.
+            round_id: строковый id раунда (topic + timestamp или UUID).
+
+        Returns:
+            'control' или 'candidate'.
+        """
+        import hashlib  # noqa: PLC0415 — lazy import (стандартная библиотека)
+
+        key = f"{ab_id}:{round_id}"
+        digest = hashlib.sha256(key.encode("utf-8")).digest()
+        position = int.from_bytes(digest, "big") / float(1 << 256)
+        variant = "candidate" if position < 0.5 else "control"
+        logger.debug("curator_ab_variant_selected", ab_id=ab_id, round_id=round_id, variant=variant)
+        return variant
+
+    def record_round_metric(self, ab_id: str, round_id: str, metrics: dict[str, Any]) -> None:
+        """Записывает метрики раунда в JSON A/B-теста.
+
+        Best-effort: не бросает исключений. Если тест не найден или завершён —
+        предупреждение в лог и возврат. Метрики записываются как
+        ``metrics[round_id] = {...}``.
+
+        Args:
+            ab_id: идентификатор A/B-теста.
+            round_id: строковый id раунда.
+            metrics: словарь с полями variant, cost_usd, latency_s, tool_calls,
+                     verifier_pass, success и т.д.
+        """
+        data = self._load_ab_test(ab_id)
+        if not data:
+            logger.warning("curator_ab_record_metric_not_found", ab_id=ab_id, round_id=round_id)
+            return
+        if data.get("status") != "active":
+            logger.warning(
+                "curator_ab_record_metric_inactive",
+                ab_id=ab_id,
+                status=data.get("status"),
+                round_id=round_id,
+            )
+            return
+        existing_metrics: dict[str, Any] = data.get("metrics") or {}
+        existing_metrics[round_id] = {
+            **metrics,
+            "recorded_at": _now_iso(),
+        }
+        data["metrics"] = existing_metrics
+        self._save_ab_test(data)
+        logger.debug("curator_ab_metric_recorded", ab_id=ab_id, round_id=round_id)
+
+    def evaluate_ab_test(self, ab_id: str) -> dict[str, Any]:
+        """Вычисляет агрегаты по метрикам A/B-теста.
+
+        Возвращает словарь с ключами:
+        - ``ab_id``, ``team``, ``status``
+        - ``control``, ``candidate`` — агрегаты по группам:
+            ``count``, ``success_rate``, ``avg_latency_s``, ``avg_cost_usd``,
+            ``verifier_pass_rate``, ``avg_tool_calls``
+        - ``recommendation``: 'apply_candidate' | 'keep_control' | 'inconclusive'
+        - ``rounds_total``
+
+        При недостатке данных (< 2 раундов на группу) рекомендация 'inconclusive'.
+        """
+        data = self._load_ab_test(ab_id)
+        if not data:
+            return {"error": f"A/B-тест {ab_id!r} не найден"}
+
+        metrics: dict[str, dict] = data.get("metrics") or {}
+        groups: dict[str, list[dict]] = {"control": [], "candidate": []}
+        for m in metrics.values():
+            variant = m.get("variant", "")
+            if variant in groups:
+                groups[variant].append(m)
+
+        def _agg(rounds: list[dict]) -> dict[str, Any]:
+            if not rounds:
+                return {"count": 0}
+            count = len(rounds)
+            successes = sum(1 for r in rounds if r.get("success") or r.get("verifier_pass"))
+            latencies = [float(r["latency_s"]) for r in rounds if "latency_s" in r]
+            costs = [float(r["cost_usd"]) for r in rounds if "cost_usd" in r]
+            tool_calls = [int(r.get("tool_calls") or 0) for r in rounds]
+            vp = [r for r in rounds if r.get("verifier_pass")]
+            return {
+                "count": count,
+                "success_rate": round(successes / count, 4),
+                "avg_latency_s": round(sum(latencies) / len(latencies), 3) if latencies else None,
+                "avg_cost_usd": round(sum(costs) / len(costs), 6) if costs else None,
+                "verifier_pass_rate": round(len(vp) / count, 4),
+                "avg_tool_calls": round(sum(tool_calls) / count, 2),
+            }
+
+        ctrl = _agg(groups["control"])
+        cand = _agg(groups["candidate"])
+
+        # Рекомендация: сравниваем success_rate (основная метрика)
+        recommendation = "inconclusive"
+        if ctrl.get("count", 0) >= 2 and cand.get("count", 0) >= 2:
+            ctrl_sr = ctrl.get("success_rate") or 0.0
+            cand_sr = cand.get("success_rate") or 0.0
+            if cand_sr > ctrl_sr + 0.05:
+                recommendation = "apply_candidate"
+            elif ctrl_sr >= cand_sr:
+                recommendation = "keep_control"
+
+        return {
+            "ab_id": ab_id,
+            "team": data.get("team"),
+            "status": data.get("status"),
+            "rounds_total": len(metrics),
+            "control": ctrl,
+            "candidate": cand,
+            "recommendation": recommendation,
+        }
+
+    def evaluate_ab_test_and_apply(self, ab_id: str) -> dict[str, Any]:
+        """Вычисляет результат и, если рекомендуется apply_candidate,
+        применяет кандидатный промпт через overlay в swarm_team_prompts.
+
+        Завершает тест (status → 'concluded') в обоих случаях.
+
+        Returns:
+            Словарь из evaluate_ab_test + поле 'applied': bool.
+        """
+        result = self.evaluate_ab_test(ab_id)
+        if "error" in result:
+            return result
+        applied = False
+        if result.get("recommendation") == "apply_candidate":
+            data = self._load_ab_test(ab_id)
+            if data:
+                team = data.get("team", "")
+                candidate_prompt = data.get("candidate_prompt", "")
+                if team and candidate_prompt:
+                    try:
+                        from .swarm_team_prompts import set_team_prompt_overlay  # noqa: PLC0415
+
+                        set_team_prompt_overlay(team, candidate_prompt)
+                        applied = True
+                        logger.info(
+                            "curator_ab_candidate_applied",
+                            ab_id=ab_id,
+                            team=team,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "curator_ab_apply_overlay_failed",
+                            ab_id=ab_id,
+                            team=team,
+                            error=str(exc),
+                        )
+        # Завершаем тест
+        self.conclude_ab_test(ab_id)
+        result["applied"] = applied
+        return result
+
+    def conclude_ab_test(self, ab_id: str) -> None:
+        """Помечает тест как concluded и снимает из active_ab_tests в state."""
+        data = self._load_ab_test(ab_id)
+        if not data:
+            return
+        data["status"] = "concluded"
+        data["concluded_at"] = _now_iso()
+        self._save_ab_test(data)
+        team = data.get("team", "")
+        self._remove_active_ab_test(team, ab_id)
+        logger.info("curator_ab_test_concluded", ab_id=ab_id, team=team)
+
+    def cancel_ab_test(self, ab_id: str) -> None:
+        """Отменяет активный A/B-тест (status → 'cancelled')."""
+        data = self._load_ab_test(ab_id)
+        if not data:
+            return
+        data["status"] = "cancelled"
+        data["concluded_at"] = _now_iso()
+        self._save_ab_test(data)
+        team = data.get("team", "")
+        self._remove_active_ab_test(team, ab_id)
+        logger.info("curator_ab_test_cancelled", ab_id=ab_id, team=team)
+
+    def list_ab_tests(self, team: str | None = None) -> list[dict[str, Any]]:
+        """Список всех A/B-тестов (опционально фильтр по команде), newest first."""
+        ab_dir = self._ab_tests_dir()
+        if not ab_dir.exists():
+            return []
+        results: list[dict[str, Any]] = []
+        for fp in sorted(ab_dir.glob("*.json"), reverse=True):
+            try:
+                data = json.loads(fp.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if team and (data.get("team") or "").lower() != team.lower():
+                continue
+            # Краткое summary без полных метрик
+            results.append(
+                {
+                    "ab_id": data.get("ab_id"),
+                    "team": data.get("team"),
+                    "status": data.get("status"),
+                    "created_at": data.get("created_at"),
+                    "concluded_at": data.get("concluded_at"),
+                    "rounds_total": len(data.get("metrics") or {}),
+                }
+            )
+        return results
+
+    def _remove_active_ab_test(self, team: str, ab_id: str) -> None:
+        """Снимает запись active_ab_tests[team] из CuratorState если совпадает."""
+        try:
+            state = CuratorState.load(CURATOR_STATE_PATH)
+            active: dict[str, str] = getattr(state, "active_ab_tests", {}) or {}
+            if active.get(team) == ab_id:
+                active.pop(team, None)
+                # Сохраняем обновлённый active_ab_tests через setattr
+                try:
+                    object.__setattr__(state, "active_ab_tests", active)
+                except (TypeError, AttributeError):
+                    state.active_ab_tests = active  # type: ignore[attr-defined]
+                state.save_atomic(CURATOR_STATE_PATH)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("curator_ab_remove_active_failed", team=team, error=str(exc))
+
     # -- placeholders для Step 3-4 ------------------------------------------
 
     async def apply_with_approval(
