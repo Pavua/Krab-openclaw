@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # 1. is_google_model
 # ---------------------------------------------------------------------------
@@ -155,11 +154,13 @@ async def test_complete_direct_with_system_message():
 
     mock_client_cls = MagicMock(return_value=mock_client_instance)
 
-    import src.integrations.google_genai_direct as gd_module
     import google.genai as real_genai
 
-    with patch.object(gd_module, "_resolve_api_key", return_value="AIzaFakeKey"), patch.object(
-        real_genai, "Client", mock_client_cls
+    import src.integrations.google_genai_direct as gd_module
+
+    with (
+        patch.object(gd_module, "_resolve_api_key", return_value="AIzaFakeKey"),
+        patch.object(real_genai, "Client", mock_client_cls),
     ):
         result = await gd_module.complete_direct(
             model="google/gemini-3-pro-preview",
@@ -248,3 +249,149 @@ async def test_health_check_direct_fail_on_exception():
         ok = await google_genai_direct.health_check_direct(api_key=None)
 
     assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# 7. Wave 18-I: retry с thinking_budget=0 при empty response
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_complete_direct_retries_on_empty_with_thinking_disabled():
+    """Wave 18-I: первый вызов возвращает empty text → retry с ThinkingConfig(thinking_budget=0) → 'Привет'."""
+    import google.genai as real_genai
+    from google.genai import types as real_genai_types
+
+    import src.integrations.google_genai_direct as gd_module
+
+    # Первый response: пустой text (thinking-only)
+    mock_response_empty = MagicMock()
+    mock_response_empty.text = ""
+    mock_response_empty.usage_metadata = MagicMock(prompt_token_count=10, thoughts_token_count=288)
+
+    # Второй response (no-thinking retry): нормальный текст
+    mock_response_ok = MagicMock()
+    mock_response_ok.text = "Привет"
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.models.generate_content.side_effect = [
+        mock_response_empty,
+        mock_response_ok,
+    ]
+    mock_client_cls = MagicMock(return_value=mock_client_instance)
+
+    with (
+        patch.object(gd_module, "_resolve_api_key", return_value="AIzaFakeKey"),
+        patch.object(real_genai, "Client", mock_client_cls),
+    ):
+        result = await gd_module.complete_direct(
+            model="google/gemini-3-pro-preview",
+            messages=[{"role": "user", "content": "ping"}],
+            timeout_sec=30.0,
+        )
+
+    assert result == "Привет"
+    # generate_content должен быть вызван дважды: первый раз без thinking config, второй с ним
+    assert mock_client_instance.models.generate_content.call_count == 2
+
+    # Проверяем что второй вызов содержит thinking_config с thinking_budget=0
+    second_call_kwargs = mock_client_instance.models.generate_content.call_args_list[1]
+    config_arg = second_call_kwargs.kwargs.get("config") or (
+        second_call_kwargs.args[2] if len(second_call_kwargs.args) > 2 else None
+    )
+    assert config_arg is not None, "второй вызов должен иметь config с thinking_config"
+    thinking_cfg = getattr(config_arg, "thinking_config", None)
+    assert thinking_cfg is not None, "config должен содержать thinking_config"
+    assert getattr(thinking_cfg, "thinking_budget", None) == 0
+
+
+@pytest.mark.asyncio
+async def test_complete_direct_returns_empty_when_retry_also_empty():
+    """Wave 18-I: если retry тоже возвращает empty text → вернуть пустую строку."""
+    import google.genai as real_genai
+
+    import src.integrations.google_genai_direct as gd_module
+
+    # Оба вызова возвращают пустой text
+    mock_response_empty1 = MagicMock()
+    mock_response_empty1.text = ""
+    mock_response_empty1.usage_metadata = MagicMock(prompt_token_count=5, thoughts_token_count=50)
+
+    mock_response_empty2 = MagicMock()
+    mock_response_empty2.text = ""
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.models.generate_content.side_effect = [
+        mock_response_empty1,
+        mock_response_empty2,
+    ]
+    mock_client_cls = MagicMock(return_value=mock_client_instance)
+
+    with (
+        patch.object(gd_module, "_resolve_api_key", return_value="AIzaFakeKey"),
+        patch.object(real_genai, "Client", mock_client_cls),
+    ):
+        result = await gd_module.complete_direct(
+            model="google/gemini-3-pro-preview",
+            messages=[{"role": "user", "content": "ping"}],
+            timeout_sec=30.0,
+        )
+
+    assert result == ""
+    # Оба вызова были выполнены (retry произошёл)
+    assert mock_client_instance.models.generate_content.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_complete_direct_graceful_degrade_when_thinking_config_unavailable():
+    """Wave 18-I: если ThinkingConfig недоступен в SDK — graceful degrade, возвращаем ''.
+
+    Симулируем старую версию SDK без ThinkingConfig через patch на genai_types.
+    """
+    import google.genai as real_genai
+    from google.genai import types as real_genai_types
+
+    import src.integrations.google_genai_direct as gd_module
+
+    # Первый response: пустой text
+    mock_response_empty = MagicMock()
+    mock_response_empty.text = ""
+    mock_response_empty.usage_metadata = MagicMock(prompt_token_count=5, thoughts_token_count=50)
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.models.generate_content.return_value = mock_response_empty
+    mock_client_cls = MagicMock(return_value=mock_client_instance)
+
+    # Патчим types чтобы ThinkingConfig отсутствовал (старая версия SDK)
+    mock_types_no_thinking = MagicMock(spec=real_genai_types)
+    del mock_types_no_thinking.ThinkingConfig  # убираем атрибут
+
+    with (
+        patch.object(gd_module, "_resolve_api_key", return_value="AIzaFakeKey"),
+        patch.object(real_genai, "Client", mock_client_cls),
+    ):
+        # Патчим genai_types внутри модуля через sys.modules подмену при импорте
+        # Проще: patch на google.genai.types.ThinkingConfig → None через setattr
+        original_thinking_config = getattr(real_genai_types, "ThinkingConfig", None)
+        try:
+            # Временно убираем ThinkingConfig из types
+            real_genai_types.ThinkingConfig = None  # type: ignore[attr-defined]
+            result = await gd_module.complete_direct(
+                model="google/gemini-3-pro-preview",
+                messages=[{"role": "user", "content": "ping"}],
+                timeout_sec=30.0,
+            )
+        finally:
+            # Восстанавливаем
+            if original_thinking_config is not None:
+                real_genai_types.ThinkingConfig = original_thinking_config
+            else:
+                try:
+                    del real_genai_types.ThinkingConfig
+                except AttributeError:
+                    pass
+
+    # Без ThinkingConfig — возвращаем пустую строку (graceful degrade, NO retry)
+    assert result == ""
+    # generate_content вызван только один раз (retry не произошёл)
+    assert mock_client_instance.models.generate_content.call_count == 1
