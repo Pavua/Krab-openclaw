@@ -3238,7 +3238,10 @@ class OpenClawClient:
                 # Wave 18-D: bypass проверяется КАЖДЫЙ attempt (не только initial),
                 # чтобы fallback'и из chain тоже шли через direct SDK для google/* моделей.
                 # Wave 18-B имел bypass только перед loop → срабатывал только если primary = google/*.
-                if not _google_bypass_attempted and not has_photo:
+                # Wave 18-E (Session 36 fix): has_photo НЕ был определён в этом scope (только images
+                # параметр) — bypass попадал в except NameError silent. Теперь вычисляем явно.
+                _has_photo_bypass = bool(images)
+                if not _google_bypass_attempted and not _has_photo_bypass:
                     try:
                         if (
                             _google_bypass_enabled()
@@ -3295,8 +3298,15 @@ class OpenClawClient:
                                     error=str(_bypass_exc),
                                     error_type=type(_bypass_exc).__name__,
                                 )
-                    except (NameError, ImportError):
-                        pass  # SDK imports failed (init block), silent fall through
+                    except (NameError, ImportError) as _bypass_init_exc:
+                        # Wave 18-E: explicit log в этот silent fall-through, чтобы
+                        # диагностические gaps как `has_photo` undefined было видно.
+                        logger.warning(
+                            "google_direct_bypass_init_skip",
+                            error=str(_bypass_init_exc),
+                            error_type=type(_bypass_init_exc).__name__,
+                            model=attempt_model,
+                        )
 
                 route_channel = (
                     "openclaw_local"
