@@ -28,6 +28,43 @@ logger = get_logger(__name__)
 # Таймаут ожидания graceful shutdown subprocess (сек)
 _TERMINATE_TIMEOUT = 5
 
+
+def _resolve_hermes_binary() -> str | None:
+    """Поиск hermes executable: env → PATH → ~/.hermes/bin/.
+
+    Порядок приоритета (Wave 19-C):
+      1. KRAB_HERMES_BINARY — явный override из .env
+      2. shutil.which("hermes") — системный PATH
+      3. ~/.hermes/bin/hermes — стандартное место Phase A install
+
+    Возвращает абсолютный путь к executable или None если не найден.
+    """
+    # 1. Явный override через env
+    env_path = os.environ.get("KRAB_HERMES_BINARY")
+    if env_path:
+        p = Path(env_path)
+        if p.is_file() and os.access(p, os.X_OK):
+            return str(p)
+        # env выставлен, но путь невалиден — логируем, не падаем
+        logger.warning(
+            "hermes_binary_env_invalid",
+            krab_hermes_binary=env_path,
+            hint="KRAB_HERMES_BINARY указывает на несуществующий/не-executable файл",
+        )
+
+    # 2. Системный PATH
+    found = shutil.which("hermes")
+    if found:
+        return found
+
+    # 3. Стандартное место Phase A install
+    user_path = Path.home() / ".hermes" / "bin" / "hermes"
+    if user_path.is_file() and os.access(user_path, os.X_OK):
+        return str(user_path)
+
+    return None
+
+
 # TTL кэша health probe (сек)
 _HEALTH_CACHE_TTL = 60.0
 
@@ -45,8 +82,9 @@ class HermesACPBridge:
         binary: str | None = None,
         mcp_servers: list[dict] | None = None,
     ) -> None:
-        # Приоритет: аргумент -> env -> auto-detect
-        self._binary = binary or os.environ.get("KRAB_HERMES_BINARY") or self._auto_detect_binary()
+        # Приоритет: явный аргумент → _resolve_hermes_binary() (env > PATH > ~/.hermes/bin)
+        # Wave 19-C: используем _resolve_hermes_binary() вместо _auto_detect_binary()
+        self._binary = binary or _resolve_hermes_binary() or self._auto_detect_binary()
         self._mcp_servers = list(mcp_servers or [])
         self._proc: asyncio.subprocess.Process | None = None
         self._client: Any = None  # acp.Client instance — Phase C
@@ -120,10 +158,19 @@ class HermesACPBridge:
                 return cached
 
         if not self._binary_available():
+            # Wave 19-C: подсказываем про install script при отсутствии binary
+            logger.info(
+                "hermes_binary_missing",
+                binary=self._binary,
+                hint="Запусти scripts/install_hermes.sh для установки Hermes",
+            )
             result = EngineHealth(
                 engine="hermes",
                 is_healthy=False,
-                error=f"hermes binary not found: {self._binary}",
+                error=(
+                    f"hermes binary not found: {self._binary}. "
+                    "Run scripts/install_hermes.sh to install."
+                ),
                 last_check_at=_now_iso(),
             )
         else:

@@ -177,11 +177,19 @@ def test_get_hermes_bridge_singleton() -> None:
 def test_bridge_auto_detect_binary_uses_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """KRAB_HERMES_BINARY env переопределяет auto-detect."""
-    custom = str(tmp_path / "my_hermes")
-    monkeypatch.setenv("KRAB_HERMES_BINARY", custom)
+    """KRAB_HERMES_BINARY env переопределяет auto-detect.
+
+    Wave 19-C: _resolve_hermes_binary() требует реальный executable файл,
+    поэтому создаём его с +x перед выставлением env.
+    """
+    import stat
+
+    custom = tmp_path / "my_hermes"
+    custom.write_text("#!/bin/bash\necho hermes")
+    custom.chmod(custom.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("KRAB_HERMES_BINARY", str(custom))
     bridge = HermesACPBridge()
-    assert bridge._binary == custom
+    assert bridge._binary == str(custom)
 
 
 def test_bridge_auto_detect_binary_arg_wins(
