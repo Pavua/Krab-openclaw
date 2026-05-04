@@ -64,7 +64,8 @@ async def get_engine_for_route(
         try:
             from ..integrations.hermes_acp_bridge import get_hermes_bridge
 
-            bridge = get_hermes_bridge()
+            # Wave 16-P: get_hermes_bridge async (asyncio.Lock + double-checked locking)
+            bridge = await get_hermes_bridge()
             health = await bridge.health()
             if health.is_healthy:
                 logger.info(
