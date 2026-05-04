@@ -24,6 +24,21 @@ from ..core.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _add_sentry_breadcrumb(category: str, message: str, level: str = "info", **data: Any) -> None:
+    """Best-effort Sentry breadcrumb для bypass trace. Silent если sentry_sdk не установлен."""
+    try:
+        import sentry_sdk  # type: ignore[import-not-found]
+
+        sentry_sdk.add_breadcrumb(
+            category=f"krab.bypass.{category}",
+            message=message,
+            level=level,
+            data=data,
+        )
+    except (ImportError, Exception):  # noqa: BLE001 — breadcrumbs не должны ронять hot-path
+        pass
+
+
 def is_google_direct_enabled() -> bool:
     """Включён ли bypass. Default ON (opt-out через env=0)."""
     return str(os.environ.get("KRAB_GOOGLE_DIRECT_BYPASS_ENABLED", "1")).strip().lower() in {
@@ -164,6 +179,14 @@ async def complete_direct(
         contents_count=len(contents),
         has_system=bool(system_instruction),
     )
+    # Breadcrumb: старт bypass — для post-mortem trace (когда начался bypass и с какой моделью)
+    _add_sentry_breadcrumb(
+        "start",
+        f"Google direct bypass для {model_id}",
+        model=model_id,
+        has_system=bool(system_instruction),
+        contents_count=len(contents),
+    )
 
     def _blocking_complete() -> str:
         """Синхронный вызов генерации в thread pool."""
@@ -221,6 +244,15 @@ async def complete_direct(
                 prompt_token_count=prompt_tokens,
                 thoughts_token_count=thoughts_tokens,
             )
+            # Breadcrumb: пустой ответ → retry с thinking_budget=0
+            # (Wave 18-I: Gemini 3-pro тратит весь output budget на thinking при коротких prompts)
+            _add_sentry_breadcrumb(
+                "empty_retry",
+                "Empty response — retrying с thinking_budget=0",
+                model=model_id,
+                thoughts_tokens=thoughts_tokens,
+                prompt_tokens=prompt_tokens,
+            )
 
             # Проверяем доступность ThinkingConfig в установленной версии SDK
             thinking_config_cls = getattr(genai_types, "ThinkingConfig", None)
@@ -261,6 +293,15 @@ async def complete_direct(
     except asyncio.TimeoutError:
         _elapsed = time.monotonic() - _t0
         logger.warning("google_genai_direct_timeout", model=model_id, timeout_sec=timeout_sec)
+        # Breadcrumb: таймаут bypass — видно в Sentry trace без отдельного event
+        _add_sentry_breadcrumb(
+            "error",
+            f"Bypass timeout после {round(_elapsed, 2)}s",
+            level="warning",
+            model=model_id,
+            error="TimeoutError",
+            latency_sec=round(_elapsed, 2),
+        )
         # Таймаут — записываем как error (timeout variant)
         try:
             from ..core.prometheus_metrics import record_google_bypass_call
@@ -272,6 +313,16 @@ async def complete_direct(
     except Exception as exc:  # noqa: BLE001
         _elapsed = time.monotonic() - _t0
         logger.warning("google_genai_direct_error", model=model_id, error=str(exc))
+        # Breadcrumb: исключение bypass — error_type помогает сортировать по причине
+        _add_sentry_breadcrumb(
+            "error",
+            f"Bypass failed: {type(exc).__name__}",
+            level="warning",
+            model=model_id,
+            error=str(exc),
+            error_type=type(exc).__name__,
+            latency_sec=round(_elapsed, 2),
+        )
         # Исключение — записываем outcome=error
         try:
             from ..core.prometheus_metrics import record_google_bypass_call
@@ -287,6 +338,15 @@ async def complete_direct(
         "google_genai_direct_complete_done",
         model=model_id,
         response_len=len(text),
+    )
+    # Breadcrumb: успешный bypass — latency + response_len для post-mortem анализа
+    _add_sentry_breadcrumb(
+        "success",
+        "Bypass completed",
+        model=model_id,
+        latency_sec=round(_elapsed, 2),
+        response_len=len(text),
+        is_empty=not text.strip(),
     )
 
     # Записываем метрики: success если text non-empty, empty иначе

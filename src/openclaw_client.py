@@ -3262,6 +3262,11 @@ class OpenClawClient:
                                 chat_id=chat_id,
                                 attempt=attempt + 1,
                             )
+                            # Wave 20-E: transaction tags — bypass.engaged позволяет фильтровать
+                            # транзакции в Sentry по наличию bypass attempt
+                            _sentry_tag("bypass.engaged", "1")
+                            _sentry_tag("bypass.model", attempt_model)
+                            _bypass_t0 = __import__("time").monotonic()
                             self._set_last_runtime_route(
                                 channel="google_direct",
                                 model=attempt_model,
@@ -3283,6 +3288,12 @@ class OpenClawClient:
                                     sanitized = self._sanitize_assistant_response(_direct_text)
                                     if sanitized:
                                         _direct_text = sanitized
+                                    # Tag: bypass success — позволяет отфильтровать успешные bypass
+                                    _bypass_elapsed = __import__("time").monotonic() - _bypass_t0
+                                    _sentry_tag("bypass.outcome", "success")
+                                    _sentry_tag(
+                                        "bypass.latency_sec", str(round(_bypass_elapsed, 2))
+                                    )
                                     self._set_last_runtime_route(
                                         channel="google_direct",
                                         model=attempt_model,
@@ -3294,11 +3305,21 @@ class OpenClawClient:
                                     yield _direct_text
                                     return
                                 else:
+                                    # Tag: bypass вернул пустой ответ → fallback на OpenClaw
+                                    _bypass_elapsed = __import__("time").monotonic() - _bypass_t0
+                                    _sentry_tag("bypass.outcome", "empty")
+                                    _sentry_tag(
+                                        "bypass.latency_sec", str(round(_bypass_elapsed, 2))
+                                    )
                                     logger.warning(
                                         "google_direct_bypass_empty_response_falling_back",
                                         model=attempt_model,
                                     )
                             except Exception as _bypass_exc:  # noqa: BLE001
+                                # Tag: bypass exception → fallback на OpenClaw
+                                _bypass_elapsed = __import__("time").monotonic() - _bypass_t0
+                                _sentry_tag("bypass.outcome", "error")
+                                _sentry_tag("bypass.latency_sec", str(round(_bypass_elapsed, 2)))
                                 logger.warning(
                                     "google_direct_bypass_failed_falling_back",
                                     model=attempt_model,
