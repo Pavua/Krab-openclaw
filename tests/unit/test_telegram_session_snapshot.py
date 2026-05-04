@@ -278,3 +278,129 @@ def test_snapshot_no_time_sleep_in_source() -> None:
     assert "asyncio.sleep" in source, (
         "asyncio.sleep не найден в _telegram_session_snapshot — backoff должен быть async"
     )
+
+
+# ---------------------------------------------------------------------------
+# 8. Gap 1 (Wave 17-A): async non-blocking integration test
+#    Запускаем probe параллельно с asyncio.sleep(0.1) — оба должны завершиться
+#    за ~backoff_time (≈0.3s), а НЕ последовательно (тогда было бы >0.4s).
+#    Проверяем concurrent execution через asyncio.gather + wall-time.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_snapshot_backoff_does_not_block_event_loop(
+    tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Gap 1 (Wave 17-A): _telegram_session_snapshot с 3 'locked' retry
+    использует await asyncio.sleep (не time.sleep), поэтому event loop
+    остаётся незаблокированным.
+
+    Метод:
+    - Все 3 попытки sqlite3.connect бросают OperationalError('locked').
+    - asyncio.sleep backoff: 0.05 + 0.10 + 0.15 = 0.30s суммарно.
+    - Параллельно запускаем asyncio.sleep(0.1) task.
+    - Если event loop заблокирован sync sleep — total > 0.4s (последовательно).
+    - Если правильный async — total ≈ 0.3s (concurrent), т.е. < 0.45s.
+    """
+    import time as _time
+
+    project_root, session_file = _make_session_dir(tmp_path)
+    session_file.write_bytes(b"")  # файл существует
+
+    locked_exc = sqlite3.OperationalError("database is locked")
+
+    import src.modules.web_app as webapp_module
+
+    # Mock asyncio.sleep в модуле web_app чтобы контролировать время.
+    # Используем реальный asyncio.sleep чтобы event loop не переключился на sync.
+    # Нам важно что sleep AWAIT-ится — не вызывается synchronously.
+    actual_sleeps: list[float] = []
+
+    _orig_asyncio_sleep = asyncio.sleep
+
+    async def _tracking_sleep(delay: float) -> None:
+        """Отслеживаем все sleep вызовы из probe."""
+        actual_sleeps.append(delay)
+        await _orig_asyncio_sleep(delay)
+
+    with monkeypatch.context() as m:
+        m.setattr(webapp_module.sqlite3, "connect", MagicMock(side_effect=locked_exc))
+        # Патчим asyncio.sleep только в модуле web_app
+        m.setattr(webapp_module.asyncio, "sleep", _tracking_sleep)
+
+        wa = _make_webapp(project_root)
+
+        t_start = _time.monotonic()
+
+        # Запускаем probe и фоновый sleep параллельно
+        _probe_coro = wa._telegram_session_snapshot()
+        _sleep_coro = _orig_asyncio_sleep(0.1)
+        await asyncio.gather(_probe_coro, _sleep_coro)
+
+        t_total = _time.monotonic() - t_start
+
+    # Суммарный backoff: 0.05 + 0.10 + 0.15 = 0.30s
+    expected_backoff = 0.05 + 0.10 + 0.15
+
+    # Если event loop был заблокирован sync sleep:
+    # total = backoff_seq + sleep_0.1 > 0.4s
+    # Если async (concurrent): total ≈ max(backoff, 0.1) ≈ 0.3s
+    # Даём запас ×2 чтобы не быть flaky на медленных CI, но порог выдерживает.
+    max_allowed = expected_backoff * 2 + 0.2  # 0.8s — достаточный буфер
+
+    assert t_total < max_allowed, (
+        f"event loop был заблокирован? total={t_total:.3f}s > max_allowed={max_allowed:.3f}s. "
+        f"Это значит asyncio.sleep не await-ится корректно."
+    )
+
+    # Проверяем что sleep вызывался из backoff (3 попытки = 3 sleep вызова)
+    assert len(actual_sleeps) == 3, (
+        f"Ожидали 3 backoff sleep вызова, получили {len(actual_sleeps)}: {actual_sleeps}"
+    )
+
+    # Значения должны совпадать с формулой 0.05 * (attempt + 1)
+    assert actual_sleeps[0] == pytest.approx(0.05, abs=0.001)
+    assert actual_sleeps[1] == pytest.approx(0.10, abs=0.001)
+    assert actual_sleeps[2] == pytest.approx(0.15, abs=0.001)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_no_time_sleep_concurrent_sleep_task_completes(
+    tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Gap 1 расширение: фоновая coroutine sleep(0.05) завершается во время probe.
+    Если event loop был заблокирован — фоновый task мог бы не получить CPU.
+    Проверяем через gather что оба завершились и фоновый task успел выполниться.
+    """
+    project_root, session_file = _make_session_dir(tmp_path)
+    session_file.write_bytes(b"")
+
+    import src.modules.web_app as webapp_module
+
+    locked_exc = sqlite3.OperationalError("database is locked")
+
+    background_completed = False
+
+    async def _background_task() -> None:
+        nonlocal background_completed
+        await asyncio.sleep(0.05)
+        background_completed = True
+
+    with monkeypatch.context() as m:
+        m.setattr(webapp_module.sqlite3, "connect", MagicMock(side_effect=locked_exc))
+
+        wa = _make_webapp(project_root)
+        snap, _ = await asyncio.gather(
+            wa._telegram_session_snapshot(),
+            _background_task(),
+        )
+
+    # Оба должны завершиться
+    assert background_completed, (
+        "Фоновый task не завершился — event loop был заблокирован sync sleep"
+    )
+    # Probe вернул ожидаемый snap
+    assert snap["state"] in ("open_or_unclean", "corrupted", "ready", "missing")

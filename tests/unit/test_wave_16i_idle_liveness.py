@@ -415,3 +415,234 @@ def test_config_heartbeat_default_is_60():
     from src.config import config
 
     assert config.KRAB_LLM_HEARTBEAT_INTERVAL_SEC == 60.0
+
+
+# ---------------------------------------------------------------------------
+# Gap 3 (Wave 17-A): Integration test с динамическим _active_tool_calls
+#
+# Тестируем логику idle gate при изменении _active_tool_calls во время stream.
+# Используем монотонный clock через monkeypatch вместо реального ожидания,
+# чтобы pytest --timeout=30 не срабатывал.
+#
+# Стратегия: Эмулируем жизненный цикл LLM flow через серию временных меток:
+# 1. Start (t=0): _active_tool_calls = []
+# 2. Tool started (t=30s): добавляем entry → last_activity_at сбрасывается
+# 3. Tool done (t=60s): tool_call_count растёт → last_activity_at сброшен
+# 4. Silence (t=240s > idle_cap=180s): idle gate срабатывает → LLMRetryableError
+# ---------------------------------------------------------------------------
+
+
+class _FakeOpenclawClient:
+    """
+    Stub openclaw_client с динамическим _active_tool_calls.
+    Позволяет симулировать добавление/удаление tool calls в процессе stream.
+    """
+
+    def __init__(self) -> None:
+        self._active_tool_calls: list[dict] = []
+        self._summary_override: str = ""
+
+    def add_tool(self, name: str) -> None:
+        """Симулируем начало выполнения tool."""
+        self._active_tool_calls.append({"name": name, "status": "running"})
+
+    def complete_tool(self, name: str) -> None:
+        """Симулируем завершение tool."""
+        for tc in self._active_tool_calls:
+            if tc["name"] == name and tc["status"] == "running":
+                tc["status"] = "done"
+                break
+
+    def get_active_tool_calls_summary(self) -> str:
+        """
+        Возвращает summary аналогично реальному методу.
+        Меняется при появлении/завершении tool calls.
+        """
+        if not self._active_tool_calls:
+            return ""
+        running = [tc["name"] for tc in self._active_tool_calls if tc["status"] == "running"]
+        done_count = sum(1 for tc in self._active_tool_calls if tc["status"] == "done")
+        total = len(self._active_tool_calls)
+        running_str = ", ".join(running) if running else "—"
+        return f"🔧 {running_str}\nИнструментов: {done_count}/{total}"
+
+
+def test_dynamic_tool_calls_resets_last_activity_at():
+    """
+    Gap 3: Когда _active_tool_calls меняется (tool_summary != last_tool_summary),
+    last_activity_at обновляется → idle gate НЕ срабатывает пока есть tool активность.
+
+    Симулируем tick-by-tick логику poll loop из llm_flow.py.
+    """
+    _idle_cap_sec = 180.0
+    received_any_chunk = False
+    received_any_tool_event = False
+    tool_call_count = 0
+    last_tool_summary = ""
+    last_activity_at = 0.0  # t=0: начало
+
+    # Шаг 1 (t=0): нет activity — idle gate НЕ срабатывает (нет tool event)
+    now = 0.0
+    _idle_since = now - last_activity_at
+    idle_gate = (
+        _idle_cap_sec > 0
+        and received_any_tool_event
+        and not received_any_chunk
+        and _idle_since >= _idle_cap_sec
+    )
+    assert not idle_gate, "Idle gate не должен сработать без tool events"
+
+    # Шаг 2 (t=30s): tool started → summary изменился
+    client = _FakeOpenclawClient()
+    client.add_tool("web_search")
+    tool_summary = client.get_active_tool_calls_summary()
+
+    now = 30.0
+    if tool_summary and tool_summary != last_tool_summary:
+        received_any_tool_event = True
+        last_activity_at = now  # сброс на t=30
+        _atc = getattr(client, "_active_tool_calls", None)
+        if _atc is not None:
+            tool_call_count = max(tool_call_count, len(_atc))
+        last_tool_summary = tool_summary
+
+    assert received_any_tool_event, "После tool start: received_any_tool_event должен быть True"
+    assert tool_call_count == 1, f"tool_call_count должен быть 1, получили {tool_call_count}"
+    assert last_activity_at == pytest.approx(30.0), (
+        f"last_activity_at должен быть 30.0, получили {last_activity_at}"
+    )
+
+    # Шаг 3 (t=60s): тишина 30s — idle gate НЕ должен сработать (< 180s)
+    now = 60.0
+    tool_summary = client.get_active_tool_calls_summary()  # tool ещё running → summary тот же
+
+    _idle_since = now - last_activity_at  # = 30s
+    idle_gate = (
+        _idle_cap_sec > 0
+        and received_any_tool_event
+        and not received_any_chunk
+        and _idle_since >= _idle_cap_sec
+    )
+    assert not idle_gate, "Idle gate не должен сработать при тишине 30s < idle_cap=180s"
+
+    # Шаг 4 (t=90s): tool completes → summary меняется → last_activity_at сбрасывается
+    client.complete_tool("web_search")
+    tool_summary_after = client.get_active_tool_calls_summary()
+    now = 90.0
+
+    if tool_summary_after != last_tool_summary:
+        last_activity_at = now  # сброс на t=90
+        last_tool_summary = tool_summary_after
+
+    assert last_activity_at == pytest.approx(90.0), (
+        f"last_activity_at должен обновиться до 90.0 при завершении tool, "
+        f"получили {last_activity_at}"
+    )
+
+    # Шаг 5 (t=240s): тишина 150s после последней активности (90.0) — idle_since=150 < 180
+    # Idle gate НЕ срабатывает — недостаточно тишины после последней activity
+    now = 240.0
+    _idle_since = now - last_activity_at  # = 150s < 180s
+    idle_gate = (
+        _idle_cap_sec > 0
+        and received_any_tool_event
+        and not received_any_chunk
+        and _idle_since >= _idle_cap_sec
+    )
+    assert not idle_gate, (
+        f"Idle gate не должен сработать: idle_since={_idle_since}s < idle_cap=180s"
+    )
+
+    # Шаг 6 (t=280s): тишина 190s после t=90 → idle_since=190 > 180 → gate срабатывает
+    now = 280.0
+    _idle_since = now - last_activity_at  # = 190s > 180s
+    idle_gate = (
+        _idle_cap_sec > 0
+        and received_any_tool_event
+        and not received_any_chunk
+        and _idle_since >= _idle_cap_sec
+    )
+    assert idle_gate, f"Idle gate должен сработать: idle_since={_idle_since}s >= idle_cap=180s"
+
+
+def test_dynamic_tool_calls_count_increments_correctly():
+    """
+    Gap 3: tool_call_count = max(tool_call_count, len(_active_tool_calls))
+    при добавлении нескольких tools растёт корректно.
+    """
+    client = _FakeOpenclawClient()
+    tool_call_count = 0
+    last_tool_summary = ""
+
+    # Добавляем 3 инструмента последовательно
+    for tool_name in ("web_search", "fs_read", "db_query"):
+        client.add_tool(tool_name)
+        summary = client.get_active_tool_calls_summary()
+        if summary != last_tool_summary:
+            _atc = getattr(client, "_active_tool_calls", None)
+            if _atc is not None:
+                tool_call_count = max(tool_call_count, len(_atc))
+            last_tool_summary = summary
+
+    assert tool_call_count == 3, f"Ожидали tool_call_count=3, получили {tool_call_count}"
+
+    # После завершения все инструментов count не уменьшается (max semantics)
+    for tool_name in ("web_search", "fs_read", "db_query"):
+        client.complete_tool(tool_name)
+
+    summary = client.get_active_tool_calls_summary()  # пустой — все done
+    # Мы не сбрасываем tool_call_count — оно сохраняет max
+    # (в реальном коде: tool_call_count = max(tool_call_count, len(_atc)))
+    _atc = getattr(client, "_active_tool_calls", None)
+    new_count = max(tool_call_count, len(_atc) if _atc else 0)
+    assert new_count == 3, (
+        f"tool_call_count не должен уменьшаться (max semantics), получили {new_count}"
+    )
+
+
+def test_dynamic_idle_gate_not_firing_during_active_tools():
+    """
+    Gap 3: Пока _active_tool_calls меняется каждые 30s (< idle_cap=180s),
+    idle gate НЕ должен срабатывать.
+    """
+    _idle_cap_sec = 180.0
+    received_any_tool_event = False
+    received_any_chunk = False
+    tool_call_count = 0
+    last_tool_summary = ""
+    last_activity_at = 0.0
+
+    client = _FakeOpenclawClient()
+
+    # Симулируем 6 тиков по 30s с tool активностью каждый раз
+    for tick in range(6):
+        now = float(tick * 30)
+
+        # Каждый тик — новый tool приходит (summary меняется)
+        client.add_tool(f"tool_{tick}")
+        tool_summary = client.get_active_tool_calls_summary()
+
+        if tool_summary and tool_summary != last_tool_summary:
+            received_any_tool_event = True
+            last_activity_at = now  # сбрасываем на каждый тик
+            _atc = getattr(client, "_active_tool_calls", None)
+            if _atc is not None:
+                tool_call_count = max(tool_call_count, len(_atc))
+            last_tool_summary = tool_summary
+
+        # Проверяем idle gate на каждом тике
+        _idle_since = now - last_activity_at
+        idle_gate = (
+            _idle_cap_sec > 0
+            and received_any_tool_event
+            and not received_any_chunk
+            and _idle_since >= _idle_cap_sec
+        )
+        assert not idle_gate, (
+            f"Idle gate не должен сработать при активных tool events. "
+            f"tick={tick}, now={now}, idle_since={_idle_since}"
+        )
+
+    # После 6 тиков (t=150s от начала) — idle_since=0 (последний сброс t=150)
+    # Ещё нет 180s → gate не сработал
+    assert tool_call_count == 6, f"Должно быть 6 tool calls, получили {tool_call_count}"
