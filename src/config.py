@@ -569,13 +569,13 @@ class Config:
     # Permanent chat-level ban list: Краб НИКОГДА не отвечает в этих чатах и не
     # гоняет LLM flow для входящих из них. Список применяется как permanent запись
     # в chat_ban_cache при bootstrap (cooldown_hours=None → не истекает).
-    # Это hardcoded fallback для чатов с USER_BANNED_IN_CHANNEL без возможности
-    # восстановления (например, How2AI где бот окончательно заблокирован).
-    # Снять: либо убрать из этого списка + restart, либо `!chatban clear <chat_id>`.
+    # Default = пустой список (не банить никого без явного указания).
+    # Чтобы забанить группу: CHAT_PERMANENT_BAN_LIST=-1001234567890
+    # Снять: либо убрать из env + restart, либо `!chatban clear <chat_id>`.
     # Формат: comma-separated chat_id.
     CHAT_PERMANENT_BAN_LIST: list[str] = [
         s.strip() for s in os.getenv("CHAT_PERMANENT_BAN_LIST", "").split(",") if s.strip()
-    ] or ["-1001587432709"]
+    ]
 
     # Session watchdog heartbeat (сек). Проверяет Telegram MTProto alive.
     # Не тратит токенов, чисто внутренняя проверка.
