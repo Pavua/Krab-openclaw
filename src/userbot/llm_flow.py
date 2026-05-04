@@ -700,16 +700,132 @@ class LLMFlowMixin:
             except Exception as _jc_exc:  # noqa: BLE001
                 logger.debug("joke_calibration_prompt_inject_failed", error=str(_jc_exc))
 
-        stream = openclaw_client.send_message_stream(
-            message=effective_query,
-            chat_id=runtime_chat_id,
-            system_prompt=system_prompt,
-            images=images,
-            force_cloud=force_cloud,
-            preferred_model=preferred_model_override or None,
-            max_output_tokens=max_output_tokens if max_output_tokens > 0 else None,
-            disable_tools=_guest_disable_tools,
-        )
+        # Wave 17-B (Phase C): engine dispatch за ENV gate.
+        # KRAB_AGENT_ENGINE_DISPATCH_ENABLED=0 (default) → всегда OpenClaw (zero risk).
+        # При включённом dispatch: get_engine_for_route() выбирает engine по chat/room +
+        # health gate + automatic fallback на OpenClaw если Hermes недоступен.
+        # actual == "openclaw" → продолжаем existing flow без изменений.
+        # actual == "hermes" → поток уже обёрнут в StreamChunk, но мы
+        # используем только .text поля для обратной совместимости.
+        _engine_dispatch_enabled = False
+        try:
+            import os as _os
+
+            _engine_dispatch_enabled = _os.environ.get(
+                "KRAB_AGENT_ENGINE_DISPATCH_ENABLED", "0"
+            ).strip() in {"1", "true", "yes"}
+        except Exception:  # noqa: BLE001
+            pass
+
+        if _engine_dispatch_enabled:
+            try:
+                from ..core.agent_engine_resolver import (
+                    get_engine_for_route as _get_engine,  # noqa: PLC0415
+                )
+                from ..core.prometheus_metrics import (  # noqa: PLC0415
+                    record_agent_engine_fallback as _rec_fallback,
+                )
+                from ..core.prometheus_metrics import record_agent_engine_run as _rec_run
+
+                _engine_obj, _requested_kind, _actual_kind = await _get_engine(
+                    chat_id=chat_id,
+                    room=None,
+                    openclaw_client=openclaw_client,
+                )
+                if _requested_kind != _actual_kind:
+                    # Произошёл fallback — логируем в метрики
+                    _rec_fallback(str(_requested_kind), str(_actual_kind))
+
+                if _actual_kind == "openclaw":
+                    # Существующий flow — без изменений
+                    stream = openclaw_client.send_message_stream(
+                        message=effective_query,
+                        chat_id=runtime_chat_id,
+                        system_prompt=system_prompt,
+                        images=images,
+                        force_cloud=force_cloud,
+                        preferred_model=preferred_model_override or None,
+                        max_output_tokens=max_output_tokens if max_output_tokens > 0 else None,
+                        disable_tools=_guest_disable_tools,
+                    )
+                else:
+                    # Hermes: оборачиваем AsyncIterator[StreamChunk] → AsyncIterator[str]
+                    # для backward compat с существующим stream processing loop.
+                    _engine_stream_start = time.monotonic()
+
+                    async def _hermes_stream_as_str():
+                        _ttfb_recorded = False
+                        _run_success = False
+                        _started_ms = int(time.time() * 1000)
+                        try:
+                            async for _sc in _engine_obj.stream(
+                                effective_query,
+                                ctx={
+                                    "chat_id": runtime_chat_id,
+                                    "system_prompt": system_prompt,
+                                },
+                            ):
+                                if not _ttfb_recorded:
+                                    _ttfb_ms = int((time.monotonic() - _engine_stream_start) * 1000)
+                                    _ttfb_recorded = True
+                                if _sc.chunk_type == "finish":
+                                    _run_success = _sc.finish_reason == "stop"
+                                    if _sc.text:
+                                        yield _sc.text
+                                    break
+                                if _sc.text:
+                                    yield _sc.text
+                        finally:
+                            _latency_sec = time.monotonic() - _engine_stream_start
+                            _rec_run(_actual_kind, _run_success, _latency_sec)
+                            # Запись в archive.db (fail-safe)
+                            try:
+                                from ..core.agent_engine_runs import record_engine_run as _rec_db
+
+                                _rec_db(
+                                    engine=_actual_kind,
+                                    chat_id=str(chat_id),
+                                    started_at_ms=_started_ms,
+                                    finished_at_ms=int(time.time() * 1000),
+                                    latency_ms_total=int(_latency_sec * 1000),
+                                    latency_ms_ttfb=_ttfb_ms if _ttfb_recorded else None,
+                                    success=_run_success,
+                                    fallback_engine=str(_requested_kind)
+                                    if _requested_kind != _actual_kind
+                                    else None,
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
+
+                    stream = _hermes_stream_as_str()
+            except Exception as _dispatch_exc:  # noqa: BLE001
+                logger.warning(
+                    "engine_dispatch_failed_fallback_openclaw",
+                    error=str(_dispatch_exc),
+                )
+                stream = openclaw_client.send_message_stream(
+                    message=effective_query,
+                    chat_id=runtime_chat_id,
+                    system_prompt=system_prompt,
+                    images=images,
+                    force_cloud=force_cloud,
+                    preferred_model=preferred_model_override or None,
+                    max_output_tokens=max_output_tokens if max_output_tokens > 0 else None,
+                    disable_tools=_guest_disable_tools,
+                )
+        else:
+            # Dispatch выключен — существующий flow без изменений
+            stream = openclaw_client.send_message_stream(
+                message=effective_query,
+                chat_id=runtime_chat_id,
+                system_prompt=system_prompt,
+                images=images,
+                force_cloud=force_cloud,
+                preferred_model=preferred_model_override or None,
+                max_output_tokens=max_output_tokens if max_output_tokens > 0 else None,
+                disable_tools=_guest_disable_tools,
+            )
+
         stream_iter = stream.__aiter__()
         # Регистрируем текущий task в клиенте для hard-cancel из watchdog'а.
         # detect_stagnation видит зависшую runs.sqlite-задачу и зовёт cancel_current_request() →
