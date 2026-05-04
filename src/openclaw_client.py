@@ -3208,6 +3208,84 @@ class OpenClawClient:
             final_response = ""
             last_semantic: dict[str, str] | None = None
 
+            # Wave 18-B: Google direct SDK bypass (OpenClaw 2026.5.2 WebSocket regression).
+            # OpenClaw 2026.5.2 ломает WebSocket → openresponses HTTP path для google/* моделей:
+            # HTTP 500 internal error. Direct API + CLI local transport работают корректно.
+            # Bypass: пробуем google-generativeai SDK напрямую; при ошибке — OpenClaw path ниже.
+            _google_bypass_attempted = False
+            if not has_photo:  # direct SDK не поддерживает multimodal в этой реализации
+                try:
+                    from ..config import config as _cfg
+                    from .integrations.google_genai_direct import (
+                        complete_direct as _google_complete,
+                    )
+                    from .integrations.google_genai_direct import (
+                        is_google_direct_enabled as _google_bypass_enabled,
+                    )
+                    from .integrations.google_genai_direct import (
+                        is_google_model as _is_google_model,
+                    )
+
+                    if (
+                        _google_bypass_enabled()
+                        and _cfg.KRAB_GOOGLE_DIRECT_BYPASS_ENABLED
+                        and _is_google_model(attempt_model)
+                    ):
+                        _google_bypass_attempted = True
+                        logger.info(
+                            "google_direct_bypass_engaged",
+                            model=attempt_model,
+                            chat_id=chat_id,
+                        )
+                        self._set_last_runtime_route(
+                            channel="google_direct",
+                            model=attempt_model,
+                            route_reason="google_direct_bypass",
+                            route_detail="Direct Google Generative AI SDK bypass (OpenClaw 2026.5.2 regression)",
+                            status="pending",
+                            force_cloud=effective_force_cloud,
+                        )
+                        try:
+                            _direct_text = await _google_complete(
+                                model=attempt_model,
+                                messages=messages_to_send,
+                                timeout_sec=float(max_output_tokens or 300)
+                                if max_output_tokens
+                                else 300.0,
+                                max_output_tokens=max_output_tokens,
+                            )
+                            if _direct_text and _direct_text.strip():
+                                # Успешный direct ответ — финализируем и возвращаем
+                                sanitized = self._sanitize_assistant_response(_direct_text)
+                                if sanitized:
+                                    _direct_text = sanitized
+                                self._set_last_runtime_route(
+                                    channel="google_direct",
+                                    model=attempt_model,
+                                    route_reason="google_direct_ok",
+                                    route_detail="Ответ получен через Google direct SDK",
+                                    force_cloud=effective_force_cloud,
+                                )
+                                self._finalize_chat_response(chat_id, _direct_text)
+                                yield _direct_text
+                                return
+                            else:
+                                # Пустой ответ — fallback на OpenClaw
+                                logger.warning(
+                                    "google_direct_bypass_empty_response_falling_back",
+                                    model=attempt_model,
+                                )
+                        except Exception as _bypass_exc:  # noqa: BLE001
+                            logger.warning(
+                                "google_direct_bypass_failed_falling_back",
+                                model=attempt_model,
+                                error=str(_bypass_exc),
+                                error_type=type(_bypass_exc).__name__,
+                            )
+                            # Продолжаем на OpenClaw path ниже
+                except ImportError:
+                    pass  # SDK не установлен — молча уходим в OpenClaw path
+
             for attempt in range(4):
                 logger.info("openclaw_attempt", attempt=attempt + 1, model=attempt_model)
                 route_channel = (

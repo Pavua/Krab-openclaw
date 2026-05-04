@@ -458,6 +458,14 @@ class Config:
     KRAB_CODEX_CLI_FAILURE_WINDOW_SEC: float = float(
         os.getenv("KRAB_CODEX_CLI_FAILURE_WINDOW_SEC", "300")
     )
+    # Wave 18-B: Direct Google Generative AI bypass для OpenClaw 2026.5.2 broken WebSocket transport.
+    # OpenClaw 2026.5.2 regression: WebSocket → openresponses HTTP path возвращает HTTP 500
+    # на google/* модели (CHANGELOG fix был только для OpenAI GPT-5, не для Google).
+    # Default ON (opt-out через KRAB_GOOGLE_DIRECT_BYPASS_ENABLED=0 в .env).
+    KRAB_GOOGLE_DIRECT_BYPASS_ENABLED: bool = os.getenv(
+        "KRAB_GOOGLE_DIRECT_BYPASS_ENABLED", "1"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
     # Wave 16-I: idle-aware liveness detection.
     # Если LLM был активен (tool calls или text), но потом молчит > этого порога — это hang.
     # Default 180s (3 мин тишины после activity = зависание post-tool-call).
