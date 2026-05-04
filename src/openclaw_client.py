@@ -3215,7 +3215,10 @@ class OpenClawClient:
             # Wave 18-D fix: bypass работает не только если primary = google/*, а и для fallback'ов.
             _google_bypass_attempted = False
             try:
-                from ..config import config as _cfg
+                # Wave 18-G: ИСПРАВЛЕН relative import. Ранее `from ..config` (две точки)
+                # выходил за пределы src/ → ImportError → silent fallback на lambdas →
+                # bypass effectively dead. Other imports в этом файле используют `from .config`.
+                from .config import config as _cfg
                 from .integrations.google_genai_direct import (
                     complete_direct as _google_complete,
                 )
@@ -3225,8 +3228,12 @@ class OpenClawClient:
                 from .integrations.google_genai_direct import (
                     is_google_model as _is_google_model,
                 )
-            except ImportError:
+            except ImportError as _bypass_imp_exc:
                 # SDK не установлен — bypass недоступен, идём в OpenClaw path
+                logger.warning(
+                    "google_direct_bypass_imports_failed",
+                    error=str(_bypass_imp_exc),
+                )
                 _cfg = None  # type: ignore
                 _google_complete = None  # type: ignore
                 _google_bypass_enabled = lambda: False  # type: ignore  # noqa: E731
