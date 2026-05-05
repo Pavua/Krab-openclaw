@@ -19,9 +19,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from typing import Any
 
 from ..core.logger import get_logger
+from ._bypass_perf import record_bypass_call
 from ._bypass_sentry import add_bypass_breadcrumb
 
 logger = get_logger(__name__)
@@ -133,6 +135,12 @@ async def complete_via_vertex(
         )
         return (resp.text or "").strip()
 
+    # Wave 31-A: замер latency bypass call
+    _perf_start = time.time()
+    _perf_success = False
+    _perf_response_len = 0
+    _perf_error_type: str | None = None
+
     try:
         text = await asyncio.to_thread(_sync_call)
     except Exception as exc:
@@ -149,7 +157,21 @@ async def complete_via_vertex(
             },
             level="warning",
         )
+        _perf_error_type = type(exc).__name__
         raise
+    else:
+        _perf_success = True
+        _perf_response_len = len(text)
+    finally:
+        # Wave 31-A: записываем latency в JSONL (graceful)
+        record_bypass_call(
+            kind="vertex",
+            model=model,
+            duration_sec=time.time() - _perf_start,
+            success=_perf_success,
+            response_len=_perf_response_len,
+            error_type=_perf_error_type,
+        )
 
     if not text:
         # Wave 18-I-style retry с thinking_budget=0 здесь НЕ нужен — Vertex

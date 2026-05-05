@@ -20,6 +20,7 @@ import time
 from typing import Any
 
 from ..core.logger import get_logger
+from ._bypass_perf import record_bypass_call
 from ._bypass_sentry import add_bypass_breadcrumb
 
 logger = get_logger(__name__)
@@ -311,8 +312,14 @@ async def complete_direct(
 
         return text
 
-    # Замеряем полную latency bypass-вызова для Prometheus
+    # Замеряем полную latency bypass-вызова для Prometheus и Wave 31-A JSONL
     _t0 = time.monotonic()
+    # Wave 31-A: perf-переменные для JSONL записи
+    _perf_success = False
+    _perf_response_len = 0
+    _perf_error_type: str | None = None
+    # kind зависит от модели: gemma vs google-direct
+    _perf_kind = "gemma" if is_gemma_model(model) else "google-direct"
 
     try:
         text = await asyncio.wait_for(
@@ -338,6 +345,16 @@ async def complete_direct(
             record_google_bypass_call(model=model, outcome="error", latency_sec=_elapsed)
         except Exception:  # noqa: BLE001
             pass
+        _perf_error_type = "TimeoutError"
+        # Wave 31-A: записываем timeout как failure
+        record_bypass_call(
+            kind=_perf_kind,
+            model=model,
+            duration_sec=_elapsed,
+            success=False,
+            response_len=0,
+            error_type="TimeoutError",
+        )
         return ""
     except Exception as exc:  # noqa: BLE001
         _elapsed = time.monotonic() - _t0
@@ -359,6 +376,16 @@ async def complete_direct(
             record_google_bypass_call(model=model, outcome="error", latency_sec=_elapsed)
         except Exception:  # noqa: BLE001
             pass
+        _perf_error_type = type(exc).__name__
+        # Wave 31-A: записываем exception как failure
+        record_bypass_call(
+            kind=_perf_kind,
+            model=model,
+            duration_sec=_elapsed,
+            success=False,
+            response_len=0,
+            error_type=_perf_error_type,
+        )
         raise
 
     _elapsed = time.monotonic() - _t0
@@ -386,6 +413,16 @@ async def complete_direct(
         record_google_bypass_call(model=model, outcome=_outcome, latency_sec=_elapsed)
     except Exception:  # noqa: BLE001
         pass
+
+    # Wave 31-A: записываем success в JSONL
+    record_bypass_call(
+        kind=_perf_kind,
+        model=model,
+        duration_sec=_elapsed,
+        success=True,
+        response_len=len(text),
+        error_type=None,
+    )
 
     return text
 

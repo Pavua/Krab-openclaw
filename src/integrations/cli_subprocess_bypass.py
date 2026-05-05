@@ -22,9 +22,11 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import time
 from typing import Any
 
 from ..core.logger import get_logger
+from ._bypass_perf import record_bypass_call
 from ._bypass_sentry import add_bypass_breadcrumb
 
 logger = get_logger(__name__)
@@ -203,6 +205,12 @@ async def complete_via_cli(
     if env_overrides:
         _env = {**os.environ, **env_overrides}
 
+    # Wave 31-A: замер latency bypass call
+    _perf_start = time.time()
+    _perf_success = False
+    _perf_response_len = 0
+    _perf_error_type: str | None = None
+
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -289,10 +297,13 @@ async def complete_via_cli(
             model=model_id,
             extra={"binary": binary_name, "response_len": len(text)},
         )
+        _perf_success = True
+        _perf_response_len = len(text)
         return text
 
-    except RuntimeError:
+    except RuntimeError as exc:
         # Перебрасываем RuntimeError (timeout, binary not found) без wrap
+        _perf_error_type = type(exc).__name__
         raise
     except Exception as exc:
         logger.warning(
@@ -302,4 +313,15 @@ async def complete_via_cli(
             error=str(exc),
             error_type=type(exc).__name__,
         )
+        _perf_error_type = type(exc).__name__
         raise
+    finally:
+        # Wave 31-A: записываем latency в JSONL (graceful — не крашит bypass)
+        record_bypass_call(
+            kind="cli",
+            model=model,
+            duration_sec=time.time() - _perf_start,
+            success=_perf_success,
+            response_len=_perf_response_len,
+            error_type=_perf_error_type,
+        )
