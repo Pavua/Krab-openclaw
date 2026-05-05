@@ -156,6 +156,7 @@ async def complete_via_cli(
     if binary_name == "codex":
         try:
             from .codex_account_rotator import get_account_name_from_home, get_next_codex_home
+
             _codex_home = get_next_codex_home()
             if _codex_home:
                 env_overrides["CODEX_HOME"] = _codex_home
@@ -221,10 +222,10 @@ async def complete_via_cli(
         if _rotator_account and binary_name == "codex":
             try:
                 from .codex_account_rotator import record_call
+
                 # Quota error по stderr и returncode
                 _is_quota_err = proc.returncode != 0 and any(
-                    k in stderr_text.lower()
-                    for k in ("quota", "rate limit", "429", "exceeded")
+                    k in stderr_text.lower() for k in ("quota", "rate limit", "429", "exceeded")
                 )
                 record_call(
                     _rotator_account,

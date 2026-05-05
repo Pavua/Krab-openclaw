@@ -89,26 +89,30 @@ def list_accounts() -> list[dict[str, Any]]:
         auth_file = d / "auth.json"
         if not auth_file.exists():
             # Каталог существует, но login ещё не выполнен
-            accounts.append({
-                "name": d.name,
-                "path": str(d),
-                "calls_today": 0,
-                "last_used": None,
-                "quota_exhausted_until": None,
-                "available": False,
-                "logged_in": False,
-            })
+            accounts.append(
+                {
+                    "name": d.name,
+                    "path": str(d),
+                    "calls_today": 0,
+                    "last_used": None,
+                    "quota_exhausted_until": None,
+                    "available": False,
+                    "logged_in": False,
+                }
+            )
             continue
         s = state.get(d.name, {})
-        accounts.append({
-            "name": d.name,
-            "path": str(d),
-            "calls_today": s.get("calls_today", 0),
-            "last_used": s.get("last_used"),
-            "quota_exhausted_until": s.get("quota_exhausted_until"),
-            "available": _is_available(s),
-            "logged_in": True,
-        })
+        accounts.append(
+            {
+                "name": d.name,
+                "path": str(d),
+                "calls_today": s.get("calls_today", 0),
+                "last_used": s.get("last_used"),
+                "quota_exhausted_until": s.get("quota_exhausted_until"),
+                "available": _is_available(s),
+                "logged_in": True,
+            }
+        )
     return accounts
 
 
@@ -159,8 +163,10 @@ def record_call(
     s["calls_today"] = s.get("calls_today", 0) + 1
     s["last_used"] = datetime.now(timezone.utc).isoformat()
 
-    if not success and error and any(
-        k in error.lower() for k in ("quota", "rate limit", "429", "exceeded")
+    if (
+        not success
+        and error
+        and any(k in error.lower() for k in ("quota", "rate limit", "429", "exceeded"))
     ):
         # Не сохраняем основной state — запись будет в record_quota_exhaustion
         record_quota_exhaustion(
