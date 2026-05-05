@@ -49,10 +49,15 @@ def is_google_direct_enabled() -> bool:
     }
 
 
+GOOGLE_PREFIX = "google/"
+GEMMA_PREFIX = "gemma-"  # gemma-3-27b-it, gemma-3-12b-it, gemma-3-4b-it
+
+
 def is_google_model(model: str) -> bool:
     """True если model id указывает на Google direct API (НЕ google-gemini-cli).
 
     google/gemini-3-pro-preview → True
+    gemma-3-27b-it → True  (Wave 25-E: Gemma через AI Studio free tier)
     google-gemini-cli/... → False (CLI провайдер, не direct)
     openai/gpt-5 → False
     """
@@ -61,11 +66,30 @@ def is_google_model(model: str) -> bool:
     # google-antigravity и google-gemini-cli — не direct API
     if model.startswith("google-"):
         return False
-    return model.startswith("google/")
+    # Wave 25-E: Gemma модели через AI Studio (тот же ключ, бесплатный tier)
+    if is_gemma_model(model):
+        return True
+    return model.startswith(GOOGLE_PREFIX)
+
+
+def is_gemma_model(model: str) -> bool:
+    """True если модель — Gemma (gemma- prefix без provider/).
+
+    gemma-3-27b-it → True
+    google/gemma-3-27b-it → False (не ожидается, но безопасно)
+    gemini-3-pro → False
+    """
+    if not model:
+        return False
+    bare = _strip_provider_prefix(model)
+    return bare.startswith(GEMMA_PREFIX)
 
 
 def _strip_provider_prefix(model: str) -> str:
-    """'google/gemini-3-pro-preview' → 'gemini-3-pro-preview'."""
+    """'google/gemini-3-pro-preview' → 'gemini-3-pro-preview'.
+
+    'gemma-3-27b-it' → 'gemma-3-27b-it' (нет префикса — без изменений).
+    """
     return model.split("/", 1)[1] if "/" in model else model
 
 
@@ -359,6 +383,10 @@ async def complete_direct(
         pass
 
     return text
+
+
+# Wave 25-E: алиас для gemma-bypass block в openclaw_client.py (читабельный import)
+complete_via_genai_direct = complete_direct
 
 
 async def health_check_direct(*, api_key: str | None = None, timeout_sec: float = 10.0) -> bool:

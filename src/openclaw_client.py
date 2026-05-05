@@ -3231,6 +3231,27 @@ class OpenClawClient:
                 _cli_bypass_enabled = lambda: False  # type: ignore  # noqa: E731
                 _is_cli_model = lambda m: (False, None)  # type: ignore  # noqa: E731
 
+            # Wave 25-E: Gemma fallback через AI Studio API (free tier, 14400 req/day).
+            # gemma-3-27b-it / gemma-3-12b-it / gemma-3-4b-it — ходят через тот же
+            # google.genai SDK и тот же GEMINI_API_KEY, что и google/* bypass.
+            # Проверяется ВНУТРИ for loop — симметрично google_direct bypass.
+            _gemma_bypass_attempted = False
+            try:
+                from .integrations.google_genai_direct import (
+                    complete_via_genai_direct as _gemma_complete,
+                )
+                from .integrations.google_genai_direct import (
+                    is_gemma_model as _is_gemma_model,
+                )
+                from .integrations.google_genai_direct import (
+                    is_google_direct_enabled as _gemma_bypass_enabled,
+                )
+            except ImportError as _gemma_imp_exc:
+                logger.warning("gemma_bypass_imports_failed", error=str(_gemma_imp_exc))
+                _gemma_complete = None  # type: ignore
+                _is_gemma_model = lambda m: False  # type: ignore  # noqa: E731
+                _gemma_bypass_enabled = lambda: False  # type: ignore  # noqa: E731
+
             # Wave 18-B + 18-D: Google direct SDK bypass (OpenClaw 2026.5.2 regression).
             # OpenClaw 2026.5.2 ломает WebSocket → openresponses HTTP path для google/*:
             # HTTP 500 internal error. Direct API + CLI local transport работают.
@@ -3501,6 +3522,91 @@ class OpenClawClient:
                             "anthropic_vertex_bypass_init_skip",
                             error=str(_av_init_exc),
                             error_type=type(_av_init_exc).__name__,
+                            model=attempt_model,
+                        )
+
+                # Wave 25-E: Gemma bypass — ДО Google bypass (специфичнее по prefix).
+                # gemma-* модели идут через AI Studio API key (free tier, 14400 req/day).
+                if not _gemma_bypass_attempted and not _has_photo_bypass:
+                    try:
+                        if _gemma_bypass_enabled() and _is_gemma_model(attempt_model):
+                            _gemma_bypass_attempted = True
+                            logger.info(
+                                "gemma_bypass_engaged",
+                                model=attempt_model,
+                                chat_id=chat_id,
+                                attempt=attempt + 1,
+                            )
+                            _sentry_tag("bypass.engaged", "1")
+                            _sentry_tag("bypass.model", attempt_model)
+                            _bypass_t0_gemma = __import__("time").monotonic()
+                            self._set_last_runtime_route(
+                                channel="gemma_direct",
+                                model=attempt_model,
+                                route_reason="gemma_direct_bypass",
+                                route_detail="Gemma AI Studio free-tier bypass (Wave 25-E)",
+                                status="pending",
+                                force_cloud=effective_force_cloud,
+                            )
+                            try:
+                                _gemma_text = await _gemma_complete(
+                                    model=attempt_model,
+                                    messages=messages_to_send,
+                                    timeout_sec=300.0,
+                                    max_output_tokens=max_output_tokens,
+                                )
+                                if _gemma_text and _gemma_text.strip():
+                                    sanitized = self._sanitize_assistant_response(_gemma_text)
+                                    if sanitized:
+                                        _gemma_text = sanitized
+                                    _bypass_elapsed_gemma = (
+                                        __import__("time").monotonic() - _bypass_t0_gemma
+                                    )
+                                    _sentry_tag("bypass.outcome", "success")
+                                    _sentry_tag(
+                                        "bypass.latency_sec", str(round(_bypass_elapsed_gemma, 2))
+                                    )
+                                    self._set_last_runtime_route(
+                                        channel="gemma_direct",
+                                        model=attempt_model,
+                                        route_reason="gemma_direct_ok",
+                                        route_detail="Ответ получен через Gemma AI Studio SDK",
+                                        force_cloud=effective_force_cloud,
+                                    )
+                                    self._finalize_chat_response(chat_id, _gemma_text)
+                                    yield _gemma_text
+                                    return
+                                else:
+                                    _bypass_elapsed_gemma = (
+                                        __import__("time").monotonic() - _bypass_t0_gemma
+                                    )
+                                    _sentry_tag("bypass.outcome", "empty")
+                                    _sentry_tag(
+                                        "bypass.latency_sec", str(round(_bypass_elapsed_gemma, 2))
+                                    )
+                                    logger.warning(
+                                        "gemma_bypass_empty_response_falling_back",
+                                        model=attempt_model,
+                                    )
+                            except Exception as _gemma_exc:  # noqa: BLE001
+                                _bypass_elapsed_gemma = (
+                                    __import__("time").monotonic() - _bypass_t0_gemma
+                                )
+                                _sentry_tag("bypass.outcome", "error")
+                                _sentry_tag(
+                                    "bypass.latency_sec", str(round(_bypass_elapsed_gemma, 2))
+                                )
+                                logger.warning(
+                                    "gemma_bypass_failed_falling_back",
+                                    model=attempt_model,
+                                    error=str(_gemma_exc),
+                                    error_type=type(_gemma_exc).__name__,
+                                )
+                    except (NameError, ImportError) as _gemma_init_exc:
+                        logger.warning(
+                            "gemma_bypass_init_skip",
+                            error=str(_gemma_init_exc),
+                            error_type=type(_gemma_init_exc).__name__,
                             model=attempt_model,
                         )
 
