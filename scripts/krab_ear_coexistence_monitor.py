@@ -18,10 +18,13 @@ from pathlib import Path
 
 import psutil
 
-# Пороги детекции (в байтах)
-COMBINED_RSS_THRESHOLD = 12 * 1_000_000_000   # 12 GB
-SWAP_THRESHOLD = 8 * 1_000_000_000            # 8 GB
-RAM_AVAIL_THRESHOLD = 3 * 1_000_000_000       # 3 GB free
+# Пороги детекции (в байтах) — Wave 28-B: macOS-friendly defaults через ENV
+# macOS использует compressed swap агрессивно (8-12GB видно регулярно при норм работе),
+# поэтому swap > 8GB на macOS НЕ критично. Для Linux 8GB реально означает memory pressure.
+_GB = 1_000_000_000
+COMBINED_RSS_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_RSS_THRESHOLD_GB", "12")) * _GB)
+SWAP_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_SWAP_THRESHOLD_GB", "16")) * _GB)
+RAM_AVAIL_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_RAM_AVAIL_THRESHOLD_GB", "3")) * _GB)
 
 # Krab Owner Panel endpoint
 KRAB_NOTIFY_URL = os.environ.get("KRAB_NOTIFY_URL", "http://127.0.0.1:8080/api/notify")
