@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Session recovery helpers — Wave 16-N / Wave 18-A.
+Session recovery helpers — Wave 16-N / Wave 18-A / Wave 24-B.
 
 Публичный API:
 - `attempt_recovery(path, *, idempotency_sec)` — auto-recovery через sqlite3 .recover
 - `cleanup_old_backups(session_dir, *, keep_recent, max_age_days, dry_run)` — retention policy
   для session backup-файлов (Wave 18-A)
+- `check_peers_count(session_path)` — проверка threshold peers (Wave 24-B)
+- `cleanup_stale_wal_shm(session_path)` — удаление stale WAL/SHM без live writer'а (Wave 24-B)
+- `any_pyrofork_holds_session(session_path)` — lsof-проверка живого pyrofork writer'а (Wave 24-B)
 
 Используется:
 - `src/userbot/session.py` — _main_session_integrity_preflight
@@ -15,6 +18,7 @@ Session recovery helpers — Wave 16-N / Wave 18-A.
 
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -28,6 +32,13 @@ if TYPE_CHECKING:
     pass
 
 logger = structlog.get_logger(__name__)
+
+# ── Wave 24-B: peers threshold ────────────────────────────────────────────────
+
+# Минимальное кол-во peers в healthy session.
+# Если меньше — DB pristine/empty/wiped; требует recovery (не работает с Telegram).
+# Можно переопределить через env: KRAB_SESSION_MIN_PEERS_THRESHOLD.
+MIN_PEERS_THRESHOLD: int = int(os.environ.get("KRAB_SESSION_MIN_PEERS_THRESHOLD", "50"))
 
 # ── константы ────────────────────────────────────────────────────────────────
 
@@ -54,6 +65,114 @@ _PROTECTED_NAMES: frozenset[str] = frozenset(
 
 # Суффиксы sidecar-файлов, которые удаляются вместе с main backup.
 _SIDECAR_SUFFIXES: tuple[str, ...] = ("-wal", "-shm", "-journal")
+
+
+# ── Wave 24-B helpers ────────────────────────────────────────────────────────
+
+
+def any_pyrofork_holds_session(session_path: Path) -> bool:
+    """Проверяет через lsof: есть ли живой процесс с открытым session-файлом.
+
+    Возвращает True если хотя бы один PID держит файл открытым.
+    Fail-safe: если lsof недоступен или упал → False (можно безопасно чистить).
+    """
+    try:
+        out = subprocess.run(
+            ["lsof", "-t", str(session_path)],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        return bool(out.stdout.strip())
+    except Exception:  # noqa: BLE001
+        # lsof недоступен или timeout → fail-safe: разрешаем cleanup
+        return False
+
+
+def cleanup_stale_wal_shm(session_path: Path) -> bool:
+    """Удаляет stale WAL/SHM если нет живого pyrofork writer'а.
+
+    Признаки stale:
+    - kraab.session-wal или kraab.session-shm существует
+    - НЕТ живого процесса, держащего session-файл (проверяется через lsof)
+
+    Вызывается ПЕРЕД integrity_check, чтобы устранить "disk I/O error"
+    от stale WAL, оставленного после non-clean shutdown.
+
+    Returns:
+        True если хотя бы один файл был удалён.
+    """
+    wal = session_path.with_name(session_path.name + "-wal")
+    shm = session_path.with_name(session_path.name + "-shm")
+
+    if not wal.exists() and not shm.exists():
+        return False
+
+    # Проверяем: есть ли живой процесс, который держит session-файл
+    if any_pyrofork_holds_session(session_path):
+        logger.debug(
+            "stale_wal_shm_skip_live_writer",
+            session=str(session_path),
+            wal_exists=wal.exists(),
+            shm_exists=shm.exists(),
+        )
+        return False
+
+    # Нет живого writer'а → удаляем stale sidecar'ы
+    cleaned = False
+    for sidecar in (wal, shm):
+        if sidecar.exists():
+            try:
+                sidecar.unlink(missing_ok=True)
+                cleaned = True
+                logger.info(
+                    "stale_wal_shm_cleaned",
+                    path=str(sidecar),
+                )
+            except OSError as exc:
+                logger.warning(
+                    "stale_wal_shm_cleanup_failed",
+                    path=str(sidecar),
+                    error=str(exc),
+                )
+    return cleaned
+
+
+def check_peers_count(session_path: Path) -> tuple[bool, int]:
+    """Проверяет кол-во peers в session DB против MIN_PEERS_THRESHOLD.
+
+    Healthy DB должна содержать >= MIN_PEERS_THRESHOLD peers.
+    Если меньше — DB pristine/empty/wiped: integrity_check может вернуть "ok",
+    но Telegram userbot не сможет резолвить peer'ы и будет молча игнорировать
+    входящие сообщения.
+
+    Returns:
+        (healthy, peers_count) — healthy=True если peers >= MIN_PEERS_THRESHOLD.
+        При OperationalError (malformed/locked) возвращает (False, 0), что
+        тригерит recovery через основной integrity-path.
+    """
+    if not session_path.exists():
+        # Нет файла → fresh install, не ошибка
+        return True, 0
+
+    try:
+        uri = f"file:{session_path}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=5)
+        try:
+            cur = conn.execute("SELECT count(*) FROM peers")
+            row = cur.fetchone()
+            count = int(row[0]) if row else 0
+            healthy = count >= MIN_PEERS_THRESHOLD
+            return healthy, count
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        # OperationalError / DatabaseError: malformed/locked/not-a-database.
+        # recovery тригернётся через основной integrity_check path.
+        return False, 0
+    except Exception:  # noqa: BLE001
+        # Нестандартная ошибка → не блокируем boot
+        return True, 0
 
 
 # ── internal helpers ──────────────────────────────────────────────────────────
@@ -437,4 +556,9 @@ def cleanup_old_backups(
 __all__ = [
     "attempt_recovery",
     "cleanup_old_backups",
+    # Wave 24-B
+    "MIN_PEERS_THRESHOLD",
+    "any_pyrofork_holds_session",
+    "cleanup_stale_wal_shm",
+    "check_peers_count",
 ]
