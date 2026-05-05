@@ -484,6 +484,18 @@ class Config:
     KRAB_VERTEX_PROJECT: str = os.getenv("KRAB_VERTEX_PROJECT", "caramel-anvil-492816-t5")
     KRAB_VERTEX_LOCATION: str = os.getenv("KRAB_VERTEX_LOCATION", "us-central1")
 
+    # Wave 23-C: Anthropic Claude через Vertex AI bypass для anthropic-vertex/* моделей.
+    # Использует AnthropicVertex client (anthropic[vertex] SDK) с ADC auth.
+    # Region: us-east5 — где Anthropic публикует Claude на Vertex AI.
+    # Default ON (opt-out через KRAB_ANTHROPIC_VERTEX_BYPASS_ENABLED=0).
+    KRAB_ANTHROPIC_VERTEX_BYPASS_ENABLED: bool = os.getenv(
+        "KRAB_ANTHROPIC_VERTEX_BYPASS_ENABLED", "1"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    KRAB_ANTHROPIC_VERTEX_PROJECT: str = os.getenv(
+        "KRAB_ANTHROPIC_VERTEX_PROJECT", "caramel-anvil-492816-t5"
+    )
+    KRAB_ANTHROPIC_VERTEX_REGION: str = os.getenv("KRAB_ANTHROPIC_VERTEX_REGION", "us-east5")
+
     # Wave 16-I: idle-aware liveness detection.
     # Если LLM был активен (tool calls или text), но потом молчит > этого порога — это hang.
     # Default 180s (3 мин тишины после activity = зависание post-tool-call).

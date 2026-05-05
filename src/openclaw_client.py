@@ -3286,6 +3286,30 @@ class OpenClawClient:
                 _vertex_bypass_enabled = lambda: False  # type: ignore  # noqa: E731
                 _is_vertex_model = lambda m: False  # type: ignore  # noqa: E731
 
+            # Wave 23-C: Anthropic Claude через Vertex AI bypass для anthropic-vertex/* моделей.
+            # Использует AnthropicVertex client (anthropic[vertex] SDK) с ADC auth.
+            # Region: us-east5. Bypass проверяется ВНУТРИ for loop,
+            # ПОСЛЕ google-vertex bypass и ПЕРЕД Google AI Studio bypass.
+            _anthropic_vertex_bypass_attempted = False
+            try:
+                from .integrations.anthropic_vertex_direct import (
+                    complete_via_anthropic_vertex as _av_complete,
+                )
+                from .integrations.anthropic_vertex_direct import (
+                    is_anthropic_vertex_enabled as _av_bypass_enabled,
+                )
+                from .integrations.anthropic_vertex_direct import (
+                    is_anthropic_vertex_model as _is_av_model,
+                )
+            except ImportError as _av_imp_exc:
+                logger.warning(
+                    "anthropic_vertex_bypass_imports_failed",
+                    error=str(_av_imp_exc),
+                )
+                _av_complete = None  # type: ignore
+                _av_bypass_enabled = lambda: False  # type: ignore  # noqa: E731
+                _is_av_model = lambda m: False  # type: ignore  # noqa: E731
+
             for attempt in range(4):
                 logger.info("openclaw_attempt", attempt=attempt + 1, model=attempt_model)
 
@@ -3418,6 +3442,65 @@ class OpenClawClient:
                             "vertex_bypass_init_skip",
                             error=str(_vertex_init_exc),
                             error_type=type(_vertex_init_exc).__name__,
+                            model=attempt_model,
+                        )
+
+                # Wave 23-C: Anthropic Claude через Vertex AI bypass.
+                # Проверяется ПОСЛЕ google-vertex bypass и ПЕРЕД Google AI Studio bypass.
+                # Фото не поддерживаются в bypass (только текст).
+                if not _anthropic_vertex_bypass_attempted and not _has_photo_bypass:
+                    try:
+                        if _av_bypass_enabled() and _is_av_model(attempt_model):
+                            logger.info(
+                                "anthropic_vertex_bypass_engaged",
+                                model=attempt_model,
+                                attempt=attempt + 1,
+                            )
+                            _anthropic_vertex_bypass_attempted = True
+                            self._set_last_runtime_route(
+                                channel="anthropic_vertex",
+                                model=attempt_model,
+                                route_reason="anthropic_vertex_bypass",
+                                route_detail="Anthropic Claude via Vertex AI direct SDK bypass (ADC, GCP credits)",
+                                status="pending",
+                                force_cloud=effective_force_cloud,
+                            )
+                            try:
+                                _av_text = await _av_complete(
+                                    model=attempt_model,
+                                    messages=messages_to_send,
+                                )
+                                if _av_text and _av_text.strip():
+                                    sanitized = self._sanitize_assistant_response(_av_text)
+                                    if sanitized:
+                                        _av_text = sanitized
+                                    self._set_last_runtime_route(
+                                        channel="anthropic_vertex",
+                                        model=attempt_model,
+                                        route_reason="anthropic_vertex_ok",
+                                        route_detail="Ответ через Anthropic Vertex AI direct SDK",
+                                        force_cloud=effective_force_cloud,
+                                    )
+                                    self._finalize_chat_response(chat_id, _av_text)
+                                    yield _av_text
+                                    return
+                                logger.warning(
+                                    "anthropic_vertex_empty_response_fallback",
+                                    model=attempt_model,
+                                )
+                            except Exception as _av_exc:  # noqa: BLE001
+                                logger.warning(
+                                    "anthropic_vertex_bypass_failed",
+                                    model=attempt_model,
+                                    error=str(_av_exc)[:200],
+                                    error_type=type(_av_exc).__name__,
+                                )
+                                # Fall through на следующий bypass / OpenClaw path
+                    except (NameError, ImportError) as _av_init_exc:
+                        logger.warning(
+                            "anthropic_vertex_bypass_init_skip",
+                            error=str(_av_init_exc),
+                            error_type=type(_av_init_exc).__name__,
                             model=attempt_model,
                         )
 
