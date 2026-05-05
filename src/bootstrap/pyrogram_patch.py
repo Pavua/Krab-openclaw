@@ -41,6 +41,7 @@ bootstrap — до создания первого Client().
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 
 log = logging.getLogger(__name__)
@@ -63,6 +64,15 @@ _STORAGE_CORRUPT_FLAGS: dict[int, bool] = {}
 _STORAGE_SUCCESS_COUNTS: dict[int, int] = {}  # id(storage) → consecutive successes
 _STORAGE_AUTO_CLEAR_THRESHOLD: int | None = None  # lazy из Config
 
+# Wave 24-D: auto-clear отключён по умолчанию.
+# До Wave 24-D auto-clear скрывал симптомы: N успешных reads после malformed write
+# снимали _corrupt_flag, но DB оставалась физически повреждённой (torn pages).
+# Теперь recovery идёт через _main_session_integrity_preflight + sqlite .recover,
+# а не через счётчик. Pre-Wave-24-D поведение: KRAB_STORAGE_CORRUPT_AUTO_CLEAR_ENABLED=1.
+KRAB_STORAGE_CORRUPT_AUTO_CLEAR_ENABLED: bool = os.environ.get(
+    "KRAB_STORAGE_CORRUPT_AUTO_CLEAR_ENABLED", "0"
+).strip() in {"1", "true", "yes"}
+
 
 def _get_auto_clear_threshold() -> int:
     """Возвращает порог авто-очистки, lazy-loaded из Config."""
@@ -82,7 +92,14 @@ def _record_storage_success(storage) -> None:
 
     Вызывается из success-path read/write wrapper'ов. Idempotent: повторные
     вызовы после сброса флага безопасны (счётчик тоже обнуляется при сбросе).
+
+    Wave 24-D: если KRAB_STORAGE_CORRUPT_AUTO_CLEAR_ENABLED=0 (default) — no-op.
+    Пока storage помечен corrupt все writes заблокированы; recovery идёт через
+    _main_session_integrity_preflight + sqlite .recover, не через счётчик.
     """
+    if not KRAB_STORAGE_CORRUPT_AUTO_CLEAR_ENABLED:
+        return  # Wave 24-D: auto-clear disabled by default — safer after Wave 24-D
+
     sid = id(storage)
     cnt = _STORAGE_SUCCESS_COUNTS.get(sid, 0) + 1
     _STORAGE_SUCCESS_COUNTS[sid] = cnt

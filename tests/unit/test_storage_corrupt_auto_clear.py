@@ -9,11 +9,16 @@ Wave 21-A: авто-очистка _corrupt_flag после N успешных r
 4. test_clear_resets_counter
 5. test_threshold_via_env_override
 6. test_no_double_log_when_already_clear
+
+Wave 24-D: auto-clear отключён по умолчанию (KRAB_STORAGE_CORRUPT_AUTO_CLEAR_ENABLED=0).
+Тесты Wave 21-A верифицируют поведение при ENABLED=1 — используется фикстура
+enable_auto_clear, которая выставляет env и перезагружает модуль.
 """
 
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 
 import pytest
@@ -23,13 +28,30 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _reload_patch_module():
-    """Перезагружает pyrogram_patch, сбрасывая все module-level dict'ы."""
+def _reload_patch_module(*, auto_clear_enabled: bool = True):
+    """Перезагружает pyrogram_patch, сбрасывая все module-level dict'ы.
+
+    Wave 24-D: auto_clear_enabled=True выставляет env перед импортом,
+    чтобы KRAB_STORAGE_CORRUPT_AUTO_CLEAR_ENABLED читался как "1".
+    """
     mod_name = "src.bootstrap.pyrogram_patch"
     if mod_name in sys.modules:
         del sys.modules[mod_name]
+    if auto_clear_enabled:
+        os.environ["KRAB_STORAGE_CORRUPT_AUTO_CLEAR_ENABLED"] = "1"
+    else:
+        os.environ.pop("KRAB_STORAGE_CORRUPT_AUTO_CLEAR_ENABLED", None)
     mod = importlib.import_module(mod_name)
     return mod
+
+
+@pytest.fixture(autouse=True)
+def enable_auto_clear(monkeypatch):
+    """Wave 24-D: включаем auto-clear для всех тестов этого файла (ENABLED=1).
+
+    После теста env восстанавливается автоматически через monkeypatch.
+    """
+    monkeypatch.setenv("KRAB_STORAGE_CORRUPT_AUTO_CLEAR_ENABLED", "1")
 
 
 class _FakeStorage:
