@@ -34,15 +34,28 @@ LOG_FILE = Path.home() / ".openclaw/krab_runtime_state/coexistence_monitor.log"
 # Паттерны командной строки для определения процессов Krab и Krab Ear
 KRAB_PATTERNS = ["userbot_bridge", "src/main.py"]
 EAR_PATTERNS = ["KrabEar", "krab.ear", "krab_ear"]
+# Wave 29-C-fix: исключаем Swift compiler (frontend/driver) — он попадает по пути
+# "/Users/pablito/Antigravity_AGENTS/Krab Ear/" даже когда Krab Ear не запущен.
+# False positive, обнаруженный agent investigation.
+EAR_EXCLUDE_PATTERNS = [
+    "swift-frontend",
+    "swift-driver",
+    "xcodebuild",
+    "/usr/bin/codesign",
+]
 
 
-def find_pids(name_patterns: list[str]) -> list[int]:
-    """Найти PID-ы процессов, чья cmdline содержит любой из паттернов."""
+def find_pids(name_patterns: list[str], exclude: list[str] | None = None) -> list[int]:
+    """Найти PID-ы процессов, чья cmdline содержит любой из паттернов.
+
+    `exclude` (Wave 29-C-fix) — фильтрует false positives (swift-frontend и т.п.).
+    """
     pids = []
+    excl = exclude or []
     for p in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
         try:
             cmd = " ".join(p.info.get("cmdline") or [])
-            if any(pat in cmd for pat in name_patterns):
+            if any(pat in cmd for pat in name_patterns) and not any(ex in cmd for ex in excl):
                 pids.append(p.info["pid"])
         except Exception:
             continue
@@ -83,7 +96,7 @@ def main() -> int:
 
     # Найти процессы
     krab_pids = find_pids(KRAB_PATTERNS)
-    ear_pids = find_pids(EAR_PATTERNS)
+    ear_pids = find_pids(EAR_PATTERNS, exclude=EAR_EXCLUDE_PATTERNS)
 
     # RSS каждого контура
     krab_rss = get_rss_bytes(krab_pids)
