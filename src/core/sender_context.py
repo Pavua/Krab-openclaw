@@ -222,6 +222,26 @@ def _extract_mentioned_users(
     except Exception:  # noqa: BLE001
         krab_mentioned = False
 
+    # Wave 25-F: дополнительно name-pattern check (Краб/krab/🦀/@username dynamic)
+    # mention_detector НЕ проверяет русское имя — только @-mention и user_id.
+    # is_krab_mentioned() закрывает «Краб, поздоровайся» / «эй краб» / «🦀, ...»
+    if not krab_mentioned:
+        try:
+            from src.core.krab_identity import is_krab_mentioned as _name_check
+
+            text_now = str(_attr(message, "text") or _attr(message, "caption") or "")
+            if text_now and _name_check(text_now):
+                krab_mentioned = True
+            else:
+                # Также скан reply_to_message body — пользователь мог процитировать
+                # сообщение которое адресовало Краба по имени.
+                reply = _attr(message, "reply_to_message")
+                reply_text = str(_attr(reply, "text") or _attr(reply, "caption") or "")
+                if reply_text and _name_check(reply_text):
+                    krab_mentioned = True
+        except Exception:  # noqa: BLE001
+            pass
+
     # Собираем все @username из entities
     entities = _attr(message, "entities") or []
     for entity in entities:
