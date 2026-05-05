@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.krab.coexistence-monitor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/krab_ear_coexistence_monitor.py</string>
+    </array>
+
+    <!-- Запускать каждые 60 секунд -->
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <!-- Первый запуск сразу при загрузке plist -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Логи stdout/stderr -->
+    <key>StandardOutPath</key>
+    <string>/tmp/krab_coexistence_monitor.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/krab_coexistence_monitor.err.log</string>
+
+    <!-- Не перезапускать автоматически (passive monitor) -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Низкий приоритет I/O — не мешаем основному Krab -->
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>
