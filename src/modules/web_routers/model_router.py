@@ -68,16 +68,107 @@ def build_model_router(ctx: RouterContext) -> APIRouter:
     @router.get("/api/model/status")
     async def model_status() -> dict:
         """Текущий статус модели и маршрутизации."""
+        import time as _time
+
+        from src.core.openclaw_runtime_models import get_runtime_primary_model
         from src.model_manager import model_manager as _mm
         from src.openclaw_client import openclaw_client as _oc
 
         route = _oc.get_last_runtime_route()
         provider_str = str(route.get("provider") or "").strip() or "unknown"
+        active_model = str(getattr(_mm, "active_model_id", None) or route.get("model", ""))
+
+        # --- reconciled_state: единый источник истины для UI ---
+        configured_primary = get_runtime_primary_model() or active_model
+
+        # Поля из последнего маршрута
+        last_model = str(route.get("model") or "").strip()
+        route_status_raw = str(route.get("status") or "").strip().lower()
+        route_ts = route.get("timestamp")  # unix int или None
+
+        # Нормализуем статус последнего вызова в понятный enum
+        if not last_model:
+            last_executed_status = "none"
+        elif route_status_raw in {"ok", "success"}:
+            last_executed_status = "success"
+        elif route_status_raw in {"error", "failed", "fail"}:
+            last_executed_status = "failed"
+        elif route_status_raw == "pending":
+            last_executed_status = "pending"
+        else:
+            last_executed_status = route_status_raw or "none"
+
+        # ISO timestamp последнего вызова (если есть)
+        if route_ts is not None:
+            try:
+                last_executed_at = datetime.fromtimestamp(
+                    int(route_ts), tz=timezone.utc
+                ).isoformat()
+            except (TypeError, ValueError, OSError):
+                last_executed_at = None
+        else:
+            last_executed_at = None
+
+        # Рекомендация от policy-advisor (если есть в route/recommendation)
+        recommendation: dict = {}
+        try:
+            router_obj = ctx.deps.get("router")
+            if router_obj and hasattr(router_obj, "get_profile_recommendation"):
+                recommendation = router_obj.get_profile_recommendation("chat") or {}
+        except Exception:  # noqa: BLE001
+            pass
+        policy_recommendation = str(recommendation.get("model") or "").strip()
+
+        # active_display — строка для UI
+        if not last_model or last_executed_status == "none":
+            active_display = f"Active: {configured_primary}"
+        else:
+            # Вычисляем давность последнего вызова
+            age_str = ""
+            if route_ts is not None:
+                try:
+                    age_sec = int(_time.time()) - int(route_ts)
+                    if age_sec < 60:
+                        age_str = f"{age_sec}s ago"
+                    elif age_sec < 3600:
+                        age_str = f"{age_sec // 60}m ago"
+                    else:
+                        age_str = f"{age_sec // 3600}h ago"
+                except (TypeError, ValueError):
+                    age_str = ""
+
+            status_icon = "✓" if last_executed_status == "success" else "✗"
+
+            if last_model == configured_primary:
+                # Последний вызов совпадает с primary — не дублируем
+                if age_str:
+                    active_display = f"Active: {configured_primary} ({status_icon} {age_str})"
+                else:
+                    active_display = f"Active: {configured_primary}"
+            else:
+                # Другая модель — показываем оба
+                last_part = (
+                    f"{last_model} {status_icon} {age_str}".strip()
+                    if age_str
+                    else f"{last_model} {status_icon}"
+                )
+                active_display = f"Active: {configured_primary} (last: {last_part})"
+
+        reconciled_state = {
+            "configured_primary": configured_primary,
+            "last_executed": last_model or None,
+            "last_executed_status": last_executed_status,
+            "last_executed_at": last_executed_at,
+            "policy_recommendation": policy_recommendation or None,
+            "active_display": active_display,
+        }
+
         return {
             "ok": True,
             "route": route,
             "provider": provider_str,
-            "active_model": str(getattr(_mm, "active_model_id", None) or route.get("model", "")),
+            "active_model": active_model,
+            "reconciled_state": reconciled_state,
         }
 
     # ---------- POST /api/model/switch ------------------------------------
@@ -799,6 +890,27 @@ def build_model_router(ctx: RouterContext) -> APIRouter:
             "depth": thinking_default,
             "thinking_default": thinking_default,
             "available_modes": modes,
+        }
+
+    # ---------- GET /api/codex/accounts (Wave 24-A) -----------------------
+    @router.get("/api/codex/accounts")
+    async def codex_accounts() -> dict:
+        """Список multi-account codex аккаунтов с состоянием ротации.
+
+        Возвращает все аккаунты из ~/.codex_accounts/ (залогиненные и нет),
+        текущий rotator state (calls_today, quota_exhausted_until, available).
+        """
+        try:
+            from src.integrations.codex_account_rotator import list_accounts
+
+            accounts = list_accounts()
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc), "accounts": []}
+        return {
+            "ok": True,
+            "accounts": accounts,
+            "total": len(accounts),
+            "available": sum(1 for a in accounts if a.get("available") and a.get("logged_in")),
         }
 
     return router
