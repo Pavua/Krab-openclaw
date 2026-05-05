@@ -22,6 +22,7 @@ external imports `from src.handlers.command_handlers import handle_X`).
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import pathlib
@@ -783,14 +784,171 @@ async def handle_note(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(reply_text)
 
 
+# ---------------------------------------------------------------------------
+# !quota — состояние квот по всем провайдерам
+# ---------------------------------------------------------------------------
+
+_LOG_FILE = pathlib.Path.home() / ".openclaw/krab_runtime_state/krab_main.log"
+
+
+async def _probe_gemini_cli(timeout: float = 15.0) -> str:
+    """Быстрый probe gemini-cli (free OAuth)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "gemini",
+            "--model",
+            "gemini-2.5-flash",
+            "-p",
+            "ok",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        if proc.returncode == 0 and stdout.strip():
+            return "✅ ok"
+        return "❌ failed"
+    except asyncio.TimeoutError:
+        return "⏱ timeout"
+    except FileNotFoundError:
+        return "⚠️ gemini not found"
+    except Exception as exc:  # noqa: BLE001
+        return f"⚠️ {str(exc)[:30]}"
+
+
+async def _probe_anthropic_vertex() -> str:
+    """Probe anthropic-vertex (claude-haiku-4-5, cheapest)."""
+    try:
+        import anthropic  # noqa: PLC0415
+
+        client = anthropic.AnthropicVertex(region="us-east5", project_id="caramel-anvil-492816-t5")
+        client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=5,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        return "✅ ok"
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)[:80]
+        if "429" in msg:
+            return "⏳ 0 quota (waiting Google approval)"
+        if "404" in msg:
+            return "❌ not_found"
+        return f"⚠️ {msg[:50]}"
+
+
+async def _probe_vertex_gemini() -> str:
+    """Probe google-vertex (gemini-2.5-flash через google-genai)."""
+    try:
+        from google import genai  # noqa: PLC0415
+
+        gc = genai.Client(
+            vertexai=True,
+            project="caramel-anvil-492816-t5",
+            location="global",
+        )
+        gc.models.generate_content(model="gemini-2.5-flash", contents="ok")
+        return "✅ ok"
+    except Exception as exc:  # noqa: BLE001
+        return f"⚠️ {str(exc)[:50]}"
+
+
+def _count_today_calls(log_file: pathlib.Path, today_str: str) -> dict[str, int]:
+    """Считает bypass-вызовы за сегодня по лог-файлу."""
+    counts: dict[str, int] = {
+        "gemini": 0,
+        "codex": 0,
+        "vertex": 0,
+        "anthropic": 0,
+    }
+    if not log_file.exists():
+        return counts
+    try:
+        with log_file.open(errors="replace") as fh:
+            for line in fh:
+                if today_str not in line:
+                    continue
+                if "cli_subprocess_bypass_engaged" in line:
+                    if "binary=gemini" in line:
+                        counts["gemini"] += 1
+                    elif "binary=codex" in line:
+                        counts["codex"] += 1
+                elif "google_vertex_bypass_engaged" in line:
+                    counts["vertex"] += 1
+                elif "anthropic_vertex_bypass_engaged" in line:
+                    counts["anthropic"] += 1
+    except OSError:
+        pass
+    return counts
+
+
+async def handle_quota(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !quota — показывает состояние квот по всем провайдерам.
+
+    Опции:
+    - ``!quota``            — полный отчёт (с probe)
+    - ``!quota --no-probe`` — только счётчики из лога (быстро, без сетевых вызовов)
+    """
+    del bot
+
+    raw = str(message.text or "")
+    no_probe = "--no-probe" in raw
+
+    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+
+    # Собираем счётчики из лога
+    counts = _count_today_calls(_LOG_FILE, today_str)
+
+    # Параллельные probe (если не --no-probe)
+    if no_probe:
+        gemini_status = "❓ пропущен (--no-probe)"
+        anthropic_status = "❓ пропущен (--no-probe)"
+        vertex_status = "❓ пропущен (--no-probe)"
+    else:
+        gemini_status, anthropic_status, vertex_status = await asyncio.gather(
+            _probe_gemini_cli(),
+            _probe_anthropic_vertex(),
+            _probe_vertex_gemini(),
+        )
+
+    text = (
+        f"📊 *Quota Status* ({today_str})\n"
+        "\n"
+        "🟢 *gemini-cli* (free OAuth, ~1000/day shared)\n"
+        f"   Probe: {gemini_status}\n"
+        f"   Today: {counts['gemini']} calls (bypass)\n"
+        "\n"
+        "🟢 *codex-cli* (ChatGPT Plus)\n"
+        f"   Today: {counts['codex']} calls\n"
+        "\n"
+        "🟡 *google-vertex* (€848 credits)\n"
+        f"   gemini-2.5-flash probe: {vertex_status}\n"
+        f"   Today: {counts['vertex']} calls\n"
+        "\n"
+        "🟣 *anthropic-vertex* (Claude)\n"
+        f"   claude-haiku-4-5 probe: {anthropic_status}\n"
+        f"   Today: {counts['anthropic']} calls"
+    )
+
+    # Wave 25-D-fix: Pyrogram требует enum или "Markdown"/"HTML" с capital
+    from pyrogram.enums import ParseMode
+
+    await message.reply(text, parse_mode=ParseMode.MARKDOWN)
+
+
 __all__ = [
     "_CHECKPOINTS_DIR",
+    "_count_today_calls",
     "_estimate_session_tokens",
     "_format_time_ago",
+    "_probe_anthropic_vertex",
+    "_probe_gemini_cli",
+    "_probe_vertex_gemini",
     "handle_bookmark",
     "handle_context",
     "handle_inbox",
     "handle_memo",
     "handle_note",
+    "handle_quota",
     "handle_watch",
 ]

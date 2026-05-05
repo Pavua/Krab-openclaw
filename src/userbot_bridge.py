@@ -138,6 +138,7 @@ from .handlers import (
     handle_purge,
     handle_qr,
     handle_quiz,
+    handle_quota,
     handle_rate,
     handle_react,
     handle_read,
@@ -978,6 +979,12 @@ class KraabUserbot(
         )
         async def wrap_watch(c, m):
             await run_cmd(handle_watch, m)
+
+        @self.client.on_message(
+            filters.command("quota", prefixes=prefixes) & _make_command_filter("quota"), group=-1
+        )
+        async def wrap_quota(c, m):
+            await run_cmd(handle_quota, m)
 
         @self.client.on_message(
             filters.command("memory", prefixes=prefixes) & _make_command_filter("memory"), group=-1

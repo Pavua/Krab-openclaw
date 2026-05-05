@@ -481,15 +481,20 @@ from .commands.state_commands import (  # noqa: E402, F401  # Phase 2 Wave 16
     handle_reset,
     handle_web,
 )
-from .commands.observability_commands import (  # noqa: E402, F401  # Phase 2 Wave 17
+from .commands.observability_commands import (  # noqa: E402, F401  # Phase 2 Wave 17 + Wave 25-D
     _CHECKPOINTS_DIR,
+    _count_today_calls,
     _estimate_session_tokens,
     _format_time_ago,
+    _probe_anthropic_vertex,
+    _probe_gemini_cli,
+    _probe_vertex_gemini,
     handle_bookmark,
     handle_context,
     handle_inbox,
     handle_memo,
     handle_note,
+    handle_quota,
     handle_watch,
 )
 from .commands.memory_admin_commands import (  # noqa: E402, F401  # Phase 2 Wave 18
