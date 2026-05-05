@@ -216,10 +216,13 @@ class SessionMixin:
         только при первом read и могла вешать процесс.
 
         Поток:
+        0. Wave 24-B: cleanup stale WAL/SHM если нет живого pyrofork writer'а.
         1. Если файл отсутствует → return True (фрэш auth flow handled выше).
         2. Если backup `.bak-corrupt-*` моложе 1h существует → ТОЛЬКО integrity
            check (skip recovery loop, чтобы не зацикливаться).
         3. integrity_check на read-only connection.
+        3b. Wave 24-B: peers threshold check — integrity_check ok, но peers < MIN →
+            лог warning + тригерит recovery (DB pristine/wiped, не работает с Telegram).
         4. На corruption → backup + WAL/SHM cleanup + `.recover` → integrity
            recheck → atomic replace.
         5. На irrecoverable → DBCorruptionError (runtime.py выходит exit 78).
@@ -239,8 +242,23 @@ class SessionMixin:
             is_corruption_error,
             report_corruption_to_sentry,
         )
+        from ..bootstrap.session_recovery import (
+            MIN_PEERS_THRESHOLD,
+            check_peers_count,
+            cleanup_stale_wal_shm,
+        )
 
         sess_path = self._primary_session_file()
+
+        # Wave 24-B: шаг 0 — удаляем stale WAL/SHM перед integrity_check.
+        # Stale WAL после non-clean shutdown даёт "disk I/O error" при следующем open.
+        wal_cleaned = cleanup_stale_wal_shm(sess_path)
+        if wal_cleaned:
+            logger.info(
+                "main_session_stale_wal_shm_cleaned",
+                file=str(sess_path),
+            )
+
         if not sess_path.exists():
             # Fresh session — nothing to check. Pyrogram сам создаст файл
             # при первом start (либо запросит phone-code в interactive flow).
@@ -248,10 +266,39 @@ class SessionMixin:
 
         ok, detail = integrity_check(sess_path)
         if ok:
+            # Wave 24-B: шаг 3b — peers threshold check.
+            # integrity_check ok, но DB может быть pristine/wiped (0 peers).
+            peers_ok, peers_count = check_peers_count(sess_path)
+            if not peers_ok:
+                logger.warning(
+                    "main_session_peers_below_threshold",
+                    file=str(sess_path),
+                    peers_count=peers_count,
+                    min_threshold=MIN_PEERS_THRESHOLD,
+                    action="triggering_recovery",
+                )
+                # Не возвращаем True — форсируем recovery (DB pristine/wiped).
+                recovery = attempt_session_recovery(sess_path, timeout_sec=30.0)
+                if recovery.get("recovered"):
+                    logger.info(
+                        "main_session_peers_threshold_recovery_ok",
+                        file=str(sess_path),
+                        peers_before=peers_count,
+                        peers_after=recovery.get("peer_count"),
+                    )
+                else:
+                    logger.warning(
+                        "main_session_peers_threshold_recovery_skipped",
+                        file=str(sess_path),
+                        detail=recovery.get("detail", ""),
+                    )
+                return True
+
             logger.info(
                 "main_session_integrity_ok",
                 file=str(sess_path),
                 detail=detail,
+                peers_count=peers_count,
             )
             return True
 
