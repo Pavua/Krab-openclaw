@@ -99,6 +99,67 @@ _GENERIC_AI_SCORE = 0.55
 _FOLLOWUP_WINDOW_SEC: int = 5 * 60  # 5 минут
 _FOLLOWUP_SCORE = 0.65
 
+# ---------------------------------------------------------------------------
+# Implicit question detection (Wave 26-B)
+# ---------------------------------------------------------------------------
+
+# Расширенное окно для IMPLICIT_QUESTION — 10 минут после ответа Краба
+_IMPLICIT_QUESTION_WINDOW_SEC: int = 10 * 60  # 10 минут
+
+# Score IMPLICIT_QUESTION — выше threshold 0.6, сразу срабатывает на Stage 3 (regex_high)
+_IMPLICIT_QUESTION_CTX_SCORE = 0.65
+
+# ENV gate — по умолчанию включено; выключить если много ложных срабатываний
+KRAB_IMPLICIT_QUESTION_DETECTION_ENABLED: bool = os.environ.get(
+    "KRAB_IMPLICIT_QUESTION_DETECTION_ENABLED", "1"
+).strip() in {"1", "true", "yes"}
+
+# Префиксные эвристики для вопросов (нижний регистр)
+_IQ_PREFIX_PATTERNS: tuple[str, ...] = (
+    "а ",
+    "а если",
+    "а что",
+    "а как",
+    "а когда",
+    "а почему",
+    "и что",
+    "и как",
+    "и если",
+    "ну как",
+    "ну а ",
+    "ну и ",
+    "почему ",
+    "когда ",
+    "где ",
+    "куда ",
+    "кто ",
+    "что думаешь",
+    "что скажешь",
+    "что считаешь",
+    "как думаешь",
+    "как считаешь",
+    "как тебе",
+    "как по-твоему",
+    "как ты",
+    "зачем ",
+    "откуда ",
+)
+
+# Короткие standalone вопросы (ровно эти тексты после strip().lower())
+_IQ_STANDALONE: frozenset[str] = frozenset(
+    {
+        "?",
+        "продолжай",
+        "и что?",
+        "ну и?",
+        "а дальше?",
+        "дальше?",
+        "интересно",
+        "ну как?",
+        "ну?",
+    }
+)
+
 
 # ---------------------------------------------------------------------------
 # Last-Krab-message tracker (in-process, per chat_id)
@@ -133,6 +194,66 @@ last_krab_msg = _LastKrabMsgStore()
 
 
 # ---------------------------------------------------------------------------
+# Функция detect_implicit_question (Wave 26-B)
+# ---------------------------------------------------------------------------
+
+
+def detect_implicit_question(
+    text: str,
+    chat_id: str | int = "",
+    *,
+    in_window: bool | None = None,
+) -> bool:
+    """Определить, является ли сообщение неявным вопросом к Крабу по контексту.
+
+    Работает поверх существующей логики follow-up: если Краб недавно отвечал
+    (в пределах 10 минут) — анализируем эвристики вопросительного текста.
+
+    Args:
+        text:      Текст сообщения (или caption).
+        chat_id:   ID чата для проверки окна last_krab_msg.
+        in_window: Переопределить проверку окна (True/False) — для тестов.
+                   None (default) — использовать реальный last_krab_msg.
+
+    Returns:
+        True если сообщение является неявным вопросом к Крабу.
+    """
+    # ENV gate
+    if not KRAB_IMPLICIT_QUESTION_DETECTION_ENABLED:
+        return False
+
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+
+    low = stripped.lower()
+
+    # Проверка вопросительных эвристик
+    is_question = (
+        # Заканчивается на "?"
+        low.endswith("?")
+        # Standalone короткие реплики
+        or low in _IQ_STANDALONE
+        # Начинается с одного из вопросительных префиксов
+        or any(low.startswith(pfx) for pfx in _IQ_PREFIX_PATTERNS)
+    )
+    if not is_question:
+        return False
+
+    # Проверка временного окна после ответа Краба
+    if in_window is None:
+        # Реальная проверка через singleton
+        window_ok = last_krab_msg.within_window(chat_id, window=_IMPLICIT_QUESTION_WINDOW_SEC)
+    else:
+        window_ok = in_window
+
+    if not window_ok:
+        return False
+
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Основная функция
 # ---------------------------------------------------------------------------
 
@@ -163,9 +284,20 @@ def detect_implicit_mention(
     thresh = threshold if threshold is not None else _threshold()
     text_s = text.strip()
 
-    # 1. Follow-up к недавнему ответу Краба
+    # 1. Follow-up к недавнему ответу Краба (5 мин окно)
     if chat_id and not is_reply_to_explicit_msg and last_krab_msg.within_window(chat_id):
         return TriggerResult(TriggerType.FOLLOWUP_TO_KRAB, _FOLLOWUP_SCORE, "followup_window")
+
+    # 1.5. Implicit question в расширенном окне 10 мин (Wave 26-B):
+    # Проверяем ПОСЛЕ follow-up (5 мин), так как 5-10 мин попадает только сюда.
+    # detect_implicit_question учитывает ENV gate и _IMPLICIT_QUESTION_WINDOW_SEC.
+    if chat_id and not is_reply_to_explicit_msg and detect_implicit_question(text_s, chat_id):
+        if _IMPLICIT_QUESTION_CTX_SCORE >= thresh:
+            return TriggerResult(
+                TriggerType.IMPLICIT_QUESTION,
+                _IMPLICIT_QUESTION_CTX_SCORE,
+                "implicit_question_ctx",
+            )
 
     # 2. Implicit question-at-AI
     for pat in _IMPLICIT_QUESTION_PATTERNS:
