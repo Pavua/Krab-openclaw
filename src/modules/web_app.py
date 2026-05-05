@@ -8844,6 +8844,11 @@ class WebApp:
 
         self.app.include_router(_build_costs(self._make_router_context()))
 
+        # Wave 29-B: /api/quota — multi-provider quota status (panel UI version of !quota)
+        from .web_routers.quota_router import build_quota_router as _build_quota
+
+        self.app.include_router(_build_quota(self._make_router_context()))
+
         # /api/swarm/{status,memory} перенесены в swarm_router (Wave ZZ, Session 26).
 
         # ── Browser Bridge API + Dedicated Chrome ───────────────────────────
