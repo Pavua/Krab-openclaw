@@ -132,6 +132,40 @@ def _extract_forward_origin_parts(message: Any) -> tuple[Any, Any, Any]:
     return forward_from, forward_sender_name, forward_from_chat
 
 
+# ---------------------------------------------------------------------------
+# Greeting target detection (Wave 26-A)
+# ---------------------------------------------------------------------------
+
+# Ключевые слова: owner просит Краба обратиться к кому-то конкретному
+_GREETING_KEYWORDS = (
+    "поздоровайся",
+    "поздоровайся-ка",
+    "приветствуй",
+    "встречай",
+    "встреть",
+    "тегни",
+    "тэгни",
+    "упомяни",
+    "@-апни",
+    "апни",
+    "позови",
+    "представь",
+    "пожми руку",
+    "скажи привет",
+    "скажи здравствуй",
+    "поприветствуй",
+    "пнгни",
+)
+
+
+def detect_greeting_request(text: str) -> bool:
+    """True если owner просит Краба обратиться к конкретному пользователю."""
+    if not text:
+        return False
+    low = text.lower()
+    return any(kw in low for kw in _GREETING_KEYWORDS)
+
+
 _REPLY_TEXT_MAX_LEN = 500
 
 
@@ -377,6 +411,22 @@ def build_context_block(
                     " на которое отвечает user. Контекстуализируй свой ответ относительно него."
                 )
 
+        # --- Greeting target hint (Wave 26-A) ---
+        # Если owner делает reply на чьё-то сообщение И пишет слова типа
+        # "поздоровайся / тегни / упомяни" — LLM должна адресовать ответ
+        # именно этому пользователю, а не отвечать generic "путник"/"друг".
+        msg_text = str(_attr(message, "text") or _attr(message, "caption") or "")
+        if rpl["is_reply"] and rpl["reply_to_user_id"] and detect_greeting_request(msg_text):
+            _target_name = rpl["reply_to_name"] or rpl["reply_to_username"] or "пользователя"
+            _target_id = rpl["reply_to_user_id"]
+            lines.append(
+                f"greeting_target_hint: Owner просит обратиться к пользователю reply_to "
+                f"(user_id={_target_id}, name={_target_name}). "
+                f"В ответе ОБЯЗАТЕЛЬНО упомяни его по имени: "
+                f"[{_target_name}](tg://user?id={_target_id}) "
+                f"— НЕ используй generic «путник» / «друг» / «незнакомец»."
+            )
+
         # --- Mentions block ---
         if mentioned_users:
             lines.append(f"mentioned_users: {', '.join(mentioned_users)}")
@@ -480,5 +530,6 @@ __all__ = [
     "attach_to_system_prompt",
     "build_context_block",
     "build_sender_context_from_message",
+    "detect_greeting_request",
     "is_owner_user_id",
 ]
