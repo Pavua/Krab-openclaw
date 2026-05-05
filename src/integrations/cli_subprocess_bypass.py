@@ -25,6 +25,7 @@ import shutil
 from typing import Any
 
 from ..core.logger import get_logger
+from ._bypass_sentry import add_bypass_breadcrumb
 
 logger = get_logger(__name__)
 
@@ -187,6 +188,13 @@ async def complete_via_cli(
         binary=binary_name,
         prompt_len=len(prompt_text),
     )
+    # Breadcrumb: старт CLI bypass — для post-mortem trace (Wave 30-B)
+    add_bypass_breadcrumb(
+        bypass_kind="cli",
+        event="engaged",
+        model=model_id,
+        extra={"binary": binary_name, "prompt_len": len(prompt_text)},
+    )
 
     cmd = _build_cmd(binary_path, binary_name, model_id, prompt_text)
 
@@ -214,6 +222,14 @@ async def complete_via_cli(
                 await proc.wait()
             except Exception:  # noqa: BLE001
                 pass
+            # Breadcrumb: таймаут CLI subprocess (Wave 30-B)
+            add_bypass_breadcrumb(
+                bypass_kind="cli",
+                event="timeout",
+                model=model_id,
+                extra={"binary": binary_name, "timeout_sec": timeout_sec},
+                level="warning",
+            )
             raise RuntimeError(f"CLI subprocess timeout после {timeout_sec}s: {binary_name}")
 
         stderr_text = stderr_data.decode("utf-8", errors="ignore")[:500]
@@ -225,6 +241,18 @@ async def complete_via_cli(
                 binary=binary_name,
                 returncode=proc.returncode,
                 stderr=stderr_text,
+            )
+            # Breadcrumb: non-zero exit — returncode + stderr preview для диагностики (Wave 30-B)
+            add_bypass_breadcrumb(
+                bypass_kind="cli",
+                event="failure",
+                model=model_id,
+                extra={
+                    "binary": binary_name,
+                    "returncode": proc.returncode,
+                    "stderr_preview": stderr_text[:200],
+                },
+                level="warning",
             )
             # codex/gemini могут вернуть текст в stdout даже при non-zero exit (warnings)
 
@@ -253,6 +281,13 @@ async def complete_via_cli(
             binary=binary_name,
             response_len=len(text),
             returncode=proc.returncode,
+        )
+        # Breadcrumb: успешный CLI bypass — response_len для post-mortem (Wave 30-B)
+        add_bypass_breadcrumb(
+            bypass_kind="cli",
+            event="success",
+            model=model_id,
+            extra={"binary": binary_name, "response_len": len(text)},
         )
         return text
 

@@ -22,6 +22,7 @@ import os
 from typing import Any
 
 from ..core.logger import get_logger
+from ._bypass_sentry import add_bypass_breadcrumb
 
 logger = get_logger(__name__)
 
@@ -89,6 +90,13 @@ async def complete_via_vertex(
     proj = project or os.environ.get("KRAB_VERTEX_PROJECT") or DEFAULT_PROJECT
     loc = location or os.environ.get("KRAB_VERTEX_LOCATION") or DEFAULT_LOCATION
     bare_model = _strip_prefix(model)
+    # Breadcrumb: старт Vertex bypass — project + location для post-mortem (Wave 30-B)
+    add_bypass_breadcrumb(
+        bypass_kind="vertex",
+        event="engaged",
+        model=bare_model,
+        extra={"project": proj, "location": loc},
+    )
 
     # ADC ожидает GOOGLE_CLOUD_PROJECT для quota project resolution
     if not os.environ.get("GOOGLE_CLOUD_PROJECT"):
@@ -125,7 +133,24 @@ async def complete_via_vertex(
         )
         return (resp.text or "").strip()
 
-    text = await asyncio.to_thread(_sync_call)
+    try:
+        text = await asyncio.to_thread(_sync_call)
+    except Exception as exc:
+        # Breadcrumb: Vertex SDK error — error_type + project + region для диагностики (Wave 30-B)
+        add_bypass_breadcrumb(
+            bypass_kind="vertex",
+            event="failure",
+            model=bare_model,
+            extra={
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:200],
+                "project": proj,
+                "location": loc,
+            },
+            level="warning",
+        )
+        raise
+
     if not text:
         # Wave 18-I-style retry с thinking_budget=0 здесь НЕ нужен — Vertex
         # 2.5 модели не имеют thinking enabled by default (3.x на Vertex недоступны).
@@ -137,5 +162,12 @@ async def complete_via_vertex(
         project=proj,
         location=loc,
         length=len(text),
+    )
+    # Breadcrumb: успешный Vertex bypass (Wave 30-B)
+    add_bypass_breadcrumb(
+        bypass_kind="vertex",
+        event="success",
+        model=bare_model,
+        extra={"project": proj, "location": loc, "response_len": len(text)},
     )
     return text

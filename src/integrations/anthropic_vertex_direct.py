@@ -29,6 +29,7 @@ import os
 from typing import Any
 
 from ..core.logger import get_logger
+from ._bypass_sentry import add_bypass_breadcrumb
 
 logger = get_logger(__name__)
 
@@ -134,6 +135,13 @@ async def complete_via_anthropic_vertex(
     proj = project or os.environ.get("KRAB_ANTHROPIC_VERTEX_PROJECT") or DEFAULT_PROJECT
     reg = region or os.environ.get("KRAB_ANTHROPIC_VERTEX_REGION") or DEFAULT_REGION
     bare_model = _strip_prefix(model)
+    # Breadcrumb: старт Anthropic-via-Vertex bypass — region + project (Wave 30-B)
+    add_bypass_breadcrumb(
+        bypass_kind="anthropic-vertex",
+        event="engaged",
+        model=bare_model,
+        extra={"project": proj, "region": reg},
+    )
 
     system, chat_messages = _build_messages_for_anthropic(messages)
 
@@ -154,12 +162,36 @@ async def complete_via_anthropic_vertex(
             return resp.content[0].text or ""
         return ""
 
-    text = await asyncio.to_thread(_sync_call)
+    try:
+        text = await asyncio.to_thread(_sync_call)
+    except Exception as exc:
+        # Breadcrumb: Anthropic Vertex SDK error — error_type + region + project (Wave 30-B)
+        add_bypass_breadcrumb(
+            bypass_kind="anthropic-vertex",
+            event="failure",
+            model=bare_model,
+            extra={
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:200],
+                "project": proj,
+                "region": reg,
+            },
+            level="warning",
+        )
+        raise
+
     logger.info(
         "anthropic_vertex_complete_done",
         model=bare_model,
         region=reg,
         project=proj,
         length=len(text),
+    )
+    # Breadcrumb: успешный Anthropic Vertex bypass (Wave 30-B)
+    add_bypass_breadcrumb(
+        bypass_kind="anthropic-vertex",
+        event="success",
+        model=bare_model,
+        extra={"project": proj, "region": reg, "response_len": len(text)},
     )
     return text

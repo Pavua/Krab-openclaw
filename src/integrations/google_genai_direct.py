@@ -20,23 +20,28 @@ import time
 from typing import Any
 
 from ..core.logger import get_logger
+from ._bypass_sentry import add_bypass_breadcrumb
 
 logger = get_logger(__name__)
 
 
-def _add_sentry_breadcrumb(category: str, message: str, level: str = "info", **data: Any) -> None:
-    """Best-effort Sentry breadcrumb для bypass trace. Silent если sentry_sdk не установлен."""
-    try:
-        import sentry_sdk  # type: ignore[import-not-found]
-
-        sentry_sdk.add_breadcrumb(
-            category=f"krab.bypass.{category}",
-            message=message,
-            level=level,
-            data=data,
-        )
-    except (ImportError, Exception):  # noqa: BLE001 — breadcrumbs не должны ронять hot-path
-        pass
+def _add_genai_breadcrumb(
+    event: str,
+    model: str,
+    *,
+    is_gemma: bool = False,
+    level: str = "info",
+    **data: Any,
+) -> None:
+    """Обёртка над add_bypass_breadcrumb с разделением gemini/gemma путей (Wave 30-B)."""
+    bypass_kind = "gemma" if is_gemma else "google-direct"
+    add_bypass_breadcrumb(
+        bypass_kind=bypass_kind,
+        event=event,
+        model=model,
+        extra=dict(data) if data else None,
+        level=level,
+    )
 
 
 def is_google_direct_enabled() -> bool:
@@ -204,10 +209,10 @@ async def complete_direct(
         has_system=bool(system_instruction),
     )
     # Breadcrumb: старт bypass — для post-mortem trace (когда начался bypass и с какой моделью)
-    _add_sentry_breadcrumb(
-        "start",
-        f"Google direct bypass для {model_id}",
-        model=model_id,
+    _add_genai_breadcrumb(
+        "engaged",
+        model_id,
+        is_gemma=is_gemma_model(model),
         has_system=bool(system_instruction),
         contents_count=len(contents),
     )
@@ -270,10 +275,10 @@ async def complete_direct(
             )
             # Breadcrumb: пустой ответ → retry с thinking_budget=0
             # (Wave 18-I: Gemini 3-pro тратит весь output budget на thinking при коротких prompts)
-            _add_sentry_breadcrumb(
+            _add_genai_breadcrumb(
                 "empty_retry",
-                "Empty response — retrying с thinking_budget=0",
-                model=model_id,
+                model_id,
+                is_gemma=is_gemma_model(model),
                 thoughts_tokens=thoughts_tokens,
                 prompt_tokens=prompt_tokens,
             )
@@ -318,11 +323,11 @@ async def complete_direct(
         _elapsed = time.monotonic() - _t0
         logger.warning("google_genai_direct_timeout", model=model_id, timeout_sec=timeout_sec)
         # Breadcrumb: таймаут bypass — видно в Sentry trace без отдельного event
-        _add_sentry_breadcrumb(
-            "error",
-            f"Bypass timeout после {round(_elapsed, 2)}s",
+        _add_genai_breadcrumb(
+            "timeout",
+            model_id,
+            is_gemma=is_gemma_model(model),
             level="warning",
-            model=model_id,
             error="TimeoutError",
             latency_sec=round(_elapsed, 2),
         )
@@ -338,12 +343,12 @@ async def complete_direct(
         _elapsed = time.monotonic() - _t0
         logger.warning("google_genai_direct_error", model=model_id, error=str(exc))
         # Breadcrumb: исключение bypass — error_type помогает сортировать по причине
-        _add_sentry_breadcrumb(
-            "error",
-            f"Bypass failed: {type(exc).__name__}",
+        _add_genai_breadcrumb(
+            "failure",
+            model_id,
+            is_gemma=is_gemma_model(model),
             level="warning",
-            model=model_id,
-            error=str(exc),
+            error=str(exc)[:200],
             error_type=type(exc).__name__,
             latency_sec=round(_elapsed, 2),
         )
@@ -364,10 +369,10 @@ async def complete_direct(
         response_len=len(text),
     )
     # Breadcrumb: успешный bypass — latency + response_len для post-mortem анализа
-    _add_sentry_breadcrumb(
+    _add_genai_breadcrumb(
         "success",
-        "Bypass completed",
-        model=model_id,
+        model_id,
+        is_gemma=is_gemma_model(model),
         latency_sec=round(_elapsed, 2),
         response_len=len(text),
         is_empty=not text.strip(),
