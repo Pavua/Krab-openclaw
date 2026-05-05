@@ -1442,6 +1442,79 @@ async def handle_health(bot: "KraabUserbot", message: Message) -> None:
     except Exception as exc:
         lines.append(f"❌ Rate Limiter: ошибка ({exc})")
 
+    # Wave 30-C: Bypass providers — статус каждого прямого bypass провайдера
+    lines.append("─────────────────")
+    lines.append("🔌 **Bypass providers**")
+
+    # CLI subprocess bypass (codex + gemini-cli)
+    try:
+        from ...integrations.cli_subprocess_bypass import is_cli_subprocess_enabled
+
+        cli_enabled = is_cli_subprocess_enabled()
+        lines.append(f"  CLI subprocess: {'✅' if cli_enabled else '❌'} (codex+gemini)")
+    except Exception as exc:
+        lines.append(f"  CLI subprocess: ❓ ({exc})")
+
+    # Google Vertex direct bypass
+    try:
+        from ...integrations.google_vertex_direct import is_vertex_enabled
+
+        vertex_enabled = is_vertex_enabled()
+        lines.append(f"  Google Vertex:  {'✅' if vertex_enabled else '❌'}")
+    except Exception as exc:
+        lines.append(f"  Google Vertex:  ❓ ({exc})")
+
+    # Anthropic via Vertex bypass
+    try:
+        from ...integrations.anthropic_vertex_direct import is_anthropic_vertex_enabled
+
+        av_enabled = is_anthropic_vertex_enabled()
+        lines.append(f"  Anthropic Vertex: {'✅' if av_enabled else '❌'}")
+    except Exception as exc:
+        lines.append(f"  Anthropic Vertex: ❓ ({exc})")
+
+    # Google AI Studio direct bypass (google/gemini-* и gemma-*)
+    try:
+        from ...integrations.google_genai_direct import is_google_direct_enabled
+
+        gd_enabled = is_google_direct_enabled()
+        lines.append(f"  Google AI Studio: {'✅' if gd_enabled else '❌'}")
+    except Exception as exc:
+        lines.append(f"  Google AI Studio: ❓ ({exc})")
+
+    # Счётчики bypass-вызовов за сегодня из лог-файла
+    try:
+        import datetime as _dt
+        import pathlib as _pl
+
+        from .observability_commands import _count_today_calls
+
+        _log = _pl.Path.home() / ".openclaw/krab_runtime_state/krab_main.log"
+        _today = _dt.datetime.now().strftime("%Y-%m-%d")
+        counts = _count_today_calls(_log, _today)
+        lines.append(
+            f"\n📊 **Bypass calls today** — "
+            f"codex: {counts.get('codex', 0)}, "
+            f"gemini: {counts.get('gemini', 0)}, "
+            f"vertex: {counts.get('vertex', 0)}, "
+            f"anthropic: {counts.get('anthropic', 0)}"
+        )
+    except Exception as exc:
+        lines.append(f"  calls today: ❓ ({exc})")
+
+    # Wave 24-A: статус multi-account Codex rotation
+    try:
+        from ...integrations.codex_account_rotator import list_accounts
+
+        accounts = list_accounts()
+        if accounts:
+            lines.append("🔑 **Codex accounts**")
+            for acc in accounts:
+                _status = "✅" if (acc.get("logged_in") and acc.get("available")) else "⏸"
+                lines.append(f"  {acc['name']}: {_status} (calls: {acc.get('calls_today', 0)})")
+    except Exception as exc:
+        lines.append(f"  Codex accounts: ❓ ({exc})")
+
     report = "\n".join(lines)
     if message.from_user and message.from_user.id == bot.me.id:
         await message.edit(report)
