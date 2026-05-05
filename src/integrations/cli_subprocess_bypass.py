@@ -101,12 +101,24 @@ def _build_messages_text(messages: list[dict[str, Any]]) -> str:
 
 def _build_cmd(
     binary_path: str,
-    binary_name: str,  # noqa: ARG001 — reserved для future per-binary logic
+    binary_name: str,
     model_id: str,
     prompt_text: str,
 ) -> list[str]:
-    """Строит команду для spawn subprocess с учётом специфики каждой binary."""
-    # Оба codex и gemini поддерживают --model и -p флаги
+    """Строит команду для spawn subprocess с учётом специфики каждой binary.
+
+    codex: использует subcommand `exec` + positional prompt (`-p` зарезервирован
+    под `--profile` в codex CLI, поэтому prompt идёт ПОСЛЕДНИМ аргументом).
+    gemini: `-p/--prompt` флаг для non-interactive headless mode.
+    """
+    if binary_name == "codex":
+        # Wave 25-D-fix-2: codex требует `exec` + positional prompt
+        cmd = [binary_path, "exec"]
+        if model_id and model_id not in ("default", ""):
+            cmd.extend(["--model", model_id])
+        cmd.append(prompt_text)
+        return cmd
+    # gemini (default): -p/--prompt is the headless flag
     if model_id and model_id not in ("default", ""):
         return [binary_path, "--model", model_id, "-p", prompt_text]
     return [binary_path, "-p", prompt_text]
