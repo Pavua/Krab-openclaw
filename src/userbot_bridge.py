@@ -2240,22 +2240,60 @@ class KraabUserbot(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("command_usage_periodic_save_failed", error=str(exc))
 
+    @staticmethod
+    async def _probe_telegram_dc(timeout: float = 5.0) -> bool:
+        """
+        Активный TCP-probe к Telegram DC1 (149.154.167.50:443).
+        Возвращает True если соединение успешно установлено.
+        Не шлёт никаких данных — только проверяет TCP reachability.
+        """
+        try:
+            _reader, writer = await asyncio.wait_for(
+                asyncio.open_connection("149.154.167.50", 443),
+                timeout=timeout,
+            )
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:  # noqa: BLE001
+                pass
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     async def _network_offline_monitor_loop(self) -> None:
         """
         Мониторинг сетевого offline: если Krab не получал Telegram-событий
         дольше KRAB_NETWORK_OFFLINE_ALERT_SEC секунд — отправляет алерт владельцу.
 
-        Дебаунс: не более 1 алерта каждые 10 минут (600 сек).
+        Wave 27-A улучшения:
+        - Threshold увеличен до 180s default (60s был слишком агрессивным, pyrofork heartbeat ~30-60s)
+        - Active TCP probe к DC перед алертом — false-alarm filter (quiet hour)
+        - Auto-reconnect при реальном offline: disconnect + start, при успехе — не алертим
+        - Alert debounce увеличен до 1800s (30 мин)
+        - ENV: KRAB_NETWORK_SILENCE_THRESHOLD_SEC, KRAB_NETWORK_ALERT_DEBOUNCE_SEC
+
+        Дебаунс: не более 1 алерта каждые 30 минут (1800 сек).
         Логика: отслеживаем _last_telegram_event_ts, обновляемый в _process_message.
         Не считаем offline, если userbot только что стартовал (grace period = threshold).
         """
         _raw_threshold = int(getattr(config, "KRAB_NETWORK_OFFLINE_ALERT_SEC", 60) or 60)
         if _raw_threshold == 0:
             return  # мониторинг отключён через env
-        threshold_sec = max(30, _raw_threshold)
 
-        debounce_sec = 600  # 10 минут между алертами
-        check_interval = max(15, threshold_sec // 4)
+        # Wave 27-A: threshold из нового env или legacy, минимум 60s
+        _env_threshold = os.environ.get("KRAB_NETWORK_SILENCE_THRESHOLD_SEC")
+        if _env_threshold is not None:
+            threshold_sec = max(60, int(_env_threshold))
+        else:
+            # Если legacy KRAB_NETWORK_OFFLINE_ALERT_SEC == 60 (default), поднимаем до 180
+            threshold_sec = _raw_threshold if _raw_threshold > 60 else 180
+
+        # Wave 27-A: debounce из env или 30 минут default
+        _env_debounce = os.environ.get("KRAB_NETWORK_ALERT_DEBOUNCE_SEC")
+        debounce_sec = int(_env_debounce) if _env_debounce is not None else 1800  # 30 мин
+
+        check_interval = max(15, threshold_sec // 6)
         _last_alert_ts: float = 0.0
         _alert_active: bool = False  # флаг «алерт уже был отправлен»
 
@@ -2276,8 +2314,44 @@ class KraabUserbot(
                         _alert_active = False
                         continue
 
-                    # Отправляем алерт при дебаунсе
+                    # Wave 27-A: Active TCP probe — если DC reachable, это quiet hour, не алертим
+                    dc_reachable = await self._probe_telegram_dc()
+                    if dc_reachable:
+                        logger.debug(
+                            "network_silence_but_dc_reachable",
+                            silence_sec=round(silence_sec, 1),
+                            threshold_sec=threshold_sec,
+                        )
+                        continue
+
+                    # DC недоступен — пробуем auto-reconnect перед алертом
                     if now - _last_alert_ts >= debounce_sec:
+                        logger.warning(
+                            "network_silence_dc_unreachable_attempting_reconnect",
+                            silence_sec=round(silence_sec, 1),
+                        )
+                        try:
+                            if self.client:
+                                await self.client.disconnect()
+                            await asyncio.sleep(2)
+                            if self.client:
+                                await self.client.start()
+                            # Reconnect удался — сбрасываем ts и не алертим
+                            self._last_telegram_event_ts = time.time()
+                            logger.info(
+                                "network_silence_auto_reconnected",
+                                silence_sec=round(silence_sec, 1),
+                            )
+                            _alert_active = False
+                            continue
+                        except Exception as _re:  # noqa: BLE001
+                            logger.warning(
+                                "network_silence_reconnect_failed",
+                                error=str(_re),
+                                silence_sec=round(silence_sec, 1),
+                            )
+
+                        # Reconnect не помог — отправляем алерт
                         _last_alert_ts = now
                         _alert_active = True
                         silence_min = int(silence_sec // 60)
@@ -2285,7 +2359,7 @@ class KraabUserbot(
                         msg = (
                             f"⚠️ **Krab: нет Telegram-событий {silence_min}м {silence_s}с**\n"
                             f"MTProto подключён, но входящих сообщений не было >{threshold_sec}s.\n"
-                            f"Возможен backoff/throttle на стороне Telegram.\n"
+                            f"DC probe: недоступен. Auto-reconnect не помог.\n"
                             f"Используй `!health` для диагностики."
                         )
                         logger.warning(
