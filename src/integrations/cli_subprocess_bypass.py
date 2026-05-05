@@ -13,6 +13,8 @@ Activated only когда модель starts с одним из префикс�
 KRAB_CLI_SUBPROCESS_BYPASS_ENABLED=1 (default ON).
 
 Симметрично OpenClawClient._openclaw_completion_once() — возвращает str.
+
+Wave 24-A: Multi-account codex rotation через CODEX_HOME isolation.
 """
 
 from __future__ import annotations
@@ -148,6 +150,24 @@ async def complete_via_cli(
         logger.warning("cli_subprocess_no_messages", model=model_id, binary=binary_name)
         return ""
 
+    # Wave 24-A: Multi-account rotation для codex — выбираем CODEX_HOME из пула
+    env_overrides: dict[str, str] = {}
+    _rotator_account: str | None = None
+    if binary_name == "codex":
+        try:
+            from .codex_account_rotator import get_account_name_from_home, get_next_codex_home
+            _codex_home = get_next_codex_home()
+            if _codex_home:
+                env_overrides["CODEX_HOME"] = _codex_home
+                _rotator_account = get_account_name_from_home(_codex_home)
+                logger.info(
+                    "codex_multi_account_selected",
+                    home=_codex_home,
+                    account=_rotator_account,
+                )
+        except Exception as _rot_exc:  # noqa: BLE001
+            logger.debug("codex_rotator_skipped", error=str(_rot_exc))
+
     logger.info(
         "cli_subprocess_complete_start",
         model=model_id,
@@ -157,11 +177,17 @@ async def complete_via_cli(
 
     cmd = _build_cmd(binary_path, binary_name, model_id, prompt_text)
 
+    # Строим env для subprocess: текущий env + overrides
+    _env: dict[str, str] | None = None
+    if env_overrides:
+        _env = {**os.environ, **env_overrides}
+
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_env,
         )
         try:
             stdout_data, stderr_data = await asyncio.wait_for(
@@ -177,8 +203,9 @@ async def complete_via_cli(
                 pass
             raise RuntimeError(f"CLI subprocess timeout после {timeout_sec}s: {binary_name}")
 
+        stderr_text = stderr_data.decode("utf-8", errors="ignore")[:500]
+
         if proc.returncode != 0:
-            stderr_text = stderr_data.decode("utf-8", errors="ignore")[:500]
             logger.warning(
                 "cli_subprocess_nonzero_exit",
                 model=model_id,
@@ -189,6 +216,23 @@ async def complete_via_cli(
             # codex/gemini могут вернуть текст в stdout даже при non-zero exit (warnings)
 
         text = stdout_data.decode("utf-8", errors="ignore").strip()
+
+        # Wave 24-A: фиксируем результат вызова в rotator state
+        if _rotator_account and binary_name == "codex":
+            try:
+                from .codex_account_rotator import record_call
+                # Quota error по stderr и returncode
+                _is_quota_err = proc.returncode != 0 and any(
+                    k in stderr_text.lower()
+                    for k in ("quota", "rate limit", "429", "exceeded")
+                )
+                record_call(
+                    _rotator_account,
+                    success=not _is_quota_err,
+                    error=stderr_text if _is_quota_err else None,
+                )
+            except Exception as _rec_exc:  # noqa: BLE001
+                logger.debug("codex_rotator_record_failed", error=str(_rec_exc))
 
         logger.info(
             "cli_subprocess_complete_done",
