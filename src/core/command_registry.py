@@ -394,6 +394,13 @@ _COMMANDS: list[CommandInfo] = [
         usage="!digest",
         owner_only=True,
     ),
+    CommandInfo(
+        name="quota",
+        category="costs",
+        description="Состояние квот по провайдерам (gemini-cli/codex/vertex/anthropic)",
+        usage="!quota [--no-probe]",
+        owner_only=True,
+    ),
     # ── notes ────────────────────────────────────────────────────────────────
     CommandInfo(
         name="memo",
