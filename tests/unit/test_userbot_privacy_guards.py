@@ -276,8 +276,14 @@ def test_sync_scheduler_runtime_stops_when_disabled(monkeypatch) -> None:
             self.is_started = False
 
     fake = _FakeScheduler()
+    # Wave 31-L: _sync_scheduler_runtime переехал в src.userbot.service_orchestration —
+    # patch там, иначе bridge.krab_scheduler привязан к другому singleton'у.
+    from src.userbot import service_orchestration as _so_module  # noqa: PLC0415
+
     monkeypatch.setattr(userbot_bridge_module, "krab_scheduler", fake, raising=False)
+    monkeypatch.setattr(_so_module, "krab_scheduler", fake, raising=False)
     monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", False, raising=False)
+    monkeypatch.setattr(_so_module.config, "SCHEDULER_ENABLED", False, raising=False)
 
     bot._sync_scheduler_runtime()
 
