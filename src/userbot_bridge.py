@@ -612,6 +612,8 @@ class KraabUserbot(
         self._command_usage_save_task: Optional[asyncio.Task] = None
         # Wave 36-B: проактивный heartbeat — GetUsers([Self]) каждые 4 минуты
         self._telegram_heartbeat_task: Optional[asyncio.Task] = None
+        # Wave 36-D: macOS sleep/wake детектор — форсированный reinit после sleep
+        self._macos_sleep_detect_task: Optional[asyncio.Task] = None
         # Idea-features periodic tick (reply_scheduler / daily_brief / channel_digest / patterns)
         self._idea_features_task: Optional[asyncio.Task] = None
         self._idea_tick_state: dict[str, float] = {}
@@ -2572,6 +2574,99 @@ class KraabUserbot(
                     pass
                 os._exit(78)  # noqa: SIM905 — намеренно, EX_CONFIG → launchd respawn
 
+    async def _macos_sleep_detect_loop(self) -> None:
+        """Wave 36-D: детект macOS sleep через monotonic time jump.
+
+        Алгоритм: каждые KRAB_SLEEP_DETECT_INTERVAL_SEC секунд сравниваем
+        ожидаемый интервал с фактическим. Если фактический delta > ожидаемого +
+        KRAB_SLEEP_DETECT_THRESHOLD_SEC — mac находился в sleep.
+
+        При детекте: принудительный _force_pyrofork_session_reinit().
+
+        Почему monotonic: time.monotonic() не прыгает во время sleep (в отличие от
+        wall clock). asyncio.sleep() тоже заморожен во время sleep. Разница между
+        ожидаемым и фактическим прошедшим временем и есть длительность sleep.
+
+        Работает ПАРАЛЛЕЛЬНО с Wave 36-A и Wave 36-B (defense in depth):
+        - Wave 36-A — REACTIVE: детектит TG-silence, TCP probe, zombie escalation
+        - Wave 36-B — PROACTIVE: heartbeat каждые 4 мин, детектит zombie session
+        - Wave 36-D — WAKE: детектит macOS sleep/wake, немедленно reinit session
+
+        ENV:
+          KRAB_SLEEP_DETECT_ENABLED        — 1/true/yes (default=1)
+          KRAB_SLEEP_DETECT_INTERVAL_SEC   — интервал проверки (default=30)
+          KRAB_SLEEP_DETECT_THRESHOLD_SEC  — порог детекта sleep (default=60)
+        """
+        _enabled = os.environ.get("KRAB_SLEEP_DETECT_ENABLED", "1").strip().lower()
+        if _enabled not in {"1", "true", "yes"}:
+            logger.info("macos_sleep_detect_disabled")
+            return
+
+        _interval = float(os.environ.get("KRAB_SLEEP_DETECT_INTERVAL_SEC", "30"))
+        _threshold = float(os.environ.get("KRAB_SLEEP_DETECT_THRESHOLD_SEC", "60"))
+
+        logger.info(
+            "macos_sleep_detect_started",
+            interval_sec=_interval,
+            threshold_sec=_threshold,
+        )
+
+        last_check = time.monotonic()
+
+        while True:
+            try:
+                await asyncio.sleep(_interval)
+            except asyncio.CancelledError:
+                logger.info("macos_sleep_detect_cancelled")
+                break
+
+            now = time.monotonic()
+            actual_delta = now - last_check
+            last_check = now
+
+            # Если фактический delta сильно больше ожидаемого — был sleep
+            if actual_delta > _interval + _threshold:
+                sleep_duration = actual_delta - _interval
+                logger.warning(
+                    "macos_sleep_detected",
+                    sleep_duration_sec=round(sleep_duration, 1),
+                    actual_delta_sec=round(actual_delta, 1),
+                    expected_sec=_interval,
+                )
+                try:
+                    await self._force_pyrofork_session_reinit()
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "macos_post_sleep_reinit_failed",
+                        error=str(exc)[:200],
+                    )
+
+    async def _force_pyrofork_session_reinit(self) -> None:
+        """Wave 36-D: принудительный reinit pyrofork session после macOS sleep.
+
+        Стратегия:
+        1. client.stop(block=True) — ждёт graceful disconnect (TTL freeze закончен)
+        2. await asyncio.sleep(2) — даём сети устояться после пробуждения
+        3. client.start() — re-handshake, fresh MTProto session
+
+        При failure → логируем и поднимаем исключение (caller решает что делать).
+        Fall-through на Wave 36-A escalation logic происходит автоматически
+        через _network_offline_monitor_loop / heartbeat.
+        """
+        logger.info("forced_pyrofork_reinit_starting")
+        try:
+            if self.client and hasattr(self.client, "stop"):
+                await self.client.stop(block=True)
+            await asyncio.sleep(2)
+            if self.client:
+                await self.client.start()
+            # Сбрасываем таймер тишины: reconnect = событие активности
+            self._last_telegram_event_ts = time.time()
+            logger.info("forced_pyrofork_reinit_success")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("forced_pyrofork_reinit_failed", error=str(exc)[:200])
+            raise
+
     def _ensure_proactive_watch_started(self) -> None:
         """Запускает фоновый proactive watch, если он включён конфигом."""
         if not config.PROACTIVE_WATCH_ENABLED:
@@ -3524,6 +3619,16 @@ class KraabUserbot(
                 "network_offline_monitor_started",
                 threshold_sec=int(getattr(config, "KRAB_NETWORK_OFFLINE_ALERT_SEC", 60)),
             )
+        # Wave 36-B: proactive Telegram heartbeat (GetUsers[Self] каждые 4 мин)
+        # Работает параллельно с Wave 36-A (defense in depth для zombie detection).
+        self._telegram_heartbeat_task = asyncio.create_task(
+            self._telegram_heartbeat_loop(), name="telegram_heartbeat"
+        )
+        # Wave 36-D: macOS sleep/wake детектор — reinit session после пробуждения.
+        # Дополняет 36-A (reactive silence) и 36-B (proactive heartbeat).
+        self._macos_sleep_detect_task = asyncio.create_task(
+            self._macos_sleep_detect_loop(), name="macos_sleep_detect"
+        )
         # Idea-features periodic tick: reply_scheduler / daily_brief / channel_digest / patterns
         if self._idea_features_task is None or self._idea_features_task.done():
             self._idea_features_task = asyncio.create_task(self._idea_features_tick_loop())
@@ -3843,6 +3948,8 @@ class KraabUserbot(
         await self._cancel_background_task("_silence_schedule_task")
         await self._cancel_background_task("_memory_indexer_task")
         await self._cancel_background_task("_network_offline_monitor_task")
+        await self._cancel_background_task("_telegram_heartbeat_task")  # Wave 36-B
+        await self._cancel_background_task("_macos_sleep_detect_task")  # Wave 36-D
         try:
             from .core.memory_indexer_worker import get_indexer as _get_idx
 
