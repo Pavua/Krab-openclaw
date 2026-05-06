@@ -20,9 +20,13 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..config import config
 from ..core.logger import get_logger
+
+if TYPE_CHECKING:
+    from pyrogram import Client  # noqa: F401 — для "Client" type annotation
 
 logger = get_logger(__name__)
 
@@ -181,6 +185,61 @@ class NetworkWatchdogMixin:
         except Exception as _e:  # noqa: BLE001
             logger.warning("zombie_alert_send_failed", error=str(_e))
 
+    async def _try_reconnect_pyrofork(self, client: "Client") -> bool:
+        """Wave 33-A: корректный reconnect для pyrofork 2.3.69.
+
+        Стратегия 1: если client.is_connected → stop(block=True) затем start().
+        Pyrogram Client.disconnect() raises ConnectionError когда клиент
+        инициализирован (connected state). Client.stop() — правильный shutdown.
+
+        Стратегия 2 (fallback): Ping invoke без disconnect — проверяет
+        живость сессии без teardown. Если Ping прошёл — сессия жива.
+
+        Returns True если reconnect / ping успешен.
+        """
+        import secrets
+
+        # Стратегия 1: graceful stop + start
+        try:
+            is_conn = getattr(client, "is_connected", False)
+            if is_conn:
+                await client.stop(block=True)
+            await client.start()
+            return True
+        except (ConnectionError, RuntimeError, OSError) as _e:
+            logger.warning("pyrofork_reconnect_strategy1_failed", error=str(_e))
+
+        # Стратегия 2: Ping invoke (без teardown)
+        try:
+            from pyrogram.raw.functions import Ping  # noqa: PLC0415
+
+            await client.invoke(Ping(ping_id=secrets.randbits(63)))
+            return True
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("pyrofork_reconnect_strategy2_failed", error=str(_e))
+            return False
+
+    @staticmethod
+    async def _probe_telegram_dc(timeout: float = 5.0) -> bool:
+        """
+        Активный TCP-probe к Telegram DC1 (149.154.167.50:443).
+        Возвращает True если соединение успешно установлено.
+        Не шлёт никаких данных — только проверяет TCP reachability.
+        """
+        try:
+            _reader, writer = await asyncio.wait_for(
+                asyncio.open_connection("149.154.167.50", 443),
+                timeout=timeout,
+            )
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:  # noqa: BLE001
+                pass
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     async def _network_offline_monitor_loop(self) -> None:
         """
         Мониторинг сетевого offline: если Krab не получал Telegram-событий
@@ -194,8 +253,9 @@ class NetworkWatchdogMixin:
         - ENV: KRAB_NETWORK_SILENCE_THRESHOLD_SEC, KRAB_NETWORK_ALERT_DEBOUNCE_SEC
 
         Wave 36-A: zombie session escalation:
-        - DC reachable + тишина > KRAB_ZOMBIE_DOUBLE_SILENCE_SEC → session probe
+        - DC reachable + тишина > KRAB_ZOMBIE_DOUBLE_SILENCE_SEC → MTProto session probe
         - ≥ KRAB_ZOMBIE_ESCALATION_THRESHOLD consecutive probe failures → os._exit(78)
+        - launchd respawn'нет автоматически (KeepAlive + ThrottleInterval настроены)
         - ENV: KRAB_ZOMBIE_ESCALATION_ENABLED (default=1), KRAB_ZOMBIE_ESCALATION_THRESHOLD,
                 KRAB_ZOMBIE_DOUBLE_SILENCE_SEC
 
@@ -203,6 +263,12 @@ class NetworkWatchdogMixin:
         Логика: отслеживаем _last_telegram_event_ts, обновляемый в _process_message.
         Не считаем offline, если userbot только что стартовал (grace period = threshold).
         """
+        from .userbot.network_watchdog import (  # noqa: PLC0415
+            _ZOMBIE_DOUBLE_SILENCE_SEC,
+            _ZOMBIE_ESCALATION_THRESHOLD,
+            _probe_telegram_session_alive,
+        )
+
         _raw_threshold = int(getattr(config, "KRAB_NETWORK_OFFLINE_ALERT_SEC", 60) or 60)
         if _raw_threshold == 0:
             return  # мониторинг отключён через env
@@ -255,12 +321,14 @@ class NetworkWatchdogMixin:
                                 "network_silence_dc_unreachable_attempting_reconnect",
                                 silence_sec=round(silence_sec, 1),
                             )
-                            try:
-                                if self.client:
-                                    await self.client.disconnect()
+                            # Wave 33-A: используем _try_reconnect_pyrofork вместо
+                            # прямого disconnect()+start() — исправляет
+                            # "Can't disconnect an initialized client" от pyrofork.
+                            reconnected = False
+                            if self.client:
                                 await asyncio.sleep(2)
-                                if self.client:
-                                    await self.client.start()
+                                reconnected = await self._try_reconnect_pyrofork(self.client)
+                            if reconnected:
                                 # Reconnect удался — сбрасываем ts и не алертим
                                 self._last_telegram_event_ts = time.time()
                                 logger.info(
@@ -269,10 +337,9 @@ class NetworkWatchdogMixin:
                                 )
                                 _alert_active = False
                                 continue
-                            except Exception as _re:  # noqa: BLE001
+                            else:
                                 logger.warning(
                                     "network_silence_reconnect_failed",
-                                    error=str(_re),
                                     silence_sec=round(silence_sec, 1),
                                 )
 
@@ -298,8 +365,7 @@ class NetworkWatchdogMixin:
                                 logger.warning("network_offline_alert_send_failed", error=str(_e))
                         continue
 
-                    # Wave 27-A: DC reachable + тишина → раньше просто continue (false-alarm)
-                    # Wave 36-A: если тишина достаточно долгая — делаем session probe
+                    # Wave 36-A: DC reachable + тишина достаточно долгая → session probe
                     if _zombie_enabled and silence_sec > _ZOMBIE_DOUBLE_SILENCE_SEC:
                         session_alive = await _probe_telegram_session_alive(self.client)
                         if not session_alive:
@@ -311,34 +377,20 @@ class NetworkWatchdogMixin:
                                 threshold=_ZOMBIE_ESCALATION_THRESHOLD,
                             )
                             if _consecutive_zombie_failures >= _ZOMBIE_ESCALATION_THRESHOLD:
-                                # Wave 36-C: записываем escalation в persistent history
-                                # и считаем количество за окно для fail-loud решения.
-                                recent_count = _record_zombie_escalation()
+                                # Zombie подтверждён — уведомляем и перезапускаем процесс
                                 logger.error(
                                     "telegram_session_zombie_escalation",
                                     action="process_exit_for_launchd_respawn",
                                     consecutive_failures=_consecutive_zombie_failures,
                                     silence_sec=round(silence_sec, 1),
-                                    recent_escalations_24h=recent_count,
-                                    fail_loud=recent_count >= _ZOMBIE_FAIL_LOUD_THRESHOLD,
                                 )
                                 await self._send_zombie_alert_to_owner(
-                                    silence_sec,
-                                    _consecutive_zombie_failures,
-                                    recent_escalations=recent_count,
+                                    silence_sec, _consecutive_zombie_failures
                                 )
-                                # os._exit обходит asyncio cleanup — launchd respawn'нет через exit 78
+                                # os._exit обходит asyncio cleanup — launchd respawn через exit 78
                                 os._exit(78)  # noqa: SIM905 — намеренно, нет safe shutdown
-                        else:
-                            # Session живая — просто тихий час
-                            _consecutive_zombie_failures = 0
-                            logger.debug(
-                                "network_silence_but_dc_reachable_session_alive",
-                                silence_sec=round(silence_sec, 1),
-                                threshold_sec=threshold_sec,
-                            )
                     else:
-                        # Тишина меньше zombie-порога — DC reachable, считаем тихим часом
+                        # Тишина меньше zombie-порога — просто тихий час
                         _consecutive_zombie_failures = 0
                         logger.debug(
                             "network_silence_but_dc_reachable",
@@ -358,3 +410,194 @@ class NetworkWatchdogMixin:
                             logger.warning("network_recovery_alert_send_failed", error=str(_e))
         except asyncio.CancelledError:
             logger.info("network_offline_monitor_cancelled")
+
+    async def _telegram_heartbeat_loop(self) -> None:
+        """Wave 36-B: проактивный MTProto heartbeat.
+
+        Каждые HEARTBEAT_INTERVAL_SEC отправляет lightweight API call
+        (`GetUsers([InputUserSelf()])`). Это:
+        1. Детектит zombie session за <5 мин (вместо 10-15 у Wave 36-A)
+        2. Side effect: keepalive — TG видит активную session
+        3. При consecutive failures → trigger escalation (os._exit(78) → launchd respawn)
+
+        Работает ПАРАЛЛЕЛЬНО с Wave 36-A (_network_offline_monitor_loop):
+        - Wave 36-B — PROACTIVE: не ждёт тишины, сам зондирует каждые 4 мин
+        - Wave 36-A — REACTIVE: детектит silence > 10 мин, потом зондирует
+        Вместе — defense in depth для zombie session detection.
+
+        ENV:
+          KRAB_TELEGRAM_HEARTBEAT_ENABLED          — 1/true/yes (default=1)
+          KRAB_TELEGRAM_HEARTBEAT_INTERVAL_SEC     — интервал (default=240)
+          KRAB_TELEGRAM_HEARTBEAT_FAIL_THRESHOLD   — порог consecutive failures (default=3)
+          KRAB_TELEGRAM_HEARTBEAT_TIMEOUT_SEC      — таймаут одного probe (default=10.0)
+        """
+        # Читаем конфигурацию из ENV
+        _enabled = os.environ.get("KRAB_TELEGRAM_HEARTBEAT_ENABLED", "1").strip().lower()
+        if _enabled not in {"1", "true", "yes"}:
+            logger.info("telegram_heartbeat_disabled")
+            return
+
+        _interval = int(os.environ.get("KRAB_TELEGRAM_HEARTBEAT_INTERVAL_SEC", "240"))
+        _fail_threshold = int(os.environ.get("KRAB_TELEGRAM_HEARTBEAT_FAIL_THRESHOLD", "3"))
+        _timeout = float(os.environ.get("KRAB_TELEGRAM_HEARTBEAT_TIMEOUT_SEC", "10.0"))
+
+        logger.info(
+            "telegram_heartbeat_started",
+            interval_sec=_interval,
+            fail_threshold=_fail_threshold,
+            timeout_sec=_timeout,
+        )
+
+        consecutive_failures = 0
+
+        while True:
+            try:
+                await asyncio.sleep(_interval)
+            except asyncio.CancelledError:
+                logger.info("telegram_heartbeat_cancelled")
+                break
+
+            # Не зондируем, если клиент не подключён
+            if not (self.client and self.client.is_connected):
+                logger.debug("telegram_heartbeat_skip_disconnected")
+                continue
+
+            try:
+                from pyrogram.raw.functions.users import GetUsers  # noqa: PLC0415
+                from pyrogram.raw.types import InputUserSelf  # noqa: PLC0415
+
+                await asyncio.wait_for(
+                    self.client.invoke(GetUsers(id=[InputUserSelf()])),
+                    timeout=_timeout,
+                )
+
+                # Успех: ресетим таймер тишины + счётчик сбоев
+                self._last_telegram_event_ts = time.time()
+                consecutive_failures = 0
+                logger.debug("telegram_heartbeat_ok")
+
+            except asyncio.TimeoutError:
+                consecutive_failures += 1
+                logger.warning(
+                    "telegram_heartbeat_timeout",
+                    consecutive_failures=consecutive_failures,
+                    threshold=_fail_threshold,
+                )
+            except asyncio.CancelledError:
+                logger.info("telegram_heartbeat_cancelled")
+                break
+            except Exception as exc:  # noqa: BLE001
+                consecutive_failures += 1
+                logger.warning(
+                    "telegram_heartbeat_failed",
+                    error=str(exc)[:200],
+                    consecutive_failures=consecutive_failures,
+                )
+
+            if consecutive_failures >= _fail_threshold:
+                # Zombie подтверждён — уведомляем и перезапускаем через launchd
+                logger.error(
+                    "telegram_heartbeat_zombie_escalation",
+                    action="process_exit_for_launchd_respawn",
+                    consecutive_failures=consecutive_failures,
+                )
+                try:
+                    await self._send_zombie_alert_to_owner(
+                        float(_interval * consecutive_failures), consecutive_failures
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                os._exit(78)  # noqa: SIM905 — намеренно, EX_CONFIG → launchd respawn
+
+    async def _macos_sleep_detect_loop(self) -> None:
+        """Wave 36-D: детект macOS sleep через monotonic time jump.
+
+        Алгоритм: каждые KRAB_SLEEP_DETECT_INTERVAL_SEC секунд сравниваем
+        ожидаемый интервал с фактическим. Если фактический delta > ожидаемого +
+        KRAB_SLEEP_DETECT_THRESHOLD_SEC — mac находился в sleep.
+
+        При детекте: принудительный _force_pyrofork_session_reinit().
+
+        Почему monotonic: time.monotonic() не прыгает во время sleep (в отличие от
+        wall clock). asyncio.sleep() тоже заморожен во время sleep. Разница между
+        ожидаемым и фактическим прошедшим временем и есть длительность sleep.
+
+        Работает ПАРАЛЛЕЛЬНО с Wave 36-A и Wave 36-B (defense in depth):
+        - Wave 36-A — REACTIVE: детектит TG-silence, TCP probe, zombie escalation
+        - Wave 36-B — PROACTIVE: heartbeat каждые 4 мин, детектит zombie session
+        - Wave 36-D — WAKE: детектит macOS sleep/wake, немедленно reinit session
+
+        ENV:
+          KRAB_SLEEP_DETECT_ENABLED        — 1/true/yes (default=1)
+          KRAB_SLEEP_DETECT_INTERVAL_SEC   — интервал проверки (default=30)
+          KRAB_SLEEP_DETECT_THRESHOLD_SEC  — порог детекта sleep (default=60)
+        """
+        _enabled = os.environ.get("KRAB_SLEEP_DETECT_ENABLED", "1").strip().lower()
+        if _enabled not in {"1", "true", "yes"}:
+            logger.info("macos_sleep_detect_disabled")
+            return
+
+        _interval = float(os.environ.get("KRAB_SLEEP_DETECT_INTERVAL_SEC", "30"))
+        _threshold = float(os.environ.get("KRAB_SLEEP_DETECT_THRESHOLD_SEC", "60"))
+
+        logger.info(
+            "macos_sleep_detect_started",
+            interval_sec=_interval,
+            threshold_sec=_threshold,
+        )
+
+        last_check = time.monotonic()
+
+        while True:
+            try:
+                await asyncio.sleep(_interval)
+            except asyncio.CancelledError:
+                logger.info("macos_sleep_detect_cancelled")
+                break
+
+            now = time.monotonic()
+            actual_delta = now - last_check
+            last_check = now
+
+            # Если фактический delta сильно больше ожидаемого — был sleep
+            if actual_delta > _interval + _threshold:
+                sleep_duration = actual_delta - _interval
+                logger.warning(
+                    "macos_sleep_detected",
+                    sleep_duration_sec=round(sleep_duration, 1),
+                    actual_delta_sec=round(actual_delta, 1),
+                    expected_sec=_interval,
+                )
+                try:
+                    await self._force_pyrofork_session_reinit()
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "macos_post_sleep_reinit_failed",
+                        error=str(exc)[:200],
+                    )
+
+    async def _force_pyrofork_session_reinit(self) -> None:
+        """Wave 36-D: принудительный reinit pyrofork session после macOS sleep.
+
+        Стратегия:
+        1. client.stop(block=True) — ждёт graceful disconnect (TTL freeze закончен)
+        2. await asyncio.sleep(2) — даём сети устояться после пробуждения
+        3. client.start() — re-handshake, fresh MTProto session
+
+        При failure → логируем и поднимаем исключение (caller решает что делать).
+        Fall-through на Wave 36-A escalation logic происходит автоматически
+        через _network_offline_monitor_loop / heartbeat.
+        """
+        logger.info("forced_pyrofork_reinit_starting")
+        try:
+            if self.client and hasattr(self.client, "stop"):
+                await self.client.stop(block=True)
+            await asyncio.sleep(2)
+            if self.client:
+                await self.client.start()
+            # Сбрасываем таймер тишины: reconnect = событие активности
+            self._last_telegram_event_ts = time.time()
+            logger.info("forced_pyrofork_reinit_success")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("forced_pyrofork_reinit_failed", error=str(exc)[:200])
+            raise
