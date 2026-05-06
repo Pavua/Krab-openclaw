@@ -610,6 +610,8 @@ class KraabUserbot(
         self._error_digest_task: Optional[asyncio.Task] = None
         self._silence_schedule_task: Optional[asyncio.Task] = None
         self._command_usage_save_task: Optional[asyncio.Task] = None
+        # Wave 36-B: проактивный heartbeat — GetUsers([Self]) каждые 4 минуты
+        self._telegram_heartbeat_task: Optional[asyncio.Task] = None
         # Idea-features periodic tick (reply_scheduler / daily_brief / channel_digest / patterns)
         self._idea_features_task: Optional[asyncio.Task] = None
         self._idea_tick_state: dict[str, float] = {}
@@ -2313,10 +2315,23 @@ class KraabUserbot(
         - Alert debounce увеличен до 1800s (30 мин)
         - ENV: KRAB_NETWORK_SILENCE_THRESHOLD_SEC, KRAB_NETWORK_ALERT_DEBOUNCE_SEC
 
+        Wave 36-A: zombie session escalation:
+        - DC reachable + тишина > KRAB_ZOMBIE_DOUBLE_SILENCE_SEC → MTProto session probe
+        - ≥ KRAB_ZOMBIE_ESCALATION_THRESHOLD consecutive probe failures → os._exit(78)
+        - launchd respawn'нет автоматически (KeepAlive + ThrottleInterval настроены)
+        - ENV: KRAB_ZOMBIE_ESCALATION_ENABLED (default=1), KRAB_ZOMBIE_ESCALATION_THRESHOLD,
+                KRAB_ZOMBIE_DOUBLE_SILENCE_SEC
+
         Дебаунс: не более 1 алерта каждые 30 минут (1800 сек).
         Логика: отслеживаем _last_telegram_event_ts, обновляемый в _process_message.
         Не считаем offline, если userbot только что стартовал (grace period = threshold).
         """
+        from .userbot.network_watchdog import (  # noqa: PLC0415
+            _ZOMBIE_DOUBLE_SILENCE_SEC,
+            _ZOMBIE_ESCALATION_THRESHOLD,
+            _probe_telegram_session_alive,
+        )
+
         _raw_threshold = int(getattr(config, "KRAB_NETWORK_OFFLINE_ALERT_SEC", 60) or 60)
         if _raw_threshold == 0:
             return  # мониторинг отключён через env
@@ -2333,9 +2348,13 @@ class KraabUserbot(
         _env_debounce = os.environ.get("KRAB_NETWORK_ALERT_DEBOUNCE_SEC")
         debounce_sec = int(_env_debounce) if _env_debounce is not None else 1800  # 30 мин
 
+        # Wave 36-A: zombie escalation enabled by default
+        _zombie_enabled = os.environ.get("KRAB_ZOMBIE_ESCALATION_ENABLED", "1") != "0"
+
         check_interval = max(15, threshold_sec // 6)
         _last_alert_ts: float = 0.0
         _alert_active: bool = False  # флаг «алерт уже был отправлен»
+        _consecutive_zombie_failures: int = 0  # Wave 36-A: счётчик zombie probe failures
 
         # Grace period: даём время на прогрев после запуска
         await asyncio.sleep(threshold_sec)
@@ -2352,68 +2371,98 @@ class KraabUserbot(
                     if not client_connected:
                         # Уже ловит watchdog → не дублируем
                         _alert_active = False
+                        _consecutive_zombie_failures = 0
                         continue
 
-                    # Wave 27-A: Active TCP probe — если DC reachable, это quiet hour, не алертим
+                    # Wave 27-A: Active TCP probe — если DC НЕ reachable → reconnect + alert
                     dc_reachable = await self._probe_telegram_dc()
-                    if dc_reachable:
+                    if not dc_reachable:
+                        # DC недоступен — пробуем auto-reconnect перед алертом
+                        _consecutive_zombie_failures = 0  # сеть упала, не zombie
+                        if now - _last_alert_ts >= debounce_sec:
+                            logger.warning(
+                                "network_silence_dc_unreachable_attempting_reconnect",
+                                silence_sec=round(silence_sec, 1),
+                            )
+                            # Wave 33-A: используем _try_reconnect_pyrofork вместо
+                            # прямого disconnect()+start() — исправляет
+                            # "Can't disconnect an initialized client" от pyrofork.
+                            reconnected = False
+                            if self.client:
+                                await asyncio.sleep(2)
+                                reconnected = await self._try_reconnect_pyrofork(self.client)
+                            if reconnected:
+                                # Reconnect удался — сбрасываем ts и не алертим
+                                self._last_telegram_event_ts = time.time()
+                                logger.info(
+                                    "network_silence_auto_reconnected",
+                                    silence_sec=round(silence_sec, 1),
+                                )
+                                _alert_active = False
+                                continue
+                            else:
+                                logger.warning(
+                                    "network_silence_reconnect_failed",
+                                    silence_sec=round(silence_sec, 1),
+                                )
+
+                            # Reconnect не помог — отправляем алерт
+                            _last_alert_ts = now
+                            _alert_active = True
+                            silence_min = int(silence_sec // 60)
+                            silence_s = int(silence_sec % 60)
+                            msg = (
+                                f"⚠️ **Krab: нет Telegram-событий {silence_min}м {silence_s}с**\n"
+                                f"MTProto подключён, но входящих сообщений не было >{threshold_sec}s.\n"
+                                f"DC probe: недоступен. Auto-reconnect не помог.\n"
+                                f"Используй `!health` для диагностики."
+                            )
+                            logger.warning(
+                                "network_offline_alert_sent",
+                                silence_sec=round(silence_sec, 1),
+                                threshold_sec=threshold_sec,
+                            )
+                            try:
+                                await self._send_proactive_watch_alert(msg)
+                            except Exception as _e:  # noqa: BLE001
+                                logger.warning("network_offline_alert_send_failed", error=str(_e))
+                        continue
+
+                    # Wave 36-A: DC reachable + тишина достаточно долгая → session probe
+                    if _zombie_enabled and silence_sec > _ZOMBIE_DOUBLE_SILENCE_SEC:
+                        session_alive = await _probe_telegram_session_alive(self.client)
+                        if not session_alive:
+                            _consecutive_zombie_failures += 1
+                            logger.warning(
+                                "telegram_session_zombie_detected",
+                                silence_sec=round(silence_sec, 1),
+                                consecutive_failures=_consecutive_zombie_failures,
+                                threshold=_ZOMBIE_ESCALATION_THRESHOLD,
+                            )
+                            if _consecutive_zombie_failures >= _ZOMBIE_ESCALATION_THRESHOLD:
+                                # Zombie подтверждён — уведомляем и перезапускаем процесс
+                                logger.error(
+                                    "telegram_session_zombie_escalation",
+                                    action="process_exit_for_launchd_respawn",
+                                    consecutive_failures=_consecutive_zombie_failures,
+                                    silence_sec=round(silence_sec, 1),
+                                )
+                                await self._send_zombie_alert_to_owner(
+                                    silence_sec, _consecutive_zombie_failures
+                                )
+                                # os._exit обходит asyncio cleanup — launchd respawn через exit 78
+                                os._exit(78)  # noqa: SIM905 — намеренно, нет safe shutdown
+                    else:
+                        # Тишина меньше zombie-порога — просто тихий час
+                        _consecutive_zombie_failures = 0
                         logger.debug(
                             "network_silence_but_dc_reachable",
                             silence_sec=round(silence_sec, 1),
                             threshold_sec=threshold_sec,
                         )
-                        continue
-
-                    # DC недоступен — пробуем auto-reconnect перед алертом
-                    if now - _last_alert_ts >= debounce_sec:
-                        logger.warning(
-                            "network_silence_dc_unreachable_attempting_reconnect",
-                            silence_sec=round(silence_sec, 1),
-                        )
-                        # Wave 33-A: используем _try_reconnect_pyrofork вместо
-                        # прямого disconnect()+start() — исправляет
-                        # "Can't disconnect an initialized client" от pyrofork.
-                        reconnected = False
-                        if self.client:
-                            await asyncio.sleep(2)
-                            reconnected = await self._try_reconnect_pyrofork(self.client)
-                        if reconnected:
-                            # Reconnect удался — сбрасываем ts и не алертим
-                            self._last_telegram_event_ts = time.time()
-                            logger.info(
-                                "network_silence_auto_reconnected",
-                                silence_sec=round(silence_sec, 1),
-                            )
-                            _alert_active = False
-                            continue
-                        else:
-                            logger.warning(
-                                "network_silence_reconnect_failed",
-                                silence_sec=round(silence_sec, 1),
-                            )
-
-                        # Reconnect не помог — отправляем алерт
-                        _last_alert_ts = now
-                        _alert_active = True
-                        silence_min = int(silence_sec // 60)
-                        silence_s = int(silence_sec % 60)
-                        msg = (
-                            f"⚠️ **Krab: нет Telegram-событий {silence_min}м {silence_s}с**\n"
-                            f"MTProto подключён, но входящих сообщений не было >{threshold_sec}s.\n"
-                            f"DC probe: недоступен. Auto-reconnect не помог.\n"
-                            f"Используй `!health` для диагностики."
-                        )
-                        logger.warning(
-                            "network_offline_alert_sent",
-                            silence_sec=round(silence_sec, 1),
-                            threshold_sec=threshold_sec,
-                        )
-                        try:
-                            await self._send_proactive_watch_alert(msg)
-                        except Exception as _e:  # noqa: BLE001
-                            logger.warning("network_offline_alert_send_failed", error=str(_e))
                 else:
-                    # Событие было — если был алерт, сообщим о восстановлении
+                    # Событие было — сбрасываем zombie счётчик + recovery алерт
+                    _consecutive_zombie_failures = 0
                     if _alert_active:
                         _alert_active = False
                         try:
@@ -2424,6 +2473,104 @@ class KraabUserbot(
                             logger.warning("network_recovery_alert_send_failed", error=str(_e))
         except asyncio.CancelledError:
             logger.info("network_offline_monitor_cancelled")
+
+    async def _telegram_heartbeat_loop(self) -> None:
+        """Wave 36-B: проактивный MTProto heartbeat.
+
+        Каждые HEARTBEAT_INTERVAL_SEC отправляет lightweight API call
+        (`GetUsers([InputUserSelf()])`). Это:
+        1. Детектит zombie session за <5 мин (вместо 10-15 у Wave 36-A)
+        2. Side effect: keepalive — TG видит активную session
+        3. При consecutive failures → trigger escalation (os._exit(78) → launchd respawn)
+
+        Работает ПАРАЛЛЕЛЬНО с Wave 36-A (_network_offline_monitor_loop):
+        - Wave 36-B — PROACTIVE: не ждёт тишины, сам зондирует каждые 4 мин
+        - Wave 36-A — REACTIVE: детектит silence > 10 мин, потом зондирует
+        Вместе — defense in depth для zombie session detection.
+
+        ENV:
+          KRAB_TELEGRAM_HEARTBEAT_ENABLED          — 1/true/yes (default=1)
+          KRAB_TELEGRAM_HEARTBEAT_INTERVAL_SEC     — интервал (default=240)
+          KRAB_TELEGRAM_HEARTBEAT_FAIL_THRESHOLD   — порог consecutive failures (default=3)
+          KRAB_TELEGRAM_HEARTBEAT_TIMEOUT_SEC      — таймаут одного probe (default=10.0)
+        """
+        # Читаем конфигурацию из ENV
+        _enabled = os.environ.get("KRAB_TELEGRAM_HEARTBEAT_ENABLED", "1").strip().lower()
+        if _enabled not in {"1", "true", "yes"}:
+            logger.info("telegram_heartbeat_disabled")
+            return
+
+        _interval = int(os.environ.get("KRAB_TELEGRAM_HEARTBEAT_INTERVAL_SEC", "240"))
+        _fail_threshold = int(os.environ.get("KRAB_TELEGRAM_HEARTBEAT_FAIL_THRESHOLD", "3"))
+        _timeout = float(os.environ.get("KRAB_TELEGRAM_HEARTBEAT_TIMEOUT_SEC", "10.0"))
+
+        logger.info(
+            "telegram_heartbeat_started",
+            interval_sec=_interval,
+            fail_threshold=_fail_threshold,
+            timeout_sec=_timeout,
+        )
+
+        consecutive_failures = 0
+
+        while True:
+            try:
+                await asyncio.sleep(_interval)
+            except asyncio.CancelledError:
+                logger.info("telegram_heartbeat_cancelled")
+                break
+
+            # Не зондируем, если клиент не подключён
+            if not (self.client and self.client.is_connected):
+                logger.debug("telegram_heartbeat_skip_disconnected")
+                continue
+
+            try:
+                from pyrogram.raw.functions.users import GetUsers  # noqa: PLC0415
+                from pyrogram.raw.types import InputUserSelf  # noqa: PLC0415
+
+                await asyncio.wait_for(
+                    self.client.invoke(GetUsers(id=[InputUserSelf()])),
+                    timeout=_timeout,
+                )
+
+                # Успех: ресетим таймер тишины + счётчик сбоев
+                self._last_telegram_event_ts = time.time()
+                consecutive_failures = 0
+                logger.debug("telegram_heartbeat_ok")
+
+            except asyncio.TimeoutError:
+                consecutive_failures += 1
+                logger.warning(
+                    "telegram_heartbeat_timeout",
+                    consecutive_failures=consecutive_failures,
+                    threshold=_fail_threshold,
+                )
+            except asyncio.CancelledError:
+                logger.info("telegram_heartbeat_cancelled")
+                break
+            except Exception as exc:  # noqa: BLE001
+                consecutive_failures += 1
+                logger.warning(
+                    "telegram_heartbeat_failed",
+                    error=str(exc)[:200],
+                    consecutive_failures=consecutive_failures,
+                )
+
+            if consecutive_failures >= _fail_threshold:
+                # Zombie подтверждён — уведомляем и перезапускаем через launchd
+                logger.error(
+                    "telegram_heartbeat_zombie_escalation",
+                    action="process_exit_for_launchd_respawn",
+                    consecutive_failures=consecutive_failures,
+                )
+                try:
+                    await self._send_zombie_alert_to_owner(
+                        float(_interval * consecutive_failures), consecutive_failures
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                os._exit(78)  # noqa: SIM905 — намеренно, EX_CONFIG → launchd respawn
 
     def _ensure_proactive_watch_started(self) -> None:
         """Запускает фоновый proactive watch, если он включён конфигом."""
