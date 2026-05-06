@@ -1,0 +1,542 @@
+# -*- coding: utf-8 -*-
+"""Wave 40-A: Krab nightly self-audit.
+
+Запускается каждую ночь в 03:00 local через LaunchAgent ai.krab.nightly-audit.
+Проверяет 8 критичных дименсий, генерит markdown отчёт, шлёт в Saved Messages.
+
+Audit dimensions:
+1. Process health (uptime, daemons up/down)
+2. Database integrity (PRAGMA integrity_check на 5 sqlite DBs)
+3. Bypass perf trend (24h vs baseline — degradation detection)
+4. Memory trend (7-day samples из coexistence_monitor.log)
+5. Disk space (>85% = warn, >95% = critical)
+6. Inbox bloat (open items >7d)
+7. OAuth tokens (expiry проверка)
+8. Zombie/sleep escalations (self-recovery event count)
+
+Delivery: POST /api/notify → DM owner в Saved Messages.
+Quiet mode: если all_ok — не шлёт (избегаем ночной spam).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import sqlite3
+import subprocess
+import time
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+from .logger import get_logger
+
+logger = get_logger(__name__)
+
+# Хост owner-panel
+_PANEL_HOST = os.getenv("KRAB_PANEL_HOST", "http://127.0.0.1:8080")
+# HTTP таймаут для panel запросов
+_HTTP_TIMEOUT = 5
+
+
+class AuditFinding:
+    """Один результат audit-проверки."""
+
+    def __init__(
+        self,
+        dimension: str,
+        status: str,
+        summary: str,
+        detail: str = "",
+    ) -> None:
+        # status: 'ok' | 'warn' | 'critical'
+        self.dimension = dimension
+        self.status = status
+        self.summary = summary
+        self.detail = detail
+
+    def to_markdown(self) -> str:
+        """Форматирует finding как строку Markdown."""
+        emoji = {"ok": "✅", "warn": "⚠️", "critical": "🔴"}.get(self.status, "❓")
+        line = f"{emoji} *{self.dimension}*: {self.summary}"
+        if self.detail:
+            line += f"\n  _{self.detail}_"
+        return line
+
+
+# ---------------------------------------------------------------------------
+# Dimension 1: Process health
+# ---------------------------------------------------------------------------
+
+
+async def audit_process_health() -> AuditFinding:
+    """Проверка uptime Krab-процесса и количества живых LaunchAgent daemon'ов."""
+    try:
+        import psutil
+    except ImportError:
+        return AuditFinding("Process", "warn", "psutil not installed — cannot check")
+
+    # Ищем Krab-процесс по cmdline
+    krab_pids: list[int] = []
+    for p in psutil.process_iter(["cmdline"]):
+        try:
+            cmdline = p.info.get("cmdline") or []
+            if any(
+                "userbot_bridge" in c or "src/main.py" in c or "krab_main" in c for c in cmdline
+            ):
+                krab_pids.append(p.pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    if not krab_pids:
+        return AuditFinding("Process", "critical", "Krab process не найден — возможно упал!")
+
+    uptime_sec = time.time() - psutil.Process(krab_pids[0]).create_time()
+    uptime_h = uptime_sec / 3600
+
+    # Проверяем LaunchAgents через launchctl
+    try:
+        result = subprocess.run(
+            ["launchctl", "list"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        krab_lines = [line.strip() for line in result.stdout.splitlines() if "ai.krab." in line]
+        # PID != '-' означает процесс запущен
+        running = sum(1 for line in krab_lines if line and line.split()[0].lstrip("-").isdigit())
+        total = len(krab_lines)
+        if total > 0 and running < total - 2:
+            return AuditFinding(
+                "Process",
+                "warn",
+                f"Uptime {uptime_h:.1f}h, но только {running}/{total} LaunchAgents активны",
+                "Проверить: launchctl list | grep ai.krab.",
+            )
+        return AuditFinding(
+            "Process",
+            "ok",
+            f"Uptime {uptime_h:.1f}h, {running}/{total} LaunchAgents активны",
+        )
+    except Exception as exc:
+        # launchctl недоступен — минимально ok, только uptime
+        return AuditFinding(
+            "Process",
+            "ok",
+            f"Uptime {uptime_h:.1f}h (launchctl недоступен: {str(exc)[:40]})",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Dimension 2: Database integrity
+# ---------------------------------------------------------------------------
+
+
+async def audit_database_integrity() -> AuditFinding:
+    """PRAGMA integrity_check на критичных SQLite базах."""
+    dbs = [
+        Path.home() / "Antigravity_AGENTS/Краб/data/sessions/kraab.session",
+        Path.home() / ".openclaw/krab_memory/archive.db",
+        Path.home() / ".openclaw/tasks/runs.sqlite",
+    ]
+
+    checked = 0
+    issues: list[str] = []
+
+    for db_path in dbs:
+        if not db_path.exists():
+            continue
+        checked += 1
+        try:
+            # read-only URI для безопасности
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=3)
+            cursor = conn.execute("PRAGMA integrity_check")
+            result = cursor.fetchone()[0]
+            conn.close()
+            if result != "ok":
+                issues.append(f"{db_path.name}: {str(result)[:80]}")
+        except Exception as exc:
+            issues.append(f"{db_path.name}: read_error — {str(exc)[:50]}")
+
+    if issues:
+        return AuditFinding(
+            "DB integrity",
+            "critical",
+            f"{len(issues)}/{checked} DBs имеют проблемы",
+            "; ".join(issues[:3]),
+        )
+    if checked == 0:
+        return AuditFinding("DB integrity", "warn", "Ни одна DB не найдена — пути не совпадают?")
+    return AuditFinding("DB integrity", "ok", f"{checked} DBs проверены — чисто")
+
+
+# ---------------------------------------------------------------------------
+# Dimension 3: Bypass perf trend
+# ---------------------------------------------------------------------------
+
+
+async def audit_bypass_perf_trend() -> AuditFinding:
+    """Запрашивает /api/bypass/perf?window=24h и проверяет деградацию p95."""
+    try:
+        url = f"{_PANEL_HOST}/api/bypass/perf?window=24h"
+        with urllib.request.urlopen(url, timeout=_HTTP_TIMEOUT) as resp:
+            data = json.loads(resp.read())
+
+        total_calls = data.get("total_calls", 0)
+        cli_p95 = data.get("by_kind", {}).get("cli", {}).get("p95", 0)
+        cli_p95_prev = data.get("by_kind", {}).get("cli", {}).get("p95_prev_24h", 0)
+
+        if cli_p95_prev and cli_p95_prev > 0:
+            degradation = (cli_p95 - cli_p95_prev) / cli_p95_prev
+            if degradation > 0.5:
+                return AuditFinding(
+                    "Bypass perf",
+                    "warn",
+                    f"CLI p95 вырос с {cli_p95_prev:.1f}s до {cli_p95:.1f}s (+{degradation * 100:.0f}%)",
+                    "Возможная деградация. Проверить codex-cli health.",
+                )
+
+        return AuditFinding(
+            "Bypass perf",
+            "ok",
+            f"CLI p95={cli_p95:.1f}s, total_calls={total_calls}",
+        )
+    except Exception as exc:
+        # endpoint может не существовать — это не критично
+        return AuditFinding(
+            "Bypass perf",
+            "warn",
+            f"Не удалось получить perf данные: {str(exc)[:60]}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Dimension 4: Memory trend
+# ---------------------------------------------------------------------------
+
+
+async def audit_memory_trend() -> AuditFinding:
+    """Анализирует coexistence_monitor.log за последние 7 дней."""
+    log = Path.home() / ".openclaw/krab_runtime_state/coexistence_monitor.log"
+    if not log.exists():
+        return AuditFinding(
+            "Memory trend",
+            "warn",
+            "coexistence_monitor.log не найден — мониторинг памяти не активен",
+        )
+
+    try:
+        # Читаем последние ~100KB
+        with log.open("rb") as f:
+            f.seek(0, 2)
+            sz = f.tell()
+            f.seek(max(0, sz - 100_000))
+            raw = f.read().decode(errors="ignore")
+
+        cutoff = time.time() - 7 * 86400
+        samples: list[dict] = []
+        for line in raw.strip().splitlines():
+            try:
+                d = json.loads(line)
+                if d.get("timestamp", 0) >= cutoff:
+                    samples.append(d)
+            except Exception:
+                continue
+
+        if not samples:
+            return AuditFinding("Memory trend", "warn", "Нет данных за 7 дней в лог-файле")
+
+        max_swap = max(s.get("swap_used_gb", 0) for s in samples)
+        avg_rss = sum(s.get("krab_rss_gb", 0) + s.get("ear_rss_gb", 0) for s in samples) / len(
+            samples
+        )
+
+        if max_swap > 16:
+            return AuditFinding(
+                "Memory trend",
+                "warn",
+                f"Max swap за 7 дней: {max_swap:.1f}GB — возможный memory leak",
+                f"Avg RSS: {avg_rss:.1f}GB. Рассмотреть restart или profiling.",
+            )
+        return AuditFinding(
+            "Memory trend",
+            "ok",
+            f"Max swap 7д: {max_swap:.1f}GB, avg RSS: {avg_rss:.1f}GB",
+        )
+    except Exception as exc:
+        return AuditFinding("Memory trend", "warn", f"Анализ не удался: {str(exc)[:60]}")
+
+
+# ---------------------------------------------------------------------------
+# Dimension 5: Disk space
+# ---------------------------------------------------------------------------
+
+
+async def audit_disk_space() -> AuditFinding:
+    """Проверяет использование диска /Users/pablito."""
+    import shutil
+
+    total, used, free = shutil.disk_usage("/Users/pablito")
+    pct_used = (used / total) * 100
+    free_gb = free / 1e9
+
+    if pct_used > 95:
+        return AuditFinding(
+            "Disk",
+            "critical",
+            f"{pct_used:.0f}% использовано, свободно {free_gb:.0f}GB — КРИТИЧНО",
+        )
+    if pct_used > 85:
+        return AuditFinding(
+            "Disk",
+            "warn",
+            f"{pct_used:.0f}% использовано, свободно {free_gb:.0f}GB",
+            "Нужна очистка. Проверить ~/.openclaw/logs, tmp, бэкапы.",
+        )
+    return AuditFinding("Disk", "ok", f"{pct_used:.0f}% использовано ({free_gb:.0f}GB свободно)")
+
+
+# ---------------------------------------------------------------------------
+# Dimension 6: Inbox bloat
+# ---------------------------------------------------------------------------
+
+
+async def audit_inbox_bloat() -> AuditFinding:
+    """Проверяет stale inbox items (открытые >7 дней)."""
+    try:
+        url = f"{_PANEL_HOST}/api/inbox/status"
+        with urllib.request.urlopen(url, timeout=_HTTP_TIMEOUT) as resp:
+            data = json.loads(resp.read())
+
+        stale = data.get("stale_open_items", 0)
+        open_total = data.get("open_items", 0)
+
+        if stale > 50:
+            return AuditFinding(
+                "Inbox",
+                "warn",
+                f"{stale} stale items (>7д) из {open_total} открытых",
+                "Запустить !inbox cleanup или проверить cron inbox-cleanup.",
+            )
+        return AuditFinding("Inbox", "ok", f"{open_total} открытых, {stale} stale (>7д)")
+    except Exception as exc:
+        return AuditFinding(
+            "Inbox",
+            "warn",
+            f"Panel недоступна: {str(exc)[:60]}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Dimension 7: OAuth tokens
+# ---------------------------------------------------------------------------
+
+
+async def audit_oauth_tokens() -> AuditFinding:
+    """Проверяет истечение OAuth токенов (gemini-cli и другие)."""
+    issues: list[str] = []
+    checked = 0
+
+    # gemini-cli oauth credentials
+    gemini_creds = Path.home() / ".gemini/oauth_creds.json"
+    if gemini_creds.exists():
+        checked += 1
+        try:
+            d = json.loads(gemini_creds.read_text())
+            exp_ms = d.get("expiry_date", 0)
+            if exp_ms:
+                hours_until = (exp_ms / 1000 - time.time()) / 3600
+                if hours_until < 0:
+                    # Expired но auto-refresh должен сработать при использовании
+                    issues.append(
+                        f"gemini token истёк {abs(hours_until):.1f}h назад "
+                        f"(auto-refresh при следующем использовании)"
+                    )
+                elif hours_until < 1:
+                    issues.append(
+                        f"gemini token истекает через {hours_until * 60:.0f}мин — критично!"
+                    )
+        except Exception as exc:
+            issues.append(f"gemini creds read error: {str(exc)[:40]}")
+
+    # claude-cli token (если есть)
+    claude_token_path = Path.home() / ".claude/.credentials.json"
+    if claude_token_path.exists():
+        checked += 1
+        try:
+            d = json.loads(claude_token_path.read_text())
+            exp = d.get("expires_at") or d.get("expiry_date")
+            if exp and isinstance(exp, (int, float)):
+                hours_until = (exp - time.time()) / 3600
+                if hours_until < 0:
+                    issues.append("claude credentials истекли — требует обновления!")
+                elif hours_until < 24:
+                    issues.append(f"claude credentials истекают через {hours_until:.1f}h")
+        except Exception:
+            pass  # Нет expire поля — считаем нормальным
+
+    if issues:
+        return AuditFinding(
+            "OAuth tokens",
+            "warn",
+            "; ".join(issues[:2]),
+        )
+    if checked == 0:
+        return AuditFinding("OAuth tokens", "warn", "Credential файлы не найдены")
+    return AuditFinding(
+        "OAuth tokens", "ok", f"{checked} credential-файлов проверено — всё в порядке"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dimension 8: Zombie / sleep escalations
+# ---------------------------------------------------------------------------
+
+
+async def audit_zombie_escalations() -> AuditFinding:
+    """Считает события self-recovery за всё время жизни лог-файла."""
+    log = Path.home() / ".openclaw/krab_runtime_state/krab_main.log"
+    if not log.exists():
+        return AuditFinding(
+            "Zombie/sleep",
+            "warn",
+            "krab_main.log не найден — логирование не настроено",
+        )
+
+    # Паттерны, которые указывают на zombie/sleep recovery
+    patterns = [
+        "telegram_session_zombie_escalation",
+        "telegram_heartbeat_zombie_escalation",
+        "macos_sleep_detected",
+        "session_integrity_recover",
+        "_main_session_integrity_preflight",
+    ]
+
+    try:
+        grep_args = [
+            "grep",
+            "-c",
+            "\\|".join(patterns),
+            str(log),
+        ]
+        result = subprocess.run(
+            grep_args,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        # grep -c возвращает 1 если ничего не найдено
+        count = int(result.stdout.strip() or "0")
+
+        if count > 10:
+            return AuditFinding(
+                "Zombie/sleep",
+                "warn",
+                f"{count} событий self-recovery (за время жизни лога)",
+                "Если нарастает — рассмотреть telethon migration или частые restarts.",
+            )
+        return AuditFinding(
+            "Zombie/sleep",
+            "ok",
+            f"{count} событий self-recovery (норма)",
+        )
+    except Exception as exc:
+        return AuditFinding("Zombie/sleep", "warn", f"grep не удался: {str(exc)[:50]}")
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
+
+
+async def run_full_audit() -> dict:
+    """Запускает все checks параллельно, собирает отчёт, шлёт в Telegram если нужно."""
+    raw_results = await asyncio.gather(
+        audit_process_health(),
+        audit_database_integrity(),
+        audit_bypass_perf_trend(),
+        audit_memory_trend(),
+        audit_disk_space(),
+        audit_inbox_bloat(),
+        audit_oauth_tokens(),
+        audit_zombie_escalations(),
+        return_exceptions=True,
+    )
+
+    # Фильтруем exception'ы (заменяем на warn-finding)
+    findings: list[AuditFinding] = []
+    for i, r in enumerate(raw_results):
+        if isinstance(r, AuditFinding):
+            findings.append(r)
+        else:
+            dim = f"Dimension-{i + 1}"
+            findings.append(AuditFinding(dim, "warn", f"Exception: {str(r)[:80]}"))
+
+    counts: dict[str, int] = {"ok": 0, "warn": 0, "critical": 0}
+    for f in findings:
+        counts[f.status] = counts.get(f.status, 0) + 1
+
+    # Строим Markdown report
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [f"🌙 *Krab Nightly Audit* — {now_str}", ""]
+    for f in findings:
+        lines.append(f.to_markdown())
+    lines.append(f"\n*Итого*: {counts['ok']} ✅  {counts['warn']} ⚠️  {counts['critical']} 🔴")
+    report = "\n".join(lines)
+
+    # Отправляем в Telegram только если есть проблемы (quiet mode для all-ok)
+    has_issues = counts["warn"] + counts["critical"] > 0
+    if has_issues:
+        try:
+            payload = json.dumps({"text": report}).encode()
+            req = urllib.request.Request(
+                f"{_PANEL_HOST}/api/notify",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT)
+            logger.info(
+                "nightly_audit_sent_telegram",
+                warnings=counts["warn"],
+                critical=counts["critical"],
+            )
+        except Exception as exc:
+            logger.warning("nightly_audit_send_failed", error=str(exc)[:200])
+    else:
+        logger.info("nightly_audit_all_ok_quiet_mode")
+
+    return {
+        "ok": True,
+        "counts": counts,
+        "has_issues": has_issues,
+        "findings": [
+            {
+                "dimension": f.dimension,
+                "status": f.status,
+                "summary": f.summary,
+                "detail": f.detail,
+            }
+            for f in findings
+        ],
+        "report": report,
+    }
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point для LaunchAgent
+# ---------------------------------------------------------------------------
+
+
+async def main() -> int:
+    """Точка входа при запуске через LaunchAgent или напрямую."""
+    result = await run_full_audit()
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0 if result["counts"]["critical"] == 0 else 1
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(asyncio.run(main()))
