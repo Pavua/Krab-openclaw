@@ -41,6 +41,13 @@ def _make_healthy_session(path: Path) -> None:
         conn.execute("INSERT INTO sessions VALUES (2, X'BEEF')")
         conn.execute("CREATE TABLE peers (id INTEGER PRIMARY KEY, access_hash INTEGER, type TEXT)")
         conn.execute("CREATE TABLE usernames (id INTEGER, username TEXT)")
+        # Session 39: seed 60 peers чтобы пройти min_threshold=50 проверку
+        # в _main_session_integrity_preflight (peers_below_threshold trigger).
+        for i in range(60):
+            conn.execute(
+                "INSERT INTO peers VALUES (?, ?, ?)",
+                (1000 + i, 12345 + i, "user"),
+            )
         conn.commit()
     finally:
         conn.close()

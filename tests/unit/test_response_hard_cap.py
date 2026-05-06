@@ -64,8 +64,9 @@ async def test_hard_cap_fires_on_long_call(monkeypatch):
 
     obj._safe_reply_or_send_new.assert_awaited_once()
     sent_text = obj._safe_reply_or_send_new.await_args.args[1]
-    # Session 33 UX wording: "дольше обычного" вместо старого "слишком долго"
-    assert "дольше обычного" in sent_text
+    # Session 39 UX wording: "Запрос занял ... wall-clock лимит" с advice
+    # как поднять KRAB_LLM_WALL_CLOCK_CAP_SEC. Раньше "дольше обычного".
+    assert "wall-clock" in sent_text or "KRAB_LLM_WALL_CLOCK_CAP_SEC" in sent_text
 
 
 @pytest.mark.asyncio

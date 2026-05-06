@@ -162,7 +162,8 @@ async def test_cap_fired_no_subtask_sends_fallback(monkeypatch):
 
     obj._safe_reply_or_send_new.assert_awaited_once()
     text = obj._safe_reply_or_send_new.await_args.args[1]
-    assert "дольше обычного" in text
+    # Session 39: fallback message changed на explicit wall-clock advice
+    assert "wall-clock" in text or "KRAB_LLM_WALL_CLOCK_CAP_SEC" in text
 
 
 @pytest.mark.asyncio
