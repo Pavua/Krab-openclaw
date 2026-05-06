@@ -498,35 +498,48 @@ class HybridRetriever:
                 )
 
         # Opt-in: LLM re-ranking финальная стадия (Chado §6 P1).
+        # Wave 43-A: adaptive threshold — LLM пропускается при высокой/низкой уверенности.
         if os.getenv("KRAB_RAG_LLM_RERANK_ENABLED", "0") == "1" and results:
             try:
-                from src.core.memory_llm_rerank import Candidate, llm_rerank  # lazy
-
-                candidates = [
-                    Candidate(
-                        chunk_id=r.message_id,
-                        text=r.text_redacted,
-                        rrf_score=r.score,
-                    )
-                    for r in results
-                ]
-                # Подключаем Gemini-провайдер если доступен (Chado §6 P1).
-                _rerank_provider = None
-                try:
-                    from src.core.gemini_rerank_provider import default_provider as _grp_default
-
-                    _rerank_provider = _grp_default()
-                except Exception as exc:  # noqa: BLE001
-                    # Fallback: rerank без Gemini-провайдера. Не Sentry — Phase 2
-                    # downgrade ожидаемо (provider может быть disabled in env).
-                    logger.warning("memory_llm_rerank_provider_unavailable", error=str(exc))
-                reranked_cands = asyncio.get_event_loop().run_until_complete(
-                    llm_rerank(query, candidates, top_k=top_k, provider=_rerank_provider)
+                from src.core.memory_llm_rerank import (  # lazy
+                    Candidate,
+                    llm_rerank,
+                    should_apply_llm_rerank,
                 )
-                # Восстанавливаем порядок SearchResult по chunk_id.
-                order = {c.chunk_id: i for i, c in enumerate(reranked_cands)}
-                results = sorted(results, key=lambda r: order.get(r.message_id, 9999))
-                logger.debug("memory_llm_rerank_applied", count=len(results))
+
+                # Проверяем adaptive threshold по top-1 score перед созданием candidates.
+                _top_score = results[0].score if results else 0.0
+                if not should_apply_llm_rerank(_top_score):
+                    logger.debug(
+                        "memory_llm_rerank_skipped_by_threshold",
+                        top_score=round(_top_score, 3),
+                    )
+                else:
+                    candidates = [
+                        Candidate(
+                            chunk_id=r.message_id,
+                            text=r.text_redacted,
+                            rrf_score=r.score,
+                        )
+                        for r in results
+                    ]
+                    # Подключаем Gemini-провайдер если доступен (Chado §6 P1).
+                    _rerank_provider = None
+                    try:
+                        from src.core.gemini_rerank_provider import default_provider as _grp_default
+
+                        _rerank_provider = _grp_default()
+                    except Exception as exc:  # noqa: BLE001
+                        # Fallback: rerank без Gemini-провайдера. Не Sentry — Phase 2
+                        # downgrade ожидаемо (provider может быть disabled in env).
+                        logger.warning("memory_llm_rerank_provider_unavailable", error=str(exc))
+                    reranked_cands = asyncio.get_event_loop().run_until_complete(
+                        llm_rerank(query, candidates, top_k=top_k, provider=_rerank_provider)
+                    )
+                    # Восстанавливаем порядок SearchResult по chunk_id.
+                    order = {c.chunk_id: i for i, c in enumerate(reranked_cands)}
+                    results = sorted(results, key=lambda r: order.get(r.message_id, 9999))
+                    logger.debug("memory_llm_rerank_applied", count=len(results))
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "memory_llm_rerank_hook_failed",
