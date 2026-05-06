@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.krab.quota-history</string>
+
+    <key>Comment</key>
+    <string>Wave 34-A: Hourly quota history snapshot — пишет quota state в quota_history.jsonl каждый час</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/quota_history_snapshot.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/quota_history.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/quota_history.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
