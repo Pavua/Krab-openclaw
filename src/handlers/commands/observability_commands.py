@@ -936,6 +936,149 @@ async def handle_quota(bot: "KraabUserbot", message: Message) -> None:
     await message.reply(text, parse_mode=ParseMode.MARKDOWN)
 
 
+# ---------------------------------------------------------------------------
+# !metrics — Wave 39-A: единый системный дашборд (one-card overview)
+# ---------------------------------------------------------------------------
+
+
+async def handle_metrics(bot: "KraabUserbot", message: Message) -> None:
+    """!metrics — единый отчёт по всем системам Krab (one-card overview).
+
+    Агрегирует:
+    - Uptime Krab-процесса
+    - Bypass perf (последний час): top-3 кайндов + p95 + кол-во фейлов
+    - Quota: счётчики вызовов за сегодня по 4 провайдерам
+    - Memory: krab_rss + ear_rss + swap из coexistence_monitor.log
+    - Daemons: число активных LaunchAgents ai.krab.*
+    - Zombie escalations: суммарный счётчик из лога (если > 0)
+    """
+    import json
+    import subprocess
+    import time
+    import urllib.request
+    from pathlib import Path
+
+    import psutil
+    from pyrogram.enums import ParseMode
+
+    del bot  # не используется напрямую
+
+    parts: list[str] = ["📊 *Krab Metrics* — единый отчёт"]
+
+    # 1. Uptime Krab-процесса
+    try:
+        krab_pids = [
+            p.pid
+            for p in psutil.process_iter(["cmdline"])
+            if p.info.get("cmdline")
+            and any("userbot_bridge" in c or "src/main.py" in c for c in p.info["cmdline"])
+        ]
+        if krab_pids:
+            create_time = psutil.Process(krab_pids[0]).create_time()
+            uptime_min = (time.time() - create_time) / 60
+            uptime_str = f"{uptime_min / 60:.1f}h" if uptime_min > 60 else f"{uptime_min:.0f} min"
+            parts.append(f"\n⏱ *Uptime*: {uptime_str}")
+    except Exception:
+        pass
+
+    # 2. Bypass perf (Wave 31-A endpoint)
+    try:
+        with urllib.request.urlopen(
+            "http://127.0.0.1:8080/api/bypass/perf?window=1h", timeout=3
+        ) as resp:
+            perf: dict = json.loads(resp.read())
+        total = perf.get("total_calls", 0)
+        fails = perf.get("total_failures", 0)
+        parts.append(f"\n🔌 *Bypass* (1h): {total} calls, {fails} fails")
+        # top-3 кайнда по убыванию count
+        by_kind: dict = perf.get("by_kind", {})
+        sorted_kinds = sorted(by_kind.items(), key=lambda kv: kv[1].get("count", 0), reverse=True)
+        for kind, stats in sorted_kinds[:3]:
+            p95 = stats.get("p95", 0.0)
+            cnt = stats.get("count", 0)
+            parts.append(f"  {kind}: {cnt} ({p95:.1f}s p95)")
+    except Exception as exc:
+        parts.append(f"\n🔌 *Bypass*: ⚠️ {str(exc)[:40]}")
+
+    # 3. Quota — счётчики вызовов за сегодня (без probe для скорости)
+    try:
+        with urllib.request.urlopen(
+            "http://127.0.0.1:8080/api/quota?probe=false", timeout=3
+        ) as resp:
+            quota: dict = json.loads(resp.read())
+        providers = quota.get("providers", {})
+        if providers:
+            parts.append("\n📈 *Today's calls*:")
+            for prov, info in providers.items():
+                calls = info.get("today_calls", 0)
+                parts.append(f"  {prov}: {calls}")
+    except Exception:
+        # Fallback: считаем из лога напрямую через _count_today_calls
+        try:
+            today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+            counts = _count_today_calls(_LOG_FILE, today_str)
+            parts.append("\n📈 *Today's calls* (local):")
+            for prov, cnt in counts.items():
+                parts.append(f"  {prov}: {cnt}")
+        except Exception:
+            pass
+
+    # 4. Memory — последняя запись coexistence_monitor.log (Wave 25-B)
+    try:
+        log_path = Path.home() / ".openclaw/krab_runtime_state/coexistence_monitor.log"
+        if log_path.exists():
+            with log_path.open("rb") as fh:
+                fh.seek(0, 2)
+                sz = fh.tell()
+                fh.seek(max(0, sz - 4096))
+                tail_raw = fh.read().decode(errors="ignore").strip().splitlines()
+            if tail_raw:
+                last_entry: dict = json.loads(tail_raw[-1])
+                swap = last_entry.get("swap_used_gb", 0.0)
+                krab = last_entry.get("krab_rss_gb", 0.0)
+                ear = last_entry.get("ear_rss_gb", 0.0)
+                ram_avail = last_entry.get("system_ram_available_gb", 0.0)
+                parts.append(
+                    f"\n🖥 *Memory*: krab={krab:.1f}GB ear={ear:.1f}GB"
+                    f" swap={swap:.1f}GB free={ram_avail:.1f}GB"
+                )
+    except Exception:
+        pass
+
+    # 5. Daemons — быстрый подсчёт активных LaunchAgents ai.krab.*
+    try:
+        result = subprocess.run(
+            ["launchctl", "list"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        krab_lines = [line for line in result.stdout.splitlines() if "ai.krab." in line]
+        # Активные: первое поле (PID) не равно "-"
+        running = sum(1 for line in krab_lines if line.split()[0] != "-")
+        parts.append(f"\n⚙️ *Daemons*: {running}/{len(krab_lines)} active")
+    except Exception:
+        pass
+
+    # 6. Zombie escalations (Wave 36-A/B) — только если счётчик > 0
+    try:
+        krab_log = Path.home() / ".openclaw/krab_runtime_state/krab_main.log"
+        if krab_log.exists():
+            grep = subprocess.run(
+                ["grep", "-c", "telegram_session_zombie_escalation", str(krab_log)],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            zombie_count = int(grep.stdout.strip() or "0")
+            if zombie_count > 0:
+                parts.append(f"\n🧟 *Zombie escalations*: {zombie_count} (life-time)")
+    except Exception:
+        pass
+
+    await message.reply("\n".join(parts), parse_mode=ParseMode.MARKDOWN)
+
+
 __all__ = [
     "_CHECKPOINTS_DIR",
     "_count_today_calls",
@@ -948,6 +1091,7 @@ __all__ = [
     "handle_context",
     "handle_inbox",
     "handle_memo",
+    "handle_metrics",
     "handle_note",
     "handle_quota",
     "handle_watch",

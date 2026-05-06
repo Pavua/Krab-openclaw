@@ -401,6 +401,13 @@ _COMMANDS: list[CommandInfo] = [
         usage="!quota [--no-probe]",
         owner_only=True,
     ),
+    CommandInfo(
+        name="metrics",
+        category="costs",
+        description="Единый системный дашборд: bypass perf + quota + memory + daemons + zombie",
+        usage="!metrics",
+        owner_only=True,
+    ),
     # ── notes ────────────────────────────────────────────────────────────────
     CommandInfo(
         name="memo",

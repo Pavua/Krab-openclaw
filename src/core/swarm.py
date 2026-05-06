@@ -25,6 +25,119 @@ from .swarm_memory import swarm_memory
 from .swarm_team_prompts import get_team_system_prompt
 from .swarm_tool_scope import format_tool_hint
 
+# ---------------------------------------------------------------------------
+# Wave 38-B: Engine dispatch helper
+# Lazy import чтобы избежать циклических зависимостей при старте.
+# При KRAB_AGENT_ENGINE_DISPATCH_ENABLED=0 (дефолт) — нулевое изменение поведения.
+# ---------------------------------------------------------------------------
+
+
+async def _dispatch_route_query(
+    prompt: str,
+    router: Any,
+    *,
+    team_name: str = "",
+    chat_id: Any = None,
+) -> str:
+    """Wave 38-B: Route через AgentEngine если dispatch включён, иначе через router.
+
+    Возвращает строку-ответ. Записывает run в agent_engine_runs после завершения.
+    Backward compat: при dispatch OFF — прямо вызывает router.route_query().
+    """
+    import os
+
+    dispatch_on = os.environ.get("KRAB_AGENT_ENGINE_DISPATCH_ENABLED", "0").strip() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+    if not dispatch_on:
+        # Нулевое изменение поведения — прямой вызов router
+        return await router.route_query(prompt, skip_swarm=True)
+
+    # -- dispatch включён: resolve engine ----------------------------------
+    t0 = time.monotonic()
+    engine = None
+    requested_kind = "openclaw"
+    actual_kind = "openclaw"
+    success = False
+    response_text = ""
+
+    try:
+        from .agent_engine_resolver import get_engine_for_route  # noqa: PLC0415
+
+        # openclaw_client берём из router для fallback
+        _openclaw_client = getattr(router, "_openclaw_client", None) or getattr(
+            router, "client", None
+        )
+        engine, requested_kind, actual_kind = await get_engine_for_route(
+            chat_id=chat_id,
+            room=team_name or None,
+            openclaw_client=_openclaw_client,
+        )
+        logger.info(
+            "swarm_engine_dispatched",
+            team=team_name,
+            requested=requested_kind,
+            actual=actual_kind,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("swarm_engine_dispatch_resolve_failed", error=str(exc))
+        # Fallback на router при ошибке resolver
+        return await router.route_query(prompt, skip_swarm=True)
+
+    # -- вызываем engine: если это OpenClawAdapter — stream() делегирует
+    # в openclaw_client.send_message_stream(); Hermes — в subprocess ACP.
+    # Но route_query() может быть удобнее для OpenClaw (возвращает полный текст).
+    # Детектируем: если actual_kind == "openclaw" — идём через router для
+    # сохранения всей OpenClaw логики (tools, memory, etc.). Только при
+    # actual_kind == "hermes" используем engine.stream().
+    try:
+        if actual_kind == "hermes" and engine is not None:
+            # Hermes engine — stream() через ACP subprocess
+            chunks: list[str] = []
+            async for chunk in engine.stream(
+                prompt,
+                ctx={"chat_id": str(chat_id) if chat_id else "_swarm_", "room": team_name},
+            ):
+                if chunk.text and chunk.chunk_type != "finish":
+                    chunks.append(chunk.text)
+            response_text = "".join(chunks)
+            success = bool(response_text)
+        else:
+            # openclaw actual — через router (full feature-set)
+            response_text = await router.route_query(prompt, skip_swarm=True)
+            success = bool(response_text)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("swarm_engine_dispatch_call_failed", engine=actual_kind, error=str(exc))
+        # Fallback на router при ошибке engine
+        try:
+            response_text = await router.route_query(prompt, skip_swarm=True)
+            success = bool(response_text)
+            actual_kind = "openclaw"  # зафиксируем что использовали fallback
+        except Exception as exc2:  # noqa: BLE001
+            response_text = f"[Ошибка engine и fallback: {exc2}]"
+
+    # -- записываем run в archive.db (fail-safe) ----------------------------
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    try:
+        from .agent_engine_runs import record_engine_run  # noqa: PLC0415
+
+        fallback_engine = "openclaw" if actual_kind != requested_kind else None
+        record_engine_run(
+            engine=actual_kind,
+            chat_id=str(chat_id) if chat_id else None,
+            room=team_name or None,
+            latency_ms_total=elapsed_ms,
+            success=success,
+            fallback_engine=fallback_engine,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("swarm_engine_run_record_failed", error=str(exc))
+
+    return response_text
+
 
 # Реестр прогресса — подключается лениво чтобы избежать циклических импортов
 def _get_swarm_progress():  # noqa: ANN202
@@ -290,7 +403,13 @@ class AgentRoom:
                 prompt = f"{ab_prefix}{hint}{tool_hint}\n\nТема: {topic}"
 
             try:
-                response = await router.route_query(prompt, skip_swarm=True)
+                # Wave 38-B: route через engine dispatcher (при dispatch OFF — прямой router.route_query)
+                response = await _dispatch_route_query(
+                    prompt,
+                    router,
+                    team_name=_team_name,
+                    chat_id=None,  # swarm не знает chat_id — передаём None (resolver использует room)
+                )
             except Exception as exc:  # noqa: BLE001
                 response = f"[Ошибка роли {name}: {exc}]"
                 logger.warning("agent_room_role_failed", role=name, error=str(exc))

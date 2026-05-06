@@ -90,6 +90,48 @@ def build_agent_engine_metrics_router(ctx: RouterContext) -> APIRouter:  # noqa:
             },
         }
 
+    @router.get("/dispatch-status")
+    async def dispatch_status() -> dict[str, Any]:
+        """Wave 38-B: Полный статус dispatch — включён/выключен, доступные engines, skill_curator cron.
+
+        Endpoint для быстрой проверки состояния Phase D wire-up:
+        - dispatch_enabled: True когда KRAB_AGENT_ENGINE_DISPATCH_ENABLED=1
+        - skill_curator_cron_enabled: True когда KRAB_SKILL_CURATOR_CRON_ENABLED=1
+        - engines_available: список поддерживаемых engine-kind
+        - default_engine: openclaw (дефолт при dispatch OFF)
+        """
+        import os
+
+        _enabled_vals = {"1", "true", "yes"}
+
+        dispatch_enabled = (
+            os.environ.get("KRAB_AGENT_ENGINE_DISPATCH_ENABLED", "0").strip() in _enabled_vals
+        )
+        skill_curator_cron_enabled = (
+            os.environ.get("KRAB_SKILL_CURATOR_CRON_ENABLED", "0").strip() in _enabled_vals
+        )
+        skill_curator_ab_enabled = (
+            os.environ.get("KRAB_SKILL_CURATOR_AB_ENABLED", "0").strip() in _enabled_vals
+        )
+
+        return {
+            "ok": True,
+            "dispatch_enabled": dispatch_enabled,
+            "engines_available": ["openclaw", "hermes", "auto"],
+            "default_engine": "openclaw",
+            "skill_curator_cron_enabled": skill_curator_cron_enabled,
+            "skill_curator_ab_enabled": skill_curator_ab_enabled,
+            "env": {
+                "KRAB_AGENT_ENGINE_DISPATCH_ENABLED": os.environ.get(
+                    "KRAB_AGENT_ENGINE_DISPATCH_ENABLED", "0"
+                ),
+                "KRAB_SKILL_CURATOR_CRON_ENABLED": os.environ.get(
+                    "KRAB_SKILL_CURATOR_CRON_ENABLED", "0"
+                ),
+            },
+            "wire_up": "Wave 38-B: swarm.py _dispatch_route_query + cron 04:00 UTC",
+        }
+
     return router
 
 

@@ -493,6 +493,7 @@ from .commands.observability_commands import (  # noqa: E402, F401  # Phase 2 Wa
     handle_context,
     handle_inbox,
     handle_memo,
+    handle_metrics,
     handle_note,
     handle_quota,
     handle_watch,

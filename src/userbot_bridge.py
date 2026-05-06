@@ -124,6 +124,7 @@ from .handlers import (
     handle_mem,
     handle_memo,
     handle_memory,
+    handle_metrics,
     handle_model,
     handle_models,
     handle_monitor,
@@ -261,6 +262,54 @@ _RELAY_PROMISE_IN_RESPONSE: frozenset[str] = frozenset(
         "передам владельцу",
     }
 )
+
+
+async def _evaluate_and_apply_skill_curator_proposals() -> None:
+    """Wave 38-B: cron-trigger для evaluation + apply A/B test results.
+
+    Запускается раз в сутки в 04:00 UTC через _idea_features_tick_loop.
+    Гейт: KRAB_SKILL_CURATOR_CRON_ENABLED=1.
+    Для каждой команды свёрма ищет активный A/B тест и запускает evaluate_ab_test_and_apply.
+    При отсутствии activate теста — тихий пропуск.
+    """
+    _swarm_teams = ("traders", "coders", "analysts", "creative")
+
+    try:
+        from .core.skill_curator import skill_curator  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001
+        _sc_logger = __import__("logging").getLogger(__name__)
+        _sc_logger.warning("skill_curator_cron_import_failed: %s", exc)
+        return
+
+    _log = __import__("logging").getLogger(__name__)
+
+    for team in _swarm_teams:
+        try:
+            # Проверяем наличие активного теста (без side-effects)
+            active_test = skill_curator.get_active_ab_test(team)
+            if not active_test:
+                _log.debug("skill_curator_cron_no_active_test", team=team)
+                continue
+
+            ab_id = active_test.get("ab_id", "")
+            if not ab_id:
+                continue
+
+            result, applied = await skill_curator.evaluate_ab_test_and_apply(ab_id)
+            _log.info(
+                "skill_curator_eval_done",
+                team=team,
+                ab_id=ab_id,
+                applied=applied,
+                status=result.get("status"),
+                winner=result.get("winner"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log.warning(
+                "skill_curator_eval_failed",
+                team=team,
+                error=str(exc)[:200],
+            )
 
 
 class _TelegramSendQueue:
@@ -995,6 +1044,13 @@ class KraabUserbot(
         )
         async def wrap_quota(c, m):
             await run_cmd(handle_quota, m)
+
+        @self.client.on_message(
+            filters.command("metrics", prefixes=prefixes) & _make_command_filter("metrics"),
+            group=-1,
+        )
+        async def wrap_metrics(c, m):
+            await run_cmd(handle_metrics, m)
 
         @self.client.on_message(
             filters.command("memory", prefixes=prefixes) & _make_command_filter("memory"), group=-1
@@ -2235,6 +2291,29 @@ class KraabUserbot(
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "idea_tick_pattern_detector_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+            # ── 5. Wave 38-B: skill_curator A/B evaluation — 04:00 UTC ─
+            # SkillCurator Step 4: auto-apply если кандидат победил в A/B тесте.
+            # Запускается раз в сутки в 04:00 UTC. Гейт: KRAB_SKILL_CURATOR_CRON_ENABLED=1.
+            try:
+                if os.getenv("KRAB_SKILL_CURATOR_CRON_ENABLED", "0").strip().lower() in (
+                    "1",
+                    "true",
+                    "yes",
+                ):
+                    now_utc = __import__("datetime").datetime.now(
+                        __import__("datetime").timezone.utc
+                    )
+                    last_run = float(self._idea_tick_state.get("skill_curator_eval", 0.0))
+                    if now_utc.hour == 4 and (now_ts - last_run) > daily_reentry_guard:
+                        await _evaluate_and_apply_skill_curator_proposals()
+                        self._idea_tick_state["skill_curator_eval"] = now_ts
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "idea_tick_skill_curator_eval_failed",
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
