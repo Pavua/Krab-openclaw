@@ -8,9 +8,19 @@ Forward Batch Mode (сессия 14):
   и все имеют forward_from* признак — они дожидаются конца пачки и
   обрабатываются одним LLM-запросом с per-sender attribution.
 
+Bulk Forward Mode (Wave 33-C):
+  Если в течение BULK_DETECTION_WINDOW_SEC прилетает BULK_DETECTION_THRESHOLD+
+  пересланных сообщений — активируется bulk mode: MAX увеличивается до 200,
+  WINDOW до 60s. Это позволяет консолидировать 310 сообщений (3 пачки по 100)
+  в ОДИН LLM-запрос вместо 9+ отдельных.
+
 Переменные окружения:
-  KRAB_FORWARD_BATCH_WINDOW_SEC  — окно ожидания конца пачки (default 5)
-  KRAB_FORWARD_BATCH_MAX         — максимум сообщений в пачке (default 20)
+  KRAB_FORWARD_BATCH_WINDOW_SEC              — окно ожидания конца пачки (default 5)
+  KRAB_FORWARD_BATCH_MAX                     — максимум сообщений в пачке (default 20)
+  KRAB_BULK_FORWARD_MAX_BATCH                — bulk mode: максимум сообщений (default 200)
+  KRAB_BULK_FORWARD_WINDOW_SEC               — bulk mode: окно ожидания (default 60)
+  KRAB_BULK_FORWARD_DETECTION_THRESHOLD      — кол-во forwards для входа в bulk mode (default 5)
+  KRAB_BULK_FORWARD_DETECTION_WINDOW_SEC     — окно детекции burst (default 5)
 """
 
 from __future__ import annotations
@@ -32,9 +42,15 @@ BATCH_FORMAT = os.environ.get(
     "Пользователь прислал {count} сообщений подряд:\n\n{messages}\n\nОтветь coherently объединяя контекст.",
 )
 
-# Forward batch settings
+# Forward batch settings (обычный режим)
 FORWARD_BATCH_WINDOW_SEC = float(os.environ.get("KRAB_FORWARD_BATCH_WINDOW_SEC", "5"))
 FORWARD_BATCH_MAX = int(os.environ.get("KRAB_FORWARD_BATCH_MAX", "20"))
+
+# Wave 33-C: bulk forward mode — активируется при массовой пересылке (100+ сообщений)
+BULK_MAX_BATCH_SIZE = int(os.environ.get("KRAB_BULK_FORWARD_MAX_BATCH", "200"))
+BULK_WINDOW_SEC = float(os.environ.get("KRAB_BULK_FORWARD_WINDOW_SEC", "60"))
+BULK_DETECTION_THRESHOLD = int(os.environ.get("KRAB_BULK_FORWARD_DETECTION_THRESHOLD", "5"))
+BULK_DETECTION_WINDOW_SEC = float(os.environ.get("KRAB_BULK_FORWARD_DETECTION_WINDOW_SEC", "5"))
 
 FORWARD_BATCH_PROMPT_HEADER = "[Пачка пересланных сообщений{senders_info}]:\n{lines}"
 
@@ -104,16 +120,58 @@ class ForwardBatchBuffer:
     """
     Временный буфер пересланных сообщений для одного чата.
     Накапливает forwards в окне FORWARD_BATCH_WINDOW_SEC, затем сбрасывает.
+
+    Wave 33-C: поддерживает bulk mode — при burst 5+ forwards за 5s
+    переключается на лимиты 200 сообщений / 60s окно.
     """
 
     chat_id: str
     messages: list[PendingMessage] = field(default_factory=list)
     _timer_handle: Optional[asyncio.TimerHandle] = field(default=None, repr=False, compare=False)
     _flush_callback: Optional[Callable] = field(default=None, repr=False, compare=False)
+    # Wave 33-C: bulk forward detection state
+    _bulk_mode: bool = field(default=False, repr=False, compare=False)
+    _first_msg_ts: float = field(default=0.0, repr=False, compare=False)
 
     def reset(self) -> None:
         self.messages = []
+        self._bulk_mode = False
+        self._first_msg_ts = 0.0
         self._cancel_timer()
+
+    def is_bulk_mode(self) -> bool:
+        """Активен ли bulk forward mode для этого буфера."""
+        return self._bulk_mode
+
+    def _check_and_activate_bulk_mode(self) -> None:
+        """
+        Проверяет условия для активации bulk mode.
+        Если BULK_DETECTION_THRESHOLD+ forwards пришли за BULK_DETECTION_WINDOW_SEC —
+        активируем расширенные лимиты (200 msg / 60s).
+        """
+        if self._bulk_mode:
+            return  # уже активен
+        now = time.time()
+        if self._first_msg_ts == 0.0:
+            return  # нет данных
+        elapsed = now - self._first_msg_ts
+        count = len(self.messages)
+        if count >= BULK_DETECTION_THRESHOLD and elapsed <= BULK_DETECTION_WINDOW_SEC:
+            self._bulk_mode = True
+            logger.info(
+                "bulk_forward_mode_activated",
+                chat_id=self.chat_id,
+                buffer_size=count,
+                elapsed_sec=round(elapsed, 2),
+            )
+
+    def effective_max(self) -> int:
+        """Максимальный размер батча с учётом текущего режима."""
+        return BULK_MAX_BATCH_SIZE if self._bulk_mode else FORWARD_BATCH_MAX
+
+    def effective_window(self) -> float:
+        """Окно ожидания с учётом текущего режима."""
+        return BULK_WINDOW_SEC if self._bulk_mode else FORWARD_BATCH_WINDOW_SEC
 
     def _cancel_timer(self) -> None:
         if self._timer_handle is not None:
@@ -136,6 +194,9 @@ class ForwardBatchBuffer:
             asyncio.ensure_future(self._flush_callback())
 
     def add(self, msg: PendingMessage) -> None:
+        # Фиксируем timestamp первого сообщения в буфере
+        if not self.messages:
+            self._first_msg_ts = time.time()
         self.messages.append(msg)
 
     def size(self) -> int:
@@ -144,6 +205,9 @@ class ForwardBatchBuffer:
     def drain(self) -> list[PendingMessage]:
         msgs = list(self.messages)
         self.messages = []
+        # Сбрасываем bulk state после flush — следующая пачка начнётся заново
+        self._bulk_mode = False
+        self._first_msg_ts = 0.0
         self._cancel_timer()
         return msgs
 
@@ -232,7 +296,11 @@ class MessageBatcher:
         Возвращает True если сообщение добавлено в буфер (будет обработано позже).
         Возвращает False если сообщение не является forwarded (нужно обработать сразу).
 
-        on_flush вызывается (async) когда окно истекает или достигается FORWARD_BATCH_MAX.
+        on_flush вызывается (async) когда окно истекает или достигается лимит.
+
+        Wave 33-C: при обнаружении bulk burst (5+ forwards за 5s) автоматически
+        переключается в bulk mode: лимит 200 msg, окно 60s. Это консолидирует
+        массовую пересылку (100-310 сообщений) в ОДИН LLM-запрос.
         """
         if not msg.is_forwarded:
             return False
@@ -241,25 +309,34 @@ class MessageBatcher:
         buf = self._get_fwd_buffer(chat_id)
         buf.add(msg)
 
+        # Wave 33-C: проверяем bulk mode после добавления сообщения
+        buf._check_and_activate_bulk_mode()
+
+        effective_max = buf.effective_max()
+        effective_window = buf.effective_window()
+
         logger.info(
             "forward_msg_buffered",
             chat_id=chat_id,
             buffer_size=buf.size(),
             sender=msg.forward_sender_name or msg.forward_sender_username,
+            bulk_mode=buf.is_bulk_mode(),
+            effective_max=effective_max,
         )
 
-        # Немедленный flush при достижении максимума
-        if buf.size() >= FORWARD_BATCH_MAX:
+        # Немедленный flush при достижении максимума (с учётом текущего режима)
+        if buf.size() >= effective_max:
             msgs = buf.drain()
             logger.info(
                 "forward_batch_max_reached",
                 chat_id=chat_id,
                 count=len(msgs),
+                was_bulk_mode=True,
             )
             asyncio.ensure_future(on_flush(chat_id, msgs))
             return True
 
-        # Перепланируем таймер окна
+        # Перепланируем таймер окна (с учётом текущего режима)
         async def _deferred_flush() -> None:
             drained = buf.drain()
             if drained:
@@ -270,7 +347,7 @@ class MessageBatcher:
                 )
                 await on_flush(chat_id, drained)
 
-        buf.schedule_flush(FORWARD_BATCH_WINDOW_SEC, _deferred_flush)
+        buf.schedule_flush(effective_window, _deferred_flush)
         return True
 
     def _get_batch(self, chat_id: str) -> ChatBatch:

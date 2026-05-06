@@ -358,36 +358,46 @@ def test_stats_forward_buffers_count():
 
 @pytest.mark.asyncio
 async def test_max_size_exact_boundary():
-    """Ровно FORWARD_BATCH_MAX сообщений → немедленный flush, буфер пуст."""
+    """Ровно FORWARD_BATCH_MAX сообщений → немедленный flush, буфер пуст (non-bulk mode)."""
+    import src.core.message_batcher as batcher_mod
     from src.core.message_batcher import FORWARD_BATCH_MAX, MessageBatcher
 
-    b = MessageBatcher()
-    flushed: list = []
+    # Wave 33-C: отключаем bulk mode — тест проверяет non-bulk лимит 20
+    original_threshold = batcher_mod.BULK_DETECTION_THRESHOLD
+    batcher_mod.BULK_DETECTION_THRESHOLD = 999
+    try:
+        b = MessageBatcher()
+        flushed: list = []
 
-    async def on_flush(chat_id, msgs):
-        flushed.extend(msgs)
+        async def on_flush(chat_id, msgs):
+            flushed.extend(msgs)
 
-    for i in range(FORWARD_BATCH_MAX):
-        b.add_forward("c1", _make_fwd(f"msg{i}"), on_flush)
+        for i in range(FORWARD_BATCH_MAX):
+            b.add_forward("c1", _make_fwd(f"msg{i}"), on_flush)
 
-    await asyncio.sleep(0)  # даём event loop крутануться
+        await asyncio.sleep(0)  # даём event loop крутануться
 
-    assert len(flushed) == FORWARD_BATCH_MAX
-    # Буфер после flush должен быть пуст
-    buf = b._get_fwd_buffer("c1")
-    assert buf.size() == 0
+        assert len(flushed) == FORWARD_BATCH_MAX
+        # Буфер после flush должен быть пуст
+        buf = b._get_fwd_buffer("c1")
+        assert buf.size() == 0
+    finally:
+        batcher_mod.BULK_DETECTION_THRESHOLD = original_threshold
 
 
 @pytest.mark.asyncio
 async def test_max_size_plus_one_triggers_two_flushes():
     """
     FORWARD_BATCH_MAX + 1 сообщений → первый batch из MAX немедленно,
-    +1 остаётся в буфере и флашится по таймеру.
+    +1 остаётся в буфере и флашится по таймеру (non-bulk mode).
     """
     import src.core.message_batcher as batcher_mod
 
     original_window = batcher_mod.FORWARD_BATCH_WINDOW_SEC
+    original_threshold = batcher_mod.BULK_DETECTION_THRESHOLD
+    # Wave 33-C: отключаем bulk mode чтобы тестировать старый лимит 20
     batcher_mod.FORWARD_BATCH_WINDOW_SEC = 0.05
+    batcher_mod.BULK_DETECTION_THRESHOLD = 999
 
     try:
         from src.core.message_batcher import FORWARD_BATCH_MAX, MessageBatcher
@@ -412,6 +422,7 @@ async def test_max_size_plus_one_triggers_two_flushes():
         assert batch_sizes[1] == 1
     finally:
         batcher_mod.FORWARD_BATCH_WINDOW_SEC = original_window
+        batcher_mod.BULK_DETECTION_THRESHOLD = original_threshold
 
 
 # ---------------------------------------------------------------------------

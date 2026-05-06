@@ -118,22 +118,31 @@ async def test_three_forwards_collected_in_buffer():
 
 @pytest.mark.asyncio
 async def test_max_size_triggers_immediate_flush():
-    """При достижении FORWARD_BATCH_MAX (20) → немедленный async flush."""
+    """При достижении FORWARD_BATCH_MAX (20) → немедленный async flush (non-bulk mode)."""
+    import src.core.message_batcher as batcher_mod
     from src.core.message_batcher import FORWARD_BATCH_MAX, MessageBatcher
 
-    b = MessageBatcher()
-    flushed: list = []
+    # Wave 33-C: отключаем bulk mode чтобы протестировать старый лимит 20
+    # (bulk mode требует 5+ forwards за 5s, что здесь и происходит — но тест
+    # проверяет именно non-bulk поведение при патченном threshold)
+    original_threshold = batcher_mod.BULK_DETECTION_THRESHOLD
+    batcher_mod.BULK_DETECTION_THRESHOLD = 999  # выше числа сообщений в тесте
+    try:
+        b = MessageBatcher()
+        flushed: list = []
 
-    async def on_flush(chat_id, msgs):
-        flushed.extend(msgs)
+        async def on_flush(chat_id, msgs):
+            flushed.extend(msgs)
 
-    # Добавляем FORWARD_BATCH_MAX сообщений
-    for i in range(FORWARD_BATCH_MAX):
-        b.add_forward("c1", _make_msg(f"msg{i}", fwd_name="alice"), on_flush)
+        # Добавляем FORWARD_BATCH_MAX сообщений
+        for i in range(FORWARD_BATCH_MAX):
+            b.add_forward("c1", _make_msg(f"msg{i}", fwd_name="alice"), on_flush)
 
-    # После добавления ровно MAX — asyncio.ensure_future запустила flush
-    await asyncio.sleep(0)  # даём event loop крутануться
-    assert len(flushed) == FORWARD_BATCH_MAX
+        # После добавления ровно MAX — asyncio.ensure_future запустила flush
+        await asyncio.sleep(0)  # даём event loop крутануться
+        assert len(flushed) == FORWARD_BATCH_MAX
+    finally:
+        batcher_mod.BULK_DETECTION_THRESHOLD = original_threshold
 
 
 # ---------------------------------------------------------------------------

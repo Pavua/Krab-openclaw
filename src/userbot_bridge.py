@@ -6332,12 +6332,31 @@ class KraabUserbot(
                     if not combined:
                         return
 
+                    count = len(msgs)
                     logger.info(
                         "forward_batch_processing",
                         chat_id=_chat_id,
-                        count=len(msgs),
+                        count=count,
                         combined_len=len(combined),
                     )
+
+                    # Wave 33-C: UX ack при большом количестве сообщений (bulk mode).
+                    # Отправляем промежуточный ack чтобы пользователь понял что Краб
+                    # получил все сообщения и обрабатывает их как единый блок.
+                    _bulk_ack_threshold = 15
+                    if count >= _bulk_ack_threshold:
+                        try:
+                            ack_text = (
+                                f"📥 Получил {count} пересланных сообщений, "
+                                f"обрабатываю как единый блок..."
+                            )
+                            await self._safe_reply_or_send_new(_orig_msg, ack_text)
+                        except Exception as _ack_err:
+                            logger.debug(
+                                "bulk_forward_ack_failed",
+                                chat_id=_chat_id,
+                                error=str(_ack_err),
+                            )
 
                     async with self._get_chat_processing_lock(_chat_id):
                         await self._process_message_serialized(
