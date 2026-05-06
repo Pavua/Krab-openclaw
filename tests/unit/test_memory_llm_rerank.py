@@ -9,6 +9,16 @@ import pytest
 
 from src.core.memory_llm_rerank import Candidate, is_enabled, llm_rerank
 
+
+@pytest.fixture(autouse=True)
+def _clear_rerank_cache():
+    """Wave 43-A LRU cache leaks state между tests — очищаем перед каждым."""
+    from src.core import memory_llm_rerank as _mod  # noqa: PLC0415
+
+    _mod._rerank_cache.clear()
+    yield
+    _mod._rerank_cache.clear()
+
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------

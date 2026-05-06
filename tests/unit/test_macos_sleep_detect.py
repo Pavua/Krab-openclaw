@@ -182,18 +182,24 @@ def test_sleep_detect_disabled_env_gate(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_sleep_detect_methods_in_userbot_bridge() -> None:
-    """_macos_sleep_detect_loop и _force_pyrofork_session_reinit объявлены в userbot_bridge.py."""
+    """Wave 31-O: методы переехали в network_watchdog mixin.
+
+    Проверяем что они доступны через MRO на KraabUserbot, не привязка
+    к строкам исходника (которые могут быть в любом mixin'е).
+    """
+    from src.userbot_bridge import KraabUserbot  # noqa: PLC0415
+
+    assert hasattr(KraabUserbot, "_macos_sleep_detect_loop"), (
+        "_macos_sleep_detect_loop должен быть на KraabUserbot (через MRO)"
+    )
+    assert hasattr(KraabUserbot, "_force_pyrofork_session_reinit"), (
+        "_force_pyrofork_session_reinit должен быть на KraabUserbot (через MRO)"
+    )
+    # _macos_sleep_detect_task — instance attr, проверяем через bridge.py
     import pathlib  # noqa: PLC0415
 
     src = pathlib.Path(__file__).parent.parent.parent / "src" / "userbot_bridge.py"
     text = src.read_text(encoding="utf-8")
-
-    assert "_macos_sleep_detect_loop" in text, (
-        "_macos_sleep_detect_loop должен быть объявлен в userbot_bridge.py"
-    )
-    assert "_force_pyrofork_session_reinit" in text, (
-        "_force_pyrofork_session_reinit должен быть объявлен в userbot_bridge.py"
-    )
     assert "_macos_sleep_detect_task" in text, (
         "_macos_sleep_detect_task атрибут должен быть в userbot_bridge.py"
     )
