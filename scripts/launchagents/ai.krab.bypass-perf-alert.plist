@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Wave 35-B: bypass perf threshold check.
+        Каждые 15 минут проверяет p95 latency и fail_rate по bypass_perf.jsonl.
+        При нарушении порогов → POST /api/notify → Telegram alert.
+
+        Пороги:
+          cli:      p95 > 60s, fail_rate > 10%
+          vertex/*: p95 > 30s, fail_rate > 10%
+
+        Дебаунс: не чаще одного алерта в час.
+
+        Install:
+          cp scripts/launchagents/ai.krab.bypass-perf-alert.plist \
+             ~/Library/LaunchAgents/
+          launchctl load ~/Library/LaunchAgents/ai.krab.bypass-perf-alert.plist
+    -->
+    <key>Label</key>
+    <string>ai.krab.bypass-perf-alert</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/bypass_perf_alert_check.py</string>
+    </array>
+
+    <!-- 15 минут = 900 секунд -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>KRAB_REPO</key>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/krab_bypass_perf_alert_stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/krab_bypass_perf_alert_stderr.log</string>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
