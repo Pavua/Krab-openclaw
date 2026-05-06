@@ -124,7 +124,8 @@ def test_full_profile_cannot_execute_owner_only_commands(
     assert profile.level == AccessLevel.FULL
     # Wave 11: 'diag' добавлен в OWNER_ONLY_COMMANDS (расширение admin scope).
     # Session 32 Wave 3-A: 'setpanelauth' wired (генерирует bcrypt hash для panel auth).
-    assert OWNER_ONLY_COMMANDS == {
+    # Session 39: 'curator' добавлен (SkillCurator owner-only).
+    assert set(OWNER_ONLY_COMMANDS) == {
         "access",
         "acl",
         "reasoning",
@@ -148,6 +149,7 @@ def test_full_profile_cannot_execute_owner_only_commands(
         "bench",
         "diag",
         "setpanelauth",
+        "curator",
     }
     assert profile.can_execute_command("status", set(USERBOT_KNOWN_COMMANDS)) is True
     assert profile.can_execute_command("acl", set(USERBOT_KNOWN_COMMANDS)) is False
