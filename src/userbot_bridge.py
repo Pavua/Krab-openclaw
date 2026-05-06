@@ -42,7 +42,6 @@ from .core.inbox_service import inbox_service  # noqa: F401 — re-export, monke
 from .core.logger import bind_contextvars, clear_contextvars, get_logger
 from .core.memory_indexer_worker import get_indexer
 from .core.message_priority_dispatcher import Priority, classify_priority
-from .core.proactive_watch import proactive_watch
 from .core.routing_errors import RouterError, user_message_for_surface
 from .core.scheduler import krab_scheduler
 from .core.sender_context import _extract_forward_origin_parts
@@ -194,6 +193,7 @@ from .userbot.llm_flow import (
 from .userbot.llm_text_processing import LLMTextProcessingMixin
 from .userbot.media_processors import MediaProcessorsMixin
 from .userbot.network_watchdog import NetworkWatchdogMixin
+from .userbot.proactive_watch import ProactiveWatchMixin
 from .userbot.reaction_dispatch import ReactionDispatchMixin
 from .userbot.relay_inbox import (
     _RELAY_INTENT_KEYWORDS,  # noqa: F401 — re-export для tests/llm_flow
@@ -270,6 +270,7 @@ class KraabUserbot(
     MediaProcessorsMixin,  # Wave 31-H
     BackgroundLoopsMixin,  # Wave 31-I
     VoiceHandlersMixin,  # Wave 31-J
+    ProactiveWatchMixin,  # Wave 31-K
 ):
     """
     Класс KraabUserbot.
@@ -1581,23 +1582,6 @@ class KraabUserbot(
                 pass
         return "me"
 
-    async def _send_proactive_watch_alert(self, text: str) -> None:
-        """
-        Отправляет watch-alert владельцу через userbot.
-        Fallback: если userbot offline — пробует reserve bot (Phase 2.1).
-        """
-        clean_text = str(text or "").strip()
-        if self.client and self.client.is_connected:
-            for part in self._split_message(clean_text):
-                await self.client.send_message(self._owner_notify_target, part)
-            return
-        # userbot недоступен — пробуем reserve bot
-        if reserve_bot.is_running:
-            logger.info("proactive_watch_alert_via_reserve_bot")
-            await reserve_bot.send_to_owner(f"[reserve] {clean_text}")
-            return
-        raise RuntimeError("telegram_client_not_ready")
-
     def _ensure_silence_schedule_started(self) -> None:
         """Запускает фоновый loop проверки расписания ночного режима."""
         if self._silence_schedule_task and not self._silence_schedule_task.done():
@@ -2041,82 +2025,6 @@ class KraabUserbot(
         except Exception as exc:  # noqa: BLE001
             logger.warning("forced_pyrofork_reinit_failed", error=str(exc)[:200])
             raise
-
-    def _ensure_proactive_watch_started(self) -> None:
-        """Запускает фоновый proactive watch, если он включён конфигом."""
-        if not config.PROACTIVE_WATCH_ENABLED:
-            return
-        if self._proactive_watch_task and not self._proactive_watch_task.done():
-            return
-        self._proactive_watch_task = asyncio.create_task(self._run_proactive_watch_loop())
-        # Запускаем периодическую сводку ошибок (каждые 6 часов)
-        if self._error_digest_task is None or self._error_digest_task.done():
-            self._error_digest_task = proactive_watch.start_error_digest_loop()
-        # WeeklyDigest: подключаем Telegram delivery callback + запускаем loop
-        try:
-            from .core.weekly_digest import weekly_digest  # noqa: PLC0415
-
-            weekly_digest.set_telegram_callback(self._send_proactive_watch_alert)
-            wdt = getattr(self, "_weekly_digest_task", None)
-            if wdt is None or wdt.done():
-                self._weekly_digest_task = weekly_digest.start_weekly_digest_loop()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("weekly_digest_setup_failed", error=str(exc))
-
-        # NightlySummary: привязываем bot и запускаем daily loop (fire в NIGHTLY_SUMMARY_HOUR)
-        try:
-            from .core.nightly_summary import nightly_summary_service  # noqa: PLC0415
-
-            nightly_summary_service.bind_bot(self.client)
-            nst = getattr(self, "_nightly_summary_task", None)
-            if nst is None or nst.done():
-                self._nightly_summary_task = nightly_summary_service.start()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("nightly_summary_setup_failed", error=str(exc))
-
-        # OpenClaw gateway health alert: 3 последовательных сбоя → Telegram alert
-        _oc_task = getattr(self, "_openclaw_health_alert_task", None)
-        if _oc_task is None or _oc_task.done():
-            self._openclaw_health_alert_task = proactive_watch.start_openclaw_health_alert_loop(
-                notifier=self._send_proactive_watch_alert,
-            )
-
-    async def _run_proactive_watch_loop(self) -> None:
-        """
-        Периодически снимает owner-oriented runtime digest.
-
-        Первый проход строит baseline без alert.
-        Следующие проходы сообщают только про реальные переходы состояния.
-        """
-        interval_sec = max(60, config.PROACTIVE_WATCH_INTERVAL_SEC)
-        baseline_ready = False
-        try:
-            while True:
-                if self.client and self.client.is_connected:
-                    # Даём runtime прогреться: scheduler, wake-up и route warmup должны
-                    # успеть стабилизироваться до baseline, иначе первый snapshot
-                    # получается правдивым, но слишком "холодным" и мало полезным.
-                    if not baseline_ready:
-                        await asyncio.sleep(min(20, max(5, interval_sec // 6)))
-                    result = await proactive_watch.capture(
-                        manual=False,
-                        persist_memory=True,
-                        notify=baseline_ready,
-                        notifier=self._send_proactive_watch_alert,
-                    )
-                    baseline_ready = True
-                    if result.get("reason"):
-                        logger.info(
-                            "proactive_watch_transition_captured",
-                            reason=result.get("reason"),
-                            alerted=bool(result.get("alerted")),
-                            wrote_memory=bool(result.get("wrote_memory")),
-                        )
-                await asyncio.sleep(interval_sec)
-        except asyncio.CancelledError:
-            logger.info("proactive_watch_task_cancelled")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("proactive_watch_loop_failed", error=str(exc), non_fatal=True)
 
     def _sync_scheduler_runtime(self) -> None:
         """
