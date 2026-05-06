@@ -308,6 +308,9 @@ def test_is_local_model_treats_openai_codex_as_cloud(manager: ModelManager) -> N
     assert manager.is_local_model("claude-cli/opus-4.6") is False
     assert manager.is_local_model("google-antigravity/gemini-3.1-pro-preview") is False
     assert manager.is_local_model("google-gemini-cli/gemini-3.1-pro-preview") is False
+    assert manager.is_local_model("google-vertex/gemini-3-flash-preview") is False
+    assert manager.is_local_model("anthropic-vertex/claude-opus-4-7") is False
+    assert manager.is_local_model("gemma-3-27b-it") is False
     assert manager.is_local_model("qwen-portal/coder-model") is False
 
 

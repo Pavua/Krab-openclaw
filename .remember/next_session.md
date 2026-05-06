@@ -1,177 +1,120 @@
-# Session 37 — Starter Handoff (after Session 36 close, 2026-05-04)
+# Session 39 — Starter Handoff (Session 38 close, 2026-05-05)
 
 ## TL;DR
 
-- **main HEAD**: `f6a6861` — **30+ commits** Session 36 over `ba02171`
-- **Krab live**: running, integrity ok после 3 OOM reboot'ов MacBook (Krab Ear подозревается)
-- **Wave 18-H последний**: GenerateContentConfig flat fields fix — google_direct bypass PRODUCTION-VERIFIED
-- **Google direct bypass работает**: `google_direct_bypass_engaged` + `google_genai_direct_complete_done` в логах, HTTP query за 5.5s
-- **~68 тестов добавлено** в Session 36 (Waves 16-P + 17-A/B/C + 18-A/B)
+- **main HEAD**: `40c3e3d` (Wave 28-B macOS swap threshold)
+- **Krab live**: running, session=ready, 436 peers (восстановлено из bak.1777575968)
+- **Wave 22-A codex bypass VERIFIED in prod**: `codex exec --model X "PROMPT"` отвечает 14-16s
+- **Wave 25-D !quota VERIFIED in prod**: multi-provider статус в одном TG-сообщении
+- **Wave 26-F Russian Краб detection VERIFIED in prod**: "Краб, скажи привет" → ответ
+- **Anthropic Vertex quota PENDING**: user отправил email с corp `pavelr7@rongfa.biz`, ждём approval от Cy/Elle (1-4 часа typically)
 
-## Что сделано в Session 36 (Wave 16-P → 18-H, 30+ commits)
+## Что сделано в Session 38 (2026-05-05) — 17+ waves, ~30 commits
 
-### Wave 16-P: code review LOW fixes
-- **HermesACPBridge async singleton**: `get_hermes_bridge()` — asyncio.Lock + double-checked locking, thread-safe
-- **SkillCurator evaluate+apply atomicity**: `evaluate_ab_test_and_apply` под одной team-lock — нет gap между evaluate+apply
-- **openclaw_runtime_repair.py**: `--session-path` CLI arg + `KRAB_SESSION_PATH` env override (нет hardcoded path)
-- +9 тестов
+### Bypass infrastructure (новые провайдеры обходящие broken OpenClaw transport)
+- **Wave 23-A** `5ab4286` — Vertex AI direct SDK bypass для `google-vertex/*` через `google.genai(vertexai=True)`
+- **Wave 23-B** `c261a34` — DEFAULT_LOCATION=`global` (gemini-3.x preview доступны только там)
+- **Wave 23-C** `fa46fc3` — Anthropic Claude через Vertex (`anthropic-vertex/*`, region=us-east5) — bypass готов, ждёт квоты
+- **Wave 25-E** `c370ff4` — Gemma fallback через AI Studio (`gemma-3-27b/12b/4b`, free 14400/day на 27b)
+- **Wave 22-A-fix** `49d7be3` — codex CLI требует `exec` subcommand + positional prompt (`-p` зарезервирован под `--profile`)
 
-### Wave 17-A: test coverage gaps
-- `_telegram_session_snapshot` async non-blocking integration test
-- `/api/runtime/recover` HTTP 503 e2e test для exit 78
-- Wave 16-I full integration test с dynamic `_active_tool_calls`
-- +10 тестов
+### Каталог OpenClaw (модели в panel dropdown)
+- **8 Gemini** в `google-vertex`: 2.5-pro/flash/lite, 2.5-flash-lite-preview-09-2025, 3-flash-preview, 3.1-pro-preview, 3.1-pro-preview-customtools, flash-latest
+- **5 Gemini** в `google-gemini-cli` (free OAuth): 3.1-pro-preview, 3-pro-preview, 3-flash-preview, 2.5-pro, 2.5-flash
+- **6 Claude** активированы в Cloud Console (Opus 4.7/4.6/4.5, Sonnet 4.6/4.5, Haiku 4.5) — quota=0 RPM, ждём approval
+- **3 Gemma** в `google` (AI Studio): 3-27b-it, 3-12b-it, 3-4b-it
 
-### Wave 17-B: Hermes Phase C live wiring
-- `src/core/agent_engine_openclaw.py` — OpenClawAdapter (реализует AgentEngineClient Protocol)
-- `src/core/agent_engine_resolver.py` — `get_engine_for_route()` (chat→room→env priority + health gate)
-- archive.db migration: `agent_engine_runs` таблица
-- `/api/agent-engine/comparison`, `/api/agent-engine/runs`, `/api/agent-engine/status` endpoints
-- Prometheus: `krab_agent_engine_runs_total`, `_latency_seconds`, `_fallback_total`
-- ENV gate `KRAB_AGENT_ENGINE_DISPATCH_ENABLED` (default OFF — zero risk в production)
-- +18 тестов
+### Multi-account / rotation
+- **Wave 24-A** `ae1c560`+`f8c8538` — codex rotation (~/.codex_accounts/{primary,account2,account3}/, LRU + quota tracking, GET `/api/codex/accounts`)
+- `primary` symlink → `~/.codex` (existing ChatGPT Plus аккаунт)
+- account2/account3 — пустые dirs ждут `./scripts/setup_codex_account.sh accountN` (ручной 2FA login)
 
-### Wave 17-C: убран hardcoded How2AI fallback
-- `src/config.py`: убран `or ['-1001587432709']` — How2AI больше НЕ автоматом в CHAT_PERMANENT_BAN_LIST
-- Удалена переменная `CHAT_PERMANENT_BAN_LIST=disabled` из .env
-- +3 теста против регрессии
+### Stability / corruption recovery
+- **Wave 24-B** `bb5dfe1` — peers threshold (≥50) + WAL/SHM stale cleanup в session preflight
+- **Wave 24-C** (inline в `Stop Krab.command`) — post-doctor primary reapply (config supremacy против doctor wizard)
+- **Wave 24-D** `bfbb3d6` — graceful shutdown 15s grace (было 0.5-0.8s) + WAL checkpoint pre-exit + Wave 16-F auto-clear OFF
+- **Wave 27-A** `7c405d1` — network resilience: active TCP probe to Telegram DC + auto-reconnect + alert debounce 1800s, threshold 60→180s
 
-### Wave 18-A: session backup retention policy
-- `src/bootstrap/session_recovery.py`: `cleanup_old_backups()` — 7 категорий бэкапов, keep_recent=3, max_age_days=14
-- `scripts/openclaw_runtime_repair.py`: Step 5 cleanup integration
-- +9 тестов
+### UX / observability
+- **Wave 24-E** `d8cd118` — `/api/model/status` `reconciled_state` (configured/last_executed/policy_recommendation + active_display "X (last: Y ✓ Nm ago)")
+- **Wave 25-A** `55b746c` — OAuth auto-resync daemon (gemini-cli `~/.gemini` → OpenClaw, 15min interval, LaunchAgent `ai.krab.oauth-resync`)
+- **Wave 25-B** `5092f44` — Krab Ear coexistence monitor (combined RSS/swap/RAM thresholds → `/api/notify` Telegram alerts)
+- **Wave 25-D** `ac0fea4` — `!quota` Telegram command (multi-provider state в одном сообщении)
+- **Wave 25-D-fix** `e3f996c` — Pyrogram `parse_mode=ParseMode.MARKDOWN` enum (не строка lowercase)
+- **Wave 28-B** `40c3e3d` — macOS-friendly swap threshold 16GB (compressed swap не = OOM)
 
-### Wave 18-B: Google direct SDK bypass (КЛЮЧЕВАЯ ФИЧА)
-- `src/integrations/google_genai_direct.py` — direct google.genai SDK call, минует OpenClaw WebSocket→openresponses
-- `src/openclaw_client.py`: bypass wire-up в `send_message_stream`
-- Новая dep: `google-genai>=1.62`
-- ENV gate `KRAB_GOOGLE_DIRECT_BYPASS_ENABLED` (default ON)
-- +19 тестов
+### Quality / mention detection
+- **Wave 25-F** `642b521` — sender_context учитывает русское "Краб" + 🦀 + dynamic @username
+- **Wave 26-A** `8716592` — greeting target hint в LLM context: когда owner просит "Краб поздоровайся с X" + reply_to set → LLM получает inline `[Имя](tg://user?id=X)` directive
+- **Wave 26-B** `062fe4e` — implicit question detection в trigger_detector — 10-min window после ответа Krab + эвристики "продолжай / а если / что думаешь / ?$"
 
-### Wave 18-D/E/G/H: fix chain для bypass
-- **18-D**: bypass проверяется КАЖДЫЙ attempt в for loop (был только initial)
-- **18-E**: `_has_photo_bypass = bool(images)` — explicit local (silent NameError fix)
-- **18-G**: relative import fix `from ..config` → `from .config` (silent ImportError fix)
-- **18-H**: `GenerateContentConfig` flat fields (`max_output_tokens` плоско, не вложенный `generation_config`) — legacy SDK pattern исправлен
+### Documentation
+- **Wave 28-A** `4ab1b03` — CLAUDE.md split (72KB → 21KB, -70%) — auto-tables вынесены в `docs/CLAUDE_AUTO_*.md`
 
-### Production verification (Session 36 close)
-```
-HTTP query → "Привет." за 5.5s через google_direct channel ✅
-Logs: google_direct_bypass_engaged + google_genai_direct_complete_done
-OpenClaw 2026.5.2 broken WebSocket→openresponses обходится
-```
+## Pending для Session 39
 
-## Settings обновлены (.env)
+### Blocked на user actions
+1. **Anthropic Vertex quota approval** — Google ответ ожидается. После approval bypass auto-engage'нет, нужно добавить `anthropic-vertex/*` в panel fallback chain.
+2. **account2 + account3 codex login** — `./scripts/setup_codex_account.sh account2` (2FA flow). Утроит codex квоту.
 
-```
-CHAT_PERMANENT_BAN_LIST=disabled  → УДАЛЕНА (Wave 17-C)
-MODEL=codex/gpt-5.5              → codex-cli/gpt-5.5
-KRAB_GOOGLE_DIRECT_BYPASS_ENABLED=1  (implicit default ON)
-```
+### Можем делать
+3. **24h+ uptime verification** — проверить что Wave 24-B/D/27-A реально устранили recurring corruption после длинной uptime
+4. **Mass production verify** — групповой чат, DM, voice, swarm, mention/reply сценарии
 
-## OpenClaw config (`~/.openclaw/openclaw.json`) — fallback chain
-
-```
-primary:    codex-cli/gpt-5.5
-fallbacks:
-  - google/gemini-3.1-pro-preview          ← #1, bypass engages здесь
-  - google/gemini-3-pro-preview
-  - google/gemini-flash-latest
-  - google-gemini-cli/gemini-3.1-pro-preview  (OAuth — token EXPIRED ~2026-04-13, last resort)
-```
-
-## Session 36 final state
-
-```
-Branch: main (HEAD = f6a6861)
-Commits Session 36: 30+ (ba02171 → f6a6861)
-Krab process: running, integrity ok
-Google direct bypass: LIVE (5.5s response verified)
-Test additions Session 36: ~68 новых тестов
-3× MacBook OOM reboots: Krab пережил, Krab Ear подозреваемый виновник
-agent-client-protocol: 0.9.0 (Wave 16-B, Session 35)
-```
-
-## Backlog для Session 37
-
-### P0 / Критические
-
-1. **Memory leak / OOM investigation** — MacBook перегружался 3 раза за Session 36. Подозревается параллельная Krab Ear сессия. Нужно: psutil baseline для Krab процесса + Krab Ear процесса, memory growth graph, потенциальный leak в audio buffering или embedding pipeline. Action: `pip install psutil` + мониторинг RSS 30 мин.
-
-2. **gemini-cli OAuth re-auth** — `google-gemini-cli/gemini-3.1-pro-preview` token expired ~2026-04-13. Fallback chain деградирован если codex+gemini-direct упадут. Action: `gemini auth login` в терминале.
-
-3. **Wave 18-I (in flight)** — empty response retry с `thinking_budget=0`. Bypass иногда возвращает пустой text при thinking-heavy моделях. Fix: после пустого ответа — retry без thinking budget.
-
-### Hermes / Agent Engine
-
-4. **Hermes Phase D** — wire-up SkillCurator A/B → `swarm.py`. Foundation готова (Waves 16-A/D + 17-B). Нужно: `select_variant()` в `AgentRoom.run()`, `record_round_metric()` после каждого раунда, `evaluate_ab_test_and_apply` cron trigger.
-
-5. **Hermes binary install** — `hermes` не в PATH, Phase C (Wave 17-B) создала adapter но активация требует `KRAB_AGENT_ENGINE_DISPATCH_ENABLED=1` + hermes binary. Пока безопасный stub.
-
-6. **OpenClaw upstream issue report** — WebSocket→openresponses transport regression для Google в OpenClaw 2026.5.2 нужно репортить upstream (если есть канал). Bypass обходит симптом, но не фиксит root cause в OpenClaw.
-
-### Test coverage
-
-7. **Integration test full bypass flow** — mock google.genai SDK + проверить что NameError/ImportError paths не silent. Wave 18 fix chain (D/E/G/H) показал что 4 silent bugs прошли review.
-
-8. **Agent engine dispatch integration test** — когда `KRAB_AGENT_ENGINE_DISPATCH_ENABLED=1`, проверить что `get_engine_for_route()` возвращает корректный engine и fallback работает.
-
-### Carryover
-
-9. **Paperclip server start** (carryover Session 33+) — до сих пор не сделано
-10. **Hermes selective cherry-picks** (agentskills.io, Honcho memory plugin)
+### Backlog
+5. CLAUDE.md autotables refresh routine — `scripts/refresh_claude_md_autotables.py` weekly (теперь когда файлы маленькие)
+6. `!quota` panel endpoint `/api/quota` — UI version вместо TG-only
+7. Make gemma fallback selectable в panel
+8. Krab Ear memory investigation (5 процессов, 2.16GB RSS)
+9. Sentry observation после 24h running с Wave 24-D
+10. anthropic-vertex/* в каталог OpenClaw (когда квота приедет)
 
 ## Operational quick reference
 
 ```bash
 cd /Users/pablito/Antigravity_AGENTS/Краб
 
-# Krab control
+# Krab control (Wave 24-D 15s grace)
 "/Users/pablito/Antigravity_AGENTS/new Stop Krab.command"
 "/Users/pablito/Antigravity_AGENTS/new start_krab.command"
 
 # Health
 curl -sS http://127.0.0.1:8080/api/health/lite | python3 -m json.tool
-curl -sS http://127.0.0.1:18789/health  # gateway direct
+curl -sS http://127.0.0.1:18789/health  # gateway
 
-# Google direct bypass verify
-grep "google_direct_bypass_engaged\|google_genai_direct" ~/.openclaw/logs/krab.log | tail -5
+# Multi-account codex
+./scripts/setup_codex_account.sh account2  # ручной 2FA → ~/.codex_accounts/account2/
+curl -sS http://127.0.0.1:8080/api/codex/accounts | python3 -m json.tool
 
-# Manual recovery (если session corrupt)
-venv/bin/python scripts/openclaw_runtime_repair.py --check-only
-venv/bin/python scripts/openclaw_runtime_repair.py
+# Quota check
+# В Telegram: !quota --no-probe (быстро) | !quota (с probe ~30s)
+gemini --model gemini-2.5-flash -p "ok"  # gemini-cli probe вручную
 
-# Agent engine (Phase C, default OFF)
-# Активировать: KRAB_AGENT_ENGINE_DISPATCH_ENABLED=1 в .env
-# Status: GET /api/agent-engine/status
-# Сравнение: GET /api/agent-engine/comparison
+# Recovery (если session corrupt)
+sqlite3 data/sessions/kraab.session "PRAGMA integrity_check; SELECT count(*) FROM peers"
+cp data/sessions/kraab.session.bak.1777575968 data/sessions/kraab.session  # 436 peers backup
 
-# SkillCurator (Steps 1-4):
-# !curator dry-run [team] / propose <team> / proposals / show <id>
-# !curator apply <proposal_id> [--force] / rollback <team>
-# !curator ab start <team> <id> [--rounds N] / status / evaluate / cancel / list
-
-# Engine commands (Hermes Phase B):
-# !engine show / here <openclaw|hermes|auto> / room <name> <engine|clear> / status
+# Memory baseline (Wave 25-B)
+tail -5 ~/.openclaw/krab_runtime_state/coexistence_monitor.log
 ```
 
 ## Critical operational notes
 
 - **НИКОГДА** не использовать `launchctl kickstart -k` (causes session corruption)
-- **30s settle** между Stop+Start
-- **Google direct bypass ON по умолчанию** — если нужно отключить: `KRAB_GOOGLE_DIRECT_BYPASS_ENABLED=0`
-- **KRAB_AGENT_ENGINE_DISPATCH_ENABLED** — default OFF, безопасно включать на тест
-- **OpenAI ключ мёртвый** — НЕ возвращать `openai/*` в fallback chain
-- **gemini-cli OAuth expired** — последний резерв в chain неработоспособен, нужен re-auth
-- **Krab Ear + Krab параллельно** — risk OOM на 36GB M4 Max, мониторить RSS
-- **Wave 16-N auto-recovery** — session recovery автоматический при preflight corrupt detect
-- **google-genai>=1.62 требуется** — добавлена в requirements (Wave 18-B)
+- **Wave 24-D 15s grace** даёт SQLite checkpoint завершиться чисто
+- **WAL/SHM cleanup при stale process** handled by Wave 24-B preflight
+- **codex exec subcommand обязателен** для CLI bypass (-p = profile, не prompt)
+- **Vertex location=global** для gemini-3.x preview, us-east5 для Anthropic Claude
+- **Anthropic quota запрашивать с corp email** (10 RPM Sonnet/Haiku, 5 RPM Opus = sweet spot)
+- **macOS swap 8-12GB ≠ OOM** — Wave 28-B threshold поднят до 16GB
+- **Wave 25-A OAuth auto-resync** держит panel зелёным без ручного синка
 
-## Session 36 stats
+## Session 38 stats
 
-- **30+ commits** (ba02171 → f6a6861)
-- **5 новых модулей**: `google_genai_direct.py`, `agent_engine_openclaw.py`, `agent_engine_resolver.py` + 2 test modules
-- **~68 тестов добавлено** (Wave 16-P: 9, 17-A: 10, 17-B: 18, 17-C: 3, 18-A: 9, 18-B: 19)
-- **3× MacBook OOM reboot** — Krab выжил все 3 раза, integrity ok
-- **Production bypass verified** — 5.5s Google response без OpenClaw WebSocket path
-- **0 critical bugs** в финальном code review
+- **17+ waves**: 23-A/B/C, 24-A/B/C/D/E, 25-A/B/D/E/F, 26-A/B/F, 27-A, 28-A/B/C
+- **30+ commits** (cd7ea91 → 40c3e3d)
+- **3 LaunchAgents** добавлены: oauth-resync, coexistence-monitor, memory-baseline
+- **6 моделей Claude** активированы (ждут квоту)
+- **3 production verifications**: codex bypass, !quota, Russian "Краб" detection
+- **CLAUDE.md** compressed -70% (72KB → 21KB)
+- **0 critical regressions** в финальной сессии

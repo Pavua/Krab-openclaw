@@ -95,13 +95,14 @@ async def audit_process_health() -> AuditFinding:
     uptime_sec = time.time() - psutil.Process(krab_pids[0]).create_time()
     uptime_h = uptime_sec / 3600
 
-    # Wave 40-A-fix: правильная интерпретация launchctl list output
+    # Wave 40-A-fix-3: правильная интерпретация launchctl list output
     # Format: PID  EXIT_CODE  LABEL
     #   PID = '-'  → loaded но idle (cron-style, ОК)
     #   PID = N    → currently running (OK)
-    #   EXIT = 0   → last run successful или ещё не запускался (HEALTHY)
+    #   EXIT = 0   → success / ещё не запускался (HEALTHY)
     #   EXIT < 0   → killed signal (-15 SIGTERM = clean shutdown, OK)
-    #   EXIT > 0   → real error (FAILED)
+    #   EXIT = 1   → monitoring scripts: "warnings found" — semantic, не bug
+    #   EXIT >= 2  → real error (script broken / config missing / etc)
     try:
         result = subprocess.run(
             ["launchctl", "list"],
@@ -111,8 +112,8 @@ async def audit_process_health() -> AuditFinding:
         )
         krab_lines = [line.strip() for line in result.stdout.splitlines() if "ai.krab." in line]
         total = len(krab_lines)
-        healthy = 0
-        failed_labels = []
+        healthy = 0  # exit_code 0 или signal (clean) или 1 (monitoring warning)
+        broken_labels = []  # exit_code >= 2 — real failure
         for line in krab_lines:
             parts = line.split()
             if len(parts) < 3:
@@ -121,19 +122,19 @@ async def audit_process_health() -> AuditFinding:
                 exit_code = int(parts[1])
             except ValueError:
                 continue
-            # exit_code 0 ИЛИ отрицательный (signal) = healthy
-            # положительный exit_code = real failure
-            if exit_code <= 0:
+            # 0 / negative / 1 = ok (1 = monitoring warning, not bug)
+            # >=2 = real failure
+            if exit_code <= 1:
                 healthy += 1
             else:
-                failed_labels.append(parts[2].split(".")[-1])
+                broken_labels.append(parts[2].split(".")[-1])
 
-        if failed_labels:
+        if broken_labels:
             return AuditFinding(
                 "Process",
                 "warn",
-                f"Uptime {uptime_h:.1f}h, {healthy}/{total} healthy, {len(failed_labels)} failed",
-                f"Failed: {', '.join(failed_labels[:5])}",
+                f"Uptime {uptime_h:.1f}h, {healthy}/{total} healthy, {len(broken_labels)} broken",
+                f"Broken (exit≥2): {', '.join(broken_labels[:5])}",
             )
         return AuditFinding(
             "Process",

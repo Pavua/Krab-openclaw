@@ -413,8 +413,10 @@ class ModelManager:
                 "openrouter/",
                 "google-antigravity/",
                 "google-gemini-cli/",
+                "google-vertex/",
                 "qwen-portal/",
                 "anthropic/",
+                "anthropic-vertex/",
                 "xai/",
                 "deepseek/",
                 "groq/",
@@ -422,6 +424,11 @@ class ModelManager:
         ):
             return ModelType.CLOUD_OPENROUTER
         if model_id_lower.startswith("google/"):
+            return ModelType.CLOUD_GEMINI
+        if model_id_lower.startswith("gemma-"):
+            # Gemma без provider-префикса обслуживается direct AI Studio bypass.
+            # Если считать её локальной, preflight LM Studio перехватывает маршрут
+            # раньше bypass-chain и уводит запрос в неверный fallback.
             return ModelType.CLOUD_GEMINI
 
         if "mlx" in model_id_lower:
@@ -479,7 +486,7 @@ class ModelManager:
         return await self._router.get_best_model(has_photo=has_photo)
 
     def is_local_model(self, model_id: str) -> bool:
-        """True if model_id refers to a local (LM Studio) model, not a cloud one."""
+        """True если model_id относится к локальной LM Studio модели, а не к cloud/bypass."""
         return self._detect_model_type(model_id) in (ModelType.LOCAL_MLX, ModelType.LOCAL_GGUF)
 
     async def _local_candidates(self, *, has_photo: bool = False) -> list[tuple[str, ModelInfo]]:

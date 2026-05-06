@@ -48,9 +48,13 @@ if [ -z "${SENTRY_AUTH_TOKEN:-}" ]; then
     exit 2
 fi
 TG_TOKEN="${OPENCLAW_TELEGRAM_BOT_TOKEN:-}"
+# Wave 40-A-fix-2: OWNER_USER_IDS removed как legacy, fallback на OWNER_NOTIFY_CHAT_ID
 TG_OWNER=$(echo "${OWNER_USER_IDS:-}" | cut -d, -f1)
+if [ -z "$TG_OWNER" ]; then
+    TG_OWNER="${OWNER_NOTIFY_CHAT_ID:-}"
+fi
 if [ -z "$TG_TOKEN" ] || [ -z "$TG_OWNER" ]; then
-    log_err "Telegram creds missing (token or owner_id) — exit"
+    log_err "Telegram creds missing (token=${TG_TOKEN:+SET} owner=${TG_OWNER:-EMPTY}) — exit"
     exit 3
 fi
 
