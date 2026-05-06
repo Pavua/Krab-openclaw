@@ -351,8 +351,12 @@ def test_propose_command_invokes_curator(tmp_path: Path) -> None:
 
     fake_report = _make_report()
 
+    class _FakeCfg:
+        KRAB_SKILL_CURATOR_PROPOSE_ENABLED = True
+
     with (
         patch.object(curator_commands, "is_owner_user_id", return_value=True),
+        patch("src.config.config", _FakeCfg()),
         patch.object(
             curator_commands.skill_curator, "analyze_recent_rounds", return_value=fake_report
         ),
@@ -366,6 +370,30 @@ def test_propose_command_invokes_curator(tmp_path: Path) -> None:
     out = bot.replies[-1]
     assert "analysts-2026-05-02-20-00" in out
     assert "diff" in out.lower()
+
+
+def test_propose_command_env_gate_disabled() -> None:
+    """!curator propose заблокирован когда KRAB_SKILL_CURATOR_PROPOSE_ENABLED=0 (default).
+
+    Wave 38-A: ENV gate — feature opt-in, по умолчанию OFF.
+    """
+    from src.handlers.commands import curator_commands
+
+    bot = _FakeBot()
+    msg = _FakeMessage(text="!curator propose analysts")
+
+    class _FakeCfgOff:
+        KRAB_SKILL_CURATOR_PROPOSE_ENABLED = False
+
+    with (
+        patch.object(curator_commands, "is_owner_user_id", return_value=True),
+        patch("src.config.config", _FakeCfgOff()),
+    ):
+        asyncio.run(curator_commands.handle_curator(bot, msg))
+
+    assert bot.replies, "Expected gate refusal reply"
+    out = bot.replies[-1]
+    assert "выключен" in out or "KRAB_SKILL_CURATOR_PROPOSE_ENABLED" in out
 
 
 def test_proposals_list_command_empty(tmp_path: Path) -> None:

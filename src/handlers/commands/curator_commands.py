@@ -169,7 +169,10 @@ async def _run_dry_run(bot: "KraabUserbot", message: Message, team_arg: str) -> 
 
 
 async def _run_propose(bot: "KraabUserbot", message: Message, team_arg: str) -> None:
-    """!curator propose <team> — LLM-генерирует diff и сохраняет proposal."""
+    """!curator propose <team> — LLM-генерирует diff и сохраняет proposal.
+
+    Wave 38-A: требует KRAB_SKILL_CURATOR_PROPOSE_ENABLED=1 (feature opt-in).
+    """
 
     if not team_arg:
         await bot._safe_reply_or_send_new(
@@ -184,6 +187,20 @@ async def _run_propose(bot: "KraabUserbot", message: Message, team_arg: str) -> 
             f"❌ Команда `{team_arg}` не найдена. Доступны: {', '.join(sorted(TEAM_REGISTRY))}",
         )
         return
+
+    # ENV gate — по умолчанию OFF (Wave 38-A feature opt-in)
+    try:
+        from ...config import config as _cfg
+
+        if not getattr(_cfg, "KRAB_SKILL_CURATOR_PROPOSE_ENABLED", False):
+            await bot._safe_reply_or_send_new(
+                message,
+                "⛔ SkillCurator propose выключен.\n"
+                "Включить: `KRAB_SKILL_CURATOR_PROPOSE_ENABLED=1` в `.env` + перезапуск.",
+            )
+            return
+    except Exception:  # noqa: BLE001 — конфиг может быть недоступен в тестах
+        pass
 
     try:
         report = skill_curator.analyze_recent_rounds(team_arg, days=7)

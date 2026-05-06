@@ -570,6 +570,12 @@ class Config:
     KRAB_SWARM_AUTO_EXECUTE_MAX_PER_HOUR: int = int(
         os.getenv("KRAB_SWARM_AUTO_EXECUTE_MAX_PER_HOUR", "5")
     )
+    # Wave 38-A: SkillCurator Step 2 — LLM-based propose generator.
+    # По умолчанию выключено (feature opt-in). Включить: KRAB_SKILL_CURATOR_PROPOSE_ENABLED=1
+    KRAB_SKILL_CURATOR_PROPOSE_ENABLED: bool = os.getenv(
+        "KRAB_SKILL_CURATOR_PROPOSE_ENABLED",
+        "0",
+    ).strip().lower() in ("1", "true", "yes")
     # Порог (секунды) отсутствия Telegram-событий для алерта о возможном MTProto backoff.
     # 0 — отключить мониторинг. Дефолт: 60.
     KRAB_NETWORK_OFFLINE_ALERT_SEC: int = int(os.getenv("KRAB_NETWORK_OFFLINE_ALERT_SEC", "60"))
