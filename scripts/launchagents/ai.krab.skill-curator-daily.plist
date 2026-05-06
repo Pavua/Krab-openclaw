@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.krab.skill-curator-daily</string>
+
+    <key>Comment</key>
+    <string>Krab SkillCurator Daily Loop (Wave 44-A) — 03:30 UTC.
+    Запускает dry-run analyzer для всех 4 команд свёрма (traders/coders/analysts/creative).
+    Сохраняет daily JSON в ~/.openclaw/krab_runtime_state/skill_curator/daily/{team}/.
+    По понедельникам (если WEEKLY_AUTO_PROPOSE=1): auto-propose при recurring weakness.
+    14-го числа (если AUTO_AB/AUTO_APPLY=1): A/B cycle.
+    Все ENV gates default OFF — opt-in.</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/skill_curator_daily_loop.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/krab_skill_curator_daily.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/krab_skill_curator_daily.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONIOENCODING</key>
+        <string>utf-8</string>
+        <key>KRAB_SKILL_CURATOR_DAILY_LOOP_ENABLED</key>
+        <string>0</string>
+        <key>KRAB_SKILL_CURATOR_WEEKLY_AUTO_PROPOSE</key>
+        <string>0</string>
+        <key>KRAB_SKILL_CURATOR_AUTO_AB_ENABLED</key>
+        <string>0</string>
+        <key>KRAB_SKILL_CURATOR_AUTO_APPLY_ENABLED</key>
+        <string>0</string>
+    </dict>
+</dict>
+</plist>
