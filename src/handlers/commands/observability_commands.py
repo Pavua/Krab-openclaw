@@ -1045,7 +1045,8 @@ async def handle_metrics(bot: "KraabUserbot", message: Message) -> None:
     except Exception:
         pass
 
-    # 5. Daemons — быстрый подсчёт активных LaunchAgents ai.krab.*
+    # 5. Daemons — Wave 40-A-fix-3 semantic: exit_code <= 1 = healthy, >= 2 = broken
+    # PID '-' нормально для cron-style, EXIT — реальный health signal
     try:
         result = subprocess.run(
             ["launchctl", "list"],
@@ -1054,9 +1055,22 @@ async def handle_metrics(bot: "KraabUserbot", message: Message) -> None:
             timeout=3,
         )
         krab_lines = [line for line in result.stdout.splitlines() if "ai.krab." in line]
-        # Активные: первое поле (PID) не равно "-"
-        running = sum(1 for line in krab_lines if line.split()[0] != "-")
-        parts.append(f"\n⚙️ *Daemons*: {running}/{len(krab_lines)} active")
+        healthy = 0
+        broken = 0
+        for line in krab_lines:
+            parts2 = line.split()
+            if len(parts2) < 3:
+                continue
+            try:
+                exit_code = int(parts2[1])
+            except ValueError:
+                continue
+            if exit_code <= 1:
+                healthy += 1
+            else:
+                broken += 1
+        broken_str = f", {broken} broken" if broken else ""
+        parts.append(f"\n⚙️ *Daemons*: {healthy}/{len(krab_lines)} healthy{broken_str}")
     except Exception:
         pass
 
