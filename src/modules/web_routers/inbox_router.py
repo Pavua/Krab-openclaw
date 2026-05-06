@@ -275,6 +275,26 @@ def build_inbox_router(ctx: RouterContext) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "result": result}
 
+    @router.post("/api/inbox/cleanup-stale")
+    async def inbox_cleanup_stale(
+        max_age_days: int = Query(default=7, ge=1, le=365),
+        dry_run: bool = Query(default=False),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Wave 34-C: архивирует stale open items старше max_age_days.
+
+        Безопасные kinds: info_alert, weekly_digest, cron_acked,
+        proactive_alert, auto_notification. Критичные kinds не трогает.
+        dry_run=true — только считает без реальной записи.
+        """
+        ctx.assert_write_access(x_krab_web_key, token)
+        result = inbox_service.cleanup_stale_open_items(
+            max_age_days=max_age_days,
+            dry_run=dry_run,
+        )
+        return {"ok": True, **result}
+
     @router.post("/api/inbox/create")
     async def inbox_create(
         payload: dict[str, Any] = Body(default_factory=dict),

@@ -1932,6 +1932,113 @@ class InboxService:
             return self.set_status_by_dedupe("watch:scheduler_backlog", status="done")
         return {"ok": False, "error": "watch_reason_not_actionable"}
 
+    def cleanup_stale_open_items(
+        self,
+        *,
+        max_age_days: int = 7,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Wave 34-C: архивирует open items старше max_age_days из безопасных kinds.
+
+        Не трогает критичные kinds (escalation, owner_request, owner_task,
+        approval_request, watch_alert). Только информационные/системные kinds,
+        которые безопасно убрать без подтверждения owner-а.
+
+        Args:
+            max_age_days: Возраст в днях — items старше этого значения подлежат архивации.
+            dry_run: Если True, считает без реальной записи (safe preview).
+
+        Returns:
+            dict с archived_count, kept_count, by_kind, dry_run.
+        """
+        # Kinds, которые безопасно зачищать автоматически (не критичные для owner).
+        # Критичные kinds (owner_request, owner_task, approval_request, watch_alert,
+        # vpn_alert, relay_request) намеренно исключены — требуют ручного закрытия.
+        safe_to_cleanup_kinds: frozenset[str] = frozenset(
+            {
+                "info_alert",
+                "weekly_digest",
+                "cron_acked",
+                "proactive_alert",
+                "proactive_action",  # cron/digest события, не требующие ручного ответа
+                "owner_mention",  # упоминания owner-а в групповых чатах (информационно)
+                "auto_notification",
+            }
+        )
+
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=max(1, int(max_age_days or 7)))
+        now_iso = _now_utc_iso()
+
+        items = self._load_items()
+        archived: list[InboxItem] = []
+        kept: list[InboxItem] = []
+
+        for item in items:
+            # Только open items подлежат зачистке
+            if item.status != "open":
+                kept.append(item)
+                continue
+
+            # Не трогаем критичные kinds
+            if item.kind not in safe_to_cleanup_kinds:
+                kept.append(item)
+                continue
+
+            # Парсим время создания item-а
+            activity_at = self._parse_item_activity_at(item)
+            if activity_at is None:
+                kept.append(item)
+                continue
+
+            # Оставляем свежие items
+            if activity_at >= cutoff_dt:
+                kept.append(item)
+                continue
+
+            # Архивируем: помечаем статус и reason без уничтожения payload
+            if not dry_run:
+                item.status = "cancelled"
+                item.updated_at_utc = now_iso
+                metadata = self._normalize_metadata(item.metadata)
+                metadata["archive_reason"] = f"auto_cleanup_age>{max_age_days}d"
+                metadata["archived_at_utc"] = now_iso
+                metadata["last_action_actor"] = "inbox-cleanup"
+                metadata["last_action_status"] = "cancelled"
+                metadata["last_action_at_utc"] = now_iso
+                item.metadata = self._append_workflow_event(
+                    metadata,
+                    action="auto_archived",
+                    actor="inbox-cleanup",
+                    status="cancelled",
+                    note=f"auto_cleanup: age>{max_age_days}d",
+                )
+            archived.append(item)
+
+        if not dry_run and archived:
+            # Сохраняем полный список (с обновлёнными archived + нетронутыми kept)
+            self._save_items(items)
+
+        # Статистика по kinds
+        by_kind: dict[str, int] = {}
+        for item in archived:
+            k = item.kind or "unknown"
+            by_kind[k] = by_kind.get(k, 0) + 1
+
+        logger.info(
+            "inbox_cleanup_stale_open",
+            archived=len(archived),
+            kept=len(kept),
+            max_age_days=max_age_days,
+            dry_run=dry_run,
+        )
+
+        return {
+            "archived_count": len(archived),
+            "kept_count": len(kept),
+            "by_kind": by_kind,
+            "dry_run": dry_run,
+        }
+
 
 inbox_service = InboxService()
 
