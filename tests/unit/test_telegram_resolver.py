@@ -29,6 +29,20 @@ from src.core.telegram_resolver import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_resolver_cache(tmp_path, monkeypatch):
+    """Session 39: production contact_cache.json content leaks into tests.
+
+    Redirect _CACHE_PATH в tmp_path перед каждым тестом — иначе resolver
+    видит реальные cached peer_id из production cache.
+    """
+    from src.core import contact_cache as _cc  # noqa: PLC0415
+
+    fake_path = tmp_path / "contact_cache_test.json"
+    monkeypatch.setattr(_cc, "_CACHE_PATH", fake_path)
+    yield
+
+
 # ---------------------------------------------------------------------------
 # Вспомогательные builder'ы mock-объектов
 # ---------------------------------------------------------------------------

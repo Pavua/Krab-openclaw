@@ -116,6 +116,8 @@ async def test_save_basic(tmp_path, monkeypatch):
     """!template save greet Привет! — сохраняет шаблон без переменных."""
     templates_file = tmp_path / "message_templates.json"
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("save greet Привет!")
     msg = _make_message()
@@ -133,6 +135,8 @@ async def test_save_with_vars_hint(tmp_path, monkeypatch):
     """При сохранении шаблона с переменными ответ содержит имена переменных."""
     templates_file = tmp_path / "message_templates.json"
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("save greet Привет, {name}! Как {mood}?")
     msg = _make_message()
@@ -150,6 +154,8 @@ async def test_save_overwrites(tmp_path, monkeypatch):
     templates_file = tmp_path / "message_templates.json"
     templates_file.write_text(json.dumps({"greet": "старый"}), encoding="utf-8")
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("save greet новый")
     msg = _make_message()
@@ -164,6 +170,8 @@ async def test_save_no_args(tmp_path, monkeypatch):
     """!template save без имени и текста -> UserInputError."""
     templates_file = tmp_path / "message_templates.json"
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("save")
     msg = _make_message()
@@ -177,6 +185,8 @@ async def test_save_name_without_text(tmp_path, monkeypatch):
     """!template save greet без текста -> UserInputError."""
     templates_file = tmp_path / "message_templates.json"
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("save greet")
     msg = _make_message()
@@ -190,6 +200,8 @@ async def test_save_empty_name(tmp_path, monkeypatch):
     """!template save с пустым именем -> UserInputError (покрываем ветку empty name)."""
     templates_file = tmp_path / "message_templates.json"
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     # Передаём " " как имя — после strip() будет пустая строка
     bot = _make_bot("save  текст")
@@ -211,6 +223,8 @@ async def test_send_no_vars(tmp_path, monkeypatch):
     templates_file = tmp_path / "message_templates.json"
     templates_file.write_text(json.dumps({"greet": "Привет!"}), encoding="utf-8")
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("greet")
     msg = _make_message()
@@ -225,6 +239,8 @@ async def test_send_with_vars(tmp_path, monkeypatch):
     templates_file = tmp_path / "message_templates.json"
     templates_file.write_text(json.dumps({"greet": "Привет, {name}! Как дела?"}), encoding="utf-8")
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("greet Павел")
     msg = _make_message()
@@ -239,6 +255,8 @@ async def test_send_unknown_name(tmp_path, monkeypatch):
     templates_file = tmp_path / "message_templates.json"
     templates_file.write_text(json.dumps({}), encoding="utf-8")
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("unknown")
     msg = _make_message()
@@ -258,6 +276,8 @@ async def test_list_shows_templates(tmp_path, monkeypatch):
     templates_file = tmp_path / "message_templates.json"
     templates_file.write_text(json.dumps({"greet": "Привет!", "bye": "Пока!"}), encoding="utf-8")
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("list")
     msg = _make_message()
@@ -273,6 +293,8 @@ async def test_list_empty(tmp_path, monkeypatch):
     """!template list при пустом хранилище — сообщение об отсутствии шаблонов."""
     templates_file = tmp_path / "message_templates.json"
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("list")
     msg = _make_message()
@@ -288,6 +310,8 @@ async def test_no_args_is_list(tmp_path, monkeypatch):
     templates_file = tmp_path / "message_templates.json"
     templates_file.write_text(json.dumps({"x": "текст"}), encoding="utf-8")
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("")
     msg = _make_message()
@@ -308,6 +332,8 @@ async def test_del_existing(tmp_path, monkeypatch):
     templates_file = tmp_path / "message_templates.json"
     templates_file.write_text(json.dumps({"greet": "Привет!"}), encoding="utf-8")
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("del greet")
     msg = _make_message()
@@ -325,6 +351,8 @@ async def test_del_unknown(tmp_path, monkeypatch):
     templates_file = tmp_path / "message_templates.json"
     templates_file.write_text(json.dumps({}), encoding="utf-8")
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("del unknown")
     msg = _make_message()
@@ -338,6 +366,8 @@ async def test_del_no_name(tmp_path, monkeypatch):
     """!template del без имени -> UserInputError."""
     templates_file = tmp_path / "message_templates.json"
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("del")
     msg = _make_message()
@@ -356,6 +386,8 @@ async def test_name_lowercased(tmp_path, monkeypatch):
     """Имя шаблона приводится к нижнему регистру при сохранении."""
     templates_file = tmp_path / "message_templates.json"
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("save GREET Привет!")
     msg = _make_message()
@@ -371,6 +403,8 @@ async def test_file_path_correct(tmp_path, monkeypatch):
     """Файл сохраняется по корректному пути (_TEMPLATES_FILE)."""
     templates_file = tmp_path / "message_templates.json"
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("save t текст")
     msg = _make_message()
@@ -383,6 +417,9 @@ def test_load_missing_file(tmp_path, monkeypatch):
     """_load_templates возвращает {} если файл отсутствует."""
     missing = tmp_path / "nonexistent.json"
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", missing)
+    import src.handlers.commands.content_commands as cc_mod  # noqa: PLC0415
+
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", missing)
     assert _load_templates() == {}
 
 
@@ -391,6 +428,9 @@ def test_load_corrupted_file(tmp_path, monkeypatch):
     bad_file = tmp_path / "bad.json"
     bad_file.write_text("не JSON!!!", encoding="utf-8")
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", bad_file)
+    import src.handlers.commands.content_commands as cc_mod  # noqa: PLC0415
+
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", bad_file)
     assert _load_templates() == {}
 
 
@@ -398,6 +438,9 @@ def test_save_creates_parent_dir(tmp_path, monkeypatch):
     """_save_templates создаёт родительский каталог если его нет."""
     nested = tmp_path / "deep" / "path" / "templates.json"
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", nested)
+    import src.handlers.commands.content_commands as cc_mod  # noqa: PLC0415
+
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", nested)
     _save_templates({"a": "b"})
     assert nested.exists()
     data = json.loads(nested.read_text())
@@ -411,6 +454,8 @@ async def test_list_preview_truncated(tmp_path, monkeypatch):
     templates_file = tmp_path / "message_templates.json"
     templates_file.write_text(json.dumps({"long": long_text}), encoding="utf-8")
     monkeypatch.setattr(cmd_module, "_TEMPLATES_FILE", templates_file)
+    import src.handlers.commands.content_commands as cc_mod
+    monkeypatch.setattr(cc_mod, "_TEMPLATES_FILE", templates_file)
 
     bot = _make_bot("list")
     msg = _make_message()
