@@ -192,12 +192,15 @@ from .search_engine import close_search
 from .userbot.access_control import AccessControlMixin
 from .userbot.auto_translate import AutoTranslateMixin
 from .userbot.background_tasks import BackgroundTasksMixin
+from .userbot.callback_handler import CallbackHandlerMixin
 from .userbot.llm_flow import (
     LLMFlowMixin,
 )
 from .userbot.llm_text_processing import LLMTextProcessingMixin
+from .userbot.network_watchdog import NetworkWatchdogMixin
 from .userbot.runtime_status import RuntimeStatusMixin
 from .userbot.session import SessionMixin
+from .userbot.startup_state import StartupStateMixin
 from .userbot.voice_profile import VoiceProfileMixin
 
 logger = get_logger(__name__)
@@ -512,6 +515,9 @@ class KraabUserbot(
     LLMFlowMixin,
     BackgroundTasksMixin,
     SessionMixin,
+    StartupStateMixin,
+    CallbackHandlerMixin,
+    NetworkWatchdogMixin,
 ):
     """
     Класс KraabUserbot.
@@ -2240,6 +2246,40 @@ class KraabUserbot(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("command_usage_periodic_save_failed", error=str(exc))
 
+    async def _try_reconnect_pyrofork(self, client: "Client") -> bool:
+        """Wave 33-A: корректный reconnect для pyrofork 2.3.69.
+
+        Стратегия 1: если client.is_connected → stop(block=True) затем start().
+        Pyrogram Client.disconnect() raises ConnectionError когда клиент
+        инициализирован (connected state). Client.stop() — правильный shutdown.
+
+        Стратегия 2 (fallback): Ping invoke без disconnect — проверяет
+        живость сессии без teardown. Если Ping прошёл — сессия жива.
+
+        Returns True если reconnect / ping успешен.
+        """
+        import secrets
+
+        # Стратегия 1: graceful stop + start
+        try:
+            is_conn = getattr(client, "is_connected", False)
+            if is_conn:
+                await client.stop(block=True)
+            await client.start()
+            return True
+        except (ConnectionError, RuntimeError, OSError) as _e:
+            logger.warning("pyrofork_reconnect_strategy1_failed", error=str(_e))
+
+        # Стратегия 2: Ping invoke (без teardown)
+        try:
+            from pyrogram.raw.functions import Ping  # noqa: PLC0415
+
+            await client.invoke(Ping(ping_id=secrets.randbits(63)))
+            return True
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("pyrofork_reconnect_strategy2_failed", error=str(_e))
+            return False
+
     @staticmethod
     async def _probe_telegram_dc(timeout: float = 5.0) -> bool:
         """
@@ -2330,12 +2370,14 @@ class KraabUserbot(
                             "network_silence_dc_unreachable_attempting_reconnect",
                             silence_sec=round(silence_sec, 1),
                         )
-                        try:
-                            if self.client:
-                                await self.client.disconnect()
+                        # Wave 33-A: используем _try_reconnect_pyrofork вместо
+                        # прямого disconnect()+start() — исправляет
+                        # "Can't disconnect an initialized client" от pyrofork.
+                        reconnected = False
+                        if self.client:
                             await asyncio.sleep(2)
-                            if self.client:
-                                await self.client.start()
+                            reconnected = await self._try_reconnect_pyrofork(self.client)
+                        if reconnected:
                             # Reconnect удался — сбрасываем ts и не алертим
                             self._last_telegram_event_ts = time.time()
                             logger.info(
@@ -2344,10 +2386,9 @@ class KraabUserbot(
                             )
                             _alert_active = False
                             continue
-                        except Exception as _re:  # noqa: BLE001
+                        else:
                             logger.warning(
                                 "network_silence_reconnect_failed",
-                                error=str(_re),
                                 silence_sec=round(silence_sec, 1),
                             )
 
