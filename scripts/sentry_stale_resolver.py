@@ -125,7 +125,8 @@ def fetch_issues(project: str) -> list[dict]:
 
 def resolve_issue(issue_id: str, reason: str) -> bool:
     """Отправляет PUT для перевода issue в status=resolved."""
-    url = f"https://sentry.io/api/0/issues/{issue_id}/"
+    # Wave 42-A-fix: Sentry требует org-prefixed URL для PUT (без org → 404)
+    url = f"https://sentry.io/api/0/organizations/{SENTRY_ORG}/issues/{issue_id}/"
     body = json.dumps({"status": "resolved", "statusDetails": {}}).encode()
     req = urllib.request.Request(
         url,

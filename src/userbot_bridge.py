@@ -54,17 +54,8 @@ from .core.swarm_auto_executor import swarm_auto_executor
 from .core.swarm_channels import swarm_channels
 from .core.swarm_scheduler import swarm_scheduler
 from .core.telegram_rate_limiter import telegram_rate_limiter
-from .core.translator_runtime_profile import (
-    load_translator_runtime_profile,
-    normalize_translator_runtime_profile,
-    save_translator_runtime_profile,
-)
 from .core.translator_session_state import (
-    append_translator_history_entry,
-    apply_translator_session_update,
-    default_translator_session_state,
-    load_translator_session_state,
-    save_translator_session_state,
+    append_translator_history_entry,  # load/save/normalize → TranslatorProfileMixin (Wave 31-D)
 )
 from .employee_templates import ROLES
 from .handlers import (
@@ -190,6 +181,8 @@ from .model_manager import model_manager
 from .openclaw_client import openclaw_client
 from .reserve_bot import reserve_bot
 from .search_engine import close_search
+from .userbot._send_queue import _TelegramSendQueue  # noqa: F401 — backward-compat reexport
+from .userbot._send_queue import telegram_send_queue as _telegram_send_queue
 from .userbot.access_control import AccessControlMixin
 from .userbot.auto_translate import AutoTranslateMixin
 from .userbot.background_tasks import BackgroundTasksMixin
@@ -199,9 +192,12 @@ from .userbot.llm_flow import (
 )
 from .userbot.llm_text_processing import LLMTextProcessingMixin
 from .userbot.network_watchdog import NetworkWatchdogMixin
+from .userbot.reaction_dispatch import ReactionDispatchMixin
 from .userbot.runtime_status import RuntimeStatusMixin
 from .userbot.session import SessionMixin
 from .userbot.startup_state import StartupStateMixin
+from .userbot.telegram_send_utils import TelegramSendUtilsMixin
+from .userbot.translator_profile import TranslatorProfileMixin
 from .userbot.voice_profile import VoiceProfileMixin
 
 logger = get_logger(__name__)
@@ -312,232 +308,8 @@ async def _evaluate_and_apply_skill_curator_proposals() -> None:
             )
 
 
-class _TelegramSendQueue:
-    """
-    Per-chat serialised queue with exponential-backoff retry for outgoing
-    Telegram API calls (send_message, edit, reply).
-
-    Зачем нужна очередь:
-    - При долгих tool-chain задачах Telegram API может вернуть FLOOD_WAIT или
-      временный timeout; без retry сообщение теряется бесследно.
-    - Per-chat воркер гарантирует порядок доставки внутри одного чата и изолирует
-      медленные чаты от быстрых.
-    - Воркер ленив: стартует при первом вызове, самоостанавливается через 30 с простоя.
-    """
-
-    _MAX_RETRIES: int = 3
-    _BASE_BACKOFF_SEC: float = 0.5
-
-    def __init__(self) -> None:
-        self._queues: dict[int, asyncio.Queue] = {}
-        self._workers: dict[int, asyncio.Task] = {}
-        # slowmode: chat_id → последний момент успешной отправки (time.monotonic())
-        self._slowmode_last_sent: dict[int, float] = {}
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    async def run(self, chat_id: int, coro_factory: Any) -> Any:
-        """
-        Ставит вызов Telegram API в очередь чата и ждёт результата.
-
-        coro_factory — callable без аргументов, возвращающий корутину:
-            lambda: client.send_message(chat_id, text)
-
-        При FLOOD_WAIT или TimeoutError выполняет до _MAX_RETRIES попыток
-        с экспоненциальным откатом. Остальные исключения пробрасываются.
-        """
-        queue = self._get_or_create_queue(chat_id)
-        self._ensure_worker_running(chat_id)
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future = loop.create_future()
-        await queue.put((coro_factory, fut))
-        return await fut
-
-    async def stop_all(self) -> None:
-        """Останавливает всех воркеров (вызывать при shutdown юзербота)."""
-        for task in list(self._workers.values()):
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except (asyncio.CancelledError, Exception):
-                    pass
-        self._workers.clear()
-        self._queues.clear()
-        self._slowmode_last_sent.clear()
-
-    def reset(self) -> None:
-        """
-        Сбрасывает state без async-cancel (W32: для синхронного bootstrap).
-
-        Вызывать при старте нового event loop'а, когда старые queues/workers
-        привязаны к убитому loop'у и `await` недоступен. Задачи не
-        отменяются (loop уже мёртв — `cancel()` бросит RuntimeError), просто
-        отбрасываем ссылки: GC подчистит их вместе со старым loop'ом.
-        """
-        self._queues.clear()
-        self._workers.clear()
-        self._slowmode_last_sent.clear()
-
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
-    async def _enforce_slowmode_for_chat(self, chat_id: int) -> None:
-        """
-        Ждёт, если для чата установлен slowmode.
-        Вызывать перед первой попыткой отправки — не в retry-цикле.
-        """
-        slow_sec = chat_capability_cache.get_slow_mode_seconds(chat_id)
-        if not slow_sec or slow_sec <= 0:
-            return
-        last_sent = self._slowmode_last_sent.get(chat_id, 0.0)
-        elapsed = time.monotonic() - last_sent
-        remaining = slow_sec - elapsed
-        if remaining > 0:
-            logger.debug("slowmode_wait", chat_id=chat_id, wait_sec=round(remaining, 1))
-            await asyncio.sleep(remaining)
-
-    def _queue_matches_loop(
-        self,
-        queue: asyncio.Queue,
-        current_loop: asyncio.AbstractEventLoop,
-    ) -> bool:
-        """True, если очередь может безопасно использоваться в `current_loop`.
-
-        `asyncio.Queue` (через `_LoopBoundMixin`) лениво кэширует loop в
-        `_loop`. Пока `_loop is None` — очередь ещё не привязана, подходит
-        любому loop. При mismatch `_get_loop()` бросит
-        `RuntimeError: bound to a different event loop`.
-        """
-        bound = getattr(queue, "_loop", None)
-        if bound is None:
-            return True
-        return bound is current_loop
-
-    def _get_or_create_queue(self, chat_id: int) -> asyncio.Queue:
-        """Создаёт или возвращает per-chat очередь.
-
-        W32: если существующая очередь привязана к другому event loop
-        (сценарий рестарта userbot'а — модульный singleton переживает loop),
-        пересоздаём её вместе с воркером. Без этого `queue.put()` бросает
-        `RuntimeError: Queue bound to different event loop`.
-        """
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-
-        existing = self._queues.get(chat_id)
-        if (
-            existing is not None
-            and current_loop is not None
-            and not self._queue_matches_loop(existing, current_loop)
-        ):
-            bound = getattr(existing, "_loop", None)
-            logger.warning(
-                "telegram_send_queue_loop_mismatch_rebind",
-                chat_id=chat_id,
-                bound_closed=getattr(bound, "_closed", None),
-            )
-            # Старый воркер привязан к убитому loop — просто отбрасываем
-            # ссылку; cancel() на foreign loop бросил бы RuntimeError.
-            self._workers.pop(chat_id, None)
-            existing = None
-
-        if existing is None:
-            self._queues[chat_id] = asyncio.Queue()
-        return self._queues[chat_id]
-
-    def _ensure_worker_running(self, chat_id: int) -> None:
-        task = self._workers.get(chat_id)
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-
-        # W32: если task из другого loop'а — игнорируем и создаём новый.
-        if task is not None and current_loop is not None:
-            task_loop = getattr(task, "_loop", None)
-            if task_loop is not None and task_loop is not current_loop:
-                task = None
-
-        if task is None or task.done():
-            self._workers[chat_id] = asyncio.create_task(
-                self._worker(chat_id), name=f"tg-send-{chat_id}"
-            )
-
-    async def _worker(self, chat_id: int) -> None:
-        queue = self._queues.get(chat_id)
-        if queue is None:
-            return
-        while True:
-            try:
-                coro_factory, fut = await asyncio.wait_for(queue.get(), timeout=30.0)
-            except asyncio.TimeoutError:
-                # Очередь пустовала 30 с — воркер самоостанавливается.
-                self._workers.pop(chat_id, None)
-                return
-
-            result_exc: BaseException | None = None
-            result_val: Any = None
-
-            # Slowmode: ждём перед отправкой, если у чата настроен slowmode.
-            # Делаем ДО retry-цикла — не нужно засыпать снова при retry.
-            await self._enforce_slowmode_for_chat(chat_id)
-
-            for attempt in range(self._MAX_RETRIES):
-                try:
-                    # B.7: global API rate limit. acquire() → sleep если
-                    # aggregate rate превысил soft cap (default 20 req/s).
-                    # Ставим ДО coro_factory чтобы retry тоже учитывались.
-                    await telegram_rate_limiter.acquire(purpose="send_queue")
-                    result_val = await coro_factory()
-                    # Фиксируем время успешной отправки для slowmode-трекинга.
-                    self._slowmode_last_sent[chat_id] = time.monotonic()
-                    result_exc = None
-                    break
-                except Exception as exc:  # noqa: BLE001
-                    err_upper = str(exc).upper()
-                    is_flood = "FLOOD" in err_upper
-                    is_slowmode = "SLOWMODE_WAIT" in err_upper
-                    is_timeout = isinstance(exc, (asyncio.TimeoutError, TimeoutError))
-                    if is_slowmode:
-                        # SlowmodeWait: обновляем last_sent и ждём
-                        self._slowmode_last_sent[chat_id] = time.monotonic()
-                        m = re.search(r"(\d+)", str(exc))
-                        slow_wait = float(m.group(1)) if m else 10.0
-                        logger.warning(
-                            "slowmode_wait_from_error",
-                            chat_id=chat_id,
-                            wait_sec=slow_wait,
-                        )
-                        if attempt < self._MAX_RETRIES - 1:
-                            await asyncio.sleep(slow_wait)
-                            continue
-                    if (is_flood or is_timeout) and attempt < self._MAX_RETRIES - 1:
-                        delay = self._BASE_BACKOFF_SEC * (2**attempt)
-                        if is_flood:
-                            m = re.search(r"A wait of (\d+) seconds", str(exc), re.I)
-                            if m:
-                                delay = max(delay, float(m.group(1)))
-                        await asyncio.sleep(delay)
-                        continue
-                    result_exc = exc
-                    break
-
-            if not fut.done():
-                if result_exc is not None:
-                    fut.set_exception(result_exc)
-                else:
-                    fut.set_result(result_val)
-            queue.task_done()
-
-
-# Singleton — один на весь процесс юзербота.
-_telegram_send_queue = _TelegramSendQueue()
+# _TelegramSendQueue и singleton перенесены в src/userbot/_send_queue.py (Wave 31-D).
+# Импорты перенесены в блок импортов наверху файла.
 
 
 def _message_unix_ts(message: Message | Any) -> float | None:
@@ -567,6 +339,9 @@ class KraabUserbot(
     StartupStateMixin,
     CallbackHandlerMixin,
     NetworkWatchdogMixin,
+    TranslatorProfileMixin,  # Wave 31-D
+    TelegramSendUtilsMixin,  # Wave 31-D
+    ReactionDispatchMixin,  # Wave 31-D
 ):
     """
     Класс KraabUserbot.
@@ -2916,128 +2691,15 @@ class KraabUserbot(
                 client_connected=client_connected,
             )
 
-    @classmethod
-    def _repo_root(cls) -> Path:
-        """
-        Возвращает корень текущего репозитория Краба.
-
-        Нужен единый helper, чтобы userbot, web API и тесты ссылались на один и тот же
-        repo-level persisted translator profile, а не расходились по рабочим каталогам.
-        """
-        del cls
-        return Path(__file__).resolve().parent.parent
-
-    @classmethod
-    def _translator_runtime_profile_path(cls) -> Path:
-        """Возвращает repo-level путь persisted translator runtime profile."""
-        return cls._repo_root() / "data" / "translator" / "runtime_profile.json"
-
-    def get_translator_runtime_profile(self) -> dict[str, Any]:
-        """
-        Возвращает persisted translator runtime profile с короткой runtime truth-добавкой.
-
-        Это не live session-state переводчика звонков. Здесь лежит именно product/runtime
-        профиль owner-уровня, который используется командами, web-панелью и handoff.
-        """
-        profile = load_translator_runtime_profile(self._translator_runtime_profile_path())
-        voice_profile = self.get_voice_runtime_profile()
-        result = dict(profile)
-        result["quick_phrase_count"] = len(profile.get("quick_phrases") or [])
-        result["voice_foundation_ready"] = bool(voice_profile.get("live_voice_foundation"))
-        result["voice_runtime_enabled"] = bool(voice_profile.get("enabled"))
-        return result
-
-    @classmethod
-    def _translator_session_state_path(cls) -> Path:
-        """Возвращает repo-level путь persisted translator session state."""
-        return cls._repo_root() / "data" / "translator" / "session_state.json"
-
-    def get_translator_session_state(self) -> dict[str, Any]:
-        """
-        Возвращает persisted translator session state с короткой runtime truth-добавкой.
-
-        Это product-level control state, а не финальный source-of-truth live звонка.
-        Но именно он нужен owner-командам и UI до подключения полноценного session feed.
-        """
-        state = load_translator_session_state(self._translator_session_state_path())
-        profile = self.get_translator_runtime_profile()
-        result = dict(state)
-        result["language_pair"] = str(profile.get("language_pair") or "")
-        result["target_device"] = str(profile.get("target_device") or "iphone_companion")
-        return result
-
-    def update_translator_runtime_profile(
-        self,
-        *,
-        persist: bool = True,
-        **changes: Any,
-    ) -> dict[str, Any]:
-        """
-        Обновляет persisted translator runtime profile и возвращает нормализованный срез.
-
-        Почему логика здесь:
-        - Telegram-команда `!translator` и owner web UI должны опираться на одну модель данных;
-        - тесты и runtime-status не должны зависеть от разнородной ad-hoc сериализации.
-        """
-        path = self._translator_runtime_profile_path()
-        current = load_translator_runtime_profile(path)
-        normalized = normalize_translator_runtime_profile(changes, base=current)
-        if persist:
-            save_translator_runtime_profile(path, normalized)
-        return self.get_translator_runtime_profile() if persist else normalized
-
-    def update_translator_session_state(
-        self,
-        *,
-        persist: bool = True,
-        **changes: Any,
-    ) -> dict[str, Any]:
-        """
-        Обновляет persisted translator session state и возвращает нормализованный срез.
-
-        Почему логика здесь:
-        - web UI, userbot-команды и handoff должны видеть один session-control слой;
-        - до live feed Voice Gateway нам нужен честный persisted placeholder,
-          а не ad-hoc state в памяти процесса.
-        """
-        path = self._translator_session_state_path()
-        current = load_translator_session_state(path)
-        normalized = apply_translator_session_update(changes, base=current)
-        if persist:
-            save_translator_session_state(path, normalized)
-        return self.get_translator_session_state() if persist else normalized
-
-    def reset_translator_session_state(self, *, persist: bool = True) -> dict[str, Any]:
-        """Сбрасывает translator session state к каноническому idle-срезу."""
-        state = default_translator_session_state()
-        if persist:
-            save_translator_session_state(self._translator_session_state_path(), state)
-            return self.get_translator_session_state()
-        return state
+    # _repo_root, _translator_runtime_profile_path, get_translator_runtime_profile,
+    # _translator_session_state_path, get_translator_session_state,
+    # update_translator_runtime_profile, update_translator_session_state,
+    # reset_translator_session_state, _is_translator_active_for_chat
+    # → TranslatorProfileMixin (src/userbot/translator_profile.py, Wave 31-D)
 
     # ------------------------------------------------------------------
     # Translator MVP — voice note translation pipeline
     # ------------------------------------------------------------------
-
-    def _is_translator_active_for_chat(self, chat_id: int | str) -> bool:
-        """Проверяет, активна ли translator сессия для данного чата.
-
-        Translator — строго opt-in: активируется только явным
-        !translator on / !translator session start.
-        active_chats должен содержать chat_id чтобы pipeline сработал —
-        пустой список = inactive.
-        """
-        state = self.get_translator_session_state()
-        if state.get("session_status") != "active":
-            return False
-        if state.get("translation_muted"):
-            return False
-        active_chats = state.get("active_chats") or []
-        if not active_chats:
-            # Пустой active_chats → сессия не привязана ни к одному чату (не активна).
-            # Ранее здесь был fallback "активен для всех" — это нарушало opt-in семантику.
-            return False
-        return str(chat_id) in [str(c) for c in active_chats]
 
     async def _apply_voice_dispatcher(self, message: Any, transcript: str) -> str:
         """Idea 1: подмешать summary/preview к голосовому transcript.
@@ -4962,267 +4624,16 @@ class KraabUserbot(
             )
         return f"{extra_context}\n\n{query}".strip() if query else extra_context
 
-    @staticmethod
-    def _is_message_not_modified_error(exc: Exception) -> bool:
-        """Определяет типичную ошибку Telegram при повторном edit того же текста."""
-        text = str(exc).upper()
-        return "MESSAGE_NOT_MODIFIED" in text
+    # _is_message_not_modified_error, _is_message_id_invalid_error,
+    # _is_message_author_required_error, _is_message_empty_error, _is_message_too_long_error,
+    # _extract_message_text, _is_command_like_text, _safe_edit, _safe_reply_or_send_new
+    # → TelegramSendUtilsMixin (src/userbot/telegram_send_utils.py, Wave 31-D)
 
-    @staticmethod
-    def _is_message_id_invalid_error(exc: Exception) -> bool:
-        """Определяет ошибку Telegram при попытке edit невалидного message id."""
-        return "MESSAGE_ID_INVALID" in str(exc).upper()
-
-    @staticmethod
-    def _is_message_author_required_error(exc: Exception) -> bool:
-        """Определяет 403 MESSAGE_AUTHOR_REQUIRED при попытке edit чужого сообщения."""
-        return "MESSAGE_AUTHOR_REQUIRED" in str(exc).upper()
-
-    @staticmethod
-    def _is_message_empty_error(exc: Exception) -> bool:
-        """Определяет ошибку Telegram при попытке отправить/отредактировать пустой текст."""
-        return "MESSAGE_EMPTY" in str(exc).upper()
-
-    @staticmethod
-    def _is_message_too_long_error(exc: Exception) -> bool:
-        """Определяет ошибку Telegram при превышении лимита длины сообщения (4096 chars)."""
-        return "MESSAGE_TOO_LONG" in str(exc).upper()
-
-    async def _send_message_reaction(self, message: Message, emoji: str) -> None:
-        """
-        Ставит реакцию на сообщение через pyrofork send_reaction.
-
-        Молча игнорирует ошибки — не все чаты/типы сообщений поддерживают реакции
-        (каналы без реакций, анонимные группы, старые клиенты и т.д.).
-        Не ставит реакцию если TELEGRAM_REACTIONS_ENABLED=False.
-        """
-        if not bool(getattr(config, "TELEGRAM_REACTIONS_ENABLED", True)):
-            return
-        chat_id_int = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
-        message_id_int = int(getattr(message, "id", 0) or 0)
-        if not chat_id_int or not message_id_int:
-            return
-        try:
-            await self.client.send_reaction(
-                chat_id=chat_id_int,
-                message_id=message_id_int,
-                emoji=emoji,
-            )
-        except Exception:  # noqa: BLE001
-            pass  # реакции — best-effort, не прерываем основной flow
-
-    async def _handle_message_reaction_updated(self, reaction_update: Any) -> None:
-        """
-        Обрабатывает обновление реакции пользователя на сообщение.
-
-        Логирует реакции как feedback и передаёт в ReactionEngine для накопления статистики.
-        Полезно: 👍/❤️ = пользователь доволен ответом, 👎 = недоволен.
-        """
-        try:
-            # Извлекаем поля из MessageReactionUpdated
-            chat = getattr(reaction_update, "chat", None)
-            from_user = getattr(reaction_update, "from_user", None)
-            message_id = int(getattr(reaction_update, "id", 0) or 0)
-            chat_id = int(getattr(chat, "id", 0) or 0) if chat else 0
-            user_id = int(getattr(from_user, "id", 0) or 0) if from_user else None
-
-            if not chat_id or not message_id:
-                return
-
-            # Список Reaction объектов
-            new_reactions = list(getattr(reaction_update, "new_reaction", None) or [])
-            old_reactions = list(getattr(reaction_update, "old_reaction", None) or [])
-
-            def _extract_emojis(reactions: list) -> list[str]:
-                """Извлекает emoji-строки из объектов Reaction."""
-                result = []
-                for r in reactions:
-                    emoji = getattr(r, "emoji", None) or getattr(r, "emoticon", None)
-                    if emoji:
-                        result.append(str(emoji))
-                return result
-
-            new_emojis = _extract_emojis(new_reactions)
-            old_emojis = _extract_emojis(old_reactions)
-
-            # Добавленные реакции (не было в old, появились в new)
-            added = [e for e in new_emojis if e not in old_emojis]
-            removed = [e for e in old_emojis if e not in new_emojis]
-
-            if not added and not removed:
-                return
-
-            logger.info(
-                "reaction_updated",
-                chat_id=chat_id,
-                message_id=message_id,
-                user_id=user_id,
-                added=added,
-                removed=removed,
-            )
-
-            # Передаём в ReactionEngine для накопления feedback
-            try:
-                from .core.reaction_engine import reaction_engine  # noqa: PLC0415
-
-                reaction_engine.record_reaction(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    user_id=user_id,
-                    new_emojis=new_emojis,
-                    old_emojis=old_emojis,
-                )
-            except Exception as eng_exc:  # noqa: BLE001
-                logger.warning("reaction_engine_record_failed", error=str(eng_exc))
-
-        except Exception:  # noqa: BLE001
-            logger.exception("handle_message_reaction_updated_error")
-
-    async def _send_monitor_alert(self, message: Message, matched_keyword: str) -> None:
-        """Отправляет alert owner'у в Saved Messages при совпадении keyword в мониторимом чате."""
-        try:
-            if not self.me:
-                return
-            # Информация об отправителе
-            sender = message.from_user
-            sender_name = (
-                (
-                    getattr(sender, "username", None)
-                    or getattr(sender, "first_name", None)
-                    or str(getattr(sender, "id", "?"))
-                )
-                if sender
-                else "Unknown"
-            )
-            # Название чата
-            chat_title = (
-                getattr(message.chat, "title", None)
-                or getattr(message.chat, "first_name", None)
-                or str(message.chat.id)
-            )
-            # Текст сообщения (обрезаем длинные)
-            msg_text = (message.text or "").strip()
-            if len(msg_text) > 800:
-                msg_text = msg_text[:797] + "..."
-            alert = (
-                f"\U0001f514 **Monitor Alert**\n"
-                f"Chat: {chat_title} (`{message.chat.id}`)\n"
-                f"From: @{sender_name}\n"
-                f"Keyword: `{matched_keyword}`\n"
-                f"\u2500\u2500\u2500\u2500\u2500\n"
-                f"{msg_text}"
-            )
-            await self.client.send_message(self._owner_notify_target, alert)
-            logger.info(
-                "monitor_alert_sent",
-                chat_id=str(message.chat.id),
-                keyword=matched_keyword,
-                sender=sender_name,
-            )
-        except Exception as exc:
-            logger.warning("monitor_alert_error", error=str(exc))
-
-    async def _safe_edit(self, msg: Message, text: str) -> Message:
-        """
-        Безопасно редактирует сообщение через _telegram_send_queue (с retry).
-        Возвращает актуальный Message:
-        - исходный, если edit не потребовался;
-        - результат edit;
-        - новый message при fallback на send_message.
-        """
-        current_text = (getattr(msg, "text", None) or getattr(msg, "caption", None) or "").strip()
-        target_text = (text or "").strip()
-        # Telegram EditMessage не принимает пустой/невидимый текст.
-        if not target_text:
-            target_text = "…"
-        if current_text == target_text:
-            return msg
-        chat_id: int = msg.chat.id
-        _text = target_text  # захват для lambda
-        try:
-            edited = await _telegram_send_queue.run(chat_id, lambda: msg.edit(_text))
-            return edited or msg
-        except Exception as exc:  # noqa: BLE001 - фильтруем MESSAGE_NOT_MODIFIED
-            if self._is_message_not_modified_error(exc):
-                return msg
-            if self._is_message_id_invalid_error(exc) or self._is_message_empty_error(exc):
-                logger.warning("telegram_edit_fallback_send_new", error=str(exc))
-                return await _telegram_send_queue.run(
-                    chat_id, lambda: self.client.send_message(chat_id, _text)
-                )
-            if self._is_message_author_required_error(exc):
-                # Bug 4 defense-in-depth: на случай, если guard в _deliver_response_parts
-                # был обойдён — отправляем как reply на исходное сообщение.
-                logger.warning(
-                    "telegram_edit_author_required_fallback_reply",
-                    error=str(exc),
-                    error_type=type(exc).__name__,
-                )
-                msg_id = getattr(msg, "id", None)
-                if msg_id:
-                    return await _telegram_send_queue.run(
-                        chat_id,
-                        lambda: self.client.send_message(
-                            chat_id, _text, reply_to_message_id=msg_id
-                        ),
-                    )
-                return await _telegram_send_queue.run(
-                    chat_id, lambda: self.client.send_message(chat_id, _text)
-                )
-            if self._is_message_too_long_error(exc):
-                # Текст превысил лимит Telegram (4096). Отрезаем и отправляем новым сообщением.
-                logger.warning("telegram_edit_too_long_fallback_send_new", error=str(exc))
-                _truncated = _text[:4000]
-                return await _telegram_send_queue.run(
-                    chat_id, lambda: self.client.send_message(chat_id, _truncated)
-                )
-            raise
-
-    async def _safe_reply_or_send_new(self, msg: Message, text: str) -> Message:
-        """
-        Безопасно отвечает на сообщение через reply с fallback на send_message.
-
-        Это защищает private owner-path от silent-drop, когда Telegram принимает
-        обычную отправку в чат, но валит именно reply на конкретный message id.
-        Оба вызова идут через _telegram_send_queue (с retry при FLOOD_WAIT/timeout).
-        """
-        target_text = (text or "").strip() or "…"
-        chat_id: int = msg.chat.id
-        _text = target_text  # захват для lambda
-        try:
-            sent = await _telegram_send_queue.run(chat_id, lambda: msg.reply(_text))
-            # Фиксируем момент ответа Краба для follow-up детектора
-            from .core.trigger_detector import last_krab_msg  # noqa: PLC0415
-
-            last_krab_msg.record(chat_id)
-            return sent or msg
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "telegram_reply_fallback_send_new",
-                chat_id=str(chat_id),
-                message_id=str(getattr(msg, "id", "") or ""),
-                error=str(exc),
-            )
-            sent = await _telegram_send_queue.run(
-                chat_id, lambda: self.client.send_message(chat_id, _text)
-            )
-            from .core.trigger_detector import last_krab_msg  # noqa: PLC0415
-
-            last_krab_msg.record(chat_id)
-            return sent
+    # _send_message_reaction, _handle_message_reaction_updated, _send_monitor_alert
+    # → ReactionDispatchMixin (src/userbot/reaction_dispatch.py, Wave 31-D)
 
     # _get_chat_processing_lock -> BackgroundTasksMixin (src/userbot/background_tasks.py)
-
-    @staticmethod
-    def _extract_message_text(message: Message | Any) -> str:
-        """Возвращает текст или подпись сообщения единым способом."""
-        return str(getattr(message, "text", None) or getattr(message, "caption", None) or "")
-
-    @staticmethod
-    def _is_command_like_text(text: str) -> bool:
-        """Определяет служебные команды, которые нельзя склеивать с обычным текстом."""
-        normalized = str(text or "").lstrip()
-        return normalized[:1] in {"!", "/", "."}
+    # _extract_message_text, _is_command_like_text -> TelegramSendUtilsMixin (Wave 31-D)
 
     # _keep_typing_alive, _send_delivery_chat_action, _mark_incoming_item_background_started,
     # _log_background_task_exception_cb, _register_chat_background_task,
