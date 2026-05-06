@@ -348,6 +348,28 @@ OPENCLAW_REASONING_EFFORT=medium
 | Session 35 | ~10670+ |
 | Session 36 | ~10738+ |
 | **Session 38** | **12594 collected** |
+| **Session 39 (06.05)** | **12702 collected** (+108: Wave 31 mixin tests + 3 stale fixed) |
+
+## Wave 31 series — Bridge mixin extraction (06.05.2026)
+
+Цель: разнести `userbot_bridge.py` (6860 LOC monolith) на cohesive mixins.
+
+| Wave | Module | Methods | LOC delta | Bridge after |
+|---|---|---|---|---|
+| 31-A→D | startup_state, callback_handler, network_watchdog, translator_profile, telegram_send_utils, reaction_dispatch, _send_queue | 30+ | -589 | 6271 |
+| 31-E | `cron_tasks.py` | 4 (cron prompt+context+send) | -225 | 6046 |
+| 31-F | `relay_inbox.py` | 7 + `_RELAY_INTENT_KEYWORDS` | -349 | 5697 |
+| 31-G | `swarm_team_clients.py` | 3 (start/stop/init) | -169 | 5528 |
+| 31-H | `media_processors.py` | 3 (document/video/frame) + 3 const | -338 | 5190 |
+| **31-I** | `background_loops.py` | 2 (idea_features_tick + cmd_usage_save) + skill_curator helper | **-223** | **4967** ✨ |
+
+**Total: -1893 LOC (-27.6%)**, bridge < 5000 LOC впервые.
+
+**KraabUserbot MRO (19 mixins):** LLMTextProcessing → RuntimeStatus → VoiceProfile → AutoTranslate → AccessControl → LLMFlow → BackgroundTasks → Session → StartupState → CallbackHandler → NetworkWatchdog → TranslatorProfile → TelegramSendUtils → ReactionDispatch → CronTask → RelayInbox → SwarmTeamClients → MediaProcessors → BackgroundLoops.
+
+**Pattern:** factory mixin classes в `src/userbot/*Mixin.py`, MRO inheritance, lazy imports внутри hot-path methods, structlog с `module=<mixin_name>` для traceability в production logs.
+
+
 
 ## LM Studio integration
 
