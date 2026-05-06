@@ -327,3 +327,88 @@ class SwarmBus:
 
 # Singleton
 swarm_bus = SwarmBus()
+
+
+# ---------------------------------------------------------------------------
+# SwarmProgressRegistry — отслеживание активных loop/round сессий
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SwarmRoomSession:
+    """Состояние одной активной swarm-сессии (loop или single round)."""
+
+    team: str
+    topic: str
+    rounds_total: int  # запланировано раундов (1 для single round)
+    rounds_completed: int = 0
+    started_at: float = field(default_factory=time.monotonic)
+
+    def elapsed_sec(self) -> float:
+        """Секунды с момента старта сессии."""
+        return time.monotonic() - self.started_at
+
+    def eta_sec(self) -> float | None:
+        """Примерное оставшееся время в секундах (None если нет данных)."""
+        done = self.rounds_completed
+        remaining = self.rounds_total - done
+        if done <= 0 or remaining <= 0:
+            return None
+        avg = self.elapsed_sec() / done
+        return avg * remaining
+
+
+class SwarmProgressRegistry:
+    """
+    In-memory реестр активных swarm-сессий.
+
+    Вызывается из ``AgentRoom.run_loop`` / ``run_round`` через module-level singleton.
+    Позволяет `!swarm progress` получить актуальный снимок без IO.
+    """
+
+    def __init__(self) -> None:
+        self._sessions: dict[str, SwarmRoomSession] = {}
+
+    # -- writer API (вызывается из swarm.py) ---------------------------------
+
+    def start_session(self, *, team: str, topic: str, rounds_total: int) -> str:
+        """Регистрирует новую сессию, возвращает session_id."""
+        sid = f"{team}:{uuid.uuid4().hex[:6]}"
+        self._sessions[sid] = SwarmRoomSession(
+            team=team,
+            topic=topic,
+            rounds_total=rounds_total,
+        )
+        logger.info("swarm_progress_session_started", sid=sid, team=team, rounds=rounds_total)
+        return sid
+
+    def record_round_done(self, sid: str) -> None:
+        """Фиксирует завершение одного раунда для сессии ``sid``."""
+        session = self._sessions.get(sid)
+        if session is None:
+            return
+        session.rounds_completed += 1
+        logger.debug(
+            "swarm_progress_round_done",
+            sid=sid,
+            done=session.rounds_completed,
+            total=session.rounds_total,
+        )
+
+    def end_session(self, sid: str) -> None:
+        """Удаляет сессию из реестра (вызывается в finally блоке)."""
+        self._sessions.pop(sid, None)
+        logger.info("swarm_progress_session_ended", sid=sid)
+
+    # -- reader API (вызывается из swarm_commands.py) ------------------------
+
+    def get_all_active(self) -> dict[str, SwarmRoomSession]:
+        """Возвращает копию словаря активных сессий {sid: session}."""
+        return dict(self._sessions)
+
+    def active_count(self) -> int:
+        return len(self._sessions)
+
+
+# Singleton
+swarm_progress = SwarmProgressRegistry()

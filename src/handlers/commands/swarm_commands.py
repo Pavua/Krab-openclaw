@@ -726,6 +726,55 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(f"📡 Группа привязана к команде **{team}**\nChat ID: `{chat_id}`")
         return
 
+    # !swarm progress — реальный статус активных rooms + ETA
+    if args.lower() in {"progress", "прогресс", "status running", "running"}:
+        from ...core.swarm_bus import swarm_progress
+
+        sessions = swarm_progress.get_all_active()
+        if not sessions:
+            await message.reply(
+                "🐝 Все swarm-комнаты idle.\n"
+                "Запусти `!swarm <team> <topic>` или `!swarm <team> loop N <topic>` для старта."
+            )
+            return
+
+        lines = ["🐝 **Swarm Progress**\n"]
+        for sid, sess in sessions.items():
+            done = sess.rounds_completed
+            total = sess.rounds_total
+            elapsed_min = sess.elapsed_sec() / 60
+            eta = sess.eta_sec()
+
+            # Форматирование ETA
+            if eta is None:
+                eta_str = "?"
+            elif eta < 60:
+                eta_str = f"~{eta:.0f}с"
+            else:
+                eta_str = f"~{eta / 60:.1f} мин"
+
+            # Прогресс-бар (10 символов)
+            if total > 1:
+                filled = int(10 * done / total)
+                bar = "█" * filled + "░" * (10 - filled)
+                progress_str = f"[{bar}] {done}/{total}"
+            else:
+                # Single round — показываем spinner
+                progress_str = "▶ выполняется"
+
+            team_label = sess.team
+            topic_short = sess.topic[:60].rstrip()
+            elapsed_str = (
+                f"{elapsed_min:.0f} мин" if elapsed_min >= 1 else f"{sess.elapsed_sec():.0f}с"
+            )
+
+            lines.append(f"**{team_label}** — {progress_str}")
+            lines.append(f"  Тема: _{topic_short}_")
+            lines.append(f"  Elapsed: {elapsed_str}  ETA: {eta_str}")
+
+        await message.reply("\n".join(lines))
+        return
+
     # !swarm research <тема> — research pipeline с обязательным web_search.
     # После завершения research hook self-reflection создаёт follow-up задачи
     # в swarm_task_board (или reminders_queue для time-based триггеров).

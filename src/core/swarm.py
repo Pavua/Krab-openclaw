@@ -25,6 +25,15 @@ from .swarm_memory import swarm_memory
 from .swarm_team_prompts import get_team_system_prompt
 from .swarm_tool_scope import format_tool_hint
 
+
+# Реестр прогресса — подключается лениво чтобы избежать циклических импортов
+def _get_swarm_progress():  # noqa: ANN202
+    """Lazy getter для SwarmProgressRegistry singleton."""
+    from .swarm_bus import swarm_progress  # noqa: PLC0415
+
+    return swarm_progress
+
+
 # Wave 16-D: lazy-импорт SkillCurator для A/B wire-up.
 # Если импорт не удался — логируем предупреждение и продолжаем без A/B.
 try:
@@ -153,6 +162,7 @@ class AgentRoom:
         _depth: int = 0,
         _router_factory: Any = None,
         _team_name: str = "",
+        _track_progress: bool = True,
     ) -> str:
         """
         Запускает полный роевой раунд по теме `topic`.
@@ -217,6 +227,18 @@ class AgentRoom:
                 )
 
         logger.info("agent_room_round_started", topic=topic, roles=len(self.roles), depth=_depth)
+
+        # Регистрируем single-round сессию только для top-level вызовов.
+        # _track_progress=False передаётся из run_loop (там уже есть loop-level sid).
+        # _depth>0 — делегированные раунды не регистрируем.
+        _single_round_sid: str | None = None
+        if _track_progress and _depth == 0:
+            _progress = _get_swarm_progress()
+            _single_round_sid = _progress.start_session(
+                team=_team_name or "default",
+                topic=str(topic or "")[:120],
+                rounds_total=1,
+            )
 
         # Live broadcast: анонс начала раунда в swarm-группу
         # Для delegated rounds (depth>0) используем target_team для broadcast в его топик
@@ -472,6 +494,10 @@ class AgentRoom:
                     )
 
         logger.info("agent_room_round_completed", topic=topic, delegations=len(delegation_results))
+        # Завершаем single-round сессию если была зарегистрирована
+        if _single_round_sid is not None:
+            _get_swarm_progress().record_round_done(_single_round_sid)
+            _get_swarm_progress().end_session(_single_round_sid)
         return full_result
 
     async def run_loop(
@@ -508,29 +534,42 @@ class AgentRoom:
         current_topic = base_topic
         sections: list[str] = []
 
-        for idx in range(safe_rounds):
-            round_no = idx + 1
-            round_result = await self.run_round(
-                current_topic,
-                router,
-                _bus=_bus,
-                _depth=0,
-                _router_factory=_router_factory,
-                _team_name=_team_name,
-            )
-            sections.append(f"## Раунд {round_no}/{safe_rounds}\n{round_result}")
+        # Регистрируем сессию в реестре прогресса
+        _progress = _get_swarm_progress()
+        _sid = _progress.start_session(
+            team=_team_name or "default",
+            topic=base_topic,
+            rounds_total=safe_rounds,
+        )
+        try:
+            for idx in range(safe_rounds):
+                round_no = idx + 1
+                round_result = await self.run_round(
+                    current_topic,
+                    router,
+                    _bus=_bus,
+                    _depth=0,
+                    _router_factory=_router_factory,
+                    _team_name=_team_name,
+                    _track_progress=False,  # loop уже управляет своим sid
+                )
+                sections.append(f"## Раунд {round_no}/{safe_rounds}\n{round_result}")
+                # Фиксируем завершение раунда
+                _progress.record_round_done(_sid)
 
-            if round_no >= safe_rounds:
-                continue
+                if round_no >= safe_rounds:
+                    continue
 
-            # Для следующего раунда даем сжатый контекст предыдущего результата.
-            clipped = round_result[:safe_clip]
-            current_topic = (
-                "Улучши и уточни предыдущее решение. "
-                "Сделай более практичный, проверяемый и устойчивый план.\n\n"
-                f"Исходная тема:\n{base_topic}\n\n"
-                f"Результат предыдущего раунда:\n{clipped}"
-            )
+                # Для следующего раунда даем сжатый контекст предыдущего результата.
+                clipped = round_result[:safe_clip]
+                current_topic = (
+                    "Улучши и уточни предыдущее решение. "
+                    "Сделай более практичный, проверяемый и устойчивый план.\n\n"
+                    f"Исходная тема:\n{base_topic}\n\n"
+                    f"Результат предыдущего раунда:\n{clipped}"
+                )
+        finally:
+            _progress.end_session(_sid)
 
         logger.info("agent_room_loop_completed", topic=topic, rounds=safe_rounds)
         return f"🐝 **Swarm Loop: {base_topic}**\n\n" + "\n\n".join(sections)
