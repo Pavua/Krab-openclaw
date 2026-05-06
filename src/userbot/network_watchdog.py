@@ -16,8 +16,10 @@ Wave 36-A: добавлен MTProto session probe + zombie-escalation с process
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
+from pathlib import Path
 
 from ..config import config
 from ..core.logger import get_logger
@@ -28,6 +30,62 @@ logger = get_logger(__name__)
 _ZOMBIE_ESCALATION_THRESHOLD = int(os.environ.get("KRAB_ZOMBIE_ESCALATION_THRESHOLD", "3"))
 # Wave 36-A: тишина должна быть дольше этого чтобы вообще делать session probe
 _ZOMBIE_DOUBLE_SILENCE_SEC = int(os.environ.get("KRAB_ZOMBIE_DOUBLE_SILENCE_SEC", "600"))
+
+# Wave 36-C: fail-loud если zombie escalation повторяется > N раз за 24h.
+# Указывает на architectural-уровень problem (не одиночный glitch).
+_ZOMBIE_HISTORY_FILE: Path = (
+    Path.home() / ".openclaw" / "krab_runtime_state" / "zombie_escalation_history.json"
+)
+_ZOMBIE_FAIL_LOUD_THRESHOLD = int(os.environ.get("KRAB_ZOMBIE_FAIL_LOUD_THRESHOLD", "3"))
+_ZOMBIE_FAIL_LOUD_WINDOW_SEC = int(
+    os.environ.get("KRAB_ZOMBIE_FAIL_LOUD_WINDOW_SEC", str(24 * 3600))
+)
+
+
+def _read_zombie_history() -> list[float]:
+    """Читает persistent JSON-историю zombie escalation timestamps.
+
+    Возвращает список UNIX timestamps. Невалидный/отсутствующий файл = []
+    (fail-open: lost history лучше чем crash при boot).
+    """
+    try:
+        if not _ZOMBIE_HISTORY_FILE.exists():
+            return []
+        data = json.loads(_ZOMBIE_HISTORY_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, list):
+            return []
+        return [float(x) for x in data if isinstance(x, (int, float))]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("zombie_history_read_failed", error=str(exc))
+        return []
+
+
+def _record_zombie_escalation() -> int:
+    """Записывает текущий timestamp в zombie history + возвращает recent count.
+
+    Хранит rolling window — старше _ZOMBIE_FAIL_LOUD_WINDOW_SEC обрезается.
+    Atomic write через .tmp + rename. Returns: число escalation-ов в окне
+    включая текущий (для решения о fail-loud).
+    """
+    now = time.time()
+    cutoff = now - _ZOMBIE_FAIL_LOUD_WINDOW_SEC
+    history = [ts for ts in _read_zombie_history() if ts >= cutoff]
+    history.append(now)
+    try:
+        _ZOMBIE_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _ZOMBIE_HISTORY_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(history), encoding="utf-8")
+        tmp.replace(_ZOMBIE_HISTORY_FILE)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("zombie_history_write_failed", error=str(exc))
+    return len(history)
+
+
+def _count_recent_escalations() -> int:
+    """Считает escalations за окно — для startup-диагностики (без записи)."""
+    now = time.time()
+    cutoff = now - _ZOMBIE_FAIL_LOUD_WINDOW_SEC
+    return sum(1 for ts in _read_zombie_history() if ts >= cutoff)
 
 
 async def _probe_telegram_session_alive(client: object, *, timeout_sec: float = 5.0) -> bool:
@@ -79,16 +137,45 @@ class NetworkWatchdogMixin:
         except Exception:  # noqa: BLE001
             return False
 
-    async def _send_zombie_alert_to_owner(self, silence_sec: float, consecutive: int) -> None:
-        """Wave 36-A: алерт владельцу перед zombie process restart."""
+    async def _send_zombie_alert_to_owner(
+        self,
+        silence_sec: float,
+        consecutive: int,
+        *,
+        recent_escalations: int = 1,
+    ) -> None:
+        """Wave 36-A+C: алерт владельцу перед zombie process restart.
+
+        Wave 36-C: при ``recent_escalations >= _ZOMBIE_FAIL_LOUD_THRESHOLD``
+        переключается в fail-loud режим — отдельный critical-prefix alert,
+        чтобы владелец заметил architectural-уровень проблему (не одиночный
+        glitch). Stack trace или architectural review требуется.
+        """
         silence_min = int(silence_sec // 60)
         silence_s = int(silence_sec % 60)
-        msg = (
-            f"🧟 **Krab: zombie session — принудительный перезапуск**\n"
-            f"DC доступен, но MTProto session не отвечает {silence_min}м {silence_s}с.\n"
-            f"Session probe failures: {consecutive}/{_ZOMBIE_ESCALATION_THRESHOLD}.\n"
-            f"Выполняю `os._exit(78)` → launchd respawn."
-        )
+        if recent_escalations >= _ZOMBIE_FAIL_LOUD_THRESHOLD:
+            window_h = _ZOMBIE_FAIL_LOUD_WINDOW_SEC // 3600
+            msg = (
+                f"🚨 **КРИТИЧНО: повторяющиеся zombie restart'ы**\n\n"
+                f"Krab сделал **{recent_escalations}** zombie escalation за {window_h}h "
+                f"(threshold: {_ZOMBIE_FAIL_LOUD_THRESHOLD}).\n"
+                f"Текущий: тишина {silence_min}м {silence_s}с, probe failures "
+                f"{consecutive}/{_ZOMBIE_ESCALATION_THRESHOLD}.\n\n"
+                f"⚠️ Это указывает на **архитектурную проблему**, а не одиночный glitch:\n"
+                f"• MTProto session corruption (попробуй `sqlite3 .recover`)\n"
+                f"• Telegram-side rate limiting / FloodWait в фоне\n"
+                f"• pyrofork → telethon migration может потребоваться\n\n"
+                f"Выполняю `os._exit(78)` → launchd respawn, но **посмотри Sentry / логи**."
+            )
+        else:
+            msg = (
+                f"🧟 **Krab: zombie session — принудительный перезапуск**\n"
+                f"DC доступен, но MTProto session не отвечает {silence_min}м {silence_s}с.\n"
+                f"Session probe failures: {consecutive}/{_ZOMBIE_ESCALATION_THRESHOLD}.\n"
+                f"Recent zombie escalations: {recent_escalations}/{_ZOMBIE_FAIL_LOUD_THRESHOLD} "
+                f"(окно {_ZOMBIE_FAIL_LOUD_WINDOW_SEC // 3600}h).\n"
+                f"Выполняю `os._exit(78)` → launchd respawn."
+            )
         try:
             await self._send_proactive_watch_alert(msg)
         except Exception as _e:  # noqa: BLE001
@@ -224,15 +311,21 @@ class NetworkWatchdogMixin:
                                 threshold=_ZOMBIE_ESCALATION_THRESHOLD,
                             )
                             if _consecutive_zombie_failures >= _ZOMBIE_ESCALATION_THRESHOLD:
-                                # Zombie подтверждён — уведомляем и перезапускаем
+                                # Wave 36-C: записываем escalation в persistent history
+                                # и считаем количество за окно для fail-loud решения.
+                                recent_count = _record_zombie_escalation()
                                 logger.error(
                                     "telegram_session_zombie_escalation",
                                     action="process_exit_for_launchd_respawn",
                                     consecutive_failures=_consecutive_zombie_failures,
                                     silence_sec=round(silence_sec, 1),
+                                    recent_escalations_24h=recent_count,
+                                    fail_loud=recent_count >= _ZOMBIE_FAIL_LOUD_THRESHOLD,
                                 )
                                 await self._send_zombie_alert_to_owner(
-                                    silence_sec, _consecutive_zombie_failures
+                                    silence_sec,
+                                    _consecutive_zombie_failures,
+                                    recent_escalations=recent_count,
                                 )
                                 # os._exit обходит asyncio cleanup — launchd respawn'нет через exit 78
                                 os._exit(78)  # noqa: SIM905 — намеренно, нет safe shutdown
