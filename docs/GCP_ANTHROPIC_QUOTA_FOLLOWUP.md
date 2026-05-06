@@ -88,14 +88,24 @@ quotas на Vertex AI:
 
 | Model family | Recommended RPM |
 |---|---|
-| Haiku 3, 3.5, 4.5 | **120** RPM каждая (~170k/day) |
-| Sonnet 3.5, 3.7, 4.5, 4.6 | **60** RPM каждая (~85k/day) |
-| Opus 4.5, 4.6, 4.7 | **30** RPM каждая (~43k/day) |
+| Model family | RPM (target) | per day |
+|---|---|---|
+| **Anthropic** Haiku 3, 3.5, 4.5 | **150** RPM каждая | ~216k/day |
+| **Anthropic** Sonnet 3.5, 3.7, 4.5, 4.6 | **75** RPM каждая | ~108k/day |
+| **Anthropic** Opus 4.5, 4.6, 4.7 | **40** RPM каждая | ~57k/day |
+| **Mistral** Large, Codestral | **60** RPM | ~85k/day |
+| **Meta** Llama 4 Maverick, Scout | **60** RPM | ~85k/day |
+| **AI21** Jamba | **30** RPM | ~43k/day |
 
-**Logic max-reasonable**: 120 Haiku одобрят без вопросов (Google has plenty
-Haiku capacity), 60 Sonnet — corporate-tier active apps, 30 Opus — упирается
-в Anthropic capacity (выше = "show business case" pushback risk). Через
-2-4 недели actual usage → 2-3x bump через re-file.
+**Logic max-reasonable +25% bump**: Sales POC уже на стороне approval, так
+что можно просить чуть выше "modest" не наглеть. Эти числа: 150 Haiku
+безоговорочно одобрят, 75 Sonnet — corporate-active range, 40 Opus —
+upper bound где Anthropic ещё approves без push-back. Через 2-4 недели
+actual usage → 2-3x bump через re-file (всегда можно).
+
+**Other Vertex partners** (после Anthropic round): Mistral / Llama / AI21
+популярные, уже available в Vertex Model Garden, можно запросить параллельно
+или отдельным POC handoff.
 
 Логика: Haiku — cheap & fast, можно запросить больше; Opus — premium,
 короткие, scarce. Numbers выбраны как "modest with headroom" — Sales
