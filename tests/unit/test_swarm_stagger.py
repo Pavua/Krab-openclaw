@@ -58,10 +58,10 @@ async def test_stagger_sleep_between_clients(tmp_path):
     async def fake_sleep(delay: float) -> None:
         sleep_calls.append(delay)
 
-    with patch("src.userbot_bridge.config.load_swarm_team_accounts", return_value=accounts), \
-         patch("src.userbot_bridge.Client", side_effect=lambda *a, **kw: _make_fake_client()), \
-         patch("src.userbot_bridge.asyncio.sleep", side_effect=fake_sleep), \
-         patch("src.userbot_bridge.asyncio.wait_for", new=AsyncMock(return_value=None)):
+    with patch("src.userbot.swarm_team_clients.config.load_swarm_team_accounts", return_value=accounts), \
+         patch("src.userbot.swarm_team_clients.Client", side_effect=lambda *a, **kw: _make_fake_client()), \
+         patch("src.userbot.swarm_team_clients.asyncio.sleep", side_effect=fake_sleep), \
+         patch("src.userbot.swarm_team_clients.asyncio.wait_for", new=AsyncMock(return_value=None)):
         started = await bot._start_swarm_team_clients()
 
     assert len(started) == 3
@@ -84,10 +84,10 @@ async def test_warmup_gate_skips_on_second_start(tmp_path):
     cl2 = _make_fake_client()
     clients = iter([cl1, cl2])
 
-    with patch("src.userbot_bridge.config.load_swarm_team_accounts", return_value=accounts), \
-         patch("src.userbot_bridge.Client", side_effect=lambda *a, **kw: next(clients)), \
-         patch("src.userbot_bridge.asyncio.sleep", new=AsyncMock()), \
-         patch("src.userbot_bridge.asyncio.wait_for", new=AsyncMock(return_value=None)):
+    with patch("src.userbot.swarm_team_clients.config.load_swarm_team_accounts", return_value=accounts), \
+         patch("src.userbot.swarm_team_clients.Client", side_effect=lambda *a, **kw: next(clients)), \
+         patch("src.userbot.swarm_team_clients.asyncio.sleep", new=AsyncMock()), \
+         patch("src.userbot.swarm_team_clients.asyncio.wait_for", new=AsyncMock(return_value=None)):
         await bot._start_swarm_team_clients()
         await bot._start_swarm_team_clients()
 
@@ -104,8 +104,8 @@ async def test_empty_accounts_returns_empty(tmp_path):
     bot = KraabUserbot.__new__(KraabUserbot)
     bot._session_workdir = tmp_path
 
-    with patch("src.userbot_bridge.config.load_swarm_team_accounts", return_value={}), \
-         patch("src.userbot_bridge.asyncio.sleep", new=AsyncMock()) as mock_sleep:
+    with patch("src.userbot.swarm_team_clients.config.load_swarm_team_accounts", return_value={}), \
+         patch("src.userbot.swarm_team_clients.asyncio.sleep", new=AsyncMock()) as mock_sleep:
         result = await bot._start_swarm_team_clients()
 
     assert result == {}

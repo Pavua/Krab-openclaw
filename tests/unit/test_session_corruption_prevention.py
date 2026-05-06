@@ -341,7 +341,12 @@ def test_wal_mode_persists_on_reopen(tmp_session_dir):
 
 
 def test_synchronous_normal_set(tmp_session_dir):
-    """После patched open, synchronous должен быть NORMAL (=1)."""
+    """После patched open, synchronous должен быть FULL (=2).
+
+    Wave 6-A: bumped from NORMAL to FULL для atomic write guarantee.
+    Защищает от torn pages при power-loss / kernel-panic. 12+ часов
+    uptime при synchronous=NORMAL + WAL + macOS sleep cycle = corruption.
+    """
     pp.apply_pyrogram_sqlite_hardening()
     storage = _make_file_storage("test_sync", tmp_session_dir)
     _run_open(storage)
@@ -350,7 +355,7 @@ def test_synchronous_normal_set(tmp_session_dir):
         row = storage.conn.execute("PRAGMA synchronous").fetchone()
         assert row is not None
         # 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA
-        assert row[0] == 1, f"synchronous={row[0]}, ожидалось 1 (NORMAL)"
+        assert row[0] == 2, f"synchronous={row[0]}, ожидалось 2 (FULL, Wave 6-A)"
     finally:
         storage.conn.close()
 
@@ -378,7 +383,9 @@ def test_execute_pragmas_order_busy_timeout_first():
 
     pp._execute_pragmas(conn)
 
-    assert len(pragma_order) == 3
+    # Wave 14-J: расширили set до 6 PRAGMA — busy_timeout / journal_mode /
+    # synchronous / wal_autocheckpoint / temp_store / cache_size.
+    assert len(pragma_order) == 6
     assert "busy_timeout" in pragma_order[0].lower(), (
         f"busy_timeout должен быть первым, получено: {pragma_order[0]}"
     )
@@ -446,8 +453,8 @@ def test_execute_pragmas_tolerates_single_failure():
     # Не должно поднимать исключение
     pp._execute_pragmas(conn)
 
-    # Все 3 PRAGMA должны были попробоваться
-    assert call_count["n"] == 3
+    # Wave 14-J: 6 PRAGMA должны были попробоваться (не 3 как раньше).
+    assert call_count["n"] == 6
 
 
 # ---------------------------------------------------------------------------

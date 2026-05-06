@@ -430,7 +430,13 @@ def test_swarm_task_create_calls_board() -> None:
 
     def fake_create(**kwargs):
         captured.update(kwargs)
-        return SimpleNamespace(task_id="new-id", team=kwargs["team"], title=kwargs["title"])
+        # Session 39: router читает task.auto_execute (новое поле) → seed как False
+        return SimpleNamespace(
+            task_id="new-id",
+            team=kwargs["team"],
+            title=kwargs["title"],
+            auto_execute=False,
+        )
 
     fake_board = SimpleNamespace(create_task=fake_create)
     with patch("src.core.swarm_task_board.swarm_task_board", fake_board):

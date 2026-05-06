@@ -86,7 +86,7 @@ class TestDisabledByDefault:
                 assert executor._task is not None
                 executor.stop()
 
-        asyncio.get_event_loop().run_until_complete(_run())
+        asyncio.run(_run())
 
 
 # ---------------------------------------------------------------------------
@@ -399,4 +399,4 @@ class TestGetStatus:
                 executor.stop()
                 assert executor._started is False
 
-        asyncio.get_event_loop().run_until_complete(_run())
+        asyncio.run(_run())
