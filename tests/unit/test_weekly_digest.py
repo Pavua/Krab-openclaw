@@ -180,9 +180,9 @@ def test_render_digest_contains_sections(svc):
     )
 
     assert "Weekly Digest" in body
-    assert "## Swarm" in body
-    assert "## Cost" in body
-    assert "## Inbox" in body
+    assert "Swarm" in body
+    assert "Cost" in body
+    assert "Inbox" in body
     assert "5" in body  # total_rounds
     assert "0.0042" in body  # cost_usd
     assert "traders: 3" in body or "traders" in body
@@ -236,3 +236,156 @@ async def test_generate_digest_inbox_error(svc):
 
     assert result["ok"] is False
     assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# 10. _collect_bypass_perf: агрегирует top-3 kind/model (tmpdir + JSONL)
+# ---------------------------------------------------------------------------
+
+
+def test_collect_bypass_perf_top3(tmp_path, svc):
+    """JSONL с записями разных kind → top_kinds возвращает max 3 элемента."""
+    import json as _json
+
+    log = tmp_path / "bypass_perf.jsonl"
+    now = time.time()
+    # 4 записи cli, 2 vertex, 1 google-direct
+    records = (
+        [{"ts": now - 60, "kind": "cli", "model": "codex", "duration_sec": 22.0, "success": True}] * 4
+        + [{"ts": now - 120, "kind": "vertex", "model": "gemini-pro", "duration_sec": 10.0, "success": True}] * 2
+        + [{"ts": now - 180, "kind": "google-direct", "model": "gemini-flash", "duration_sec": 8.0, "success": False}]
+    )
+    with log.open("w") as fh:
+        for r in records:
+            fh.write(_json.dumps(r) + "\n")
+
+    with patch("src.core.weekly_digest._BYPASS_PERF_LOG", log):
+        result = WeeklyDigestService._collect_bypass_perf(window_days=7)
+
+    assert result["total_calls"] == 7
+    assert result["total_failures"] == 1
+    assert len(result["top_kinds"]) <= 3
+    # cli должен быть первым (4 вызова)
+    assert result["top_kinds"][0]["name"] == "cli"
+    assert result["top_kinds"][0]["count"] == 4
+    assert len(result["top_models"]) <= 3
+
+
+# ---------------------------------------------------------------------------
+# 11. _collect_bypass_perf: пустой файл → нули
+# ---------------------------------------------------------------------------
+
+
+def test_collect_bypass_perf_no_file(tmp_path):
+    """Если файла нет — возвращаем нулевую статистику без исключения."""
+    nonexistent = tmp_path / "does_not_exist.jsonl"
+    with patch("src.core.weekly_digest._BYPASS_PERF_LOG", nonexistent):
+        result = WeeklyDigestService._collect_bypass_perf(window_days=7)
+
+    assert result["total_calls"] == 0
+    assert result["top_kinds"] == []
+    assert result["top_models"] == []
+
+
+# ---------------------------------------------------------------------------
+# 12. _collect_cost_trend: delta% и top_models
+# ---------------------------------------------------------------------------
+
+
+def test_collect_cost_trend_delta_and_top_models(svc):
+    """Прошлая неделя $1, эта $1.5 → delta +50%."""
+    from src.core.cost_analytics import CallRecord
+
+    now = time.time()
+    week_start = now - 7 * 24 * 3600
+    # Прошлая неделя (8 дней назад)
+    old_call = CallRecord(
+        model_id="gemini-pro",
+        input_tokens=1000,
+        output_tokens=500,
+        cost_usd=1.0,
+        timestamp=now - 8 * 24 * 3600,
+    )
+    # Эта неделя (1 час назад)
+    new_call = CallRecord(
+        model_id="claude-opus",
+        input_tokens=2000,
+        output_tokens=1000,
+        cost_usd=1.5,
+        timestamp=now - 3600,
+    )
+
+    with patch("src.core.weekly_digest.cost_analytics") as mock_ca:
+        mock_ca._calls = [old_call, new_call]
+        result = WeeklyDigestService._collect_cost_trend(week_start)
+
+    assert abs(result["this_week_usd"] - 1.5) < 0.001
+    assert abs(result["prev_week_usd"] - 1.0) < 0.001
+    assert result["delta_pct"] == 50.0
+    assert len(result["top_models"]) == 1
+    assert result["top_models"][0]["model"] == "claude-opus"
+
+
+# ---------------------------------------------------------------------------
+# 13. _collect_memory_pressure: max swap и alerts_count
+# ---------------------------------------------------------------------------
+
+
+def test_collect_memory_pressure_alerts(tmp_path):
+    """JSONL с swap и alerts → max_swap и alerts_count корректны."""
+    import json as _json
+
+    log = tmp_path / "coexistence_monitor.log"
+    now = time.time()
+    rows = [
+        {"timestamp": now - 100, "swap_used_gb": 5.2, "combined_rss_gb": 3.1, "alerts": []},
+        {"timestamp": now - 200, "swap_used_gb": 14.5, "combined_rss_gb": 4.2, "alerts": ["swap_critical:14.5GB"]},
+        {"timestamp": now - 300, "swap_used_gb": 3.0, "combined_rss_gb": 2.0, "alerts": ["swap_warning:3.0GB", "rss_high"]},
+        # Старая запись — вне окна 7 дней
+        {"timestamp": now - 8 * 86400, "swap_used_gb": 99.0, "combined_rss_gb": 50.0, "alerts": ["old_alert"]},
+    ]
+    with log.open("w") as fh:
+        for r in rows:
+            fh.write(_json.dumps(r) + "\n")
+
+    with patch("src.core.weekly_digest._COEXISTENCE_LOG", log):
+        result = WeeklyDigestService._collect_memory_pressure(window_days=7)
+
+    assert result["max_swap_gb"] == 14.5
+    assert result["max_combined_rss_gb"] == 4.2
+    assert result["alerts_count"] == 3  # только 3 alerts в окне (не 4 из старой записи)
+
+
+# ---------------------------------------------------------------------------
+# 14. _render_digest: новые секции bypass + memory + cost trend
+# ---------------------------------------------------------------------------
+
+
+def test_render_digest_extended_sections():
+    """Все расширенные секции присутствуют при наличии данных."""
+    body = WeeklyDigestService._render_digest(
+        ts_now="2026-05-06T12:00:00+00:00",
+        swarm_data={"total_rounds": 10, "by_team": {"traders": 10}, "top_artifacts": []},
+        cost_data={"cost_week_usd": 2.34, "calls_count": 50, "total_tokens": 100000},
+        cost_trend={
+            "this_week_usd": 2.34,
+            "prev_week_usd": 2.03,
+            "delta_pct": 15.3,
+            "top_models": [{"model": "gemini-pro", "cost_usd": 2.34, "calls": 50}],
+        },
+        bypass_data={
+            "total_calls": 100,
+            "total_failures": 2,
+            "top_kinds": [{"name": "cli", "count": 80, "mean_sec": 22.3, "p95_sec": 44.1, "fail": 1}],
+            "top_models": [{"name": "codex/gpt-5.5", "count": 80, "mean_sec": 22.3, "p95_sec": 44.1, "fail": 1}],
+        },
+        memory_data={"alerts_count": 3, "max_swap_gb": 11.2, "max_combined_rss_gb": 4.5},
+        inbox_data={"attention_count": 0, "error_count": 0, "warning_count": 0, "items": []},
+    )
+
+    assert "Bypass Calls" in body
+    assert "cli" in body
+    assert "Memory" in body
+    assert "11.2" in body  # max swap
+    assert "+15.3%" in body  # cost trend
+    assert "gemini-pro" in body  # top cost model

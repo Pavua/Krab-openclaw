@@ -4,8 +4,10 @@ weekly_digest.py — еженедельная сводка активности 
 
 Собирает данные за последние 7 дней:
 - swarm rounds по командам + top artifacts;
-- cost за неделю;
-- inbox errors / attention items.
+- cost за неделю + cost trend vs предыдущая неделя;
+- top-3 моделей по вызовам (из cost_analytics + bypass_perf.jsonl);
+- inbox errors / attention items;
+- memory pressure (из coexistence_monitor.log).
 
 Записывает digest-item в inbox_service (аналогично ErrorDigest).
 """
@@ -13,16 +15,23 @@ weekly_digest.py — еженедельная сводка активности 
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from ..core.cost_analytics import cost_analytics
 from .inbox_service import inbox_service
 from .logger import get_logger
 from .swarm_artifact_store import swarm_artifact_store
+
+# Путь к JSONL-файлу с bypass latency записями
+_BYPASS_PERF_LOG = Path.home() / ".openclaw/krab_runtime_state/bypass_perf.jsonl"
+# Путь к логу мониторинга памяти
+_COEXISTENCE_LOG = Path.home() / ".openclaw/krab_runtime_state/coexistence_monitor.log"
 
 logger = get_logger(__name__)
 
@@ -64,6 +73,195 @@ class WeeklyDigestService:
         """Устанавливает async callback для Telegram delivery."""
         self._telegram_callback = cb
 
+    @staticmethod
+    def _collect_bypass_perf(window_days: int = 7) -> dict[str, Any]:
+        """
+        Читает bypass_perf.jsonl и возвращает top-3 kind/model по количеству вызовов.
+
+        Деградирует тихо при любых сбоях.
+        """
+        empty: dict[str, Any] = {
+            "total_calls": 0,
+            "total_failures": 0,
+            "top_kinds": [],
+            "top_models": [],
+        }
+        if not _BYPASS_PERF_LOG.exists():
+            return empty
+
+        cutoff = time.time() - window_days * 86400
+        by_kind: dict[str, dict[str, Any]] = defaultdict(
+            lambda: {"count": 0, "fail": 0, "durations": []}
+        )
+        by_model: dict[str, dict[str, Any]] = defaultdict(
+            lambda: {"count": 0, "fail": 0, "durations": []}
+        )
+        total_calls = 0
+        total_failures = 0
+
+        try:
+            with _BYPASS_PERF_LOG.open() as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        r = json.loads(line)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if r.get("ts", 0) < cutoff:
+                        continue
+                    total_calls += 1
+                    kind = str(r.get("kind") or "unknown")
+                    model = str(r.get("model") or "unknown")
+                    dur = r.get("duration_sec", 0.0)
+                    ok = r.get("success", True)
+                    if not ok:
+                        total_failures += 1
+                    by_kind[kind]["count"] += 1
+                    by_kind[kind]["fail"] += 0 if ok else 1
+                    by_kind[kind]["durations"].append(dur)
+                    by_model[model]["count"] += 1
+                    by_model[model]["fail"] += 0 if ok else 1
+                    by_model[model]["durations"].append(dur)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("weekly_digest_bypass_read_failed", error=str(exc))
+            return empty
+
+        def _p95(durs: list[float]) -> float:
+            """Перцентиль p95 из списка длительностей."""
+            if not durs:
+                return 0.0
+            s = sorted(durs)
+            return round(s[min(int(len(s) * 0.95), len(s) - 1)], 1)
+
+        def _mean(durs: list[float]) -> float:
+            """Среднее значение длительностей."""
+            return round(sum(durs) / len(durs), 1) if durs else 0.0
+
+        # Top-3 по количеству вызовов
+        top_kinds = sorted(by_kind.items(), key=lambda x: -x[1]["count"])[:3]
+        top_kinds_out = [
+            {
+                "name": k,
+                "count": v["count"],
+                "mean_sec": _mean(v["durations"]),
+                "p95_sec": _p95(v["durations"]),
+                "fail": v["fail"],
+            }
+            for k, v in top_kinds
+        ]
+        top_models = sorted(by_model.items(), key=lambda x: -x[1]["count"])[:3]
+        top_models_out = [
+            {
+                "name": m,
+                "count": v["count"],
+                "mean_sec": _mean(v["durations"]),
+                "p95_sec": _p95(v["durations"]),
+                "fail": v["fail"],
+            }
+            for m, v in top_models
+        ]
+        return {
+            "total_calls": total_calls,
+            "total_failures": total_failures,
+            "top_kinds": top_kinds_out,
+            "top_models": top_models_out,
+        }
+
+    @staticmethod
+    def _collect_cost_trend(week_start_ts: float) -> dict[str, Any]:
+        """
+        Возвращает cost этой и прошлой недели + delta% + top-3 модели по стоимости.
+
+        Использует cost_analytics._calls (in-memory). Деградирует тихо.
+        """
+        try:
+            prev_week_start = week_start_ts - 7 * 24 * 3600
+            this_calls = [r for r in cost_analytics._calls if r.timestamp >= week_start_ts]
+            prev_calls = [
+                r for r in cost_analytics._calls if prev_week_start <= r.timestamp < week_start_ts
+            ]
+            this_cost = sum(r.cost_usd for r in this_calls)
+            prev_cost = sum(r.cost_usd for r in prev_calls)
+
+            # delta в процентах (None если прошлой недели нет)
+            delta_pct: float | None = None
+            if prev_cost > 0:
+                delta_pct = round((this_cost - prev_cost) / prev_cost * 100, 1)
+
+            # Top-3 модели этой недели по стоимости
+            by_model: dict[str, dict[str, float]] = defaultdict(lambda: {"cost": 0.0, "calls": 0.0})
+            for r in this_calls:
+                by_model[r.model_id]["cost"] += r.cost_usd
+                by_model[r.model_id]["calls"] += 1  # type: ignore[assignment]
+            top_models = sorted(by_model.items(), key=lambda x: -x[1]["cost"])[:3]
+            top_models_out = [
+                {"model": m, "cost_usd": round(v["cost"], 4), "calls": int(v["calls"])}
+                for m, v in top_models
+            ]
+
+            return {
+                "this_week_usd": round(this_cost, 4),
+                "prev_week_usd": round(prev_cost, 4),
+                "delta_pct": delta_pct,
+                "top_models": top_models_out,
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("weekly_digest_cost_trend_failed", error=str(exc))
+            return {
+                "this_week_usd": 0.0,
+                "prev_week_usd": 0.0,
+                "delta_pct": None,
+                "top_models": [],
+            }
+
+    @staticmethod
+    def _collect_memory_pressure(window_days: int = 7) -> dict[str, Any]:
+        """
+        Читает coexistence_monitor.log и возвращает max swap + количество alerts.
+
+        Деградирует тихо при любых сбоях.
+        """
+        empty: dict[str, Any] = {"alerts_count": 0, "max_swap_gb": 0.0, "max_combined_rss_gb": 0.0}
+        if not _COEXISTENCE_LOG.exists():
+            return empty
+
+        cutoff = time.time() - window_days * 86400
+        alerts_count = 0
+        max_swap = 0.0
+        max_rss = 0.0
+
+        try:
+            with _COEXISTENCE_LOG.open() as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if d.get("timestamp", 0) < cutoff:
+                        continue
+                    alerts_list = d.get("alerts") or []
+                    alerts_count += len(alerts_list)
+                    swap = d.get("swap_used_gb", 0.0)
+                    rss = d.get("combined_rss_gb", 0.0)
+                    if swap > max_swap:
+                        max_swap = swap
+                    if rss > max_rss:
+                        max_rss = rss
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("weekly_digest_memory_pressure_failed", error=str(exc))
+            return empty
+
+        return {
+            "alerts_count": alerts_count,
+            "max_swap_gb": round(max_swap, 1),
+            "max_combined_rss_gb": round(max_rss, 1),
+        }
+
     async def generate_digest(self) -> dict[str, Any]:
         """
         Собирает данные за 7 дней и записывает weekly digest в inbox.
@@ -80,6 +278,15 @@ class WeeklyDigestService:
         # --- Cost за неделю ---
         cost_data = self._collect_cost_data(week_start)
 
+        # --- Cost trend: эта vs прошлая неделя + top-3 модели ---
+        cost_trend = self._collect_cost_trend(week_start)
+
+        # --- Bypass perf: top-3 kind/model за неделю ---
+        bypass_data = self._collect_bypass_perf(window_days=7)
+
+        # --- Memory pressure: swap max + alerts ---
+        memory_data = self._collect_memory_pressure(window_days=7)
+
         # --- Inbox: attention items и ошибки ---
         inbox_data = self._collect_inbox_data()
 
@@ -88,6 +295,9 @@ class WeeklyDigestService:
             ts_now=ts_now,
             swarm_data=swarm_data,
             cost_data=cost_data,
+            cost_trend=cost_trend,
+            bypass_data=bypass_data,
+            memory_data=memory_data,
             inbox_data=inbox_data,
         )
 
@@ -246,13 +456,16 @@ class WeeklyDigestService:
         ts_now: str,
         swarm_data: dict[str, Any],
         cost_data: dict[str, Any],
+        cost_trend: dict[str, Any] | None = None,
+        bypass_data: dict[str, Any] | None = None,
+        memory_data: dict[str, Any] | None = None,
         inbox_data: dict[str, Any],
     ) -> str:
-        """Формирует markdown-тело Weekly Digest."""
+        """Формирует markdown-тело Weekly Digest с расширенными секциями."""
         lines = [
             f"**🦀 Weekly Digest** — {ts_now}",
             "",
-            "## Swarm",
+            "## 🤖 Swarm",
         ]
 
         total_rounds = swarm_data.get("total_rounds", 0)
@@ -272,9 +485,10 @@ class WeeklyDigestService:
                 ts_str = a.get("timestamp_iso") or ""
                 lines.append(f"  - [{a['team']}] {a['topic']} ({ts_str[:16]})")
 
+        # --- Секция Cost ---
         lines += [
             "",
-            "## Cost",
+            "## 💸 Cost",
         ]
         cost_usd = cost_data.get("cost_week_usd", 0.0)
         calls_count = cost_data.get("calls_count", 0)
@@ -283,9 +497,66 @@ class WeeklyDigestService:
         lines.append(f"- Вызовов модели: {calls_count}")
         lines.append(f"- Токенов суммарно: {total_tokens:,}")
 
+        # Cost trend: delta vs прошлая неделя + top-3 модели
+        if cost_trend:
+            prev_cost = cost_trend.get("prev_week_usd", 0.0)
+            delta_pct = cost_trend.get("delta_pct")
+            if delta_pct is not None:
+                sign = "+" if delta_pct >= 0 else ""
+                trend_str = f"{sign}{delta_pct:.1f}% vs предыдущая неделя (${prev_cost:.4f})"
+                lines.append(f"- Динамика: {trend_str}")
+            top_cost_models = cost_trend.get("top_models") or []
+            if top_cost_models:
+                lines.append("- Top модели по стоимости:")
+                for m in top_cost_models:
+                    lines.append(f"  - {m['model']}: ${m['cost_usd']:.4f} ({m['calls']} вызовов)")
+
+        # --- Секция Bypass Calls ---
+        if bypass_data and bypass_data.get("total_calls", 0) > 0:
+            lines += [
+                "",
+                "## 🔌 Bypass Calls",
+            ]
+            total_bp = bypass_data.get("total_calls", 0)
+            total_bp_fail = bypass_data.get("total_failures", 0)
+            lines.append(f"- Всего bypass вызовов: **{total_bp}** (сбоев: {total_bp_fail})")
+            top_kinds = bypass_data.get("top_kinds") or []
+            if top_kinds:
+                lines.append("- Top по kind:")
+                for k in top_kinds:
+                    lines.append(
+                        f"  - {k['name']}: {k['count']} "
+                        f"(mean {k['mean_sec']}s, p95 {k['p95_sec']}s)"
+                    )
+            top_bp_models = bypass_data.get("top_models") or []
+            if top_bp_models:
+                lines.append("- Top модели:")
+                for m in top_bp_models:
+                    lines.append(f"  - {m['name']}: {m['count']} вызовов (mean {m['mean_sec']}s)")
+
+        # --- Секция Memory Pressure ---
+        if memory_data:
+            max_swap = memory_data.get("max_swap_gb", 0.0)
+            alerts_cnt = memory_data.get("alerts_count", 0)
+            max_rss = memory_data.get("max_combined_rss_gb", 0.0)
+            # Показываем секцию только если есть что сообщить
+            if max_swap > 0 or alerts_cnt > 0:
+                lines += [
+                    "",
+                    "## 🖥️ Memory",
+                ]
+                lines.append(f"- Max swap за неделю: **{max_swap} GB**")
+                if max_rss > 0:
+                    lines.append(f"- Max RSS (combined): {max_rss} GB")
+                if alerts_cnt > 0:
+                    lines.append(f"- ⚠️ Memory alerts: **{alerts_cnt}**")
+                else:
+                    lines.append("- Критических alerts не было")
+
+        # --- Секция Inbox / Attention ---
         lines += [
             "",
-            "## Inbox / Attention",
+            "## 📥 Inbox / Attention",
         ]
         attention_count = inbox_data.get("attention_count", 0)
         error_count = inbox_data.get("error_count", 0)
