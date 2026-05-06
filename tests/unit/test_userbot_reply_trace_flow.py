@@ -49,7 +49,11 @@ def test_record_incoming_reply_keeps_same_trace_and_marks_request_done(
     """Ответ должен закрывать тот же inbox item, а не создавать новый след рядом."""
     bot = _build_bot()
     inbox = InboxService(state_path=tmp_path / "inbox.json")
+    # Wave 31-F: relay_inbox mixin использует свой module-level import inbox_service
+    from src.userbot import relay_inbox as _relay_inbox_module  # noqa: PLC0415
+
     monkeypatch.setattr(userbot_bridge_module, "inbox_service", inbox)
+    monkeypatch.setattr(_relay_inbox_module, "inbox_service", inbox)
     message = _make_message(chat_id=123, message_id=41, text="Проверь reply trail")
 
     incoming = bot._sync_incoming_message_to_inbox(

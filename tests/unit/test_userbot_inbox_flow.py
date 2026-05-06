@@ -99,7 +99,12 @@ def _run_inbox_sync(
     is_reply_to_me: bool,
 ) -> dict[str, object]:
     """Вызывает transport->inbox helper напрямую."""
+    # Wave 31-F: метод переехал в src.userbot.relay_inbox — патчим оба модуля
+    # для обратной совместимости (bridge.inbox_service) + реального вызова.
+    from src.userbot import relay_inbox as _relay_inbox_module  # noqa: PLC0415
+
     monkeypatch.setattr(userbot_bridge_module, "inbox_service", inbox)
+    monkeypatch.setattr(_relay_inbox_module, "inbox_service", inbox)
     return bot._sync_incoming_message_to_inbox(
         message=message,
         user=message.from_user,
