@@ -59,12 +59,16 @@ def test_process_video_message_invokes_perceptor_for_all_video_kinds(tmp_path, k
 
     with (
         patch("src.modules.perceptor.process_video_message", side_effect=fake_perceptor),
-        patch("src.userbot_bridge.config", SimpleNamespace(
-            VIDEO_DOWNLOAD_DIR=str(tmp_path),
-            VIDEO_DOWNLOAD_TIMEOUT_SEC=5.0,
-            VIDEO_DOWNLOAD_MAX_BYTES=10 * 1024 * 1024,
-            VIDEO_MAX_FRAMES=3,
-        )),
+        # Wave 31-H: media-методы переехали в src.userbot.media_processors
+        patch(
+            "src.userbot.media_processors.config",
+            SimpleNamespace(
+                VIDEO_DOWNLOAD_DIR=str(tmp_path),
+                VIDEO_DOWNLOAD_TIMEOUT_SEC=5.0,
+                VIDEO_DOWNLOAD_MAX_BYTES=10 * 1024 * 1024,
+                VIDEO_MAX_FRAMES=3,
+            ),
+        ),
     ):
         result = asyncio.run(
             bot._process_video_message(
@@ -122,10 +126,13 @@ def test_process_video_message_too_large_skips(tmp_path):
             "src.modules.perceptor.process_video_message",
             side_effect=AssertionError("perceptor не должен вызываться"),
         ),
-        patch("src.userbot_bridge.config", SimpleNamespace(
-            VIDEO_DOWNLOAD_DIR=str(tmp_path),
-            VIDEO_DOWNLOAD_MAX_BYTES=1024,
-        )),
+        patch(
+            "src.userbot.media_processors.config",
+            SimpleNamespace(
+                VIDEO_DOWNLOAD_DIR=str(tmp_path),
+                VIDEO_DOWNLOAD_MAX_BYTES=1024,
+            ),
+        ),
     ):
         result = asyncio.run(
             bot._process_video_message(
@@ -149,9 +156,9 @@ def test_describe_video_frame_aggregates_stream_chunks():
             yield ch
 
     with (
-        patch("src.userbot_bridge.openclaw_client") as mock_client,
+        patch("src.userbot.media_processors.openclaw_client") as mock_client,
         patch(
-            "src.userbot_bridge.config",
+            "src.userbot.media_processors.config",
             SimpleNamespace(VIDEO_FRAME_DESCRIBE_TIMEOUT_SEC=10.0),
         ),
     ):
@@ -170,9 +177,9 @@ def test_describe_video_frame_returns_empty_on_error():
         yield  # pragma: no cover — make это async generator
 
     with (
-        patch("src.userbot_bridge.openclaw_client") as mock_client,
+        patch("src.userbot.media_processors.openclaw_client") as mock_client,
         patch(
-            "src.userbot_bridge.config",
+            "src.userbot.media_processors.config",
             SimpleNamespace(VIDEO_FRAME_DESCRIBE_TIMEOUT_SEC=10.0),
         ),
     ):
@@ -185,7 +192,7 @@ def test_describe_video_frame_returns_empty_on_error():
 def test_describe_video_frame_empty_bytes_short_circuits():
     """Пустой frame_bytes → пустая строка без обращения к openclaw."""
     bot = _stub_bot()
-    with patch("src.userbot_bridge.openclaw_client") as mock_client:
+    with patch("src.userbot.media_processors.openclaw_client") as mock_client:
         mock_client.send_message_stream = MagicMock(
             side_effect=AssertionError("не должно вызываться")
         )
