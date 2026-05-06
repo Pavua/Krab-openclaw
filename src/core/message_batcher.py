@@ -47,8 +47,9 @@ FORWARD_BATCH_WINDOW_SEC = float(os.environ.get("KRAB_FORWARD_BATCH_WINDOW_SEC",
 FORWARD_BATCH_MAX = int(os.environ.get("KRAB_FORWARD_BATCH_MAX", "20"))
 
 # Wave 33-C: bulk forward mode — активируется при массовой пересылке (100+ сообщений)
-BULK_MAX_BATCH_SIZE = int(os.environ.get("KRAB_BULK_FORWARD_MAX_BATCH", "200"))
-BULK_WINDOW_SEC = float(os.environ.get("KRAB_BULK_FORWARD_WINDOW_SEC", "60"))
+# Wave 33-C-fix: window до 180s — selecting 100 messages tap-by-tap занимает 1-2 мин
+BULK_MAX_BATCH_SIZE = int(os.environ.get("KRAB_BULK_FORWARD_MAX_BATCH", "300"))
+BULK_WINDOW_SEC = float(os.environ.get("KRAB_BULK_FORWARD_WINDOW_SEC", "180"))
 BULK_DETECTION_THRESHOLD = int(os.environ.get("KRAB_BULK_FORWARD_DETECTION_THRESHOLD", "5"))
 BULK_DETECTION_WINDOW_SEC = float(os.environ.get("KRAB_BULK_FORWARD_DETECTION_WINDOW_SEC", "5"))
 
