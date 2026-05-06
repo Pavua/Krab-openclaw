@@ -46,7 +46,6 @@ from .core.routing_errors import RouterError, user_message_for_surface
 from .core.scheduler import krab_scheduler
 from .core.sender_context import _extract_forward_origin_parts
 from .core.silence_mode import silence_manager
-from .core.silence_schedule import silence_schedule_manager
 from .core.spam_filter import is_bulk_sender as _is_bulk_sender_ext
 from .core.swarm_auto_executor import swarm_auto_executor
 from .core.swarm_channels import swarm_channels
@@ -200,6 +199,7 @@ from .userbot.relay_inbox import (
     RelayInboxMixin,
 )
 from .userbot.runtime_status import RuntimeStatusMixin
+from .userbot.service_orchestration import ServiceOrchestrationMixin
 from .userbot.session import SessionMixin
 from .userbot.startup_state import StartupStateMixin
 from .userbot.swarm_team_clients import SwarmTeamClientsMixin
@@ -271,6 +271,7 @@ class KraabUserbot(
     BackgroundLoopsMixin,  # Wave 31-I
     VoiceHandlersMixin,  # Wave 31-J
     ProactiveWatchMixin,  # Wave 31-K
+    ServiceOrchestrationMixin,  # Wave 31-L
 ):
     """
     Класс KraabUserbot.
@@ -1558,12 +1559,6 @@ class KraabUserbot(
             )
             return {"exported": False, "path": str(dest), "error": str(exc), "reason": reason}
 
-    def _ensure_maintenance_started(self) -> None:
-        """Запускает maintenance-задачу model_manager, если она еще не активна."""
-        if self.maintenance_task and not self.maintenance_task.done():
-            return
-        self.maintenance_task = asyncio.create_task(self._safe_maintenance())
-
     @property
     def _owner_notify_target(self) -> int | str:
         """
@@ -1581,33 +1576,6 @@ class KraabUserbot(
             except ValueError:
                 pass
         return "me"
-
-    def _ensure_silence_schedule_started(self) -> None:
-        """Запускает фоновый loop проверки расписания ночного режима."""
-        if self._silence_schedule_task and not self._silence_schedule_task.done():
-            return
-
-        def _apply_mute() -> None:
-            silence_manager.mute_global(minutes=480)  # максимум 8 часов запас
-
-        def _remove_mute() -> None:
-            silence_manager.unmute_global()
-
-        self._silence_schedule_task = asyncio.create_task(
-            silence_schedule_manager.run_loop(_apply_mute, _remove_mute)
-        )
-
-    def _ensure_memory_indexer_started(self) -> None:
-        """Lazy boot Memory Indexer Worker (Phase 4)."""
-        if self._memory_indexer_task and not self._memory_indexer_task.done():
-            return
-        try:
-            indexer = get_indexer()
-            self._memory_indexer_task = asyncio.create_task(indexer.start())
-            self._memory_indexer_task.add_done_callback(self._log_background_task_exception_cb)
-            logger.info("memory_indexer_supervisor_started")
-        except Exception as exc:
-            logger.warning("memory_indexer_start_failed", error=str(exc), non_fatal=True)
 
     async def _try_reconnect_pyrofork(self, client: "Client") -> bool:
         """Wave 33-A: корректный reconnect для pyrofork 2.3.69.
@@ -2025,100 +1993,6 @@ class KraabUserbot(
         except Exception as exc:  # noqa: BLE001
             logger.warning("forced_pyrofork_reinit_failed", error=str(exc)[:200])
             raise
-
-    def _sync_scheduler_runtime(self) -> None:
-        """
-        Синхронизирует состояние scheduler с runtime:
-        - при enabled + connected: bind sender и старт;
-        - иначе: безопасная остановка.
-        """
-        scheduler_enabled = bool(getattr(config, "SCHEDULER_ENABLED", False))
-        client_connected = bool(self.client and self.client.is_connected)
-
-        if scheduler_enabled and client_connected:
-            krab_scheduler.bind_sender(self._send_scheduled_message)
-            # Перенаправлять напоминания из групп в DM владельца
-            if self.me:
-                krab_scheduler.bind_owner_chat_id(str(self.me.id))
-            if not krab_scheduler.is_started:
-                krab_scheduler.start()
-                logger.info("scheduler_runtime_started")
-
-            # Swarm scheduler — рекуррентные автономные прогоны
-            if config.SWARM_AUTONOMOUS_ENABLED and self.me:
-                owner_chat_id = str(self.me.id)
-                system_prompt = self._build_system_prompt_for_sender(
-                    is_allowed_sender=True,
-                    access_level="owner",
-                )
-
-                def _swarm_router_factory(team_name: str):
-                    from .handlers.command_handlers import _AgentRoomRouterAdapter
-
-                    return _AgentRoomRouterAdapter(
-                        chat_id=f"swarm:scheduled:{team_name}",
-                        system_prompt=system_prompt,
-                        team_name=team_name,
-                    )
-
-                swarm_scheduler.bind(
-                    sender=self._send_scheduled_message,
-                    router_factory=_swarm_router_factory,
-                    owner_chat_id=owner_chat_id,
-                )
-                if not swarm_scheduler._started:
-                    swarm_scheduler.start()
-                    logger.info("swarm_scheduler_runtime_started")
-
-            # Swarm auto-executor — авто-выполнение задач board с auto_execute=True
-            if config.KRAB_SWARM_AUTO_EXECUTE_ENABLED and self.me:
-                _auto_owner_chat_id = str(self.me.id)
-                _auto_system_prompt = self._build_system_prompt_for_sender(
-                    is_allowed_sender=True,
-                    access_level="owner",
-                )
-
-                def _auto_executor_router_factory(team_name: str):
-                    from .handlers.command_handlers import _AgentRoomRouterAdapter
-
-                    return _AgentRoomRouterAdapter(
-                        chat_id=f"swarm:auto:{team_name}",
-                        system_prompt=_auto_system_prompt,
-                        team_name=team_name,
-                    )
-
-                swarm_auto_executor.bind(
-                    sender=self._send_scheduled_message,
-                    router_factory=_auto_executor_router_factory,
-                    owner_chat_id=_auto_owner_chat_id,
-                )
-                if not swarm_auto_executor._started:
-                    swarm_auto_executor.start()
-                    logger.info("swarm_auto_executor_runtime_started")
-
-            # Native cron scheduler — fallback когда OpenClaw CLI недоступен
-            # W32: cron health check выявил что bind_sender не вызывался →
-            # все 4 jobs были silent no-op (last_run_at обновлялся, но messages
-            # не отправлялись). Fix: bind callback который пропускает prompt
-            # через LLM и отправляет результат в Saved Messages owner'а.
-            cron_native_scheduler.bind_sender(self._run_cron_prompt_and_send)
-            if not cron_native_scheduler.is_running:
-                cron_native_scheduler.start()
-                logger.info("cron_native_scheduler_runtime_started")
-
-            # Swarm channels — live broadcast в Telegram-группы
-            if self.me and self.client:
-                swarm_channels.bind(client=self.client, owner_id=self.me.id)
-                logger.info("swarm_channels_bound", teams=list(swarm_channels.get_all_team_chats()))
-            return
-
-        if krab_scheduler.is_started:
-            krab_scheduler.stop()
-            logger.info(
-                "scheduler_runtime_stopped",
-                scheduler_enabled=scheduler_enabled,
-                client_connected=client_connected,
-            )
 
     # _repo_root, _translator_runtime_profile_path, get_translator_runtime_profile,
     # _translator_session_state_path, get_translator_session_state,
