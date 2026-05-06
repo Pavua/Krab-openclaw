@@ -2364,8 +2364,16 @@ class LLMFlowMixin:
                     elapsed_sec=round(_elapsed, 2),
                     has_images=bool(images_kw),
                 )
+                # Session 39: более информативный fallback с количеством секунд
+                # вместо «попробуй упростить» — даёт user'у понимание масштаба.
+                _elapsed_min = int(_elapsed // 60)
+                _elapsed_s = int(_elapsed % 60)
+                _cap_min = int(hard_cap_sec // 60)
                 fallback_text = (
-                    "⏱️ Ответ занимает слишком долго, попробуй ещё раз или упрости вопрос"
+                    f"⏱️ Запрос занял {_elapsed_min}м {_elapsed_s}с — "
+                    f"это превысило wall-clock лимит ({_cap_min} мин). "
+                    "Можно поднять лимит через `KRAB_LLM_WALL_CLOCK_CAP_SEC` "
+                    "или разбить задачу на части."
                 )
                 try:
                     if message is not None:

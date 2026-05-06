@@ -425,19 +425,23 @@ class Config:
     # Hard wall-clock cap на весь _run_llm_request_flow цикл (seconds).
     # Срабатывает даже если gateway активно обрабатывает запрос — просто слишком медленно.
     # Отличается от stagnation (тот срабатывает только при отсутствии активности в runs.sqlite).
-    # Default: 90s для текста, 180s для фото (overrides: KRAB_LLM_WALL_CLOCK_CAP_SEC /
-    # KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC). 0 = отключено.
-    KRAB_LLM_WALL_CLOCK_CAP_SEC: float = float(os.getenv("KRAB_LLM_WALL_CLOCK_CAP_SEC", "180"))
+    #
+    # Session 39 (07.05.2026): подняты defaults после feedback'а — Krab бросал
+    # длинные задачи (например 3D HTML animation) на ~3 мин. Реальные agentic
+    # задачи могут занимать 5-10 мин (codex-cli + multiple tool calls).
+    # Liveness check (zombie escalation) уже отдельно следит за полным висом.
+    # 0 = отключить полностью (только liveness защита остаётся).
+    KRAB_LLM_WALL_CLOCK_CAP_SEC: float = float(os.getenv("KRAB_LLM_WALL_CLOCK_CAP_SEC", "600"))
     KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC: float = float(
-        os.getenv("KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC", "180")
+        os.getenv("KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC", "600")
     )
     # Bug 14 (Session 32): outer hard cap на весь _run_llm_request_flow pipeline.
     # Защита от «бесконечной 'печатает...'» — даже если внутренние таймеры/streaming
     # зависают в любой стадии (smart routing classifier, tool exec loop, retries).
-    # 60s default (текстовый чат). codex-cli model — исключение: получает
-    # KRAB_LLM_WALL_CLOCK_CAP_SEC (180s) для совместимости с медленными CLI subprocess'ами.
+    # Session 39: 60s → 300s, чтобы non-cli модели тоже могли agentic.
+    # codex-cli model — исключение: получает KRAB_LLM_WALL_CLOCK_CAP_SEC (600s).
     # 0 = отключено.
-    KRAB_RESPONSE_HARD_CAP_SEC: float = float(os.getenv("KRAB_RESPONSE_HARD_CAP_SEC", "60"))
+    KRAB_RESPONSE_HARD_CAP_SEC: float = float(os.getenv("KRAB_RESPONSE_HARD_CAP_SEC", "300"))
     # Wave 14-D (Session 33): codex-cli first-chunk hang detection.
     # Если codex-cli не отдал первый chunk за этот timeout (default 45s), Краб
     # отменяет запрос и поднимает LLMRetryableError → auto-fallback (gateway

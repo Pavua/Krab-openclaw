@@ -263,11 +263,9 @@ class NetworkWatchdogMixin:
         Логика: отслеживаем _last_telegram_event_ts, обновляемый в _process_message.
         Не считаем offline, если userbot только что стартовал (grace period = threshold).
         """
-        from .userbot.network_watchdog import (  # noqa: PLC0415
-            _ZOMBIE_DOUBLE_SILENCE_SEC,
-            _ZOMBIE_ESCALATION_THRESHOLD,
-            _probe_telegram_session_alive,
-        )
+        # Константы и helper уже определены в этом модуле (см. верх файла) —
+        # никакого import не нужно. Wave 31-O: fix unresolved import после
+        # консолидации (раньше копия жила в bridge.py с другим relative path).
 
         _raw_threshold = int(getattr(config, "KRAB_NETWORK_OFFLINE_ALERT_SEC", 60) or 60)
         if _raw_threshold == 0:
