@@ -115,7 +115,11 @@ def test_main_no_alerts(tmp_path):
 
     with (
         patch.object(mod, "LOG_FILE", log_file),
-        patch.object(mod, "find_pids", side_effect=lambda patterns: [1] if "userbot" in patterns[0] else [2]),
+        patch.object(
+            mod,
+            "find_pids",
+            side_effect=lambda patterns, exclude=None: [1] if "userbot" in patterns[0] else [2],
+        ),
         patch("psutil.Process", side_effect=_mock_proc_factory),
         patch("psutil.virtual_memory", return_value=_vm),
         patch("psutil.swap_memory", return_value=_sw),
@@ -152,7 +156,11 @@ def test_main_combined_rss_alert(tmp_path):
 
     with (
         patch.object(mod, "LOG_FILE", log_file),
-        patch.object(mod, "find_pids", side_effect=lambda patterns: [1] if "userbot" in patterns[0] else [2]),
+        patch.object(
+            mod,
+            "find_pids",
+            side_effect=lambda patterns, exclude=None: [1] if "userbot" in patterns[0] else [2],
+        ),
         patch("psutil.Process", side_effect=_big_rss),
         patch("psutil.virtual_memory", return_value=_vm),
         patch("psutil.swap_memory", return_value=_sw),
@@ -190,7 +198,11 @@ def test_main_writes_jsonl(tmp_path):
 
     with (
         patch.object(mod, "LOG_FILE", log_file),
-        patch.object(mod, "find_pids", side_effect=lambda patterns: [10] if "userbot" in patterns[0] else [20]),
+        patch.object(
+            mod,
+            "find_pids",
+            side_effect=lambda patterns, exclude=None: [10] if "userbot" in patterns[0] else [20],
+        ),
         patch("psutil.Process", side_effect=_proc_rss),
         patch("psutil.virtual_memory", return_value=_vm),
         patch("psutil.swap_memory", return_value=_sw),
