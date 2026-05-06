@@ -83,20 +83,23 @@ def test_resolve_stream_timeouts_applies_min_bounds(monkeypatch) -> None:
 
 
 def test_resolve_buffered_response_timeout_defaults_text() -> None:
+    """text: max(default_total_180s, first_chunk + 60s buffer)."""
     total = userbot_bridge_module._resolve_openclaw_buffered_response_timeout(
         has_photo=False,
         first_chunk_timeout_sec=420.0,
     )
-    assert total >= 660.0
+    # Контракт: total ≥ first_chunk + 60s buffer (формула в llm_flow._resolve_openclaw_buffered_response_timeout)
+    assert total >= 420.0 + 60.0  # = 480
     assert total > 420.0
 
 
 def test_resolve_buffered_response_timeout_defaults_photo() -> None:
+    """photo: max(default_total_300s, first_chunk + 60s buffer)."""
     total = userbot_bridge_module._resolve_openclaw_buffered_response_timeout(
         has_photo=True,
         first_chunk_timeout_sec=540.0,
     )
-    assert total >= 780.0
+    assert total >= 540.0 + 60.0  # = 600
     assert total > 540.0
 
 

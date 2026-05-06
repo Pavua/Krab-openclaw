@@ -129,11 +129,14 @@ def test_daily_brief_sent_at_scheduled_hour():
             os.environ,
             {"KRAB_DAILY_BRIEF_ENABLED": "1", "KRAB_CHANNEL_DIGEST_CHAT_ID": ""},
         ),
+        # _owner_notify_target читает config.OWNER_NOTIFY_CHAT_ID; форсим 12345 для теста.
+        patch("src.userbot_bridge.config") as mock_cfg,
         patch("src.core.reply_scheduler.reply_scheduler", fake_scheduler),
         patch("src.core.proactive_suggestions.pattern_detector", fake_pattern),
         patch("src.core.daily_brief.DailyBriefBuilder", return_value=fake_builder),
-        patch("src.userbot_bridge.datetime") as mock_dt,
+        patch("src.userbot.background_loops.datetime") as mock_dt,
     ):
+        mock_cfg.OWNER_NOTIFY_CHAT_ID = 12345
         mock_dt.now.return_value.astimezone.return_value = fake_local_now
         asyncio.run(_run_one_tick(bot))
 
@@ -172,7 +175,7 @@ def test_channel_digest_sent_with_configured_chat():
             "src.core.channel_digest.channel_digest_builder",
             fake_digest_builder,
         ),
-        patch("src.userbot_bridge.datetime") as mock_dt,
+        patch("src.userbot.background_loops.datetime") as mock_dt,
     ):
         mock_dt.now.return_value.astimezone.return_value = fake_local_now
         asyncio.run(_run_one_tick(bot))
@@ -201,7 +204,7 @@ def test_fail_open_per_feature():
         ),
         patch("src.core.reply_scheduler.reply_scheduler", fake_scheduler),
         patch("src.core.proactive_suggestions.pattern_detector", fake_pattern),
-        patch("src.userbot_bridge.datetime") as mock_dt,
+        patch("src.userbot.background_loops.datetime") as mock_dt,
     ):
         mock_dt.now.return_value.astimezone.return_value = fake_local_now
         # Не должно бросить наружу — внутри логируется и идём дальше
