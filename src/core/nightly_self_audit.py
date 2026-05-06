@@ -95,7 +95,13 @@ async def audit_process_health() -> AuditFinding:
     uptime_sec = time.time() - psutil.Process(krab_pids[0]).create_time()
     uptime_h = uptime_sec / 3600
 
-    # Проверяем LaunchAgents через launchctl
+    # Wave 40-A-fix: правильная интерпретация launchctl list output
+    # Format: PID  EXIT_CODE  LABEL
+    #   PID = '-'  → loaded но idle (cron-style, ОК)
+    #   PID = N    → currently running (OK)
+    #   EXIT = 0   → last run successful или ещё не запускался (HEALTHY)
+    #   EXIT < 0   → killed signal (-15 SIGTERM = clean shutdown, OK)
+    #   EXIT > 0   → real error (FAILED)
     try:
         result = subprocess.run(
             ["launchctl", "list"],
@@ -104,20 +110,35 @@ async def audit_process_health() -> AuditFinding:
             timeout=5,
         )
         krab_lines = [line.strip() for line in result.stdout.splitlines() if "ai.krab." in line]
-        # PID != '-' означает процесс запущен
-        running = sum(1 for line in krab_lines if line and line.split()[0].lstrip("-").isdigit())
         total = len(krab_lines)
-        if total > 0 and running < total - 2:
+        healthy = 0
+        failed_labels = []
+        for line in krab_lines:
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            try:
+                exit_code = int(parts[1])
+            except ValueError:
+                continue
+            # exit_code 0 ИЛИ отрицательный (signal) = healthy
+            # положительный exit_code = real failure
+            if exit_code <= 0:
+                healthy += 1
+            else:
+                failed_labels.append(parts[2].split(".")[-1])
+
+        if failed_labels:
             return AuditFinding(
                 "Process",
                 "warn",
-                f"Uptime {uptime_h:.1f}h, но только {running}/{total} LaunchAgents активны",
-                "Проверить: launchctl list | grep ai.krab.",
+                f"Uptime {uptime_h:.1f}h, {healthy}/{total} healthy, {len(failed_labels)} failed",
+                f"Failed: {', '.join(failed_labels[:5])}",
             )
         return AuditFinding(
             "Process",
             "ok",
-            f"Uptime {uptime_h:.1f}h, {running}/{total} LaunchAgents активны",
+            f"Uptime {uptime_h:.1f}h, {healthy}/{total} LaunchAgents healthy",
         )
     except Exception as exc:
         # launchctl недоступен — минимально ok, только uptime
