@@ -218,10 +218,18 @@ async def test_bridge_ensure_started_mock_subprocess(
     mock_proc.returncode = None  # процесс "жив"
     mock_proc.pid = 42
 
-    async def fake_exec(*args: object, **kwargs: object) -> MagicMock:
+    async def fake_spawn(*args: object, **kwargs: object) -> MagicMock:
         return mock_proc
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
+
+    # Wave 16-Q: mock acp connection — без него initialize() требует real streams
+    import acp  # noqa: PLC0415
+
+    fake_conn = MagicMock()
+    fake_conn.initialize = AsyncMock(return_value=MagicMock())
+    fake_conn.close = AsyncMock()
+    monkeypatch.setattr(acp, "connect_to_agent", lambda *a, **kw: fake_conn)
 
     # _binary_available должен вернуть True для fake binary
     health = await bridge_with_fake_binary.health()

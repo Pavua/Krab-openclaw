@@ -13,6 +13,7 @@ Hermes binary может быть не установлен — bridge тихо 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import shutil
 import time
@@ -28,6 +29,9 @@ logger = get_logger(__name__)
 
 # Таймаут ожидания graceful shutdown subprocess (сек)
 _TERMINATE_TIMEOUT = 5
+
+# Wave 16-Q (Phase C): sentinel для finish событий в acp event queue
+_STREAM_FINISH_SENTINEL = object()
 
 
 def _resolve_hermes_binary() -> str | None:
@@ -70,11 +74,102 @@ def _resolve_hermes_binary() -> str | None:
 _HEALTH_CACHE_TTL = 60.0
 
 
+class _HermesEventClient:
+    """Wave 16-Q (Phase C): минимальный acp.Client impl для приёма session_update'ов.
+
+    acp protocol: agent (Hermes) шлёт `session_update` notifications с
+    SessionNotification.update — это chunked content для streaming. Мы
+    конвертируем их в StreamChunk и кладём в asyncio.Queue, откуда
+    HermesACPBridge.stream() их выбирает.
+
+    Не наследуемся напрямую от acp.Client — duck typing достаточен (acp
+    проверяет наличие методов через protocol). Это упрощает тесты.
+    """
+
+    def __init__(self) -> None:
+        # Per-session queues: session_id → Queue[StreamChunk | sentinel]
+        self._queues: dict[str, asyncio.Queue] = {}
+
+    def get_queue(self, session_id: str) -> asyncio.Queue:
+        """Возвращает queue для session_id, создавая её при первом обращении."""
+        q = self._queues.get(session_id)
+        if q is None:
+            q = asyncio.Queue()
+            self._queues[session_id] = q
+        return q
+
+    def drop_queue(self, session_id: str) -> None:
+        """Очищает queue после finish (память не утечёт)."""
+        self._queues.pop(session_id, None)
+
+    async def session_update(self, params: Any) -> None:
+        """ACP method: agent → client streaming chunk.
+
+        params — SessionNotification с полями: session_id, update.
+        update это discriminated union (text content, tool call, finish, etc.).
+        Phase C minimal: extract text → StreamChunk("text") → queue.
+        """
+        session_id = str(getattr(params, "session_id", "") or "")
+        update = getattr(params, "update", None)
+        if not session_id or update is None:
+            return
+
+        q = self.get_queue(session_id)
+
+        # Минимально: вытаскиваем text из любого update content
+        text = ""
+        # ACP SessionUpdate имеет sessionUpdate discriminator: agent_message_chunk,
+        # tool_call, end_of_turn и т.д. Phase C: только agent_message_chunk → text.
+        update_type = (
+            getattr(update, "sessionUpdate", None)
+            or getattr(update, "session_update", None)
+            or getattr(update, "type", "")
+        )
+        if str(update_type) in ("agent_message_chunk", "agentMessageChunk"):
+            content = getattr(update, "content", None)
+            text = getattr(content, "text", "") if content is not None else ""
+            if text:
+                await q.put(StreamChunk(text=text, chunk_type="text"))
+        elif str(update_type) in ("end_of_turn", "endOfTurn", "stop"):
+            await q.put(_STREAM_FINISH_SENTINEL)
+
+    # ──── Stub methods для других acp.Client callbacks ────
+    # Hermes может позвать их, но Phase C их не использует — возвращаем None/error.
+
+    async def request_permission(self, params: Any) -> Any:
+        """Permission request — Phase C: всегда deny (no tool execution)."""
+        return None
+
+    async def write_text_file(self, params: Any) -> None:
+        return None
+
+    async def read_text_file(self, params: Any) -> Any:
+        return None
+
+    async def create_terminal(self, params: Any) -> Any:
+        return None
+
+    async def kill_terminal(self, params: Any) -> None:
+        return None
+
+    async def terminal_output(self, params: Any) -> Any:
+        return None
+
+    async def release_terminal(self, params: Any) -> None:
+        return None
+
+    async def wait_for_terminal_exit(self, params: Any) -> Any:
+        return None
+
+
 class HermesACPBridge:
     """Subprocess wrapper над hermes acp. Лениво стартует Hermes process.
 
     Sessions кэшируются in-memory (chat_id/room -> session_id). На Krab restart
     ResponseDB Hermes сохраняет, но мы делаем new session при первом prompt.
+
+    Wave 16-Q (Phase C): full ACP wiring — connect_to_agent + Client callback
+    queue → stream() consumes chunks. Без binary всё равно gracefully degraded.
     """
 
     def __init__(
@@ -88,7 +183,10 @@ class HermesACPBridge:
         self._binary = binary or _resolve_hermes_binary() or self._auto_detect_binary()
         self._mcp_servers = list(mcp_servers or [])
         self._proc: asyncio.subprocess.Process | None = None
-        self._client: Any = None  # acp.Client instance — Phase C
+        # Wave 16-Q: connect_to_agent connection — управляет JSON-RPC через stdio
+        self._connection: Any = None
+        # Wave 16-Q: callback receiver для session_update notifications
+        self._event_client: _HermesEventClient | None = None
         self._sessions: dict[str, str] = {}  # logical_id -> acp session_id
         self._lock = asyncio.Lock()
         # (timestamp, EngineHealth) — кэш probe
@@ -118,14 +216,23 @@ class HermesACPBridge:
         return shutil.which(self._binary) is not None
 
     async def _ensure_started(self) -> bool:
-        """Lazy spawn hermes acp subprocess. Returns True если поднялся."""
+        """Lazy spawn hermes acp subprocess + acp connect_to_agent handshake (Phase C).
+
+        Returns True если subprocess запустился И acp protocol handshake
+        прошёл. Без connection возвращаем False — fallback на openclaw в
+        agent_engine_resolver.
+        """
         async with self._lock:
-            # Если уже работает — ничего не делаем
-            if self._proc is not None and self._proc.returncode is None:
+            if (
+                self._proc is not None
+                and self._proc.returncode is None
+                and self._connection is not None
+            ):
                 return True
             if not self._binary_available():
                 return False
             try:
+                # subprocess_exec — execFile-style (без shell), безопасно от injection
                 self._proc = await asyncio.create_subprocess_exec(
                     self._binary,
                     "acp",
@@ -134,8 +241,33 @@ class HermesACPBridge:
                     stderr=asyncio.subprocess.PIPE,
                     env=clean_subprocess_env(),
                 )
-                # Phase C: wire acp.Client.from_streams(stdin, stdout) здесь
-                logger.info("hermes_acp_started", pid=self._proc.pid, binary=self._binary)
+                # Wave 16-Q (Phase C): wire acp.connect_to_agent на stdio subprocess'a.
+                # connect_to_agent под капотом кидает task для приёма session_update
+                # notifications в self._event_client.
+                from acp import (  # noqa: PLC0415
+                    PROTOCOL_VERSION,
+                    InitializeRequest,
+                    connect_to_agent,
+                )
+
+                self._event_client = _HermesEventClient()
+                self._connection = connect_to_agent(
+                    self._event_client,
+                    self._proc.stdin,
+                    self._proc.stdout,
+                )
+                # ACP handshake: initialize() согласует версии protocol + capabilities
+                init_req = InitializeRequest(
+                    protocolVersion=PROTOCOL_VERSION,
+                    clientCapabilities={},
+                )
+                await asyncio.wait_for(self._connection.initialize(init_req), timeout=10.0)
+                logger.info(
+                    "hermes_acp_started",
+                    pid=self._proc.pid,
+                    binary=self._binary,
+                    protocol_version=PROTOCOL_VERSION,
+                )
                 return True
             except (FileNotFoundError, OSError) as exc:
                 logger.warning(
@@ -144,6 +276,22 @@ class HermesACPBridge:
                     error=str(exc),
                 )
                 self._proc = None
+                self._connection = None
+                self._event_client = None
+                return False
+            except Exception as exc:  # noqa: BLE001
+                # ACP handshake failure / import error — degraded, fallback на openclaw
+                logger.warning(
+                    "hermes_acp_handshake_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                if self._proc is not None:
+                    with contextlib.suppress(ProcessLookupError, OSError):
+                        self._proc.terminate()
+                self._proc = None
+                self._connection = None
+                self._event_client = None
                 return False
 
     async def health(self) -> EngineHealth:
@@ -199,10 +347,13 @@ class HermesACPBridge:
         *,
         ctx: dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        """Stream Hermes response.
+        """Stream Hermes response через ACP session_update notifications.
 
-        Phase B: stub — возвращает один error/info chunk.
-        Phase C: реальный acp.Client.prompt() loop здесь.
+        Wave 16-Q (Phase C):
+        1. health check → если unhealthy, finish chunk (engine_unavailable).
+        2. new_session() через ACP, либо resume по logical_id из ctx.
+        3. background prompt() task; параллельно consumer вытаскивает
+           StreamChunk из event_client.queue до finish sentinel.
         """
         health = await self.health()
         if not health.is_healthy:
@@ -213,20 +364,117 @@ class HermesACPBridge:
             )
             return
 
-        # Phase C: реальный acp streaming
+        if self._connection is None or self._event_client is None:
+            yield StreamChunk(
+                text="[Hermes connection not ready]",
+                chunk_type="finish",
+                finish_reason="engine_unavailable",
+            )
+            return
+
+        # Resolve session: ctx.logical_id → existing session_id или new
+        logical_id = str((ctx or {}).get("logical_id") or "default")
+        session_id = self._sessions.get(logical_id)
+        try:
+            if session_id is None:
+                from acp import NewSessionRequest  # noqa: PLC0415
+
+                # cwd + mcpServers — required по ACP protocol
+                resp = await asyncio.wait_for(
+                    self._connection.new_session(
+                        NewSessionRequest(
+                            cwd=str(Path.cwd()),
+                            mcpServers=self._mcp_servers,
+                        )
+                    ),
+                    timeout=10.0,
+                )
+                session_id = str(getattr(resp, "session_id", "") or getattr(resp, "sessionId", ""))
+                if session_id:
+                    self._sessions[logical_id] = session_id
+                else:
+                    yield StreamChunk(
+                        text="[Hermes: empty session_id from new_session]",
+                        chunk_type="finish",
+                        finish_reason="protocol_error",
+                    )
+                    return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("hermes_new_session_failed", error=str(exc))
+            yield StreamChunk(
+                text=f"[Hermes new_session failed: {exc}]",
+                chunk_type="finish",
+                finish_reason="protocol_error",
+            )
+            return
+
+        queue = self._event_client.get_queue(session_id)
+
+        # Background prompt task — он шлёт промпт, а мы консумим chunks
+        # из queue до finish sentinel или раннего exception.
+        async def _do_prompt() -> None:
+            from acp import PromptRequest  # noqa: PLC0415
+
+            try:
+                await self._connection.prompt(
+                    PromptRequest(
+                        sessionId=session_id,
+                        prompt=[{"type": "text", "text": prompt}],
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("hermes_prompt_failed", session_id=session_id, error=str(exc))
+            finally:
+                # Гарантируем finish sentinel чтобы consumer не висел
+                with contextlib.suppress(Exception):
+                    await queue.put(_STREAM_FINISH_SENTINEL)
+
+        prompt_task = asyncio.create_task(_do_prompt())
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is _STREAM_FINISH_SENTINEL:
+                    break
+                yield chunk
+        finally:
+            with contextlib.suppress(asyncio.CancelledError):
+                if not prompt_task.done():
+                    prompt_task.cancel()
+                    await asyncio.gather(prompt_task, return_exceptions=True)
+            self._event_client.drop_queue(session_id)
+
         yield StreamChunk(
-            text="[Hermes Phase C — streaming not yet implemented]",
+            text="",
             chunk_type="finish",
-            finish_reason="not_implemented",
+            finish_reason="end_of_turn",
         )
 
     async def cancel(self, session_id: str) -> bool:
-        """Отменяет сессию. Phase C: acp.Client.cancel(session_id)."""
-        return False
+        """Отменяет сессию через acp connection.cancel().
+
+        session_id — ACP session_id (не logical_id chat'а). Возвращает True
+        если cancel notification отправлено (без ack — fire-and-forget).
+        """
+        if self._connection is None or not session_id:
+            return False
+        try:
+            from acp import CancelNotification  # noqa: PLC0415
+
+            await self._connection.cancel(CancelNotification(sessionId=session_id))
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("hermes_cancel_failed", session_id=session_id, error=str(exc))
+            return False
 
     async def close(self) -> None:
-        """Graceful shutdown subprocess."""
+        """Graceful shutdown subprocess + acp connection."""
         async with self._lock:
+            # 1. Закрываем acp connection (это закрывает stdio pipes для agent)
+            if self._connection is not None:
+                with contextlib.suppress(Exception):
+                    await self._connection.close()
+                self._connection = None
+            # 2. Terminate subprocess если ещё жив
             if self._proc is not None and self._proc.returncode is None:
                 try:
                     self._proc.terminate()
@@ -238,7 +486,7 @@ class HermesACPBridge:
                 except ProcessLookupError:
                     pass  # процесс уже завершился
             self._proc = None
-            self._client = None
+            self._event_client = None
             self._sessions.clear()
             self._invalidate_health_cache()
 
