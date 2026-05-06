@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.krab.sentry-stale-resolver</string>
+
+    <key>Comment</key>
+    <string>Wave 42-A: ежедневный Sentry stale-issues resolver в 04:30 UTC.
+    Закрывает issues старше 7 дней, one-off (count le 2, 3+ days),
+    и соответствующие known_fixed паттернам (Wave 24-D / 25-D-fix / etc).
+    Безопасен: dry_run по умолчанию; live-mode только с --no-dry-run.
+    Лог: ~/.openclaw/krab_runtime_state/sentry_resolver.log</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/sentry_stale_resolver.py</string>
+        <string>--no-dry-run</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <!-- Каждый день в 04:30 UTC (после nightly-audit в 03:00 local) -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/krab_sentry_stale_resolver.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/krab_sentry_stale_resolver.err.log</string>
+
+    <!-- Читаем .env чтобы получить SENTRY_AUTH_TOKEN и прочие переменные -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONIOENCODING</key>
+        <string>utf-8</string>
+        <!-- SENTRY_AUTH_TOKEN инжектируется через wrapper (загружает .env) -->
+        <key>ENV_FILE</key>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/.env</string>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
