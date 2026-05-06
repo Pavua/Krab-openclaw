@@ -88,9 +88,14 @@ quotas на Vertex AI:
 
 | Model family | Recommended RPM |
 |---|---|
-| Haiku 3, 3.5, 4.5 | **30** RPM каждая |
-| Sonnet 3.5, 3.7, 4.5, 4.6 | **20** RPM каждая |
-| Opus 4.5, 4.6, 4.7 | **10** RPM каждая |
+| Haiku 3, 3.5, 4.5 | **120** RPM каждая (~170k/day) |
+| Sonnet 3.5, 3.7, 4.5, 4.6 | **60** RPM каждая (~85k/day) |
+| Opus 4.5, 4.6, 4.7 | **30** RPM каждая (~43k/day) |
+
+**Logic max-reasonable**: 120 Haiku одобрят без вопросов (Google has plenty
+Haiku capacity), 60 Sonnet — corporate-tier active apps, 30 Opus — упирается
+в Anthropic capacity (выше = "show business case" pushback risk). Через
+2-4 недели actual usage → 2-3x bump через re-file.
 
 Логика: Haiku — cheap & fast, можно запросить больше; Opus — premium,
 короткие, scarce. Numbers выбраны как "modest with headroom" — Sales
