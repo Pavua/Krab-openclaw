@@ -23,6 +23,7 @@ from ...core.access_control import AccessLevel
 from ...core.exceptions import UserInputError
 from ...core.logger import get_logger
 from ...openclaw_client import openclaw_client as _openclaw_client_default
+from ...skills.youtube_metadata import fetch_yt_metadata, format_yt_metadata
 
 if TYPE_CHECKING:
     pass
@@ -69,6 +70,21 @@ _YT_URL_RE = re.compile(
 _YT_PROMPT_TEMPLATE = (
     "Найди информацию об этом YouTube видео: {url}. "
     "Покажи: название, автор, длительность, дата, описание (кратко)."
+)
+
+# Prompt когда oEmbed уже дал базовые данные — просим LLM обогатить
+_YT_PROMPT_WITH_META = (
+    "YouTube видео: {url}\n"
+    "Базовые данные из oEmbed:\n{meta_block}\n\n"
+    "Используй web_search или fetch, чтобы дополнить: длительность, дата публикации, "
+    "краткое описание содержимого. Если данных нет — покажи то что уже известно."
+)
+
+# Prompt для cloud LLM без yt-dlp, акцент на web_fetch/search а не subprocess
+_YT_PROMPT_CLOUD = (
+    "Получи информацию о YouTube видео {url} через web_search или http_fetch. "
+    "НЕ запускай yt-dlp или youtube-dl. "
+    "Верни: название, автор/канал, длительность, дата публикации, краткое описание."
 )
 
 
@@ -140,10 +156,24 @@ async def handle_yt(bot: "object", message: Message) -> None:
             )
         )
 
-    prompt = _YT_PROMPT_TEMPLATE.format(url=url)
     session_id = f"yt_{message.chat.id}"
-
     msg = await message.reply(f"🎬 Ищу информацию о видео: `{url}`...")
+
+    # --- Резервный путь: oEmbed (не требует subprocess/DNS sandbox) ---
+    oembed_prefix = ""
+    try:
+        meta = await fetch_yt_metadata(url)
+        if meta:
+            oembed_prefix = format_yt_metadata(meta)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("yt_oembed_skipped", reason=str(exc))
+
+    # Если oEmbed дал достаточно данных — отображаем сразу и просим LLM обогатить
+    if oembed_prefix:
+        prompt = _YT_PROMPT_WITH_META.format(url=url, meta_block=oembed_prefix)
+    else:
+        # Иначе — cloud LLM с явным запретом yt-dlp subprocess
+        prompt = _YT_PROMPT_CLOUD.format(url=url)
 
     try:
         oc = _get_openclaw_client()
@@ -156,6 +186,11 @@ async def handle_yt(bot: "object", message: Message) -> None:
             chunks.append(str(chunk))
 
         result = "".join(chunks).strip()
+
+        if not result and oembed_prefix:
+            # LLM не добавил ничего, но oEmbed сработал — покажем oEmbed
+            result = oembed_prefix
+
         if not result:
             await msg.edit("❌ AI вернул пустой ответ.")
             return
@@ -166,6 +201,14 @@ async def handle_yt(bot: "object", message: Message) -> None:
             await message.reply(part)
 
     except Exception as exc:  # noqa: BLE001
+        # Если LLM тоже упал, но oEmbed сработал — покажем хотя бы базовые данные
+        if oembed_prefix:
+            logger.warning("handle_yt_llm_failed_fallback_to_oembed", error=str(exc))
+            parts = _split_text_for_telegram(
+                oembed_prefix + f"\n\n_(AI обогащение недоступно: {exc})_"
+            )
+            await msg.edit(parts[0])
+            return
         logger.error("handle_yt_error", error=str(exc), error_type=type(exc).__name__)
         await msg.edit(f"❌ Ошибка: {exc}")
 
