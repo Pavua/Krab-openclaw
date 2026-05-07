@@ -150,32 +150,127 @@ async def wait_for_turnstile_resolution(
 async def attempt_recaptcha_audio_bypass(
     page: "Page",
     *,
-    voice_engine,  # src.voice_engine.VoiceEngine
+    voice_engine,  # src.voice_engine.VoiceEngine — should expose transcribe(file_path) -> str
     download_dir: Path | None = None,
+    max_attempts: int = 2,
 ) -> bool:
     """reCAPTCHA v2 audio challenge bypass через Whisper STT.
 
     Steps:
-    1. Click recaptcha checkbox → opens challenge popup
-    2. Click audio button (instead of image)
-    3. Click PLAY → audio MP3 downloaded
-    4. Whisper STT transcribes
+    1. Click recaptcha checkbox iframe → opens challenge popup
+    2. Click audio button (instead of image puzzle)
+    3. Wait for audio src URL → download via Playwright fetch
+    4. Whisper STT transcribes MP3 → text
     5. Type transcription into input
-    6. Click VERIFY
+    6. Click VERIFY → checkbox iframe shows checkmark
 
-    Возвращает True если успешно solved. False = bot detected или
-    challenge ещё activate (нужен retry).
+    Возвращает True если успешно solved. False = bot detected, voice_engine
+    отсутствует, или Google присвоил slow-down lockout.
 
-    Phase 1 implementation: stub. Реальная имплементация требует точных
-    DOM selectors которые меняются часто, поэтому делаем как iterative
-    skill улучшаем по live runs.
+    Session 39 Phase 2: реальная DOM logic. Selectors могут меняться —
+    fail-soft: каждая ошибка → return False (caller retry или fallback).
     """
-    logger.warning(
-        "audio_captcha_bypass_not_implemented",
-        hint="Phase 1 stub — реальная DOM logic будет добавлена итеративно",
-    )
-    # Placeholder для будущей реализации
-    _ = voice_engine, download_dir
+    if voice_engine is None or not hasattr(voice_engine, "transcribe"):
+        logger.warning("audio_bypass_no_voice_engine")
+        return False
+
+    download_dir = download_dir or Path("/tmp")
+    download_dir.mkdir(parents=True, exist_ok=True)
+
+    for attempt in range(1, max_attempts + 1):
+        logger.info("audio_bypass_attempt", n=attempt)
+        try:
+            # 1. Click recaptcha checkbox в anchor iframe
+            anchor_frame = next(
+                (f for f in page.frames if "recaptcha/api2/anchor" in f.url),
+                None,
+            )
+            if anchor_frame is None:
+                logger.warning("audio_bypass_no_anchor_frame")
+                return False
+            checkbox = await anchor_frame.query_selector(".recaptcha-checkbox")
+            if checkbox is None:
+                logger.warning("audio_bypass_no_checkbox")
+                return False
+            await checkbox.click()
+            await apply_human_like_delays(min_sec=1.0, max_sec=2.5)
+
+            # 2. Find challenge bframe (iframe с image/audio puzzle)
+            bframe = next(
+                (f for f in page.frames if "recaptcha/api2/bframe" in f.url),
+                None,
+            )
+            if bframe is None:
+                # Если bframe не появился — checkbox уже verified (no challenge)
+                logger.info("audio_bypass_no_challenge_needed")
+                return True
+
+            # 3. Click audio button
+            audio_btn = await bframe.query_selector("#recaptcha-audio-button")
+            if audio_btn is None:
+                logger.warning("audio_bypass_no_audio_button")
+                return False
+            await audio_btn.click()
+            await apply_human_like_delays(min_sec=1.5, max_sec=3.0)
+
+            # 4. Извлекаем ссылку на MP3
+            audio_src_el = await bframe.query_selector(
+                "audio#audio-source, .rc-audiochallenge-tdownload-link"
+            )
+            if audio_src_el is None:
+                logger.warning("audio_bypass_no_audio_source")
+                return False
+            mp3_url = await audio_src_el.get_attribute("src") or await audio_src_el.get_attribute(
+                "href"
+            )
+            if not mp3_url:
+                logger.warning("audio_bypass_empty_src")
+                return False
+
+            # 5. Скачиваем MP3 через page.context.request (sharing cookies + UA)
+            mp3_path = download_dir / f"recaptcha_{attempt}.mp3"
+            response = await page.context.request.get(mp3_url)
+            mp3_path.write_bytes(await response.body())
+            logger.info("audio_bypass_mp3_downloaded", size=mp3_path.stat().st_size)
+
+            # 6. Whisper STT
+            try:
+                transcription = await voice_engine.transcribe(str(mp3_path))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("audio_bypass_transcribe_failed", error=str(exc))
+                return False
+            if not transcription or not transcription.strip():
+                logger.warning("audio_bypass_empty_transcription")
+                continue  # retry — иногда Whisper хуже на noisy audio
+            transcription = transcription.strip().lower()
+            logger.info("audio_bypass_transcribed", text=transcription[:60])
+
+            # 7. Type в input + VERIFY
+            response_input = await bframe.query_selector("#audio-response")
+            if response_input is None:
+                logger.warning("audio_bypass_no_response_input")
+                return False
+            await response_input.fill(transcription)
+            await apply_human_like_delays(min_sec=0.5, max_sec=1.5)
+
+            verify_btn = await bframe.query_selector("#recaptcha-verify-button")
+            if verify_btn is None:
+                logger.warning("audio_bypass_no_verify_button")
+                return False
+            await verify_btn.click()
+            await apply_human_like_delays(min_sec=2.0, max_sec=4.0)
+
+            # 8. Проверяем результат: checkbox должен показать checkmark
+            checkmark = await anchor_frame.query_selector(".recaptcha-checkbox-checked")
+            if checkmark is not None:
+                logger.info("audio_bypass_solved", attempts=attempt)
+                return True
+            logger.info("audio_bypass_attempt_rejected", attempt=attempt)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("audio_bypass_exception", attempt=attempt, error=str(exc))
+            return False
+
+    logger.warning("audio_bypass_exhausted", attempts=max_attempts)
     return False
 
 

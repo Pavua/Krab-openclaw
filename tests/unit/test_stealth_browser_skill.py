@@ -93,10 +93,109 @@ async def test_apply_human_like_delays_jitter_in_range():
 
 
 @pytest.mark.asyncio
-async def test_audio_bypass_returns_false_phase_1_stub():
+async def test_audio_bypass_returns_false_when_voice_engine_missing():
+    """voice_engine=None → ранний exit, False. Session 39 Phase 2 contract."""
     from src.skills.stealth_browser import attempt_recaptcha_audio_bypass
 
     page = MagicMock()
-    voice_engine = MagicMock()
+    result = await attempt_recaptcha_audio_bypass(page, voice_engine=None)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_audio_bypass_returns_false_when_voice_engine_lacks_transcribe():
+    """voice_engine без .transcribe attr → False (defensive contract)."""
+    from src.skills.stealth_browser import attempt_recaptcha_audio_bypass
+
+    page = MagicMock()
+    voice_engine = object()  # plain object, no transcribe
     result = await attempt_recaptcha_audio_bypass(page, voice_engine=voice_engine)
-    assert result is False  # Phase 1 stub
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_audio_bypass_returns_false_when_no_anchor_frame():
+    """Если на странице нет anchor frame с recaptcha — False."""
+    from src.skills.stealth_browser import attempt_recaptcha_audio_bypass
+
+    voice_engine = MagicMock()
+    voice_engine.transcribe = AsyncMock(return_value="hello")
+
+    page = MagicMock()
+    page.frames = []  # Нет ни одного frame с recaptcha api2
+    result = await attempt_recaptcha_audio_bypass(page, voice_engine=voice_engine)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_audio_bypass_returns_true_when_no_challenge_needed(tmp_path):
+    """Если checkbox click сразу solved (нет bframe challenge) → True."""
+    from src.skills.stealth_browser import attempt_recaptcha_audio_bypass
+
+    voice_engine = MagicMock()
+    voice_engine.transcribe = AsyncMock(return_value="hello")
+
+    # Anchor frame с checkbox
+    checkbox = MagicMock()
+    checkbox.click = AsyncMock()
+    anchor_frame = MagicMock()
+    anchor_frame.url = "https://google.com/recaptcha/api2/anchor?k=abc"
+    anchor_frame.query_selector = AsyncMock(return_value=checkbox)
+
+    page = MagicMock()
+    # Только anchor frame, bframe не появился — challenge skipped
+    page.frames = [anchor_frame]
+
+    result = await attempt_recaptcha_audio_bypass(
+        page, voice_engine=voice_engine, download_dir=tmp_path
+    )
+    assert result is True
+    checkbox.click.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_audio_bypass_full_flow_solves(tmp_path):
+    """End-to-end happy path: checkbox → audio button → MP3 → STT → verify."""
+    from src.skills.stealth_browser import attempt_recaptcha_audio_bypass
+
+    voice_engine = MagicMock()
+    voice_engine.transcribe = AsyncMock(return_value="three two one")
+
+    # Anchor frame после verify показывает .recaptcha-checkbox-checked
+    checkbox = MagicMock()
+    checkbox.click = AsyncMock()
+    checkmark = MagicMock()  # после verify
+    anchor_frame = MagicMock()
+    anchor_frame.url = "https://google.com/recaptcha/api2/anchor?k=abc"
+    # Сначала возвращаем checkbox, потом checkmark
+    anchor_frame.query_selector = AsyncMock(side_effect=[checkbox, checkmark])
+
+    # Bframe с audio challenge
+    audio_btn = MagicMock()
+    audio_btn.click = AsyncMock()
+    audio_src_el = MagicMock()
+    audio_src_el.get_attribute = AsyncMock(return_value="https://google.com/audio.mp3")
+    response_input = MagicMock()
+    response_input.fill = AsyncMock()
+    verify_btn = MagicMock()
+    verify_btn.click = AsyncMock()
+    bframe = MagicMock()
+    bframe.url = "https://google.com/recaptcha/api2/bframe?k=abc"
+    bframe.query_selector = AsyncMock(
+        side_effect=[audio_btn, audio_src_el, response_input, verify_btn]
+    )
+
+    page = MagicMock()
+    page.frames = [anchor_frame, bframe]
+    # request.get для скачивания MP3
+    mock_response = MagicMock()
+    mock_response.body = AsyncMock(return_value=b"\xff\xfb\x00\x00fake_mp3")
+    page.context.request.get = AsyncMock(return_value=mock_response)
+
+    result = await attempt_recaptcha_audio_bypass(
+        page, voice_engine=voice_engine, download_dir=tmp_path
+    )
+    assert result is True
+    voice_engine.transcribe.assert_awaited()
+    response_input.fill.assert_awaited_with("three two one")
+    verify_btn.click.assert_awaited()

@@ -80,7 +80,7 @@ def test_tilde_in_profile_dir_is_expanded():
 
 @pytest.mark.asyncio
 async def test_add_init_script_called_when_stealth_js_exists(tmp_path):
-    """add_init_script вызывается с путём к файлу, если он существует."""
+    """add_init_script вызывается дважды: путь к файлу + extra patches (Session 39)."""
     stealth_js = tmp_path / "stealth_init.js"
     stealth_js.write_text("// stealth", encoding="utf-8")
 
@@ -94,7 +94,10 @@ async def test_add_init_script_called_when_stealth_js_exists(tmp_path):
     with patch("src.integrations.browser_bridge._STEALTH_INIT_JS_PATH", stealth_js):
         await bridge._inject_stealth_if_available(page)
 
-    page.add_init_script.assert_awaited_once_with(path=str(stealth_js))
+    # Session 39: 1 raw stealth_init.js + 1 enhancement script
+    assert page.add_init_script.await_count == 2
+    # Первый вызов — путь к файлу
+    page.add_init_script.assert_any_await(path=str(stealth_js))
 
 
 @pytest.mark.asyncio
@@ -114,8 +117,11 @@ async def test_no_crash_when_stealth_js_missing(tmp_path, caplog):
         # Не должно бросить исключение
         await bridge._inject_stealth_if_available(page)
 
-    # add_init_script не должен вызываться
-    page.add_init_script.assert_not_awaited()
+    # Session 39: file path-based call отсутствует, но enhancement script всё равно
+    # инжектируется (graceful degrade — лучше частичный stealth чем никакого).
+    # Проверяем: ни один вызов не использует path= (нет fallback на missing JS).
+    for call in page.add_init_script.await_args_list:
+        assert "path" not in call.kwargs, "no path-based call when file missing"
 
 
 @pytest.mark.asyncio
@@ -146,4 +152,6 @@ async def test_add_init_script_called_via_active_page(tmp_path):
         returned_page = await bridge._active_page()
 
     assert returned_page is mock_page
-    mock_page.add_init_script.assert_awaited_once_with(path=str(stealth_js))
+    # Session 39: 2 calls (raw file + enhancement script)
+    assert mock_page.add_init_script.await_count == 2
+    mock_page.add_init_script.assert_any_await(path=str(stealth_js))

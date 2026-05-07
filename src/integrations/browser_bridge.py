@@ -603,6 +603,9 @@ class BrowserBridge:
         Вызывается при получении страницы — скрипт запускается ПЕРЕД загрузкой
         каждой новой страницы (evaluateOnNewDocument семантика).
         Если файл отсутствует — логируем предупреждение, продолжаем без краша.
+
+        Session 39: дополнительно инжектирует patches от stealth_browser skill
+        (permissions API, WebGL fingerprint, playwright marker cleanup).
         """
         if _STEALTH_INIT_JS_PATH.exists():
             try:
@@ -618,6 +621,13 @@ class BrowserBridge:
                 "browser_bridge_stealth_js_missing",
                 path=str(_STEALTH_INIT_JS_PATH),
             )
+        # Session 39: enhanced stealth patches поверх базового init.js
+        try:
+            from src.skills.stealth_browser import get_stealth_init_script
+
+            await page.add_init_script(get_stealth_init_script())
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("browser_bridge_stealth_extra_inject_failed", error=str(exc))
 
     async def _active_page(self):
         """Возвращает активную (первую) страницу из первого контекста.

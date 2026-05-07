@@ -24,6 +24,12 @@ from typing import Any
 import structlog
 
 from ..core.stealth_metrics import record_detection
+from .stealth_browser import (
+    apply_human_like_delays,
+    detect_captcha,
+    get_stealth_init_script,
+    wait_for_turnstile_resolution,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -131,6 +137,9 @@ async def search_mercadona(query: str, max_results: int = 10) -> str:
 
         # Патчим navigator.webdriver и прочие маркеры автоматизации
         await context.add_init_script(_STEALTH_SCRIPT)
+        # Session 39: дополнительные patches от stealth_browser skill
+        # (permissions API, WebGL fingerprint, playwright marker cleanup)
+        await context.add_init_script(get_stealth_init_script())
 
         page = await context.new_page()
 
@@ -144,7 +153,17 @@ async def search_mercadona(query: str, max_results: int = 10) -> str:
         except Exception as exc:
             record_detection("fetch_error")
             logger.warning("mercadona_goto_timeout", error=repr(exc))
-        await page.wait_for_timeout(1_500)
+        # Human-like jitter перед первым interaction (вместо fixed 1.5s)
+        await apply_human_like_delays(min_sec=1.0, max_sec=2.2)
+
+        # Session 39: проверяем CAPTCHA. Mercadona может показать Turnstile
+        # при подозрительном fingerprint — auto-resolve если возможно.
+        captcha = await detect_captcha(page)
+        if captcha is not None:
+            logger.info("mercadona_captcha_detected", kind=captcha.kind)
+            if captcha.kind == "cloudflare_turnstile":
+                resolved = await wait_for_turnstile_resolution(page, max_wait_sec=15.0)
+                logger.info("mercadona_turnstile_outcome", resolved=resolved)
         await _accept_cookies_if_present(page)
         await _dismiss_entry_modal(page)
         if not await _submit_search_query(page, query):
