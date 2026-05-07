@@ -307,6 +307,31 @@ def test_pytest_filter_drops_popen_gw_path() -> None:
     assert _before_send(event, {}) is None
 
 
+def test_detect_git_release_returns_sha_or_dev() -> None:
+    """_detect_git_release returns git short SHA или 'dev' fallback."""
+    from src.bootstrap.sentry_init import _detect_git_release
+
+    release = _detect_git_release()
+    # git short SHA — обычно 7-12 hex символов; 'dev' fallback при недоступном git.
+    assert isinstance(release, str)
+    assert release == "dev" or (
+        7 <= len(release) <= 40 and all(c in "0123456789abcdef" for c in release)
+    ), f"unexpected release format: {release!r}"
+
+
+def test_detect_git_release_fallback_when_git_fails(monkeypatch) -> None:
+    """Если subprocess raise'ает — fallback на 'dev'."""
+    import subprocess
+
+    from src.bootstrap import sentry_init
+
+    def _raise(*_, **__):
+        raise FileNotFoundError("git not found")
+
+    monkeypatch.setattr(subprocess, "run", _raise)
+    assert sentry_init._detect_git_release() == "dev"
+
+
 def test_pytest_filter_handles_malformed_event_gracefully() -> None:
     """Defensive: даже на странном shape (None values) не падаем."""
     assert _is_pytest_event({}) is False

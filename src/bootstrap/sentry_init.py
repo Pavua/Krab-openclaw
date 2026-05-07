@@ -24,6 +24,7 @@ import logging
 import os
 import threading
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -365,6 +366,43 @@ def _read_float_env(name: str, default: float) -> float:
     return value
 
 
+def _detect_git_release() -> str:
+    """Определяет release-идентификатор для Sentry на основе git-состояния.
+
+    Цель (Session 40): включить Sentry "auto-close on release deploy" — для
+    этого release должен меняться при каждом коммите. Раньше release был
+    статичным "dev", из-за чего issues с тэгом "Fixes: PYTHON-FASTAPI-XX"
+    в commit message не закрывались автоматически.
+
+    Стратегия:
+    1. ``KRAB_VERSION`` env (если задан явно) — высший приоритет (handled
+       выше в init_sentry).
+    2. ``git rev-parse --short HEAD`` из репо — обычный prod путь.
+    3. ``dev`` fallback — если git недоступен (worktree без .git, или
+       не установлен subprocess timeout).
+
+    Subprocess вызов timeout=2s чтобы не блокировать boot.
+    """
+    try:
+        import subprocess  # noqa: PLC0415
+
+        repo_root = Path(__file__).resolve().parents[2]
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+        sha = result.stdout.strip()
+        if sha and result.returncode == 0:
+            return sha
+    except Exception:  # noqa: BLE001
+        pass
+    return "dev"
+
+
 def init_sentry() -> bool:
     """
     Инициализирует Sentry SDK если SENTRY_DSN задан.
@@ -411,7 +449,7 @@ def init_sentry() -> bool:
         default_sample = 1.0 if env == "dev" else 0.1
         traces_sample_rate = _read_float_env("SENTRY_TRACES_SAMPLE_RATE", default_sample)
         profiles_sample_rate = _read_float_env("SENTRY_PROFILES_SAMPLE_RATE", default_sample)
-        release = f"krab@{os.getenv('KRAB_VERSION', 'dev')}"
+        release = f"krab@{os.getenv('KRAB_VERSION', '') or _detect_git_release()}"
 
         sentry_sdk.init(
             dsn=dsn,
