@@ -38,8 +38,71 @@ class _FakeStreamResponse:
         return b""
 
 
+@pytest.fixture(autouse=True)
+def _disable_bypass_via_env(monkeypatch: pytest.MonkeyPatch):
+    """Session 39: bypass-каналы импортируют config напрямую (`from .config
+    import config as _cfg`), не через `src.openclaw_client.config` mock.
+
+    Самый надёжный путь — env var: is_google_direct_enabled() читает
+    KRAB_GOOGLE_DIRECT_BYPASS_ENABLED из os.environ. Также покрываем
+    другие bypass-каналы (vertex/anthropic/gemma/cli) на случай если
+    тесты mock'ают другие модели.
+    """
+    monkeypatch.setenv("KRAB_GOOGLE_DIRECT_BYPASS_ENABLED", "0")
+    monkeypatch.setenv("KRAB_VERTEX_DIRECT_BYPASS_ENABLED", "0")
+    monkeypatch.setenv("KRAB_ANTHROPIC_VERTEX_DIRECT_BYPASS_ENABLED", "0")
+    monkeypatch.setenv("KRAB_GEMMA_DIRECT_BYPASS_ENABLED", "0")
+    monkeypatch.setenv("KRAB_CLI_BYPASS_ENABLED", "0")
+    monkeypatch.setenv("KRAB_CLI_SUBPROCESS_BYPASS_ENABLED", "0")
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _clean_history_cache():
+    """Session 39: persistent sqlite history_cache leaks между тестами.
+
+    Перед каждым тестом удаляем все известные тестовые chat_id чтобы
+    cached history не подмешивалась в _sessions при send_message_stream.
+    """
+    test_chat_ids = (
+        "chat-1",
+        "chat-reasoning-clean",
+        "chat-agentic-clean",
+        "chat-text-only",
+        "chat-photo-1",
+        "chat-empty-stream",
+        "chat-runtime-cloud",
+        "chat-cloud-retry",
+        "chat-empty-after-auth-error",
+        "chat-empty-runtime-cloud",
+        "chat-lm-auth",
+        "chat-lm-native-resp-id",
+        "chat-lm-native-cap-cont",
+        "chat-cloud-fallback-auth",
+        "chat-cloud-timeout",
+        "chat-cloud-remap",
+        "chat-local-fail-cloud",
+        "chat-semantic-cloud",
+        "chat-text-tokens",
+        "chat-legacy-image",
+    )
+    try:
+        from src.cache_manager import history_cache
+
+        for cid in test_chat_ids:
+            try:
+                history_cache.delete(f"chat_history:{cid}")
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001
+        pass
+    yield
+
+
 @pytest.fixture
-def client() -> OpenClawClient:
+def client():
+    """Session 39: yield чтобы patch жил до конца теста (раньше context exit'ил
+    раньше теста — bypass + reasoning checks читали РЕАЛЬНЫЙ config)."""
     with patch("src.openclaw_client.config") as mock_config:
         mock_config.OPENCLAW_URL = "http://mock-claw"
         mock_config.OPENCLAW_TOKEN = "token"
@@ -59,9 +122,16 @@ def client() -> OpenClawClient:
         mock_config.RETRY_HISTORY_WINDOW_MESSAGES = 8
         mock_config.RETRY_HISTORY_WINDOW_MAX_CHARS = 4000
         mock_config.RETRY_MESSAGE_MAX_CHARS = 1200
+        # Session 39: явно отключаем bypass-каналы — иначе тесты hit live API
+        # (MagicMock attrs default truthy → bypass triggers до моков).
+        mock_config.KRAB_GOOGLE_DIRECT_BYPASS_ENABLED = False
+        mock_config.KRAB_VERTEX_DIRECT_BYPASS_ENABLED = False
+        mock_config.KRAB_ANTHROPIC_VERTEX_DIRECT_BYPASS_ENABLED = False
+        mock_config.KRAB_GEMMA_DIRECT_BYPASS_ENABLED = False
+        mock_config.KRAB_CLI_BYPASS_ENABLED = False
         inst = OpenClawClient()
         inst._http_client = AsyncMock()
-        return inst
+        yield inst
 
 
 @pytest.mark.asyncio
@@ -128,8 +198,16 @@ async def test_warmup_runtime_route_runs_short_probe_and_clears_temp_session(
 
 
 @pytest.mark.asyncio
-async def test_send_message_stream_success_buffered(client: OpenClawClient) -> None:
+async def test_send_message_stream_success_buffered(
+    client: OpenClawClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from src.model_manager import model_manager
+
+    # Session 39: для google/* моделей openclaw_client сначала пытается google_direct
+    # bypass, который в test-env обращается к live Gemini API. Отключаем bypass
+    # чтобы тест прошёл через mocked _openclaw_completion_once.
+    # Session 39: bypass отключён в fixture, history_cache очищается autouse.
+    _ = monkeypatch  # сохраняем сигнатуру для совместимости
 
     with patch.object(
         model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
@@ -152,9 +230,12 @@ async def test_send_message_stream_success_buffered(client: OpenClawClient) -> N
 
 @pytest.mark.asyncio
 async def test_send_message_stream_strips_reasoning_before_history_cache(
-    client: OpenClawClient,
+    client: OpenClawClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from src.model_manager import model_manager
+
+    # Session 39: bypass отключён в fixture, history_cache очищается autouse.
+    _ = monkeypatch
 
     noisy_response = (
         "think\n"
