@@ -47,11 +47,13 @@ def test_version_response_unchanged_after_extraction() -> None:
     # Все ключи которые были в inline-версии (web_app.py до extraction)
     required_keys = {"ok", "version", "commits", "tests", "api_endpoints", "features"}
     assert required_keys.issubset(data.keys())
-    # Точные значения зафиксированы
-    assert data["version"] == "session5"
-    assert data["commits"] == 113
-    assert data["tests"] == 2043
-    assert data["api_endpoints"] == 184
+    # Session 39: точные значения теперь динамические — values bumped с каждой
+    # сессией. Проверяем только формат и monotonicity (≥ baseline session 5).
+    assert isinstance(data["version"], str) and data["version"].startswith("session")
+    assert int(data["version"].removeprefix("session")) >= 5
+    assert int(data["commits"]) >= 113
+    assert int(data["tests"]) >= 2043
+    assert int(data["api_endpoints"]) >= 184
 
 
 def test_version_features_contains_known_items() -> None:

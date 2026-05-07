@@ -1628,7 +1628,7 @@ def test_runtime_lite_treats_sqlite_journal_as_ready_when_userbot_is_live(monkey
     async def _fake_lmstudio_snapshot(self):
         return {"state": "idle", "loaded_models": []}
 
-    def _fake_telegram_snapshot(self):
+    async def _fake_telegram_snapshot(self):
         return {
             "state": "open_or_unclean",
             "session_exists": True,
@@ -1660,7 +1660,7 @@ def test_runtime_lite_keeps_open_or_unclean_when_userbot_is_not_live(monkeypatch
     async def _fake_lmstudio_snapshot(self):
         return {"state": "idle", "loaded_models": []}
 
-    def _fake_telegram_snapshot(self):
+    async def _fake_telegram_snapshot(self):
         return {
             "state": "open_or_unclean",
             "session_exists": True,
@@ -7056,10 +7056,8 @@ def test_runtime_chat_session_clear_calls_openclaw_client(monkeypatch: pytest.Mo
     # В worktree-окружении тестов нет реального data/sessions/kraab.session SQLite,
     # поэтому файловый snapshot вернул бы state="missing". Эмулируем здоровый
     # ready-snapshot, чтобы тест проверял именно clear-flow, а не runtime fixture.
-    monkeypatch.setattr(
-        WebApp,
-        "_telegram_session_snapshot",
-        lambda self: {
+    async def _async_snapshot(self):
+        return {
             "state": "ready",
             "session_name": "kraab",
             "session_path": "/tmp/kraab.session",
@@ -7071,8 +7069,9 @@ def test_runtime_chat_session_clear_calls_openclaw_client(monkeypatch: pytest.Mo
             "lock_files": [],
             "sqlite_quick_check_ok": True,
             "sqlite_error": "",
-        },
-    )
+        }
+
+    monkeypatch.setattr(WebApp, "_telegram_session_snapshot", _async_snapshot)
     client = TestClient(
         _make_app(
             openclaw_client=fake_openclaw,
