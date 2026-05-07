@@ -251,6 +251,55 @@ class TestHandleYtUrlSources:
 
         assert url in captured[0]
 
+    @pytest.mark.asyncio
+    async def test_url_из_web_page_inline(self) -> None:
+        """Session 40: URL из Message.web_page (Telegram WEB_PAGE_PREVIEW)."""
+        url = "https://youtu.be/inlinepreview"
+        bot = _make_bot("")
+        msg = _make_msg("", reply_text=None)
+        # inline preview: Pyrofork кладёт распознанный URL в .web_page
+        msg.web_page = SimpleNamespace(url=url, display_url=f"YouTube · {url}")
+
+        captured: list[str] = []
+
+        async def fake_stream(message, chat_id, **_kw):
+            captured.append(message)
+            yield "ответ"
+
+        with patch(
+            "src.handlers.command_handlers.openclaw_client.send_message_stream",
+            side_effect=fake_stream,
+        ):
+            await handle_yt(bot, msg)
+
+        assert url in captured[0]
+
+    @pytest.mark.asyncio
+    async def test_url_из_web_page_reply(self) -> None:
+        """Session 40: URL в web_page reply_to_message → используется."""
+        url = "https://youtu.be/replypreview"
+        bot = _make_bot("")
+        msg = _make_msg("", reply_text=None)
+        msg.reply_to_message = SimpleNamespace(
+            text=None,
+            caption=None,
+            web_page=SimpleNamespace(url=url, display_url=None),
+        )
+
+        captured: list[str] = []
+
+        async def fake_stream(message, chat_id, **_kw):
+            captured.append(message)
+            yield "ответ"
+
+        with patch(
+            "src.handlers.command_handlers.openclaw_client.send_message_stream",
+            side_effect=fake_stream,
+        ):
+            await handle_yt(bot, msg)
+
+        assert url in captured[0]
+
 
 # ---------------------------------------------------------------------------
 # Сессия и параметры вызова

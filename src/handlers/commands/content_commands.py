@@ -84,20 +84,59 @@ async def handle_yt(bot: "object", message: Message) -> None:
     !yt (в reply)   — извлекает URL из цитируемого сообщения.
 
     Сессия изолирована: yt_{chat_id}.
+
+    Session 40: extended URL extraction — теперь смотрит:
+    1. arg после команды
+    2. text/caption inline-сообщения (для случая `!yt` в caption forwarded preview)
+    3. web_page.url inline-сообщения (Pyrofork сохраняет YouTube URL в Message.web_page
+       когда юзер пишет ссылку текстом → Telegram создаёт WEB_PAGE_PREVIEW)
+    4. text/caption reply-сообщения
+    5. web_page.url reply-сообщения (тот же кейс через reply)
     """
+
+    def _yt_url_from_message(msg: "Message | None") -> str | None:
+        """Извлечь YouTube URL из text/caption/web_page любого Message.
+
+        Defensive: используем getattr — некоторые тестовые SimpleNamespace
+        и stub-объекты могут не иметь полного Message API.
+        """
+        if msg is None:
+            return None
+        for attr in ("text", "caption"):
+            source = getattr(msg, attr, None)
+            if source:
+                found = _extract_yt_url(source)
+                if found:
+                    return found
+        # Pyrofork: forwarded или inline preview хранит URL в .web_page
+        web_page = getattr(msg, "web_page", None)
+        if web_page is not None:
+            for attr in ("url", "display_url"):
+                wp_url = getattr(web_page, attr, None)
+                if wp_url:
+                    found = _extract_yt_url(str(wp_url))
+                    if found:
+                        return found
+        return None
+
     args = bot._get_command_args(message).strip()
 
     url: str | None = _extract_yt_url(args)
-    if url is None and message.reply_to_message is not None:
-        replied_text = message.reply_to_message.text or message.reply_to_message.caption or ""
-        url = _extract_yt_url(replied_text)
+    if url is None:
+        # 1) inline message itself (caption + web_page)
+        url = _yt_url_from_message(message)
+    if url is None:
+        # 2) reply target (text/caption + web_page)
+        url = _yt_url_from_message(message.reply_to_message)
 
     if url is None:
         raise UserInputError(
             user_message=(
                 "🎬 Использование:\n"
                 "`!yt <YouTube URL>` — информация о видео\n"
-                "или ответь командой `!yt` на сообщение с YouTube ссылкой"
+                "или ответь командой `!yt` на сообщение с YouTube ссылкой\n\n"
+                "ℹ️ Forwarded video в Telegram **не содержит** оригинальный YouTube URL — "
+                "это ограничение протокола. Скопируй ссылку и отправь как текст: `!yt <URL>`."
             )
         )
 
