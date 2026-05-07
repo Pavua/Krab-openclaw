@@ -239,3 +239,105 @@ def test_before_send_drops_cancelled_error_with_starlette_frame() -> None:
         }
     }
     assert _before_send(event, {}) is None
+
+
+# ---------------------------------------------------------------------------
+# Session 40: pytest event pollution filter (PYTHON-FASTAPI-83/84/85/63)
+# ---------------------------------------------------------------------------
+
+from src.bootstrap.sentry_init import _is_pytest_event  # noqa: E402
+
+
+def test_pytest_filter_drops_testserver_url() -> None:
+    """FastAPI TestClient prepends http://testserver/ — это маркер test event."""
+    event = {
+        "request": {
+            "url": "http://testserver/api/context/checkpoint",
+            "method": "POST",
+        },
+        "exception": {
+            "values": [
+                {
+                    "type": "HTTPException",
+                    "value": "context_checkpoint_failed:boom",
+                }
+            ]
+        },
+    }
+    assert _is_pytest_event(event) is True
+    assert _before_send(event, {}) is None
+
+
+def test_pytest_filter_drops_pytest_of_path_in_extra() -> None:
+    """db_corruption_detected с db_path в pytest-of- → drop."""
+    event = {
+        "extra": {
+            "db_path": (
+                "/private/var/folders/vv/.../pytest-of-pablito/pytest-150/"
+                "popen-gw2/test_preflight_recent_backup_r0/kraab.session"
+            ),
+            "detail": "database disk image is malformed",
+        },
+        "message": "db_corruption_detected: session",
+    }
+    assert _is_pytest_event(event) is True
+    assert _before_send(event, {}) is None
+
+
+def test_pytest_filter_drops_xdist_worker_argv() -> None:
+    """sys.argv == ['-c'] — xdist worker subprocess (`python -c '...'`)."""
+    event = {
+        "extra": {"sys.argv": ["-c"]},
+        "exception": {
+            "values": [{"type": "RuntimeError", "value": "anything"}]
+        },
+    }
+    assert _is_pytest_event(event) is True
+    assert _before_send(event, {}) is None
+
+
+def test_pytest_filter_drops_popen_gw_path() -> None:
+    """Любое extra-поле с popen-gw → xdist worker tmp dir → drop."""
+    event = {
+        "extra": {
+            "log_path": "/tmp/pytest-of-user/pytest-1/popen-gw5/some.log",
+        },
+    }
+    assert _is_pytest_event(event) is True
+    assert _before_send(event, {}) is None
+
+
+def test_pytest_filter_handles_malformed_event_gracefully() -> None:
+    """Defensive: даже на странном shape (None values) не падаем."""
+    assert _is_pytest_event({}) is False
+    assert _is_pytest_event({"request": None}) is False
+    assert _is_pytest_event({"extra": None}) is False
+    assert _is_pytest_event({"request": "not_a_dict"}) is False
+
+
+def test_pytest_filter_passes_real_production_event() -> None:
+    """Производственный event без pytest-маркеров → не дропается."""
+    event = {
+        "request": {
+            "url": "https://krab.production.com/api/health",
+            "method": "GET",
+        },
+        "extra": {"error_code": "real_production_bug"},
+        "exception": {
+            "values": [{"type": "ValueError", "value": "real bug"}]
+        },
+    }
+    assert _is_pytest_event(event) is False
+    # Передаётся дальше (не None)
+    assert _before_send(event, {}) is event
+
+
+def test_pytest_filter_unknown_argv_not_filtered() -> None:
+    """sys.argv = ['python', 'manage.py', ...] — не pytest, не дропать."""
+    event = {
+        "extra": {"sys.argv": ["python", "manage.py", "runserver"]},
+        "exception": {
+            "values": [{"type": "RuntimeError", "value": "real bug"}]
+        },
+    }
+    assert _is_pytest_event(event) is False

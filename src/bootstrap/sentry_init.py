@@ -243,12 +243,65 @@ def _is_shutdown_cancelled_error(event: dict[str, Any], hint: dict[str, Any] | N
         return False
 
 
+def _is_pytest_event(event: dict[str, Any]) -> bool:
+    """Return True если событие пришло из pytest-сессии (нужно дропнуть).
+
+    Session 40: тестовые события утекали в Sentry production проект через
+    общий SENTRY_DSN (см. PYTHON-FASTAPI-83/84/85/63). Маркеры:
+
+    1. ``request.url`` начинается с ``http://testserver/`` — FastAPI TestClient
+       prepends этот hostname для всех симулированных HTTP requests.
+    2. Любое поле в ``extra`` содержит подстроку ``pytest-of-`` или
+       ``popen-gw`` — это путь к tmp-директории pytest или xdist worker.
+    3. ``sys.argv == ['-c']`` — pytest-xdist subprocess сигнатура (worker
+       запускается через ``python -c "..."``, отсюда argv == ['-c']).
+
+    Defensive: на любом неожиданном shape возвращаем False (не глотаем
+    реальный prod event, лучше получить шумное событие чем потерять bug).
+
+    Note: НЕ используем env var ``PYTEST_CURRENT_TEST`` для дополнительной
+    проверки — pytest сам её всегда выставляет в своих session, поэтому
+    она бесполезна для фильтрации event'ов которые real production code
+    шлёт во время unit-тестов (например при тестировании Sentry-фильтра).
+    """
+    try:
+        # 1. testserver URL — FastAPI TestClient
+        request = event.get("request") or {}
+        if isinstance(request, dict):
+            url = str(request.get("url") or "")
+            if url.startswith("http://testserver"):
+                return True
+
+        # 2. pytest paths в extra
+        extra = event.get("extra") or {}
+        if isinstance(extra, dict):
+            for value in extra.values():
+                value_str = str(value)
+                if "pytest-of-" in value_str or "/popen-gw" in value_str:
+                    return True
+            # sys.argv == ['-c'] — pytest-xdist worker subprocess
+            argv = extra.get("sys.argv")
+            if isinstance(argv, list) and argv == ["-c"]:
+                return True
+
+        return False
+    except Exception:  # noqa: BLE001
+        # Defensive: never swallow if we can't tell.
+        return False
+
+
 def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
     """Drop benign events (например userbot_not_ready во время boot).
 
     Sentry hook: возвращает None → событие не отправляется.
     """
     try:
+        # 0. Pytest pollution filter (Session 40) — дропаем все события из
+        #    тестовых сред чтобы не светить test-injected `:boom`, missing dirs
+        #    в production Sentry проекте.
+        if _is_pytest_event(event):
+            return None
+
         # 1. Прямая проверка extra.error_code
         extra = event.get("extra") or {}
         if isinstance(extra, dict):
