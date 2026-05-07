@@ -21,7 +21,9 @@ from unittest.mock import patch
 import pytest
 
 from src.integrations._bypass_perf import (
+    EXPECTED_ERROR_PATTERNS,
     aggregate_perf,
+    is_expected_failure,
     parse_duration,
     record_bypass_call,
 )
@@ -286,3 +288,135 @@ def test_fail_rate_calculation(tmp_path: Path) -> None:
 def test_parse_duration(window: str, expected: int) -> None:
     """parse_duration правильно конвертирует строки в секунды."""
     assert parse_duration(window) == expected
+
+
+# ---------------------------------------------------------------------------
+# Session 39: error_message + is_expected_failure + exclude_expected filter
+# ---------------------------------------------------------------------------
+
+
+def test_record_bypass_call_includes_error_message(tmp_path: Path) -> None:
+    """error_message сохраняется в JSONL и truncated до 300 символов."""
+    log_file = tmp_path / "bypass_perf.jsonl"
+    long_msg = "x" * 500
+
+    with patch("src.integrations._bypass_perf.PERF_LOG", log_file):
+        record_bypass_call(
+            kind="vertex",
+            model="google-vertex/gemini-2.5-pro",
+            duration_sec=0.0,
+            success=False,
+            error_type="RuntimeError",
+            error_message=long_msg,
+        )
+
+    record = json.loads(log_file.read_text().strip().splitlines()[0])
+    assert record["error_message"] == "x" * 300
+    assert record["error_type"] == "RuntimeError"
+
+
+def test_record_bypass_call_error_message_optional(tmp_path: Path) -> None:
+    """Без error_message — поле пустая строка (backward-compatible)."""
+    log_file = tmp_path / "bypass_perf.jsonl"
+
+    with patch("src.integrations._bypass_perf.PERF_LOG", log_file):
+        record_bypass_call(
+            kind="cli",
+            model="codex-cli/gpt-5.5",
+            duration_sec=1.0,
+            success=True,
+        )
+
+    record = json.loads(log_file.read_text().strip().splitlines()[0])
+    assert record["error_message"] == ""
+
+
+@pytest.mark.parametrize(
+    "msg,expected",
+    [
+        ("quota exceeded for model", True),
+        ("ResourceExhausted: 429", True),
+        ("PermissionDenied: caller does not have access", True),
+        ("AnthropicMaasConcurrentBatchPredictionJobs limit", True),
+        ("model not yet allowed for project", True),
+        ("consumer_quota_metric exceeded", True),
+        ("API not enabled in project", True),
+        ("genuine bug: NoneType has no attribute", False),
+        ("connection refused", False),
+        (None, False),
+        ("", False),
+    ],
+)
+def test_is_expected_failure(msg: str | None, expected: bool) -> None:
+    """is_expected_failure правильно распознаёт known transient patterns."""
+    assert is_expected_failure(msg) is expected
+
+
+def test_expected_error_patterns_immutable() -> None:
+    """Тuple константа — гарантия что нельзя случайно мутировать в runtime."""
+    assert isinstance(EXPECTED_ERROR_PATTERNS, tuple)
+    assert "quota" in EXPECTED_ERROR_PATTERNS
+
+
+def test_aggregate_perf_exclude_expected_filters_quota_failures(
+    tmp_path: Path,
+) -> None:
+    """exclude_expected=True отбрасывает quota/permission failures из stats."""
+    log_file = tmp_path / "bypass_perf.jsonl"
+    now = time.time()
+
+    records = [
+        # 1 success
+        {"ts": now - 1, "kind": "vertex", "model": "google-vertex/gemini-2.5-pro",
+         "duration_sec": 1.0, "success": True, "response_len": 100,
+         "error_message": ""},
+        # 2 expected failures (quota + permission) — отфильтруются
+        {"ts": now - 2, "kind": "vertex", "model": "google-vertex/gemini-2.5-pro",
+         "duration_sec": 0.0, "success": False, "response_len": 0,
+         "error_type": "RuntimeError",
+         "error_message": "quota exceeded ResourceExhausted"},
+        {"ts": now - 3, "kind": "vertex", "model": "google-vertex/gemini-2.5-pro",
+         "duration_sec": 0.0, "success": False, "response_len": 0,
+         "error_type": "RuntimeError",
+         "error_message": "PermissionDenied: not yet allowed"},
+        # 1 genuine failure — остаётся
+        {"ts": now - 4, "kind": "vertex", "model": "google-vertex/gemini-2.5-pro",
+         "duration_sec": 5.0, "success": False, "response_len": 0,
+         "error_type": "ConnectionError",
+         "error_message": "connection refused"},
+    ]
+    log_file.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+    with patch("src.integrations._bypass_perf.PERF_LOG", log_file):
+        # Без фильтра: 4 calls, 3 failures, fail_rate=0.75
+        unfiltered = aggregate_perf(window_sec=3600, exclude_expected=False)
+        assert unfiltered["total_calls"] == 4
+        assert unfiltered["total_failures"] == 3
+        assert unfiltered["by_kind"]["vertex"]["fail_rate"] == 0.75
+
+        # С фильтром: 2 calls (1 success + 1 genuine fail), fail_rate=0.5
+        filtered = aggregate_perf(window_sec=3600, exclude_expected=True)
+        assert filtered["total_calls"] == 2
+        assert filtered["total_failures"] == 1
+        assert filtered["by_kind"]["vertex"]["fail_rate"] == 0.5
+
+
+def test_aggregate_perf_exclude_expected_keeps_successes(tmp_path: Path) -> None:
+    """exclude_expected не удаляет успешные записи (success=True)."""
+    log_file = tmp_path / "bypass_perf.jsonl"
+    now = time.time()
+
+    # success=True но в error_message (хотя редкий случай) — не должно фильтроваться
+    records = [
+        {"ts": now - 1, "kind": "cli", "model": "codex-cli/gpt-5.5",
+         "duration_sec": 1.0, "success": True, "response_len": 100,
+         "error_message": "quota warning in response"},
+    ]
+    log_file.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+    with patch("src.integrations._bypass_perf.PERF_LOG", log_file):
+        result = aggregate_perf(window_sec=3600, exclude_expected=True)
+
+    # Success запись остаётся даже если error_message содержит "quota"
+    assert result["total_calls"] == 1
+    assert result["by_kind"]["cli"]["count"] == 1

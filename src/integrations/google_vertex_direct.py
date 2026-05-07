@@ -140,6 +140,7 @@ async def complete_via_vertex(
     _perf_success = False
     _perf_response_len = 0
     _perf_error_type: str | None = None
+    _perf_error_message: str | None = None
 
     try:
         text = await asyncio.to_thread(_sync_call)
@@ -158,6 +159,7 @@ async def complete_via_vertex(
             level="warning",
         )
         _perf_error_type = type(exc).__name__
+        _perf_error_message = str(exc)[:300]
         raise
     else:
         _perf_success = True
@@ -171,6 +173,7 @@ async def complete_via_vertex(
             success=_perf_success,
             response_len=_perf_response_len,
             error_type=_perf_error_type,
+            error_message=_perf_error_message,
         )
 
     if not text:

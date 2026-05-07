@@ -25,9 +25,14 @@ def record_bypass_call(
     success: bool,
     response_len: int = 0,
     error_type: str | None = None,
+    error_message: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> None:
-    """Записывает событие bypass call в JSONL. Graceful: ошибки молча подавляются."""
+    """Записывает событие bypass call в JSONL. Graceful: ошибки молча подавляются.
+
+    Session 39: добавлен error_message — без него все RuntimeError выглядят
+    одинаково и невозможно отличить transient (quota/perm) от genuine bug.
+    """
     try:
         PERF_LOG.parent.mkdir(parents=True, exist_ok=True)
         record: dict[str, Any] = {
@@ -38,6 +43,7 @@ def record_bypass_call(
             "success": success,
             "response_len": response_len,
             "error_type": error_type,
+            "error_message": (error_message or "")[:300],  # truncate для безопасности
             **(extra or {}),
         }
         with PERF_LOG.open("a") as f:
@@ -46,11 +52,43 @@ def record_bypass_call(
         pass  # никогда не крашим bypass из-за профилировщика
 
 
-def aggregate_perf(window_sec: int = 3600) -> dict[str, Any]:
+# Session 39: known "expected" error patterns — фильтруются из fail_rate
+# alert'ов до момента когда quotas approved / quota issue решен.
+EXPECTED_ERROR_PATTERNS: tuple[str, ...] = (
+    "quota",
+    "ResourceExhausted",
+    "permission",
+    "not enabled",
+    "PermissionDenied",
+    "not yet allowed",
+    "AnthropicMaasConcurrentBatchPredictionJobs",
+    "consumer_quota_metric",
+)
+
+
+def is_expected_failure(error_message: str | None) -> bool:
+    """True если ошибка — known transient (quota/permission), не genuine bug.
+
+    Используется в alert filtering чтобы не спамить про expected failures
+    пока квоты не одобрены.
+    """
+    if not error_message:
+        return False
+    msg = error_message.lower()
+    return any(pattern.lower() in msg for pattern in EXPECTED_ERROR_PATTERNS)
+
+
+def aggregate_perf(
+    window_sec: int = 3600,
+    exclude_expected: bool = False,
+) -> dict[str, Any]:
     """Читает bypass_perf.jsonl, возвращает агрегированную статистику per kind+model.
 
     Args:
         window_sec: окно в секундах (default 3600 = 1h).
+        exclude_expected: если True, отбрасывает failures с known transient
+            error patterns (quota/permission) — для alerting, чтобы не
+            спамить пока квоты не одобрены. Session 39.
 
     Returns::
 
@@ -87,8 +125,16 @@ def aggregate_perf(window_sec: int = 3600) -> dict[str, Any]:
                     continue
                 try:
                     r = json.loads(line)
-                    if r.get("ts", 0) >= cutoff:
-                        records.append(r)
+                    if r.get("ts", 0) < cutoff:
+                        continue
+                    # Session 39: фильтруем expected failures из alert pipeline
+                    if (
+                        exclude_expected
+                        and not r.get("success", True)
+                        and is_expected_failure(r.get("error_message"))
+                    ):
+                        continue
+                    records.append(r)
                 except Exception:  # noqa: BLE001
                     continue
     except Exception:  # noqa: BLE001

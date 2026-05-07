@@ -41,8 +41,12 @@ PANEL_BASE = "http://127.0.0.1:8080"
 
 
 def _fetch_perf() -> dict | None:
-    """Запрашивает /api/bypass/perf?window=1h. Возвращает None при ошибке."""
-    url = f"{PANEL_BASE}/api/bypass/perf?window=1h"
+    """Запрашивает /api/bypass/perf?window=1h. Возвращает None при ошибке.
+
+    Session 39: используем exclude_expected=true чтобы не алертить про
+    known transient failures (quota/permission) пока квоты не одобрены.
+    """
+    url = f"{PANEL_BASE}/api/bypass/perf?window=1h&exclude_expected=true"
     try:
         with urllib.request.urlopen(url, timeout=10) as resp:
             return json.loads(resp.read())

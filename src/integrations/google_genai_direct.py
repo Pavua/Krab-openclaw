@@ -318,6 +318,7 @@ async def complete_direct(
     _perf_success = False
     _perf_response_len = 0
     _perf_error_type: str | None = None
+    _perf_error_message: str | None = None
     # kind зависит от модели: gemma vs google-direct
     _perf_kind = "gemma" if is_gemma_model(model) else "google-direct"
 
@@ -346,6 +347,7 @@ async def complete_direct(
         except Exception:  # noqa: BLE001
             pass
         _perf_error_type = "TimeoutError"
+        _perf_error_message = f"timeout after {_elapsed:.1f}s"
         # Wave 31-A: записываем timeout как failure
         record_bypass_call(
             kind=_perf_kind,
@@ -354,6 +356,7 @@ async def complete_direct(
             success=False,
             response_len=0,
             error_type="TimeoutError",
+            error_message=_perf_error_message,
         )
         return ""
     except Exception as exc:  # noqa: BLE001
@@ -377,6 +380,7 @@ async def complete_direct(
         except Exception:  # noqa: BLE001
             pass
         _perf_error_type = type(exc).__name__
+        _perf_error_message = str(exc)[:300]
         # Wave 31-A: записываем exception как failure
         record_bypass_call(
             kind=_perf_kind,
@@ -385,6 +389,7 @@ async def complete_direct(
             success=False,
             response_len=0,
             error_type=_perf_error_type,
+            error_message=_perf_error_message,
         )
         raise
 

@@ -210,6 +210,7 @@ async def complete_via_cli(
     _perf_success = False
     _perf_response_len = 0
     _perf_error_type: str | None = None
+    _perf_error_message: str | None = None
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -304,6 +305,7 @@ async def complete_via_cli(
     except RuntimeError as exc:
         # Перебрасываем RuntimeError (timeout, binary not found) без wrap
         _perf_error_type = type(exc).__name__
+        _perf_error_message = str(exc)[:300]
         raise
     except Exception as exc:
         logger.warning(
@@ -314,6 +316,7 @@ async def complete_via_cli(
             error_type=type(exc).__name__,
         )
         _perf_error_type = type(exc).__name__
+        _perf_error_message = str(exc)[:300]
         raise
     finally:
         # Wave 31-A: записываем latency в JSONL (graceful — не крашит bypass)
@@ -324,4 +327,5 @@ async def complete_via_cli(
             success=_perf_success,
             response_len=_perf_response_len,
             error_type=_perf_error_type,
+            error_message=_perf_error_message,
         )

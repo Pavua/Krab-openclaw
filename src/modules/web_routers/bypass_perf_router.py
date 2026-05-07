@@ -23,6 +23,15 @@ def build_bypass_perf_router(ctx: RouterContext) -> APIRouter:  # noqa: ARG001
         window: Annotated[
             str, Query(description="Окно анализа: '1h', '24h', '5m' или секунды")
         ] = "1h",
+        exclude_expected: Annotated[
+            bool,
+            Query(
+                description=(
+                    "Если true, отбрасывает known transient failures "
+                    "(quota/permission) — для alert pipeline. Session 39."
+                ),
+            ),
+        ] = False,
     ) -> dict:
         """Агрегированная latency статистика bypass вызовов.
 
@@ -33,11 +42,12 @@ def build_bypass_perf_router(ctx: RouterContext) -> APIRouter:  # noqa: ARG001
         - window=1h  — последний час (default)
         - window=24h — последние 24 часа
         - window=5m  — последние 5 минут
+        - exclude_expected=true — отбрасывает quota/permission failures
         """
         from src.integrations._bypass_perf import aggregate_perf, parse_duration
 
         window_sec = parse_duration(window)
-        stats = aggregate_perf(window_sec=window_sec)
+        stats = aggregate_perf(window_sec=window_sec, exclude_expected=exclude_expected)
         return {"ok": True, **stats}
 
     return router
