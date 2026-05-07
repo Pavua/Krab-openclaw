@@ -77,3 +77,73 @@ def isolate_userbot_inbox_capture(
         raising=False,
     )
     yield
+
+
+# ---------------------------------------------------------------------------
+# Session 39: persistent runtime state isolation
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolate_persistent_runtime_state(
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    """Перенаправляет файлы, которые production runtime пишет в ~/.openclaw/,
+    на временную директорию для каждого теста.
+
+    Зачем: parallel xdist runs (`-n 4`) видят production `runs.sqlite`,
+    `bypass_perf.jsonl` и т.п. Через poll_active_tasks() тесты замечают
+    реальные задачи (e.g. "Nightly Self-Diagnostics" stale 264s) и LLM
+    watchdog отменяет тестовые requests.
+
+    Стратегия: точечный redirect known leak paths в tmp dir. Не делаем
+    глобальный Path.home() patch — это сломает много модулей которые
+    легитимно нуждаются в реальном home.
+    """
+    tmp_root = tmp_path_factory.mktemp("krab_test_state")
+
+    # 1. RUNS_DB_PATH — openclaw task tracker (главный источник watchdog cancel'ов)
+    try:
+        from src.core import openclaw_task_poller as _otp
+
+        monkeypatch.setattr(_otp, "RUNS_DB_PATH", tmp_root / "runs.sqlite")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 2. bypass_perf.jsonl — leak attempts/failures между тестами
+    try:
+        from src.integrations import _bypass_perf as _bp
+
+        monkeypatch.setattr(_bp, "PERF_LOG", tmp_root / "bypass_perf.jsonl")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 3. _rerank_cache OrderedDict — module-level singleton, leak'ает между
+    # parallel workers (test_memory_adaptive_rerank_llm видит cached entries
+    # от других тестов и принимает решения skip-llm-rerank по ним).
+    try:
+        from src.core import memory_llm_rerank as _mr
+
+        _mr._rerank_cache.clear()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 4. OBSIDIAN_VAULT — hardcoded path /Users/pablito/Documents/Obsidian Vault.
+    # memo_service пишет туда — параллельные workers конкурируют за один файл.
+    try:
+        from src.core import memo_service as _memo
+
+        monkeypatch.setattr(_memo, "OBSIDIAN_VAULT", tmp_root / "obsidian_vault")
+    except Exception:  # noqa: BLE001
+        pass
+
+    yield
+
+    # Post-test: ещё раз чистим LRU чтобы следующий test видел пустой cache
+    try:
+        from src.core import memory_llm_rerank as _mr_post
+
+        _mr_post._rerank_cache.clear()
+    except Exception:  # noqa: BLE001
+        pass
