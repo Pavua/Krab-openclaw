@@ -23,13 +23,19 @@ import psutil
 # поэтому swap > 8GB на macOS НЕ критично. Для Linux 8GB реально означает memory pressure.
 _GB = 1_000_000_000
 COMBINED_RSS_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_RSS_THRESHOLD_GB", "12")) * _GB)
-SWAP_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_SWAP_THRESHOLD_GB", "16")) * _GB)
+SWAP_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_SWAP_THRESHOLD_GB", "18")) * _GB)
 RAM_AVAIL_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_RAM_AVAIL_THRESHOLD_GB", "3")) * _GB)
+# Session 40: cooldown между Telegram alerts чтобы не спамить каждую минуту.
+# При memory pressure которое держится час — 1-2 уведомления, не 60.
+ALERT_COOLDOWN_SEC = int(os.environ.get("KRAB_COEXIST_ALERT_COOLDOWN_SEC", "900"))  # 15 мин
 
 # Krab Owner Panel endpoint
 KRAB_NOTIFY_URL = os.environ.get("KRAB_NOTIFY_URL", "http://127.0.0.1:8080/api/notify")
 
 LOG_FILE = Path.home() / ".openclaw/krab_runtime_state/coexistence_monitor.log"
+ALERT_STATE_FILE = (
+    Path.home() / ".openclaw/krab_runtime_state/coexistence_alert_state.json"
+)
 
 # Паттерны командной строки для определения процессов Krab и Krab Ear
 KRAB_PATTERNS = ["userbot_bridge", "src/main.py"]
@@ -134,10 +140,26 @@ def main() -> int:
     with LOG_FILE.open("a") as f:
         f.write(json.dumps(snapshot) + "\n")
 
-    # Отправить Telegram alert если есть critical условия
+    # Отправить Telegram alert если есть critical условия + cooldown.
+    # Session 40: спам каждую минуту → cooldown 15 мин (default).
     if alerts:
-        alert_text = "⚠️ Krab memory alert: " + ", ".join(alerts)
-        _send_notify(alert_text)
+        now_ts = time.time()
+        last_ts = 0.0
+        try:
+            if ALERT_STATE_FILE.exists():
+                with ALERT_STATE_FILE.open() as f:
+                    last_ts = float(json.load(f).get("last_alert_ts", 0.0))
+        except Exception:  # noqa: BLE001
+            last_ts = 0.0
+
+        if now_ts - last_ts >= ALERT_COOLDOWN_SEC:
+            alert_text = "⚠️ Krab memory alert: " + ", ".join(alerts)
+            _send_notify(alert_text)
+            try:
+                ALERT_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+                ALERT_STATE_FILE.write_text(json.dumps({"last_alert_ts": now_ts}))
+            except Exception:  # noqa: BLE001
+                pass
 
     return 0
 
