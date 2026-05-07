@@ -129,7 +129,30 @@ def _isolate_persistent_runtime_state(
     except Exception:  # noqa: BLE001
         pass
 
-    # 4. OBSIDIAN_VAULT — hardcoded path /Users/pablito/Documents/Obsidian Vault.
+    # 5. swarm_channels.json — production singleton конфиг forum/legacy/
+    # additional broadcast chats. Тесты writing'или сюда test placeholders
+    # (-100, -200) которые после reboot Krab loadit как production config →
+    # `!swarm` в group не работает. Session 40: redirect _STATE_PATH в tmp,
+    # сбрасываем in-memory кэш SwarmChannels чтобы каждый тест получил
+    # чистый state.
+    try:
+        from src.core import swarm_channels as _sc
+
+        # Redirect persistent file
+        monkeypatch.setattr(_sc, "_STATE_PATH", tmp_root / "swarm_channels.json")
+        # Reset module-level singleton's in-memory state (если уже создан)
+        singleton = getattr(_sc, "swarm_channels", None)
+        if singleton is not None:
+            for attr in ("_team_topics", "_team_chats", "_additional_chats"):
+                store = getattr(singleton, attr, None)
+                if hasattr(store, "clear"):
+                    store.clear()
+            if hasattr(singleton, "_forum_chat_id"):
+                singleton._forum_chat_id = None
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 6. OBSIDIAN_VAULT — hardcoded path /Users/pablito/Documents/Obsidian Vault.
     # memo_service пишет туда — параллельные workers конкурируют за один файл.
     try:
         from src.core import memo_service as _memo
