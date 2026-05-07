@@ -189,7 +189,11 @@ async def test_zombie_escalation_path_in_loop() -> None:
             "_probe_telegram_dc",
             AsyncMock(return_value=True),  # DC reachable — zombie scenario
         ),
-        patch("os._exit", side_effect=_mock_exit),
+        # Session 39: мокаем helper _launchd_exit_78 (раньше — os._exit
+        # напрямую). Helper при PYTEST_CURRENT_TEST → raise SystemExit
+        # вместо os._exit чтобы xdist worker не падал. Тест проверяет что
+        # helper вызвался ровно 1 раз с правильным behaviour.
+        patch("src.userbot.network_watchdog._launchd_exit_78", side_effect=lambda: _mock_exit(78)),
         patch.dict(os.environ, {
             "KRAB_ZOMBIE_ESCALATION_ENABLED": "1",
             "KRAB_ZOMBIE_DOUBLE_SILENCE_SEC": "600",
@@ -201,8 +205,8 @@ async def test_zombie_escalation_path_in_loop() -> None:
         with pytest.raises(SystemExit) as exc_info:
             await bot._network_offline_monitor_loop()
 
-    assert exc_info.value.code == 78, "os._exit должен вызываться с кодом 78"
-    assert len(exit_calls) == 1, "os._exit должен вызываться ровно один раз"
+    assert exc_info.value.code == 78, "_launchd_exit_78 должен возвращать SystemExit(78)"
+    assert len(exit_calls) == 1, "_launchd_exit_78 должен вызываться ровно один раз"
 
 
 # ── тест 6: DC reachable + session ok → счётчик сбрасывается ─────────────────

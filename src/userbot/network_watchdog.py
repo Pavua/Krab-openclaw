@@ -30,6 +30,24 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+
+def _launchd_exit_78() -> None:
+    """Trigger launchd-respawn через `os._exit(78)` (EX_CONFIG).
+
+    Session 39: вынесено в helper чтобы добавить test-process guard. Если
+    модуль исполняется внутри pytest worker (PYTEST_CURRENT_TEST установлен
+    pytest перед каждым тестом) — НЕ убиваем интерпретатор, а raise'аем
+    SystemExit. Это позволяет xdist worker корректно завершиться, а
+    тесты — assert'ить что watchdog хотел escalation.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        # pytest-xdist worker умирает при os._exit → "node down" + hang.
+        # SystemExit ловится в caller (или в pytest framework) и тест
+        # видит явное завершение, без crash worker process.
+        raise SystemExit(78)
+    os._exit(78)  # noqa: SIM905 — production: launchd respawn через EX_CONFIG
+
+
 # Wave 36-A: сколько consecutive session probe failures до process restart
 _ZOMBIE_ESCALATION_THRESHOLD = int(os.environ.get("KRAB_ZOMBIE_ESCALATION_THRESHOLD", "3"))
 # Wave 36-A: тишина должна быть дольше этого чтобы вообще делать session probe
@@ -386,7 +404,7 @@ class NetworkWatchdogMixin:
                                     silence_sec, _consecutive_zombie_failures
                                 )
                                 # os._exit обходит asyncio cleanup — launchd respawn через exit 78
-                                os._exit(78)  # noqa: SIM905 — намеренно, нет safe shutdown
+                                _launchd_exit_78()
                     else:
                         # Тишина меньше zombie-порога — просто тихий час
                         _consecutive_zombie_failures = 0
@@ -505,7 +523,7 @@ class NetworkWatchdogMixin:
                     )
                 except Exception:  # noqa: BLE001
                     pass
-                os._exit(78)  # noqa: SIM905 — намеренно, EX_CONFIG → launchd respawn
+                _launchd_exit_78()  # EX_CONFIG → launchd respawn (test-safe wrapper)
 
     async def _macos_sleep_detect_loop(self) -> None:
         """Wave 36-D: детект macOS sleep через monotonic time jump.
