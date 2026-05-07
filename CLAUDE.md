@@ -349,6 +349,40 @@ OPENCLAW_REASONING_EFFORT=medium
 | Session 36 | ~10738+ |
 | **Session 38** | **12594 collected** |
 | **Session 39 (06.05)** | **12702 collected** (+108: Wave 31 mixin tests + 3 stale fixed) |
+| **Session 40 (07.05)** | **+30 SkillCurator analyzer + e2e fixes** (см. ниже) |
+
+### Session 40 highlights (07.05.2026 — runtime e2e + KE deadlock fix + ecosystem health)
+
+Branch `claude/naughty-ellis-f5a58e`, ~12 commits + Krab Ear repo (отдельный) `761bd5b`.
+
+**Killer bug:** Krab Ear menu bar/hotkey/window broken → root cause `Process+Pipe+waitUntilExit`
+deadlock in `SingleInstanceGuard.swift:defaultPsRunner`. `ps -axo pid,command` пишет 174KB
+на dev-машине, pipe buffer ~16KB → ps blocks on write → `waitUntilExit` hangs forever →
+`applicationDidFinishLaunching` blocked → нет `NSStatusBar.statusItem`. Fix: drain pipe
+ПЕРЕД `waitUntilExit`. Same root cause затрагивал KRAB-EAR-AGENT-E NSAlert hang.
+
+**Sentry housekeeping:**
+- 5 issues resolved (PYTHON-FASTAPI-Z 387 events + 4 pytest-leak: 83/84/85/63)
+- `_detect_git_release()` → `release: krab@<git-sha>` для auto-close on `Fixes:` PR
+- `_is_pytest_event()` filter дропает testserver URL + pytest-of- paths из prod проекта
+
+**Swarm group "🐝 Krab Swarm" production-ready:**
+- `swarm_channels.json` затёрт тестами до placeholders → restored + conftest guard (4-я persistent state leak path после Session 39)
+- 4 team accounts privacy `ChatInvite/Forwards` → `AllowAll` (главное для Coders где было `DisallowAll`)
+- E2E подтверждён: все 4 команды отвечают в группе
+- `docs/USER_GUIDE.md` (294 LOC) + pinned summary в группе
+
+**Krab Ear ecosystem:**
+- `start_krab.command`: `ensure_krab_ear_launchd_loaded()` — auto-bootstrap LaunchAgents после Stop (раньше каждый restart Krab ломал KE)
+- LM Studio: `gemma-4-e4b-it-mlx` loaded → LLM postprocess работает (97→56 chars rewrites verified live)
+- Backend → settings.json `llm_model = gemma-4-e4b-it-mlx`
+- `KRAB_MCP_APPLE_WRITE_ENABLED=1` в .env → Reminders/Calendar/Notes write enabled
+- KE auto_glossary.json: removed 21 corrupt hallucinated entries + added 30 domain terms (Krab/swarm/codex-cli/Whisper/MLX/Quironsalud/etc)
+
+**SkillCurator Step 2 (Wave 14-I follow-up):** новый module `src/core/skill_curator_analyzer.py` —
+LLM analyzer читает swarm_artifacts/ + текущий prompt → предлагает 3-5 улучшений per team
+(clarity / structure / delegation / format). CLI `scripts/skill_curator_analyze.py`,
+30 tests pass, markdown reports в `~/.openclaw/krab_runtime_state/skill_curator_reports/`.
 
 ## Wave 31 series — Bridge mixin extraction (06.05.2026)
 

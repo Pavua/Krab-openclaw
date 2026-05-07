@@ -266,6 +266,36 @@ Krab Ear — отдельное macOS приложение (Swift) в menu bar. 
 
 ---
 
+## 6.6 SkillCurator — auto-improve prompts свёрма
+
+Krab умеет анализировать собственные swarm prompts и предлагать улучшения
+на основе реальных артефактов прошлых раундов:
+
+```
+venv/bin/python scripts/skill_curator_analyze.py --team coders   # одна команда
+venv/bin/python scripts/skill_curator_analyze.py                 # все 4
+venv/bin/python scripts/skill_curator_analyze.py --dry-run       # без LLM call
+```
+
+Output → markdown отчёт в `~/.openclaw/krab_runtime_state/skill_curator_reports/`
+с 3-5 предложениями per team (clarity / structure / delegation hints / output format).
+Manual approval: ты сам решаешь применять или нет — ничего не auto-apply.
+
+## 6.7 Krab Ear glossary — учим Whisper доменным терминам
+
+Если Whisper стабильно ошибается на каком-то слове (например "битвовка"
+вместо "диктовка") — добавь его в biased prompt:
+
+```bash
+# Файл: ~/Library/Application Support/KrabEar/auto_glossary.json
+{"terms": ["диктовка", "Krab", "свёрм", "transcription", ...]}
+```
+
+Backend перечитает glossary автоматически на следующей транскрипции (TTL 6h).
+Сейчас в glossary 37 terms (Krab/swarm/codex-cli/Whisper/MLX/Quironsalud/etc).
+
+---
+
 ## 7. Когда что-то не работает — чек-лист
 
 1. **Krab вообще жив?** — `!status` или DM "проверка связи"
