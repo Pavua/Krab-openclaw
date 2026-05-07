@@ -293,6 +293,10 @@ class TestMemoryPhase2Integration:
         Важно: ИМЕННО FTS-only, а НЕ пусто. BM25 найдёт chunks по keyword'у.
         """
         monkeypatch.setenv("KRAB_RAG_PHASE2_ENABLED", "0")
+        # Session 39: SHADOW mode (Session 22, live) запускает vec для
+        # telemetry comparison даже когда production flag=0. Для теста
+        # «строго FTS-only» нужно отключить и shadow comparison.
+        monkeypatch.setenv("KRAB_RAG_PHASE2_SHADOW", "0")
         r = _make_retriever(phase2_archive)
 
         vec_calls: dict[str, int] = {"hits": 0, "n_calls": 0}

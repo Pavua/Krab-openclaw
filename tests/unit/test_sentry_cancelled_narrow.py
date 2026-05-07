@@ -136,3 +136,67 @@ def test_other_benign_markers_still_work():
         "exception": {"values": [{"type": "HTTPException", "value": "503: userbot_not_ready"}]}
     }
     assert _before_send(event, {}) is None
+
+
+# Session 39: PYTHON-FASTAPI-Z (387 events за 14 дней) — uvicorn.error logger
+# ловил CancelledError в LifespanOn.main, но фильтр не срабатывал, потому что
+# logger.error events не имеют frames в exception блоке.
+
+
+def test_uvicorn_error_logger_cancelled_is_shutdown():
+    """logger=uvicorn.error → shutdown lifespan, suppress."""
+    event = {
+        "logger": "uvicorn.error",
+        "exception": {"values": [{"type": "CancelledError", "value": ""}]},
+    }
+    assert _is_shutdown_cancelled_error(event) is True
+    assert _before_send(event, {}) is None
+
+
+def test_uvicorn_lifespan_logger_cancelled_is_shutdown():
+    """logger=uvicorn.lifespan тоже shutdown-related."""
+    event = {
+        "logger": "uvicorn.lifespan.on",
+        "exception": {"values": [{"type": "CancelledError", "value": ""}]},
+    }
+    assert _is_shutdown_cancelled_error(event) is True
+
+
+def test_trace_description_lifespan_is_shutdown():
+    """contexts.trace.description содержит 'LifespanOn.main' → shutdown."""
+    event = {
+        "contexts": {"trace": {"description": "LifespanOn.main"}},
+        "exception": {"values": [{"type": "CancelledError", "value": ""}]},
+    }
+    assert _is_shutdown_cancelled_error(event) is True
+
+
+def test_threads_frames_lifespan_is_shutdown():
+    """Sentry может класть stacktrace в threads.values, не в exception.values."""
+    event = {
+        "threads": {
+            "values": [
+                {
+                    "stacktrace": {
+                        "frames": [
+                            {"filename": "/app/main.py", "function": "main"},
+                            {"filename": "/lib/uvicorn/lifespan/on.py", "function": "receive"},
+                        ]
+                    }
+                }
+            ]
+        },
+        "exception": {"values": [{"type": "CancelledError", "value": ""}]},
+    }
+    assert _is_shutdown_cancelled_error(event) is True
+
+
+def test_random_logger_cancelled_not_shutdown():
+    """logger=src.openclaw_client (LLM timeout) → НЕ shutdown, пропускаем."""
+    event = {
+        "logger": "src.openclaw_client",
+        "exception": {"values": [{"type": "CancelledError", "value": "wait_for timeout"}]},
+    }
+    assert _is_shutdown_cancelled_error(event) is False
+    # _before_send → продолжает, не глотает (no benign marker matches)
+    assert _before_send(event, {}) is event

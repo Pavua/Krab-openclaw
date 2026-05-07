@@ -189,24 +189,16 @@ def test_model_catalog_force_refresh_bypasses_cache() -> None:
     """?force_refresh=true не должен использовать кэш (_get_model_catalog_cache не вызывается)."""
     fake_catalog = {"models": [], "modes": []}
 
-    # Переопределяем _store и _get чтобы изолировать от реальных async вызовов
+    # Session 39: model_router читает helpers из ctx.deps (build_catalog,
+    # get_cache). Мокаем _build_model_catalog_method чтобы избежать live
+    # provider calls (test зависал на старой версии).
     with (
         patch.object(WebApp, "_get_model_catalog_cache", return_value=None) as mock_cache,
         patch.object(WebApp, "_store_model_catalog_cache"),
-        patch(
-            "src.modules.web_app.WebApp._resolve_local_runtime_truth",
-            AsyncMock(
-                return_value={
-                    "active_model": "",
-                    "engine": "lmstudio",
-                    "runtime_url": "n/a",
-                    "is_loaded": False,
-                    "runtime_reachable": False,
-                    "loaded_models": [],
-                    "probe_state": "down",
-                    "error": "",
-                }
-            ),
+        patch.object(
+            WebApp,
+            "_build_model_catalog_method",
+            new=AsyncMock(return_value=fake_catalog),
         ),
     ):
         resp = _make_client().get("/api/model/catalog?force_refresh=true")

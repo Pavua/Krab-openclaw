@@ -278,10 +278,13 @@ def test_chat_session_clear_unsupported_client(monkeypatch: pytest.MonkeyPatch) 
 def test_chat_session_clear_success_returns_action_field(monkeypatch: pytest.MonkeyPatch) -> None:
     """Успешный clear должен вернуть action='clear_chat_session' и переданный chat_id."""
     monkeypatch.setenv("WEB_API_KEY", WEB_KEY)
+    async def _fake_telegram_session_snapshot(self):  # noqa: ANN001
+        return _FAKE_SESSION_SNAPSHOT
+
     monkeypatch.setattr(
         WebApp,
         "_telegram_session_snapshot",
-        lambda self: _FAKE_SESSION_SNAPSHOT,
+        _fake_telegram_session_snapshot,
     )
 
     fake_oc = _FakeOpenClaw()
@@ -303,10 +306,13 @@ def test_chat_session_clear_success_returns_action_field(monkeypatch: pytest.Mon
 def test_chat_session_clear_runtime_after_present(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ответ clear должен содержать runtime_after со статусом после очистки."""
     monkeypatch.setenv("WEB_API_KEY", WEB_KEY)
+    async def _fake_telegram_session_snapshot(self):  # noqa: ANN001
+        return _FAKE_SESSION_SNAPSHOT
+
     monkeypatch.setattr(
         WebApp,
         "_telegram_session_snapshot",
-        lambda self: _FAKE_SESSION_SNAPSHOT,
+        _fake_telegram_session_snapshot,
     )
 
     data = (
@@ -335,10 +341,13 @@ def test_handoff_contains_workspace_state(monkeypatch: pytest.MonkeyPatch) -> No
         "src.modules.web_app.build_workspace_state_snapshot",
         lambda: _FAKE_WORKSPACE_SNAPSHOT,
     )
+    async def _fake_telegram_session_snapshot(self):  # noqa: ANN001
+        return _FAKE_SESSION_SNAPSHOT
+
     monkeypatch.setattr(
         WebApp,
         "_telegram_session_snapshot",
-        lambda self: _FAKE_SESSION_SNAPSHOT,
+        _fake_telegram_session_snapshot,
     )
 
     resp = _client().get("/api/runtime/handoff", params={"probe_cloud_runtime": "0"})
@@ -356,10 +365,13 @@ def test_handoff_contains_telegram_session(monkeypatch: pytest.MonkeyPatch) -> N
         "src.modules.web_app.build_workspace_state_snapshot",
         lambda: _FAKE_WORKSPACE_SNAPSHOT,
     )
+    async def _fake_telegram_session_snapshot(self):  # noqa: ANN001
+        return _FAKE_SESSION_SNAPSHOT
+
     monkeypatch.setattr(
         WebApp,
         "_telegram_session_snapshot",
-        lambda self: _FAKE_SESSION_SNAPSHOT,
+        _fake_telegram_session_snapshot,
     )
 
     data = _client().get("/api/runtime/handoff", params={"probe_cloud_runtime": "0"}).json()
@@ -374,10 +386,13 @@ def test_handoff_health_lite_workspace_attached(monkeypatch: pytest.MonkeyPatch)
         "src.modules.web_app.build_workspace_state_snapshot",
         lambda: {**_FAKE_WORKSPACE_SNAPSHOT, "shared_workspace_attached": True},
     )
+    async def _fake_telegram_session_snapshot(self):  # noqa: ANN001
+        return _FAKE_SESSION_SNAPSHOT
+
     monkeypatch.setattr(
         WebApp,
         "_telegram_session_snapshot",
-        lambda self: _FAKE_SESSION_SNAPSHOT,
+        _fake_telegram_session_snapshot,
     )
 
     data = _client().get("/api/runtime/handoff", params={"probe_cloud_runtime": "0"}).json()

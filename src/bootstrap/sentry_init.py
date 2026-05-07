@@ -197,27 +197,46 @@ def _is_shutdown_cancelled_error(event: dict[str, Any], hint: dict[str, Any] | N
 
     Defensive: на любом неожиданном shape события возвращаем False (не
     глотаем — пусть событие дойдёт до Sentry, чем мы пропустим реальный bug).
+
+    Session 39: расширено для logger.error events (uvicorn/starlette logger
+    — 387 событий PYTHON-FASTAPI-Z за 14 дней утекали мимо фильтра потому что
+    LoggingIntegration выставляет другие поля события — нет "exception" frames,
+    но есть logger="uvicorn.error" + transaction может быть пуст. Проверяем
+    также threads frames + breadcrumbs trace description.
     """
     try:
-        # Fast path: transaction set FastAPI/Starlette на "lifespan" во время shutdown.
+        # Fast path 1: transaction set FastAPI/Starlette на "lifespan" во время shutdown.
         transaction = str(event.get("transaction") or "").lower()
         if "lifespan" in transaction:
             return True
-        # Slow path: проверяем верхние ~5 кадров стека.
-        exc_values = (event.get("exception") or {}).get("values") or []
-        for v in exc_values:
-            if not isinstance(v, dict):
-                continue
-            frames = (v.get("stacktrace") or {}).get("frames") or []
-            if not isinstance(frames, list):
-                continue
-            # В Sentry frames упорядочены от oldest к newest, top-of-stack последним.
-            for frame in reversed(frames[-5:]):
-                if not isinstance(frame, dict):
-                    continue
-                filename = str(frame.get("abs_path") or frame.get("filename") or "").lower()
-                if "starlette/routing" in filename or "uvicorn/lifespan" in filename:
+        # Fast path 2: logger=uvicorn.error/uvicorn.lifespan/starlette.* + value содержит CancelledError.
+        # logger.error("Traceback...") path — Sentry не извлекает frames в exception блок.
+        logger_name = str(event.get("logger") or "").lower()
+        if logger_name in ("uvicorn.error", "uvicorn.lifespan", "uvicorn.lifespan.on"):
+            return True
+        # Fast path 3: trace context description "LifespanOn.*" (видно в Sentry для shutdown events).
+        contexts = event.get("contexts") or {}
+        if isinstance(contexts, dict):
+            trace = contexts.get("trace") or {}
+            if isinstance(trace, dict):
+                description = str(trace.get("description") or "").lower()
+                if "lifespan" in description:
                     return True
+        # Slow path: проверяем верхние ~5 кадров стека в exception И threads.
+        for collection_key in ("exception", "threads"):
+            values = (event.get(collection_key) or {}).get("values") or []
+            for v in values:
+                if not isinstance(v, dict):
+                    continue
+                frames = (v.get("stacktrace") or {}).get("frames") or []
+                if not isinstance(frames, list):
+                    continue
+                for frame in reversed(frames[-5:]):
+                    if not isinstance(frame, dict):
+                        continue
+                    filename = str(frame.get("abs_path") or frame.get("filename") or "").lower()
+                    if "starlette/routing" in filename or "uvicorn/lifespan" in filename:
+                        return True
         return False
     except Exception:  # noqa: BLE001
         # Defensive: never swallow if we can't tell.
