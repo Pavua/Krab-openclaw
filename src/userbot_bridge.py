@@ -52,6 +52,8 @@ from .core.swarm_channels import swarm_channels
 from .core.swarm_scheduler import swarm_scheduler
 from .core.telegram_rate_limiter import telegram_rate_limiter
 from .employee_templates import ROLES
+
+# Wave 15 content commands re-exported через handlers/__init__.py
 from .handlers import (
     handle_acl,
     handle_agent,
@@ -102,10 +104,12 @@ from .handlers import (
     handle_help,
     handle_hs,
     handle_id,
+    handle_img,
     handle_inbox,
     handle_loglevel,
     handle_ls,
     handle_macos,
+    handle_media,
     handle_mem,
     handle_memo,
     handle_memory,
@@ -116,6 +120,7 @@ from .handlers import (
     handle_news,
     handle_note,
     handle_notify,
+    handle_ocr,
     handle_opencode,
     handle_panel,
     handle_pin,
@@ -147,12 +152,14 @@ from .handlers import (
     handle_setpanelauth,
     handle_shop,
     handle_silence,
+    handle_snippet,
     handle_stats,
     handle_status,
     handle_stopwatch,
     handle_summary,
     handle_swarm,
     handle_sysinfo,
+    handle_template,
     handle_timer,
     handle_todo,
     handle_top,
@@ -170,6 +177,7 @@ from .handlers import (
     handle_who,
     handle_whois,
     handle_write,
+    handle_yt,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -817,6 +825,47 @@ class KraabUserbot(
         )
         async def wrap_explain(c, m):
             await run_cmd(handle_explain, m)
+
+        # Wave 15 content commands (Session 40 fix — раньше handler'ы существовали
+        # но не были attached к pyrogram filters, из-за чего `!yt`/`!img`/`!ocr`/
+        # `!media`/`!snippet`/`!template` молчали в DM).
+        @self.client.on_message(
+            filters.command("yt", prefixes=prefixes) & _make_command_filter("yt"), group=-1
+        )
+        async def wrap_yt(c, m):
+            await run_cmd(handle_yt, m)
+
+        @self.client.on_message(
+            filters.command("img", prefixes=prefixes) & _make_command_filter("img"), group=-1
+        )
+        async def wrap_img(c, m):
+            await run_cmd(handle_img, m)
+
+        @self.client.on_message(
+            filters.command("ocr", prefixes=prefixes) & _make_command_filter("ocr"), group=-1
+        )
+        async def wrap_ocr(c, m):
+            await run_cmd(handle_ocr, m)
+
+        @self.client.on_message(
+            filters.command("media", prefixes=prefixes) & _make_command_filter("media"), group=-1
+        )
+        async def wrap_media(c, m):
+            await run_cmd(handle_media, m)
+
+        @self.client.on_message(
+            filters.command("snippet", prefixes=prefixes) & _make_command_filter("snippet"),
+            group=-1,
+        )
+        async def wrap_snippet(c, m):
+            await run_cmd(handle_snippet, m)
+
+        @self.client.on_message(
+            filters.command("template", prefixes=prefixes) & _make_command_filter("template"),
+            group=-1,
+        )
+        async def wrap_template(c, m):
+            await run_cmd(handle_template, m)
 
         @self.client.on_message(
             filters.command("news", prefixes=prefixes) & _make_command_filter("news"), group=-1
