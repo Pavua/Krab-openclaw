@@ -277,6 +277,12 @@ class Config:
 
     # Routing: force_cloud полностью обходит локальный путь (Фаза 2.2)
     FORCE_CLOUD: bool = os.getenv("FORCE_CLOUD", "0").strip().lower() in ("1", "true", "yes")
+    # Telegram-query routing: запросы об истории переписки/первом сообщении идут через
+    # cloud path (не codex-cli), потому что codex-cli блокирует Telegram MCP (Wave 9-B/10-A).
+    # Default ON (1) — workaround активен. Выключить: KRAB_TELEGRAM_QUERY_FORCE_CLOUD=0
+    KRAB_TELEGRAM_QUERY_FORCE_CLOUD: bool = os.getenv(
+        "KRAB_TELEGRAM_QUERY_FORCE_CLOUD", "1"
+    ).strip().lower() in ("1", "true", "yes")
     # Переводить ли браузерную вкладку на передний план при каждом обращении.
     # Дефолт 0 = тихий режим (Краб работает с браузером не переключая окно).
     # Включить: BROWSER_FOCUS_TAB=1 в .env или !config BROWSER_FOCUS_TAB=1

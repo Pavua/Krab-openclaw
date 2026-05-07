@@ -3229,6 +3229,20 @@ class KraabUserbot(
                 preferred_vision=str(getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or ""),
             )
             force_cloud = True
+        # Wave 35-B: Telegram-query routing override.
+        # codex-cli блокирует Telegram MCP (Wave 9-B/10-A guard) — запросы об истории
+        # переписки, первом сообщении, поиске по чатам должны идти через cloud path,
+        # где MCP серверы пробрасываются и tool calls работают.
+        if not force_cloud and bool(getattr(config, "KRAB_TELEGRAM_QUERY_FORCE_CLOUD", True)):
+            from .core.telegram_query_detector import is_telegram_query  # noqa: PLC0415
+
+            if is_telegram_query(query):
+                logger.info(
+                    "telegram_query_detected",
+                    query_preview=query[:80],
+                    routing_override="force_cloud",
+                )
+                force_cloud = True
         # Bug 12 (Session 28): handoff notice «🦀 Принял запрос... в фоне» допустим
         # только в DM/self (где владелец ждёт явного ack). В групповых чатах он
         # выглядит как мусор — Krab должен молча обрабатывать и отдавать финальный
