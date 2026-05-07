@@ -129,6 +129,12 @@ def client():
         mock_config.KRAB_ANTHROPIC_VERTEX_DIRECT_BYPASS_ENABLED = False
         mock_config.KRAB_GEMMA_DIRECT_BYPASS_ENABLED = False
         mock_config.KRAB_CLI_BYPASS_ENABLED = False
+        # Session 39: numeric attrs для LM fallback path — иначе MagicMock
+        # сравнивается с int → TypeError ('<=' not supported).
+        mock_config.LOCAL_HISTORY_WINDOW_MESSAGES = 20
+        mock_config.LOCAL_HISTORY_WINDOW_MAX_CHARS = 12000
+        mock_config.LOCAL_PREFERRED_VISION_MODEL = ""
+        mock_config.TOOL_NARRATION_ENABLED = False
         inst = OpenClawClient()
         inst._http_client = AsyncMock()
         yield inst
