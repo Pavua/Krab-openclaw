@@ -22,6 +22,7 @@ from typing import Any, Callable
 from .logger import get_logger
 from .swarm_channels import swarm_channels
 from .swarm_memory import swarm_memory
+from .swarm_pending_state import make_round_id, swarm_pending_store
 from .swarm_team_prompts import get_team_system_prompt
 from .swarm_tool_scope import format_tool_hint
 
@@ -360,126 +361,173 @@ class AgentRoom:
             swarm_channels.mark_round_active(_team_name)
             await swarm_channels.broadcast_round_start(team=_team_name, topic=topic)
 
-        for role_idx, role in enumerate(self.roles):
-            name = str(role.get("name", "agent"))
-            emoji = str(role.get("emoji", "🤖"))
-            title = str(role.get("title", name))
-            hint = str(role.get("system_hint", "")).strip()
-
-            # Проверяем intervention от владельца перед каждой ролью
-            if _team_name:
-                intervention = swarm_channels.get_pending_intervention(_team_name)
-                if intervention:
-                    accumulated_context += intervention
-                    logger.info("agent_room_intervention_applied", team=_team_name, role=name)
-
-            # Tool awareness: per-team tool scoping через swarm_tool_scope
-            _tor_enabled = False
+        # Phase 1: создаём pending-файл перед первой ролью (write-only, silent)
+        _pending_round_id: str | None = None
+        if _team_name and _depth == 0:
             try:
-                from ..config import config as _cfg  # noqa: PLC0415
-
-                _tor_enabled = getattr(_cfg, "TOR_ENABLED", False)
+                _pending_round_id = make_round_id(_team_name)
+                swarm_pending_store.create_initial(
+                    _pending_round_id,
+                    team=_team_name,
+                    topic=topic,
+                    ab_id=_ab_id,
+                    ab_variant=_ab_variant,
+                )
             except Exception:  # noqa: BLE001
-                pass
-            tool_hint = format_tool_hint(
-                _team_name or "default",
-                tor_enabled=_tor_enabled,
-                role_idx=role_idx,
-            )
+                _pending_round_id = None  # не блокируем раунд при ошибке
 
-            # Wave 16-D: первая роль (role_idx==0) получает A/B team_prompt как prefix.
-            # Остальные роли используют свои role-specific hint'ы без изменений.
-            ab_prefix = ""
-            if role_idx == 0 and _ab_team_prompt:
-                ab_prefix = f"{_ab_team_prompt}\n\n"
+        try:
+            for role_idx, role in enumerate(self.roles):
+                name = str(role.get("name", "agent"))
+                emoji = str(role.get("emoji", "🤖"))
+                title = str(role.get("title", name))
+                hint = str(role.get("system_hint", "")).strip()
 
-            if accumulated_context:
-                prompt = (
-                    f"{ab_prefix}{hint}{tool_hint}\n\n"
-                    f"--- Контекст предыдущих ролей ---\n{accumulated_context}\n"
-                    f"---\n\nТема: {topic}"
-                )
-            else:
-                prompt = f"{ab_prefix}{hint}{tool_hint}\n\nТема: {topic}"
+                # Проверяем intervention от владельца перед каждой ролью
+                if _team_name:
+                    intervention = swarm_channels.get_pending_intervention(_team_name)
+                    if intervention:
+                        accumulated_context += intervention
+                        logger.info("agent_room_intervention_applied", team=_team_name, role=name)
 
-            try:
-                # Wave 38-B: route через engine dispatcher (при dispatch OFF — прямой router.route_query)
-                response = await _dispatch_route_query(
-                    prompt,
-                    router,
-                    team_name=_team_name,
-                    chat_id=None,  # swarm не знает chat_id — передаём None (resolver использует room)
-                )
-            except Exception as exc:  # noqa: BLE001
-                response = f"[Ошибка роли {name}: {exc}]"
-                logger.warning("agent_room_role_failed", role=name, error=str(exc))
+                # Tool awareness: per-team tool scoping через swarm_tool_scope
+                _tor_enabled = False
+                try:
+                    from ..config import config as _cfg  # noqa: PLC0415
 
-            clipped = str(response or "").strip()[: self.role_context_clip]
-            if not clipped:
-                clipped = "[Пустой ответ роли: проверьте контекст, лимиты или состояние модели]"
-                logger.warning("agent_room_role_empty_response", role=name, topic=topic)
-
-            # Live broadcast: публикуем ответ роли в swarm-группу (все уровни depth)
-            if broadcast_team:
-                await swarm_channels.broadcast_role_step(
-                    team=broadcast_team,
-                    role_name=name,
-                    role_emoji=emoji,
-                    role_title=title,
-                    text=clipped,
+                    _tor_enabled = getattr(_cfg, "TOR_ENABLED", False)
+                except Exception:  # noqa: BLE001
+                    pass
+                tool_hint = format_tool_hint(
+                    _team_name or "default",
+                    tor_enabled=_tor_enabled,
+                    role_idx=role_idx,
                 )
 
-            # R18: Детектируем директиву делегирования [DELEGATE: team]
-            if _bus is not None and _router_factory is not None:
-                m = _DELEGATE_PATTERN.search(clipped)
-                if m:
-                    delegate_team = m.group(1).strip()
-                    # Извлекаем задачу: текст после [DELEGATE: team] или весь ответ
-                    delegate_topic = _DELEGATE_PATTERN.sub("", clipped).strip() or topic
-                    logger.info(
-                        "agent_room_delegation_detected",
-                        role=name,
-                        target_team=delegate_team,
-                        depth=_depth,
+                # Wave 16-D: первая роль (role_idx==0) получает A/B team_prompt как prefix.
+                # Остальные роли используют свои role-specific hint'ы без изменений.
+                ab_prefix = ""
+                if role_idx == 0 and _ab_team_prompt:
+                    ab_prefix = f"{_ab_team_prompt}\n\n"
+
+                if accumulated_context:
+                    prompt = (
+                        f"{ab_prefix}{hint}{tool_hint}\n\n"
+                        f"--- Контекст предыдущих ролей ---\n{accumulated_context}\n"
+                        f"---\n\nТема: {topic}"
                     )
-                    # Live broadcast: уведомление о делегировании (все уровни depth)
-                    if broadcast_team:
-                        await swarm_channels.broadcast_delegation(
-                            source_team=broadcast_team,
+                else:
+                    prompt = f"{ab_prefix}{hint}{tool_hint}\n\nТема: {topic}"
+
+                try:
+                    # Wave 38-B: route через engine dispatcher (при dispatch OFF — прямой router.route_query)
+                    response = await _dispatch_route_query(
+                        prompt,
+                        router,
+                        team_name=_team_name,
+                        chat_id=None,  # swarm не знает chat_id — передаём None (resolver использует room)
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    response = f"[Ошибка роли {name}: {exc}]"
+                    logger.warning("agent_room_role_failed", role=name, error=str(exc))
+
+                clipped = str(response or "").strip()[: self.role_context_clip]
+                if not clipped:
+                    clipped = "[Пустой ответ роли: проверьте контекст, лимиты или состояние модели]"
+                    logger.warning("agent_room_role_empty_response", role=name, topic=topic)
+
+                # Live broadcast: публикуем ответ роли в swarm-группу (все уровни depth)
+                if broadcast_team:
+                    await swarm_channels.broadcast_role_step(
+                        team=broadcast_team,
+                        role_name=name,
+                        role_emoji=emoji,
+                        role_title=title,
+                        text=clipped,
+                    )
+
+                # R18: Детектируем директиву делегирования [DELEGATE: team]
+                if _bus is not None and _router_factory is not None:
+                    m = _DELEGATE_PATTERN.search(clipped)
+                    if m:
+                        delegate_team = m.group(1).strip()
+                        # Извлекаем задачу: текст после [DELEGATE: team] или весь ответ
+                        delegate_topic = _DELEGATE_PATTERN.sub("", clipped).strip() or topic
+                        logger.info(
+                            "agent_room_delegation_detected",
+                            role=name,
+                            target_team=delegate_team,
+                            depth=_depth,
+                        )
+                        # Live broadcast: уведомление о делегировании (все уровни depth)
+                        if broadcast_team:
+                            await swarm_channels.broadcast_delegation(
+                                source_team=broadcast_team,
+                                target_team=delegate_team,
+                                topic=delegate_topic,
+                            )
+                        # Phase 8: delegation checkpoint — фиксируем в task board
+                        try:
+                            from .swarm_task_board import swarm_task_board  # noqa: PLC0415
+
+                            swarm_task_board.create_task(
+                                team=delegate_team,
+                                title=f"Delegation: {delegate_topic[:80]}",
+                                description=f"Delegated from {_team_name or 'default'} role {name}",
+                                priority="high",
+                                created_by=f"delegation:{_team_name or 'default'}",
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                        delegate_result = await _bus.dispatch(
+                            source_team=_team_name or "default",
                             target_team=delegate_team,
                             topic=delegate_topic,
+                            router_factory=_router_factory,
+                            depth=_depth,
                         )
-                    # Phase 8: delegation checkpoint — фиксируем в task board
-                    try:
-                        from .swarm_task_board import swarm_task_board  # noqa: PLC0415
+                        # Инжектируем результат делегирования в контекст
+                        delegation_summary = f"\n\n📬 **Результат от команды {delegate_team}:**\n{delegate_result[:800]}"
+                        clipped += delegation_summary
+                        delegation_results.append(f"→ {delegate_team}: задача выполнена")
+                        logger.info(
+                            "agent_room_delegation_injected", role=name, target=delegate_team
+                        )
 
-                        swarm_task_board.create_task(
-                            team=delegate_team,
-                            title=f"Delegation: {delegate_topic[:80]}",
-                            description=f"Delegated from {_team_name or 'default'} role {name}",
-                            priority="high",
-                            created_by=f"delegation:{_team_name or 'default'}",
+                round_results.append(
+                    {"role": name, "emoji": emoji, "title": title, "text": clipped}
+                )
+                accumulated_context += f"[{emoji} {title}]:\n{clipped}\n\n"
+
+                # Phase 1: checkpoint после каждой успешной роли (silent)
+                if _pending_round_id:
+                    try:
+                        _next_idx = role_idx + 1
+                        _next_name = (
+                            str(self.roles[_next_idx].get("name", ""))
+                            if _next_idx < len(self.roles)
+                            else ""
+                        )
+                        swarm_pending_store.write_checkpoint(
+                            _pending_round_id,
+                            next_role_idx=_next_idx,
+                            next_role_name=_next_name,
+                            accumulated_context=accumulated_context,
+                            completed_roles=list(round_results),
+                            delegation_tree=list(delegation_results),
                         )
                     except Exception:  # noqa: BLE001
-                        pass
+                        pass  # checkpoint — не критично
 
-                    delegate_result = await _bus.dispatch(
-                        source_team=_team_name or "default",
-                        target_team=delegate_team,
-                        topic=delegate_topic,
-                        router_factory=_router_factory,
-                        depth=_depth,
-                    )
-                    # Инжектируем результат делегирования в контекст
-                    delegation_summary = (
-                        f"\n\n📬 **Результат от команды {delegate_team}:**\n{delegate_result[:800]}"
-                    )
-                    clipped += delegation_summary
-                    delegation_results.append(f"→ {delegate_team}: задача выполнена")
-                    logger.info("agent_room_delegation_injected", role=name, target=delegate_team)
-
-            round_results.append({"role": name, "emoji": emoji, "title": title, "text": clipped})
-            accumulated_context += f"[{emoji} {title}]:\n{clipped}\n\n"
+        except Exception as _round_exc:  # noqa: BLE001
+            # Phase 1: помечаем pending как interrupted при неожиданном исключении
+            if _pending_round_id:
+                try:
+                    swarm_pending_store.mark_round_failed(_pending_round_id, str(_round_exc))
+                except Exception:  # noqa: BLE001
+                    pass
+            raise
 
         header = f"🐝 **Swarm Room: {topic}**\n\n"
         body = ""
@@ -617,6 +665,14 @@ class AgentRoom:
         if _single_round_sid is not None:
             _get_swarm_progress().record_round_done(_single_round_sid)
             _get_swarm_progress().end_session(_single_round_sid)
+
+        # Phase 1: удаляем pending-файл после успешного завершения раунда (silent)
+        if _pending_round_id:
+            try:
+                swarm_pending_store.mark_round_complete(_pending_round_id)
+            except Exception:  # noqa: BLE001
+                pass
+
         return full_result
 
     async def run_loop(
