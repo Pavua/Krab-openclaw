@@ -385,6 +385,29 @@ def test_local_recovery_disabled_when_force_cloud() -> None:
     assert OpenClawClient._local_recovery_enabled(force_cloud=True) is False
 
 
+def test_local_recovery_enabled_force_cloud_quota_exceeded_special_case() -> None:
+    """Session 40: при force_cloud=True + error_code=quota_exceeded local recovery
+    разрешён — иначе swarm (всегда force_cloud=True) при codex-cli quota
+    выдаёт юзеру 'облачный сервис недоступен' вместо silent fallback на gemma.
+    """
+    with patch("src.openclaw_client.config") as cfg:
+        cfg.LOCAL_FALLBACK_ENABLED = True
+        cfg.LOCAL_PREFERRED_VISION_MODEL = ""
+        result = OpenClawClient._local_recovery_enabled(
+            force_cloud=True, error_code="quota_exceeded"
+        )
+    assert result is True
+
+
+def test_local_recovery_force_cloud_other_errors_still_disabled() -> None:
+    """Без quota_exceeded force_cloud по-прежнему отрезает local recovery."""
+    for code in ("provider_timeout", "transport_error", "lm_empty_stream", ""):
+        assert (
+            OpenClawClient._local_recovery_enabled(force_cloud=True, error_code=code)
+            is False
+        ), f"force_cloud + {code!r} должен оставаться disabled"
+
+
 def test_local_recovery_disabled_for_photo_when_no_vision_model() -> None:
     """При has_photo=True и LOCAL_PREFERRED_VISION_MODEL='' recovery выключен."""
     with patch("src.openclaw_client.config") as cfg:

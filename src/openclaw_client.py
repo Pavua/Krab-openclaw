@@ -521,18 +521,27 @@ class OpenClawClient:
         return timeout_sec if timeout_sec > 0 else None
 
     @staticmethod
-    def _local_recovery_enabled(*, force_cloud: bool, has_photo: bool = False) -> bool:
+    def _local_recovery_enabled(
+        *,
+        force_cloud: bool,
+        has_photo: bool = False,
+        error_code: str = "",
+    ) -> bool:
         """
         Разрешён ли аварийный fallback cloud -> local.
 
         Логика:
-        - при force_cloud локальный recovery всегда выключен;
+        - при force_cloud локальный recovery обычно выключен;
+        - **исключение Session 40**: при ``error_code == "quota_exceeded"``
+          разрешаем local fallback даже при force_cloud=True. Иначе swarm
+          (где force_cloud=True всегда) при квотах codex-cli отдаёт user'у
+          "❌ Облачный сервис недоступен" вместо silent fallback на gemma.
         - для фото при `LOCAL_PREFERRED_VISION_MODEL=auto` локальный recovery
           запрещён, чтобы cloud-ветка не пересаживала запрос на случайную
           маленькую vision-модель;
         - иначе управляется флагом LOCAL_FALLBACK_ENABLED.
         """
-        if force_cloud:
+        if force_cloud and error_code != "quota_exceeded":
             return False
         if has_photo:
             preferred_vision = (
@@ -3909,7 +3918,9 @@ class OpenClawClient:
                 if (
                     semantic["code"] in local_recovery_codes
                     and self._local_recovery_enabled(
-                        force_cloud=effective_force_cloud, has_photo=has_photo
+                        force_cloud=effective_force_cloud,
+                        has_photo=has_photo,
+                        error_code=semantic["code"],
                     )
                     and not tried_local
                 ):
@@ -3963,7 +3974,9 @@ class OpenClawClient:
                 # реальную проблему "configured but unauthorized".
                 if (
                     self._local_recovery_enabled(
-                        force_cloud=effective_force_cloud, has_photo=has_photo
+                        force_cloud=effective_force_cloud,
+                        has_photo=has_photo,
+                        error_code=semantic_after["code"],
                     )
                     and semantic_after["code"] not in LEGACY_AUTH_CODES
                 ):
