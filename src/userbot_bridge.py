@@ -1955,51 +1955,13 @@ class KraabUserbot(
         except Exception as exc:  # noqa: BLE001
             logger.warning("scheduler_runtime_sync_failed", error=str(exc))
 
-        # WAKE UP CHECK
-        try:
-            # Wait for OpenClaw to spin up — timeout из
-            # OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC (default 90s).
-            # После рестарта gateway через LaunchAgent crash-loop
-            # стабилизация занимает 3-5 мин.
-            logger.info("waiting_for_openclaw", timeout_sec=config.OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC)
-            is_claw_ready = await openclaw_client.wait_for_healthy(
-                timeout=config.OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC
-            )
-
-            status_emoji = "✅" if is_claw_ready else "⚠️"
-            status_text = "Online" if is_claw_ready else "Gateway Unreachable (Check logs)"
-
-            # W32: rate-limit wake-up message — раньше каждый restart спамил
-            # Saved Messages owner'а ("🦀 Krab System Online ..."). Если было
-            # >5 рестартов за день, owner получает 5 spam сообщений. Suppress
-            # if previous wake_up sent <60min ago.
-            from pathlib import Path as _Path
-
-            _wake_marker = _Path("/tmp/krab_last_wakeup.ts")
-            try:
-                last_ts = float(_wake_marker.read_text().strip()) if _wake_marker.exists() else 0
-            except (OSError, ValueError):
-                last_ts = 0
-            now_ts = time.time()
-            if now_ts - last_ts >= 3600:
-                await self.client.send_message(
-                    self._owner_notify_target,
-                    f"🦀 **Krab System Online**\n"
-                    f"Gateway: {status_emoji} {status_text}\nReady to serve.",
-                )
-                try:
-                    _wake_marker.write_text(str(now_ts))
-                except OSError:
-                    pass
-                logger.info("wake_up_message_sent", gateway_ready=is_claw_ready)
-            else:
-                logger.info(
-                    "wake_up_message_suppressed",
-                    reason="rate_limit_60min",
-                    elapsed_min=round((now_ts - last_ts) / 60, 1),
-                )
-        except Exception as e:
-            logger.error("wake_up_failed", error=str(e))
+        # WAKE UP CHECK — Wave (08.05.2026): вынесено в background task.
+        # Раньше openclaw `wait_for_healthy(90s)` блокировал start() ДО
+        # регистрации watchdog/reaper (lines 2030+). Если gateway медленный,
+        # 90 секунд критическое окно без защиты — network drop / openclaw hang
+        # никто не поймает. Теперь watchdog регистрируется сразу, wake-up
+        # шлётся когда gateway реально готов.
+        asyncio.create_task(self._wake_up_when_gateway_ready_bg(), name="krab_wake_up_bg")
 
         # Загружаем счётчики вызовов команд с диска
         try:
@@ -2083,6 +2045,57 @@ class KraabUserbot(
 
         # Per-team swarm clients — отдельные TG аккаунты для каждой команды (background)
         asyncio.create_task(self._init_swarm_team_clients())
+
+    async def _wake_up_when_gateway_ready_bg(self) -> None:
+        """Wave (08.05.2026): wake-up message + gateway probe в background.
+
+        Вынесено из start() чтобы НЕ блокировать регистрацию watchdog/reaper
+        на 90 секунд. Watchdog должен быть активен с первой секунды для защиты
+        от network drop / openclaw hang. Если gateway не готов — пробуем по
+        timeout, шлём wake_up с пометкой "Gateway Unreachable" но не блокируем
+        critical path.
+        """
+        try:
+            logger.info(
+                "waiting_for_openclaw_bg",
+                timeout_sec=config.OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC,
+            )
+            is_claw_ready = await openclaw_client.wait_for_healthy(
+                timeout=config.OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC
+            )
+
+            status_emoji = "✅" if is_claw_ready else "⚠️"
+            status_text = "Online" if is_claw_ready else "Gateway Unreachable (Check logs)"
+
+            # W32: rate-limit wake-up message — иначе каждый restart спамит
+            # Saved Messages owner'а. Suppress if previous wake_up sent <60min ago.
+            from pathlib import Path as _Path
+
+            _wake_marker = _Path("/tmp/krab_last_wakeup.ts")
+            try:
+                last_ts = float(_wake_marker.read_text().strip()) if _wake_marker.exists() else 0
+            except (OSError, ValueError):
+                last_ts = 0
+            now_ts = time.time()
+            if now_ts - last_ts >= 3600:
+                await self.client.send_message(
+                    self._owner_notify_target,
+                    f"🦀 **Krab System Online**\n"
+                    f"Gateway: {status_emoji} {status_text}\nReady to serve.",
+                )
+                try:
+                    _wake_marker.write_text(str(now_ts))
+                except OSError:
+                    pass
+                logger.info("wake_up_message_sent", gateway_ready=is_claw_ready)
+            else:
+                logger.info(
+                    "wake_up_message_suppressed",
+                    reason="rate_limit_60min",
+                    elapsed_min=round((now_ts - last_ts) / 60, 1),
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.error("wake_up_failed", error=str(e))
 
     # _is_auth_key_invalid -> SessionMixin (src/userbot/session.py)
 

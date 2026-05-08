@@ -185,6 +185,28 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     "main_session_integrity_ok",
     "main_session_integrity_failed",
     "main_session_recovered_auto",
+    # Wave (08.05.2026): Telegram MTProto штатные ситуации — handled через
+    # rate_limiter / relogin / retry. Не runtime bugs.
+    "FLOOD_WAIT_",
+    "FloodWait",
+    "AUTH_KEY_UNREGISTERED",
+    "SESSION_REVOKED",
+    "SESSION_PASSWORD_NEEDED",
+    # Asyncio shutdown noise — handled через graceful teardown.
+    "Event loop is closed",
+    # Google Vertex AI / Anthropic transient — handled через retry/fallback.
+    # См. EXPECTED_ERROR_PATTERNS в src/integrations/_bypass_perf.py.
+    "DEADLINE_EXCEEDED",
+    "RESOURCE_EXHAUSTED",
+    "503 Service Unavailable",
+    # Network reconnect noise (pyrogram/httpx) — handled через retry.
+    "Network is unreachable",
+    "Connection reset by peer",
+    "ConnectionResetError",
+    # Wave (08.05.2026): cli_subprocess noise — codex-cli sandbox falls back
+    # to cloud routing on Telegram queries (telegram_query_detector).
+    # Non-zero exit handled by retry layer.
+    "cli_subprocess_nonzero_exit",
 )
 
 
@@ -407,10 +429,14 @@ def init_sentry() -> bool:
     """
     Инициализирует Sentry SDK если SENTRY_DSN задан.
     Возвращает True если SDK поднят, False если пропущен.
+
+    Wave (08.05.2026): добавлен fallback на KRAB_SENTRY_DSN — раньше эта env
+    игнорировалась, и если кто-то выставлял её как override (например в plist)
+    — Sentry не поднимался. Теперь читаем оба варианта.
     """
-    dsn = os.getenv("SENTRY_DSN", "").strip()
+    dsn = os.getenv("SENTRY_DSN", "").strip() or os.getenv("KRAB_SENTRY_DSN", "").strip()
     if not dsn:
-        logger.debug("sentry_skipped", reason="SENTRY_DSN not set")
+        logger.debug("sentry_skipped", reason="SENTRY_DSN/KRAB_SENTRY_DSN not set")
         return False
 
     try:

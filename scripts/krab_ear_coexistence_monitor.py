@@ -23,7 +23,11 @@ import psutil
 # поэтому swap > 8GB на macOS НЕ критично. Для Linux 8GB реально означает memory pressure.
 _GB = 1_000_000_000
 COMBINED_RSS_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_RSS_THRESHOLD_GB", "12")) * _GB)
-SWAP_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_SWAP_THRESHOLD_GB", "18")) * _GB)
+# Wave (08.05.2026): bumped 18→28 GB. macOS compressed swap 19-22 GB наблюдается
+# в норме под workload (compressor + OrbStack VPN + heavy apps на 36GB M4 Max).
+# Threshold 18 давал 216 false-positive alerts за 11h. Реальная panic-зона:
+# user verified swap >32 GB → kernel I/O queue overflow → watchdog timeout → reboot.
+SWAP_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_SWAP_THRESHOLD_GB", "28")) * _GB)
 RAM_AVAIL_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_RAM_AVAIL_THRESHOLD_GB", "3")) * _GB)
 # Session 40: cooldown между Telegram alerts чтобы не спамить каждую минуту.
 # При memory pressure которое держится час — 1-2 уведомления, не 60.
@@ -38,7 +42,10 @@ ALERT_STATE_FILE = (
 )
 
 # Паттерны командной строки для определения процессов Krab и Krab Ear
-KRAB_PATTERNS = ["userbot_bridge", "src/main.py"]
+# Wave (08.05.2026): добавлены `src.main` + `-m src.main` — реальный launch использует
+# module mode (`python -m src.main`), и `src/main.py` (slash) НИКОГДА не совпадает
+# с pgrep output → 11h false-negatives `krab_pids:[]` пока Krab был живой PID 1019.
+KRAB_PATTERNS = ["userbot_bridge", "src/main.py", "src.main", "-m src.main"]
 EAR_PATTERNS = ["KrabEar", "krab.ear", "krab_ear"]
 # Wave 29-C-fix: исключаем Swift compiler (frontend/driver) — он попадает по пути
 # "/Users/pablito/Antigravity_AGENTS/Krab Ear/" даже когда Krab Ear не запущен.
@@ -113,6 +120,32 @@ def main() -> int:
     vm = psutil.virtual_memory()
     sw = psutil.swap_memory()
 
+    # Wave (08.05.2026): top-5 не-Krab/Ear процессов по RSS — для поиска leaker'ов
+    # вне Krab контура (OrbStack VPN, browsers, Codex.app, etc). Без этого root
+    # cause panic'ов невозможно найти — Krab сам жрёт <1GB, виновник за периметром.
+    krab_ear_pid_set = set(krab_pids) | set(ear_pids)
+    top_external: list[dict] = []
+    try:
+        candidates: list[tuple[int, int, str]] = []
+        for p in psutil.process_iter(attrs=["pid", "name", "memory_info"]):
+            try:
+                pid = p.info["pid"]
+                if pid in krab_ear_pid_set:
+                    continue
+                rss = (p.info.get("memory_info") or psutil.Process(pid).memory_info()).rss
+                if rss < 200_000_000:  # 200 MB cutoff — отсекаем мелочь
+                    continue
+                candidates.append((pid, rss, p.info.get("name") or ""))
+            except Exception:
+                continue
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        top_external = [
+            {"pid": pid, "rss_gb": round(rss / 1e9, 2), "name": name}
+            for pid, rss, name in candidates[:5]
+        ]
+    except Exception:  # noqa: BLE001
+        top_external = []
+
     snapshot: dict = {
         "timestamp": time.time(),
         "krab_pids": krab_pids,
@@ -123,6 +156,7 @@ def main() -> int:
         "system_ram_used_gb": round(vm.used / 1e9, 2),
         "system_ram_available_gb": round(vm.available / 1e9, 2),
         "swap_used_gb": round(sw.used / 1e9, 2),
+        "top_external_rss": top_external,
     }
 
     # Вычислить alerts
