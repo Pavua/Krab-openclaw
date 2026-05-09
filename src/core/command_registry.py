@@ -415,6 +415,13 @@ _COMMANDS: list[CommandInfo] = [
         usage="!routes",
         owner_only=True,
     ),
+    CommandInfo(
+        name="mcp",
+        category="system",
+        description="Show registered MCP servers + inventory (read-only)",
+        usage="!mcp [info <name> | inventory]",
+        owner_only=True,
+    ),
     # ── notes ────────────────────────────────────────────────────────────────
     CommandInfo(
         name="memo",

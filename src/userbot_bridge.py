@@ -109,6 +109,7 @@ from .handlers import (
     handle_loglevel,
     handle_ls,
     handle_macos,
+    handle_mcp,
     handle_media,
     handle_mem,
     handle_memo,
@@ -805,6 +806,13 @@ class KraabUserbot(
         )
         async def wrap_routes(c, m):
             await run_cmd(handle_routes, m)
+
+        @self.client.on_message(
+            filters.command("mcp", prefixes=prefixes) & _make_command_filter("mcp"),
+            group=-1,
+        )
+        async def wrap_mcp(c, m):
+            await run_cmd(handle_mcp, m)
 
         @self.client.on_message(
             filters.command("memory", prefixes=prefixes) & _make_command_filter("memory"), group=-1

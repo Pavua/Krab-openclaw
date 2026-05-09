@@ -1267,6 +1267,309 @@ async def handle_metrics(bot: "KraabUserbot", message: Message) -> None:
     await message.reply("\n".join(parts), parse_mode=ParseMode.MARKDOWN)
 
 
+# ---------------------------------------------------------------------------
+# Wave 52-E: !mcp — read-only MCP inventory + registered overview (owner-only)
+# ---------------------------------------------------------------------------
+
+_MCP_INVENTORY_PATH = pathlib.Path(__file__).resolve().parents[3] / "scripts" / "mcp_inventory.toml"
+
+
+def _load_mcp_inventory(path: pathlib.Path | None = None) -> dict[str, dict[str, Any]]:
+    """Парсит scripts/mcp_inventory.toml. Возвращает {name: spec}."""
+    import tomllib  # noqa: PLC0415
+
+    target = path if path is not None else _ch_attr("_MCP_INVENTORY_PATH", _MCP_INVENTORY_PATH)
+    try:
+        with open(target, "rb") as fh:
+            data = tomllib.load(fh) or {}
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        logger.warning("mcp_inventory_load_failed", error=str(exc))
+        return {}
+    return {name: spec for name, spec in data.items() if isinstance(spec, dict)}
+
+
+async def _get_registered_mcps(
+    timeout: float = 5.0,
+) -> tuple[dict[str, dict[str, Any]], str | None]:
+    """Возвращает (registered, error). registered = {name: spec_from_openclaw}."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "openclaw",
+            "mcp",
+            "list",
+            "--json",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        if proc.returncode != 0:
+            return {}, f"exit_code={proc.returncode}"
+        text = stdout.decode(errors="replace").strip()
+        if not text.startswith("{"):
+            return {}, "non_json_output"
+        # openclaw иногда печатает мусор после JSON — берём первый top-level объект.
+        depth = 0
+        end_idx = -1
+        for idx, ch in enumerate(text):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end_idx = idx + 1
+                    break
+        json_part = text[:end_idx] if end_idx > 0 else text
+        data = json.loads(json_part) or {}
+        if not isinstance(data, dict):
+            return {}, "unexpected_root_type"
+        return ({name: spec for name, spec in data.items() if isinstance(spec, dict)}, None)
+    except asyncio.TimeoutError:
+        return {}, "timeout"
+    except FileNotFoundError:
+        return {}, "openclaw_cli_not_found"
+    except json.JSONDecodeError as exc:
+        return {}, f"json_decode_error: {str(exc)[:80]}"
+    except Exception as exc:  # noqa: BLE001
+        return {}, f"unknown_error: {str(exc)[:80]}"
+
+
+def _check_env_var_present(var: str, env: dict[str, str] | None = None) -> bool:
+    """True, если env-переменная задана и не пустая."""
+    import os as _os  # noqa: PLC0415
+
+    src = env if env is not None else _os.environ
+    val = src.get(var, "")
+    return bool(val and val.strip())
+
+
+def _classify_mcp_status(name: str, spec: dict[str, Any], registered_names: set[str]) -> str:
+    """active / deferred / deprecated / inactive."""
+    raw_status = str(spec.get("status") or "").strip().lower()
+    if raw_status == "deprecated":
+        return "deprecated"
+    if name in registered_names and raw_status != "deprecated":
+        return "active"
+    if raw_status == "deferred":
+        return "deferred"
+    required_env = spec.get("required_env") or []
+    if isinstance(required_env, list) and required_env:
+        missing = [v for v in required_env if not _check_env_var_present(str(v))]
+        if missing:
+            return "deferred"
+    return "inactive"
+
+
+def _format_mcp_summary(
+    inventory: dict[str, dict[str, Any]],
+    registered: dict[str, dict[str, Any]],
+) -> str:
+    """Markdown-сводка: Active / Deferred / Deprecated."""
+    registered_names = set(registered.keys())
+    inventory_names = set(inventory.keys())
+
+    actives: list[tuple[str, dict[str, Any]]] = []
+    deferreds: list[tuple[str, dict[str, Any]]] = []
+    deprecateds: list[tuple[str, dict[str, Any]]] = []
+
+    for name in sorted(registered_names | inventory_names):
+        spec = inventory.get(name) or registered.get(name) or {}
+        status = _classify_mcp_status(name, spec, registered_names)
+        if status == "active":
+            actives.append((name, spec))
+        elif status == "deferred":
+            deferreds.append((name, spec))
+        elif status == "deprecated":
+            deprecateds.append((name, spec))
+
+    lines: list[str] = []
+    lines.append(
+        f"📡 **MCP Inventory** ({len(registered_names)} registered, "
+        f"{len(inventory_names)} in registry)"
+    )
+    lines.append("")
+
+    if actives:
+        lines.append("**Active**:")
+        for name, spec in actives:
+            desc = str(spec.get("description") or "—")
+            transport = str(
+                spec.get("transport") or registered.get(name, {}).get("transport") or "stdio"
+            )
+            required_env = spec.get("required_env") or []
+            key_marker = ""
+            if isinstance(required_env, list) and required_env:
+                missing = [v for v in required_env if not _check_env_var_present(str(v))]
+                key_marker = " (key: ✓)" if not missing else " (key: ⚠️ missing)"
+            lines.append(f"✅ `{name}` — {transport}, {desc}{key_marker}")
+        lines.append("")
+
+    if deferreds:
+        lines.append("**Deferred** (pending tokens):")
+        for name, spec in deferreds:
+            required_env = spec.get("required_env") or []
+            need = ", ".join(str(v) for v in required_env) if required_env else "—"
+            lines.append(f"⏸ `{name}` — needs {need}")
+        lines.append("")
+
+    if deprecateds:
+        lines.append("**Deprecated**:")
+        for name, spec in deprecateds:
+            note = str(spec.get("notes") or spec.get("description") or "")
+            short = note.split(".")[0][:80] if note else "—"
+            lines.append(f"❌ `{name}` — {short}")
+        lines.append("")
+
+    lines.append("Use `!mcp info <name>` для детали, `!mcp inventory` — полный список.")
+    lines.append("Add: `python scripts/openclaw_mcp_register.py --add <name>` (CLI only).")
+    return "\n".join(lines)
+
+
+def _format_mcp_info(
+    name: str,
+    inventory: dict[str, dict[str, Any]],
+    registered: dict[str, dict[str, Any]],
+) -> str | None:
+    """Детальная карточка одного MCP. None если нигде не найден."""
+    spec = inventory.get(name)
+    reg = registered.get(name)
+    if spec is None and reg is None:
+        return None
+    spec = spec or {}
+    reg = reg or {}
+
+    transport = str(spec.get("transport") or reg.get("transport") or "stdio")
+    desc = str(spec.get("description") or "—")
+    notes = str(spec.get("notes") or "").strip()
+
+    is_registered = name in registered
+    raw_status = str(spec.get("status") or "").strip().lower()
+    if raw_status == "deprecated":
+        status_str = "❌ deprecated"
+    elif is_registered:
+        status_str = "✅ active"
+    elif raw_status == "deferred":
+        status_str = "⏸ deferred"
+    else:
+        status_str = "○ inactive"
+
+    out: list[str] = [
+        f"📡 **MCP `{name}`**",
+        f"Status: {status_str}",
+        f"Transport: `{transport}`",
+        f"Description: {desc}",
+    ]
+    url = spec.get("url") or reg.get("url")
+    if url:
+        out.append(f"URL: `{url}`")
+    cmd = spec.get("command") or reg.get("command")
+    if cmd:
+        out.append(f"Command: `{cmd}`")
+    args = spec.get("args") or reg.get("args")
+    if args and isinstance(args, list):
+        joined = " ".join(str(a) for a in args)
+        if len(joined) > 200:
+            joined = joined[:200] + "…"
+        out.append(f"Args: `{joined}`")
+
+    required_env = spec.get("required_env") or []
+    if isinstance(required_env, list) and required_env:
+        out.append("Required env:")
+        for var in required_env:
+            present = _check_env_var_present(str(var))
+            marker = "✅" if present else "❌"
+            out.append(f"  {marker} `{var}`")
+
+    if notes:
+        out.append(f"Notes: {notes[:300]}{'…' if len(notes) > 300 else ''}")
+    return "\n".join(out)
+
+
+def _format_mcp_inventory_full(
+    inventory: dict[str, dict[str, Any]],
+    registered: dict[str, dict[str, Any]],
+) -> str:
+    """Полный реестр grouped by status."""
+    registered_names = set(registered.keys())
+    by_status: dict[str, list[str]] = {
+        "active": [],
+        "deferred": [],
+        "deprecated": [],
+        "inactive": [],
+    }
+    for name in sorted(set(inventory.keys()) | registered_names):
+        spec = inventory.get(name) or registered.get(name) or {}
+        status = _classify_mcp_status(name, spec, registered_names)
+        by_status[status].append(name)
+
+    lines: list[str] = ["📡 **Full MCP Registry**", ""]
+    if by_status["active"]:
+        lines.append(f"**Active ({len(by_status['active'])})**:")
+        lines.extend(f"✅ `{n}`" for n in by_status["active"])
+        lines.append("")
+    if by_status["deferred"]:
+        lines.append(f"**Deferred ({len(by_status['deferred'])})**:")
+        lines.extend(f"⏸ `{n}`" for n in by_status["deferred"])
+        lines.append("")
+    if by_status["deprecated"]:
+        lines.append(f"**Deprecated ({len(by_status['deprecated'])})**:")
+        lines.extend(f"❌ `{n}`" for n in by_status["deprecated"])
+        lines.append("")
+    if by_status["inactive"]:
+        lines.append(f"**Inactive ({len(by_status['inactive'])})**:")
+        lines.extend(f"○ `{n}`" for n in by_status["inactive"])
+    return "\n".join(lines).strip()
+
+
+async def handle_mcp(bot: "KraabUserbot", message: Message) -> None:
+    """!mcp — read-only обзор MCP-серверов и реестра (owner-only).
+
+    Подкоманды:
+    - `!mcp`               — list active MCPs со статусами;
+    - `!mcp info <name>`   — детальная карточка;
+    - `!mcp inventory`     — полный реестр (active + deferred + deprecated).
+
+    Управление (add/remove) — только через
+    `scripts/openclaw_mcp_register.py` (CLI).
+    """
+    from ...core.access_control import AccessLevel  # noqa: PLC0415
+
+    access_profile = bot._get_access_profile(getattr(message, "from_user", None))
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 Команда `!mcp` доступна только владельцу.")
+
+    raw = str(message.text or "").strip()
+    parts = raw.split(maxsplit=2)
+    sub = parts[1].strip().lower() if len(parts) > 1 else ""
+
+    inventory = _load_mcp_inventory()
+    registered, reg_error = await _get_registered_mcps()
+
+    if sub == "info":
+        if len(parts) < 3 or not parts[2].strip():
+            raise UserInputError(user_message="📡 Формат: `!mcp info <name>`")
+        target = parts[2].strip().split()[0]
+        text = _format_mcp_info(target, inventory, registered)
+        if text is None:
+            await message.reply(f"📡 MCP `{target}` не найден ни в openclaw, ни в реестре.")
+            return
+        await message.reply(text)
+        return
+
+    if sub == "inventory":
+        text = _format_mcp_inventory_full(inventory, registered)
+        if reg_error:
+            text += f"\n\n⚠️ openclaw cli: {reg_error} (показан только inventory.toml)."
+        await message.reply(text)
+        return
+
+    text = _format_mcp_summary(inventory, registered)
+    if reg_error:
+        text += f"\n\n⚠️ openclaw cli: {reg_error} (fallback на inventory.toml)."
+    await message.reply(text)
+
+
 __all__ = [
     "_CHECKPOINTS_DIR",
     "_count_today_calls",
@@ -1288,4 +1591,13 @@ __all__ = [
     "handle_quota",
     "handle_routes",
     "handle_watch",
+    "handle_mcp",
+    "_load_mcp_inventory",
+    "_get_registered_mcps",
+    "_check_env_var_present",
+    "_classify_mcp_status",
+    "_format_mcp_summary",
+    "_format_mcp_info",
+    "_format_mcp_inventory_full",
+    "_MCP_INVENTORY_PATH",
 ]
