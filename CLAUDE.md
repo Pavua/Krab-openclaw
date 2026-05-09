@@ -36,9 +36,9 @@ ruff check src/ && ruff format src/
 
 ## Auto-generated reference
 
-- **Endpoints** (~277 routes): [docs/CLAUDE_AUTO_ENDPOINTS.md](docs/CLAUDE_AUTO_ENDPOINTS.md)
-- **Handlers** (~172 функций): [docs/CLAUDE_AUTO_HANDLERS.md](docs/CLAUDE_AUTO_HANDLERS.md)
-- **Commands** (~185+): [docs/CLAUDE_COMMANDS_REFERENCE.md](docs/CLAUDE_COMMANDS_REFERENCE.md)
+- **Endpoints** (~286 routes): [docs/CLAUDE_AUTO_ENDPOINTS.md](docs/CLAUDE_AUTO_ENDPOINTS.md)
+- **Handlers** (~177 функций): [docs/CLAUDE_AUTO_HANDLERS.md](docs/CLAUDE_AUTO_HANDLERS.md)
+- **Commands** (~158 registered, 185+ с алиасами): [docs/CLAUDE_COMMANDS_REFERENCE.md](docs/CLAUDE_COMMANDS_REFERENCE.md)
 - **Prometheus** (11 alerts, 27 metrics): [docs/CLAUDE_AUTO_PROMETHEUS.md](docs/CLAUDE_AUTO_PROMETHEUS.md)
 - **Owner Panel API** (детальный): [docs/CLAUDE_OWNER_PANEL_API.md](docs/CLAUDE_OWNER_PANEL_API.md)
 
@@ -160,6 +160,7 @@ src/
     llm_intent_classifier.py — LM Studio HTTP + LRU cache (Smart Routing, session 26)
     feedback_tracker.py — Pyrogram delete/reaction → signals (Smart Routing, session 26)
     trigger_detector.py — async 5-stage orchestrator (Smart Routing, session 26)
+    state_snapshots.py  — periodic backups of critical state files (Wave 49-F, session 44)
   handlers/
     command_handlers.py — 105+ команд, _AgentRoomRouterAdapter; 4430 LOC (Session 28, −77.4% от 19637)
     commands/           — 24 модуля (Waves 1-18 + session 35-38)
@@ -175,10 +176,12 @@ src/
     voice_gateway_client.py — клиент Voice Gateway
     voice_gateway_subscriber.py — подписчик Voice Gateway событий
     cli_runner.py       — запуск CLI инструментов (codex/gemini/claude)
+    route_switch_log.py — log model fallback switches (Wave 48-B, session 44)
   bootstrap/
     session_recovery.py — shared recovery module: attempt_recovery/has_recent_recovery_backup (session 35, Wave 16-N)
   scripts/
     openclaw_runtime_repair.py — recovery chain: validate+probe+sqlite .recover (session 35, Wave 16-J)
+    agent_tools/krab_*.py      — bash-callable github/cloudflare/sentry/brave для codex agent (Wave 45-C, session 44)
   userbot/
     access_control.py   — ACL на уровне userbot
     auto_translate.py   — авто-перевод сообщений
@@ -189,6 +192,7 @@ src/
     runtime_status.py   — runtime статус userbot
     session.py          — управление сессиями
     voice_profile.py    — профиль голоса
+    message_catchup.py  — startup catchup для lost messages (Wave 46-A, session 44)
   skills/
     mercadona.py        — Playwright scraper со stealth
     crypto.py           — крипто утилиты
@@ -267,6 +271,11 @@ GEMINI_PAID_KEY_ENABLED=1            # paid Gemini активен
 LM_STUDIO_NATIVE_REASONING_MODE=medium
 KRAB_REASONING_LEVEL=medium
 OPENCLAW_REASONING_EFFORT=medium
+KRAB_MODEL_FOOTER_ENABLED=1          # 📡 model footer per response (Wave 47-B)
+KRAB_STARTUP_CATCHUP_LIMIT=20        # startup history catchup messages (Wave 46-A)
+KRAB_STARTUP_CATCHUP_CHATS=          # extra chat IDs to catch up (Wave 48-A)
+KRAB_SWARM_GROUP_ID=-1003703978531   # Krab Swarm forum group (Wave 48-A)
+KRAB_STATE_SNAPSHOT_INTERVAL_MINUTES=60  # state snapshot interval (Wave 49-F)
 ```
 
 ## Правила
@@ -281,10 +290,25 @@ OPENCLAW_REASONING_EFFORT=medium
 ## Phase 7 статус
 
 - **Phase 7: 100%**, Memory Phase 2: **LIVE** (`KRAB_RAG_PHASE2_ENABLED=1`)
-- **12594 тестов collected** (Session 38, 05.05.2026)
-- **277 API endpoints** (live: `/api/endpoints`), 172+ handlers, 185+ команд
+- **13795/13916 тестов collected** (Session 44, 10.05.2026)
+- **286 API endpoints** (live: `/api/endpoints`), 177+ handlers, 158 registered commands (185+ с алиасами)
 
 ## Session highlights (последние)
+
+### Session 43+44 highlights (2026-05-09 → 2026-05-10 — Waves 44-Z, 45-*, 46-*, 47, 48-*, 49-*)
+
+- **Wave 44-Z merge** — Tor MCP server (был забыт в S42 close)
+- **Wave 45 series**: 8 MCPs registered (4 → 10): context7, firecrawl, github, sentry, tor-full, osint-tools
+- **Wave 45-G CI**: Python CI workflow (was red since 2026-04-07, now 🟢)
+- **Wave 46 series**: catchup mechanism для lost messages, owner auth prompt, NLU tighten
+- **Wave 47**: extended fallback chain + 📡 model footer per response
+- **Wave 48 series**: multi-chat catchup, !routes detailed visibility
+- **Wave 49 series**: ruff cleanup scripts/, HexStrike isolated venv (151 tools), !replay command, state snapshots scheduled (24/keep, 7d/age)
+- **Wave 50 series**: post-sleep reinit fix, krab-tor deprecation (in progress)
+
+**MCPs total**: 11 (context7/firecrawl/github/sentry/krab-hammerspoon/krab-telegram/krab-telegram-owner/krab-tor-deprecated/tor-full/osint-tools/hexstrike-ai-manual)
+**Tests added**: ~377 across 18 commits
+**CI**: 🟢 every push (~10s, ruff + pytest unit subset)
 
 ### Session 41 highlights (09.05.2026 — Waves 37 → 41-O, 6 commits, ~115 new tests)
 
@@ -393,6 +417,8 @@ Empirical rule: sonnet — 200-300 word с TDD; haiku — < 100 word.
 | **Session 38** | **12594 collected** |
 | **Session 39 (06.05)** | **12702 collected** (+108: Wave 31 mixin tests + 3 stale fixed) |
 | **Session 40 (07.05)** | **+30 SkillCurator analyzer + e2e fixes** (см. ниже) |
+| **Session 41 (09.05)** | **~12817 collected** (+115: Wave 37-41-O) |
+| **Session 43+44 (10.05)** | **13795/13916 collected** (+~377: Waves 44-Z, 45-*, 46-*, 47, 48-*, 49-*) |
 
 ### Session 40 highlights (07.05.2026 — runtime e2e + KE deadlock fix + ecosystem health)
 
