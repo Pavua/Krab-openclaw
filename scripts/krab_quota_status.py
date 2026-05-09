@@ -116,7 +116,7 @@ def print_probe_state() -> None:
             f_count = acct.get("failures", 0)
             last = _fmt_ts(acct.get("last_probe_ts"))
             nxt = _fmt_ts(acct.get("next_probe_ts"))
-            backoff_level = "нет" if f_count == 0 else f"×{2 ** f_count} (failures={f_count})"
+            backoff_level = "нет" if f_count == 0 else f"×{2**f_count} (failures={f_count})"
             print(f"    [{acct_name}]")
             print(f"      failures: {f_count}  backoff: {backoff_level}")
             print(f"      last_probe: {last}")
