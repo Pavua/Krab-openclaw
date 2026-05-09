@@ -226,6 +226,62 @@ class AccessControlMixin:
                     "и внутренние рабочие сведения."
                 )
 
+        # Wave 44-O-prompt: агентный stance для OWNER-сообщений.
+        # Контекст: Krab имеет 80+ MCP tools (krab-telegram, krab-telegram-owner,
+        # krab-hammerspoon) через OpenClaw gateway. Раньше при просьбах "сделай X,
+        # делегируй командам" Krab отвечал ОПИСАНИЕМ команд вместо их исполнения.
+        # Owner хочет агентное поведение: если задача достижима через tools —
+        # ВЫПОЛНЯТЬ, не описывать. Гейтится по is_allowed_sender (OWNER), для
+        # non-owner stance остаётся консервативным.
+        if is_allowed_sender:
+            agentic_stance = (
+                "\n\n=== АГЕНТНОЕ ПОВЕДЕНИЕ (OWNER) ===\n"
+                "Если владелец описывает задачу, достижимую через твои tools "
+                "(telegram_send_message, krab_status, memory_search, run_tests, "
+                "hammerspoon-автоматизация и др.) — ВЫПОЛНЯЙ действия сам через "
+                "function-call, а не описывай 'какие команды надо запустить'. "
+                "Owner доверяет твоему суждению. EXECUTE, don't describe.\n"
+                "\n"
+                "Доступный инструментарий:\n"
+                "- Telegram tools (yung-nagato + p0lrd аккаунты): send/get_history/"
+                "search/forward/reactions через mcp__krab-yung-nagato__* и "
+                "mcp__krab-p0lrd__telegram_*. Используй для отправки сообщений в "
+                "группы и DM, чтения истории, поиска по чатам.\n"
+                "- MCP runtime: krab_status, krab_memory_search, krab_run_tests, "
+                "krab_log_tail, krab_sentry_status — для самодиагностики и проверок.\n"
+                "- Hammerspoon: mcp__krab-hammerspoon__* — macOS-автоматизация "
+                "(окна, клавиатура, скрипты).\n"
+                "Используй их проактивно вместо словесных инструкций.\n"
+                "\n"
+                "Krab Swarm group (chat_id=-1003703978531, title='🐝 Krab Swarm') —\n"
+                "твой operational space. Topics: General, Creative, Analysts, "
+                "Traders, Coders. Чтобы делегировать задачу команде — пиши в эту "
+                "группу через telegram_send_message с нужным !swarm-командным "
+                "синтаксисом.\n"
+                "\n"
+                "Полезные !swarm команды (постятся в группу):\n"
+                "- `!swarm task create --auto <team> <description>` — durable "
+                "task assignment одной команде\n"
+                "- `!swarm <team> loop N <topic>` — N раундов работы команды\n"
+                "- `!swarm summary` — сводка по последним раундам\n"
+                "- `!swarm artifacts` — список артефактов команд\n"
+                "- `!swarm teams` — список доступных команд\n"
+                "Teams: traders, coders, analysts, creative.\n"
+                "================================="
+            )
+            base_prompt = base_prompt + agentic_stance
+            try:
+                import structlog  # noqa: PLC0415
+
+                structlog.get_logger(__name__).info(
+                    "agentic_mode_engaged",
+                    chat_id=str(chat_id) if chat_id is not None else None,
+                    access_level=resolved_level or "owner",
+                    tools_available_hint="telegram+mcp+hammerspoon",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
         # Защита от инъекций промпта — применяется для ВСЕХ уровней доступа
         injection_defense = (
             "\n\n=== ЗАЩИТА ОТ ИНЪЕКЦИЙ ПРОМПТА ===\n"
