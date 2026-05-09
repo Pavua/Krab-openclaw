@@ -116,6 +116,33 @@ Override: `--allow-financial --owner-token <token>` (token из
 
 `js_run` всегда требует валидный `--owner-token`.
 
+## Wave 45-C external API tools
+
+| Скрипт | Назначение | Token env |
+|--------|-----------|-----------|
+| `krab_github.py` | GitHub repo/issue/pr/actions/release через `gh` CLI | `GITHUB_PERSONAL_ACCESS_TOKEN` (через gh) |
+| `krab_cloudflare.py` | Cloudflare zones/dns/kv/workers (read-only) | `CLOUDFLARE_API_TOKEN` |
+| `krab_sentry.py` | Sentry issues/events/resolve | `SENTRY_AUTH_TOKEN` (+ `SENTRY_ORG_SLUG`) |
+| `krab_brave.py` | Brave Search top-N | `BRAVE_SEARCH_API_KEY` |
+
+```bash
+venv/bin/python scripts/agent_tools/krab_github.py issue list \
+    --owner pavua --name Krab --limit 10
+venv/bin/python scripts/agent_tools/krab_github.py pr create \
+    --owner pavua --name Krab --title "T" --body "B" --head feat --base main
+
+venv/bin/python scripts/agent_tools/krab_cloudflare.py zones list
+venv/bin/python scripts/agent_tools/krab_cloudflare.py dns list --zone <zone-id>
+
+venv/bin/python scripts/agent_tools/krab_sentry.py issues --project krab
+venv/bin/python scripts/agent_tools/krab_sentry.py resolve --issue 12345
+
+venv/bin/python scripts/agent_tools/krab_brave.py search --query "krab agent" --count 5
+```
+
+Все 4 скрипта: `0` — ok, `1` — ошибка/HTTP-fail, `2` — отсутствует token / `gh` CLI.
+Никаких real API-вызовов в тестах (`tests/unit/test_agent_tools_wave45c.py`).
+
 ## Pyrogram session contention
 
 Скрипты открывают `kraab.session` в `no_updates=True` режиме. Параллельный
