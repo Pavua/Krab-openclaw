@@ -308,7 +308,9 @@ async def test_catchup_handles_replay_exception(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_catchup_all_owner_chats(tmp_path: Path) -> None:
+async def test_catchup_all_owner_chats(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Wave 48-A: явно disable swarm group чтобы сохранить single-chat semantics теста.
+    monkeypatch.setenv("KRAB_SWARM_GROUP_ID", "")
     host = _Host(tmp_path / "last.json")
     host._owner_notify_target = 312322764
     msgs = [_mk_msg(5)]
@@ -324,8 +326,10 @@ async def test_run_startup_catchup_safe_never_raises(tmp_path: Path) -> None:
     """Главный entry-point — даже при крахе всё внутри swallowед."""
     host = _Host(tmp_path / "last.json")
     host._owner_notify_target = 312322764
-    # Симулируем полный крах _catchup_owner_dm
-    host._catchup_owner_dm = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
+    # Wave 48-A: _run_startup_catchup_safe теперь вызывает _catchup_all_owner_chats.
+    host._catchup_all_owner_chats = AsyncMock(  # type: ignore[method-assign]
+        side_effect=RuntimeError("boom")
+    )
     # Должно не raise
     await host._run_startup_catchup_safe()
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Wave 46-A: MessageCatchupMixin — startup catch-up для пропущенных сообщений.
+"""Wave 46-A / Wave 48-A: MessageCatchupMixin — startup catch-up.
 
 Зачем:
 - Production bug (Session 43): после restart 22:12→22:21 Pyrogram
@@ -7,9 +7,14 @@
   22:18-22:21 (msg 1325454-1325461 в chat 312322764) НЕ были ingested.
   Wave 39-D split_brain detection ловит downtime, но не past missed messages.
 - Решение: после ``session=ready`` (logger.info("userbot_started", ...)),
-  сразу poll ``get_chat_history`` для owner DM и сравнить с
+  сразу poll ``get_chat_history`` для каждого target chat и сравнить с
   persistent ``_last_seen_message_id``. Unseen сообщения — manually
   через ``_process_message``.
+
+Wave 48-A: catchup расширен на multiple chats (не только owner DM).
+Если Krab restart происходит во время swarm session, swarm messages могут
+быть lost — никто не реагирует, дальнейшие team interactions срываются.
+Targets: owner DM + Krab Swarm group (configurable).
 
 Persistent state:
 - File: ``~/.openclaw/krab_runtime_state/last_seen_messages.json``
@@ -19,14 +24,19 @@ Persistent state:
 Контракт:
 - ``_load_last_seen() -> dict[int, int]`` — чтение state файла, fail-open {}.
 - ``_save_last_seen(chat_id, msg_id)`` — atomic write, fail-warning.
-- ``_catchup_owner_dm(*, max_lookback)`` — fetch history + replay unseen.
-- ``_catchup_all_owner_chats()`` — iterate по всем owner-DM chats.
+- ``_catchup_chat_history(chat_id, *, max_lookback)`` — Wave 48-A:
+  generic per-chat catchup; replay unseen messages.
+- ``_catchup_owner_dm(*, max_lookback)`` — Wave 46-A wrapper для owner DM.
+- ``_catchup_all_owner_chats()`` — iterate по всем target chats.
+- ``_resolve_catchup_target_chats()`` — resolve target chat list (Wave 48-A).
 - ``_record_seen_message(chat_id, msg_id)`` — hook для _process_message.
 
 Defensive design:
-- Catchup НЕ должен failить Krab startup. Любая ошибка → log warning + return 0.
+- Catchup НЕ должен failить Krab startup. Любая ошибка → log warning + skip chat.
+- Per-chat resilience: failure в одном chat не блокирует остальные.
 - НЕ trigger live API в tests (всё через mocks).
 - max_lookback default 20, override через env ``KRAB_STARTUP_CATCHUP_LIMIT``.
+- Target chats: ``KRAB_STARTUP_CATCHUP_CHATS`` (CSV), иначе owner DM + swarm group.
 """
 
 from __future__ import annotations
@@ -97,6 +107,57 @@ def _resolve_owner_chat_id() -> int | None:
         return int(raw)
     except ValueError:
         return None
+
+
+# Wave 48-A: дефолтный chat_id Krab Swarm forum-группы.
+# Override через env ``KRAB_SWARM_GROUP_ID``.
+_DEFAULT_SWARM_GROUP_ID = -1003703978531
+
+
+def _resolve_swarm_group_id() -> int | None:
+    """Resolve Krab Swarm group chat_id.
+
+    Приоритет:
+      1. ``KRAB_SWARM_GROUP_ID`` env.
+      2. ``_DEFAULT_SWARM_GROUP_ID`` константа.
+      3. None если env установлен в "" (явный disable).
+    """
+    raw = os.environ.get("KRAB_SWARM_GROUP_ID")
+    if raw is None:
+        return _DEFAULT_SWARM_GROUP_ID
+    raw = raw.strip()
+    if not raw:
+        return None  # явный disable
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("swarm_group_id_invalid", value=raw)
+        return _DEFAULT_SWARM_GROUP_ID
+
+
+def _parse_catchup_chats_env() -> list[int] | None:
+    """Парсит ``KRAB_STARTUP_CATCHUP_CHATS`` (CSV chat_ids).
+
+    Возвращает:
+      - list[int] если env установлен и содержит хотя бы один valid id.
+      - None если env пустой/не установлен (использовать defaults).
+
+    Невалидные id silently skipped + warning logged.
+    """
+    raw = os.environ.get("KRAB_STARTUP_CATCHUP_CHATS", "").strip()
+    if not raw:
+        return None
+    result: list[int] = []
+    for token in raw.split(","):
+        s = token.strip()
+        if not s:
+            continue
+        try:
+            result.append(int(s))
+        except ValueError:
+            logger.warning("catchup_chat_id_invalid", value=s)
+            continue
+    return result if result else None
 
 
 class MessageCatchupMixin:
@@ -234,36 +295,84 @@ class MessageCatchupMixin:
     # Main catchup entry-points
     # ────────────────────────────────────────────────────────────────────
 
-    async def _catchup_owner_dm(self, *, max_lookback: int | None = None) -> int:
-        """Catch-up для owner DM. Возвращает количество replayed messages.
+    def _resolve_catchup_target_chats(self) -> list[int]:
+        """Wave 48-A: список chat_id для startup catchup.
+
+        Приоритет:
+          1. ``KRAB_STARTUP_CATCHUP_CHATS`` env (CSV) — полная замена defaults.
+          2. Defaults: owner DM + Krab Swarm group (если resolved).
+
+        Дедупликация с сохранением порядка. Невалидные id из env уже
+        отфильтрованы в ``_parse_catchup_chats_env`` (с warning).
+        """
+        env_override = _parse_catchup_chats_env()
+        if env_override is not None:
+            # Дедуп с сохранением порядка
+            seen: set[int] = set()
+            ordered: list[int] = []
+            for cid in env_override:
+                if cid not in seen:
+                    seen.add(cid)
+                    ordered.append(cid)
+            return ordered
+
+        candidates: list[int | None] = [
+            self._resolve_catchup_owner_chat_id(),
+            _resolve_swarm_group_id(),
+        ]
+        seen2: set[int] = set()
+        result: list[int] = []
+        for cid in candidates:
+            if cid is None:
+                continue
+            if cid in seen2:
+                continue
+            seen2.add(cid)
+            result.append(cid)
+        return result
+
+    async def _catchup_chat_history(
+        self, chat_id: int, *, max_lookback: int | None = None
+    ) -> dict[str, int]:
+        """Wave 48-A: generic catch-up для одного chat'а.
+
+        Возвращает структурированный результат:
+          ``{"caught_up": int, "skipped_self": int, "history_size": int,
+             "last_seen_before": int, "last_seen_after": int}``
 
         Алгоритм:
-          1. Resolve owner_chat_id (None → 0).
-          2. ``client.get_chat_history(chat_id, limit=max_lookback)``.
-          3. Filter messages с ``id > last_seen[chat_id]``.
-          4. Для каждого unseen — ``await self._process_message(msg)``.
-          5. Update ``last_seen[chat_id] = max(seen_ids)``.
+          1. ``client.get_chat_history(chat_id, limit=max_lookback)``.
+          2. Filter messages с ``id > last_seen[chat_id]``.
+          3. Для каждого unseen — ``await self._process_message(msg)``.
+          4. Update ``last_seen[chat_id] = max(seen_ids)``.
 
-        Все ошибки log + return 0 (Krab startup НЕ должен fail).
+        Все ошибки log + return zeros (Krab startup НЕ должен fail).
         """
         if max_lookback is None:
             max_lookback = _resolve_max_lookback()
 
-        chat_id = self._resolve_catchup_owner_chat_id()
-        if chat_id is None:
-            logger.info("startup_catchup_skipped", reason="no_owner_chat_id")
-            return 0
+        zero = {
+            "caught_up": 0,
+            "skipped_self": 0,
+            "history_size": 0,
+            "last_seen_before": 0,
+            "last_seen_after": 0,
+        }
 
         client = getattr(self, "client", None)
         if client is None:
-            logger.warning("startup_catchup_skipped", reason="no_client")
-            return 0
+            logger.warning("startup_catchup_skipped", chat_id=chat_id, reason="no_client")
+            return zero
 
         try:
             last_seen_map = self._load_last_seen()
             last_seen_id = last_seen_map.get(int(chat_id), 0)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("startup_catchup_load_state_failed", error=str(exc))
+            logger.warning(
+                "startup_catchup_load_state_failed",
+                chat_id=chat_id,
+                error=str(exc),
+            )
             last_seen_id = 0
 
         # Собираем history; pyrogram возвращает async-iterator от newest к oldest.
@@ -278,11 +387,17 @@ class MessageCatchupMixin:
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
-            return 0
+            return zero
 
         if not history:
             logger.info("startup_catchup_empty_history", chat_id=chat_id)
-            return 0
+            return {
+                "caught_up": 0,
+                "skipped_self": 0,
+                "history_size": 0,
+                "last_seen_before": last_seen_id,
+                "last_seen_after": last_seen_id,
+            }
 
         # Фильтруем unseen: id > last_seen_id. Сортируем oldest→newest для
         # корректного порядка replay (FIFO).
@@ -302,8 +417,6 @@ class MessageCatchupMixin:
             # inbox listing message, NLU classifier сматчил "команд" substring
             # и dispatched !swarm на самого себя.
             # Strict ``is True`` check — Pyrogram Message.outgoing всегда bool.
-            # Это защищает от ложно-truthy значений (e.g. MagicMock в tests
-            # без явной установки атрибута).
             outgoing_attr = getattr(msg, "outgoing", False)
             is_outgoing = outgoing_attr is True
             from_user = getattr(msg, "from_user", None)
@@ -312,9 +425,6 @@ class MessageCatchupMixin:
                 self_attr = getattr(from_user, "is_self", False)
                 is_self = self_attr is True
             if is_outgoing or is_self:
-                # Track max_id даже для self — иначе persistent state
-                # никогда не отметит self-messages как seen и каждый restart
-                # будет re-iterate их в history.
                 if mid > max_id:
                     max_id = mid
                 skipped_self += 1
@@ -345,28 +455,89 @@ class MessageCatchupMixin:
             last_seen_before=last_seen_id,
             last_seen_after=max_id,
         )
-        return replayed
+        return {
+            "caught_up": replayed,
+            "skipped_self": skipped_self,
+            "history_size": len(history),
+            "last_seen_before": last_seen_id,
+            "last_seen_after": max_id,
+        }
 
-    async def _catchup_all_owner_chats(self) -> dict[int, int]:
-        """Catch-up для всех owner-DM chats. Возвращает {chat_id: replayed}.
+    async def _catchup_owner_dm(self, *, max_lookback: int | None = None) -> int:
+        """Wave 46-A wrapper: catch-up только owner DM. Возвращает кол-во replayed.
 
-        В текущей реализации — только один owner DM (resolve через
-        OWNER_NOTIFY_CHAT_ID). Метод оставлен для будущего расширения
-        (Krab Swarm group, дополнительные allowed DMs).
+        Сохраняем как backward-compat для tests/callers, ожидающих int.
+        Внутри делегирует в ``_catchup_chat_history``.
         """
-        result: dict[int, int] = {}
         chat_id = self._resolve_catchup_owner_chat_id()
         if chat_id is None:
+            logger.info("startup_catchup_skipped", reason="no_owner_chat_id")
+            return 0
+        stats = await self._catchup_chat_history(chat_id, max_lookback=max_lookback)
+        return int(stats.get("caught_up", 0))
+
+    async def _catchup_all_owner_chats(self) -> dict[int, int]:
+        """Wave 48-A: catch-up для всех target chats. Возвращает {chat_id: caught_up}.
+
+        Targets resolved через ``_resolve_catchup_target_chats``: env
+        override ``KRAB_STARTUP_CATCHUP_CHATS`` либо defaults
+        (owner DM + Krab Swarm group).
+
+        Per-chat resilience: failure в одном chat НЕ блокирует остальные —
+        ошибка логируется и переход к следующему target'у.
+
+        Финальный structured log включает per-chat stats + totals.
+        """
+        result: dict[int, int] = {}
+        per_chat_stats: list[dict[str, Any]] = []
+        targets = self._resolve_catchup_target_chats()
+        if not targets:
+            logger.info("startup_catchup_skipped", reason="no_targets")
             return result
-        try:
-            replayed = await self._catchup_owner_dm()
-            result[chat_id] = replayed
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "startup_catchup_all_failed",
-                chat_id=chat_id,
-                error=str(exc),
+
+        total_caught_up = 0
+        total_skipped_self = 0
+        for chat_id in targets:
+            try:
+                stats = await self._catchup_chat_history(chat_id)
+            except Exception as exc:  # noqa: BLE001
+                # Per-chat resilience: один chat не валит остальные.
+                logger.warning(
+                    "startup_catchup_chat_failed",
+                    chat_id=chat_id,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                per_chat_stats.append(
+                    {
+                        "chat_id": chat_id,
+                        "caught_up": 0,
+                        "skipped_self": 0,
+                        "error": str(exc),
+                    }
+                )
+                result[chat_id] = 0
+                continue
+            caught = int(stats.get("caught_up", 0))
+            skipped = int(stats.get("skipped_self", 0))
+            total_caught_up += caught
+            total_skipped_self += skipped
+            result[chat_id] = caught
+            per_chat_stats.append(
+                {
+                    "chat_id": chat_id,
+                    "caught_up": caught,
+                    "skipped_self": skipped,
+                }
             )
+
+        logger.info(
+            "startup_catchup_complete_multi",
+            chats=per_chat_stats,
+            total_caught_up=total_caught_up,
+            total_skipped_self=total_skipped_self,
+            target_count=len(targets),
+        )
         return result
 
     async def _run_startup_catchup_safe(self) -> None:
@@ -374,9 +545,10 @@ class MessageCatchupMixin:
 
         Wave 46-A: вызывается из ``KraabUserbot.start`` сразу после
         ``logger.info("userbot_started", ...)``.
+        Wave 48-A: теперь вызывает multi-chat ``_catchup_all_owner_chats``.
         """
         try:
-            await self._catchup_owner_dm()
+            await self._catchup_all_owner_chats()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
