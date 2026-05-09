@@ -196,33 +196,61 @@ def _detect_topic(text: str, *, team: str | None) -> str | None:
     return None
 
 
+# Wave 46-D-nlu-tighten: explicit verb+phrase patterns вместо substring "команд".
+# Раньше "команд" matched в "командам/командах/команда" в нейтральных текстах
+# (inbox listing, переписка) → false-positive dispatch swarm.
+_SWARM_VERB_PATTERNS = (
+    # запусти/запустить + (опц. слова) + команду/swarm/team
+    re.compile(r"\bзапусти(?:ть)?\s+(?:\w+\s+){0,2}(?:команд[уыа](?:ми)?|swarm|team)\b"),
+    # позови/созови/собери + (опц. слова) + команда (любая форма)
+    re.compile(r"\b(?:позови|созови|собери)\s+(?:\w+\s+){0,2}команд[уыа](?:ми)?\b"),
+    # делегируй команде/swarm/team
+    re.compile(r"\bделегируй\s+(?:\w+\s+){0,2}(?:команд|swarm|team)"),
+    # собери swarm/team
+    re.compile(r"\bсобери\s+(?:\w+\s+){0,2}(?:swarm|team)\b"),
+    # ройник (специфический Krab-сленг)
+    re.compile(r"\bройник"),
+    # явные пары: "swarm traders", "команда analysts", etc.
+    re.compile(r"\b(?:swarm|команд[уыа])\s+(?:traders|coders|analysts|creative)\b"),
+    # запусти/позови + team-noun (трейдеров/кодеров/аналитиков/креативщиков)
+    re.compile(
+        r"\b(?:запусти(?:ть)?|позови|созови|собери|делегируй)\s+(?:\w+\s+){0,3}"
+        r"(?:трейдер\w*|кодер\w*|программист\w*|аналитик\w*|креатив\w*)"
+    ),
+)
+
+# Bare exact-word matches (без verb context, но точное слово swarm/team)
+_SWARM_BARE_RE = re.compile(r"\bswarm\b|\bteam\b")
+
+
 def _try_swarm(text: str) -> CommandIntent | None:
     lower = text.lower()
-    swarm_kw = any(
-        kw in lower
-        for kw in (
-            "запусти",
-            "запустить",
-            "позови",
-            "созови",
-            "собери",
-            "swarm",
-            "team",
-            "команд",
-            "ройник",
-        )
-    )
+    # Wave 46-D: требуем verb-phrase или bare swarm/team — substring "команд" больше не триггер
+    swarm_verb_match = any(p.search(lower) for p in _SWARM_VERB_PATTERNS)
+    swarm_bare_match = bool(_SWARM_BARE_RE.search(lower))
     team = _detect_team(text)
-    if not (swarm_kw or team):
-        return None
     if not team:
+        return None
+    if not (swarm_verb_match or swarm_bare_match):
+        # team mention есть (например "traders" или "командам"), но нет глагола/swarm-keyword —
+        # вероятно нейтральный текст (inbox listing, переписка). Не диспатчим.
         return None
     count = _detect_count(text) or 1
     topic = _detect_topic(text, team=team) or ""
     rendered = f"!swarm {team} loop {count}"
     if topic:
         rendered += f" {topic}"
-    confidence = 0.9 if (team and topic) else 0.75 if team else 0.5
+    # Wave 46-D: confidence теперь зависит от явности verb-pattern
+    if swarm_verb_match and topic:
+        confidence = 0.9
+    elif swarm_verb_match:
+        confidence = 0.75
+    elif swarm_bare_match and topic:
+        confidence = 0.85
+    elif swarm_bare_match:
+        confidence = 0.6
+    else:
+        confidence = 0.3  # safety net (не должно достижимо после early return выше)
     return CommandIntent(
         command="!swarm",
         subcommand=team,
