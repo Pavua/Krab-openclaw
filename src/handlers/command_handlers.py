@@ -496,6 +496,7 @@ from .commands.observability_commands import (  # noqa: E402, F401  # Phase 2 Wa
     handle_metrics,
     handle_note,
     handle_quota,
+    handle_routes,
     handle_watch,
 )
 from .commands.memory_admin_commands import (  # noqa: E402, F401  # Phase 2 Wave 18

@@ -153,6 +153,7 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "budget",
         "digest",
         "quota",
+        "routes",
         "metrics",
         "report",
         "pin",

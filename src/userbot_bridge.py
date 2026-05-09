@@ -143,6 +143,7 @@ from .handlers import (
     handle_rewrite,
     handle_rm_remind,
     handle_role,
+    handle_routes,
     handle_say,
     handle_schedule,
     handle_scope,
@@ -796,6 +797,13 @@ class KraabUserbot(
         )
         async def wrap_metrics(c, m):
             await run_cmd(handle_metrics, m)
+
+        @self.client.on_message(
+            filters.command("routes", prefixes=prefixes) & _make_command_filter("routes"),
+            group=-1,
+        )
+        async def wrap_routes(c, m):
+            await run_cmd(handle_routes, m)
 
         @self.client.on_message(
             filters.command("memory", prefixes=prefixes) & _make_command_filter("memory"), group=-1

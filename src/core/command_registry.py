@@ -408,6 +408,13 @@ _COMMANDS: list[CommandInfo] = [
         usage="!metrics",
         owner_only=True,
     ),
+    CommandInfo(
+        name="routes",
+        category="costs",
+        description="Детальный routing state: primary/active/fallback chain + recent switches",
+        usage="!routes",
+        owner_only=True,
+    ),
     # ── notes ────────────────────────────────────────────────────────────────
     CommandInfo(
         name="memo",

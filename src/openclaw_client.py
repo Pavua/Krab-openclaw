@@ -3483,6 +3483,23 @@ class OpenClawClient:
                                                 "transition": _is_transition,
                                             },
                                         )
+                                        # Wave 48-B: persist switch для !routes view
+                                        try:
+                                            from .integrations.route_switch_log import (
+                                                append_switch,
+                                            )
+
+                                            append_switch(
+                                                from_model=attempt_model,
+                                                to_model=_expected_fb,
+                                                reason="quota",
+                                                kind=_kind,
+                                            )
+                                        except Exception as _rsl_exc:  # noqa: BLE001
+                                            logger.debug(
+                                                "route_switch_log_failed",
+                                                error=str(_rsl_exc),
+                                            )
                                         if _is_transition:
                                             try:
                                                 _notifier = getattr(

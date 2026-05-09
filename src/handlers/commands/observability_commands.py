@@ -937,6 +937,180 @@ async def handle_quota(bot: "KraabUserbot", message: Message) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Wave 48-B: !routes — детальный routing state
+# ---------------------------------------------------------------------------
+
+
+def _format_recovery_time(seconds: int) -> str:
+    """Преобразует секунды в человеко-читаемый ETA (4d 12h / 2h 15m / 5m 30s / 23s).
+
+    Соответствует Wave 48-B спецификации: компактный формат с двумя единицами.
+    """
+    if seconds < 0:
+        seconds = 0
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, sec = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {sec}s" if sec else f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours}h" if hours else f"{days}d"
+
+
+def _read_codex_quota_state() -> dict[str, Any]:
+    """Читает codex_quota_state.json — graceful если файл отсутствует/повреждён."""
+    state_path = pathlib.Path.home() / ".openclaw/krab_runtime_state/codex_quota_state.json"
+    if not state_path.exists():
+        return {}
+    try:
+        return json.loads(state_path.read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _format_chain_state(
+    primary: str,
+    fallbacks: list[str],
+    quota_state: dict[str, Any],
+    now_utc: datetime.datetime | None = None,
+) -> list[str]:
+    """Собирает emoji-marked lines per-model.
+
+    Логика:
+    - Если codex disabled и модель начинается с ``codex-cli/`` → quota exhausted
+      с recovery ETA из disabled_at + cooldown (weekly=7d / transient=1h).
+    - Иначе ✅ available (минималистично; runtime failure-state probe выходит за
+      Wave 48-B scope, оставлено как placeholder ".".
+    """
+    if now_utc is None:
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+
+    chain: list[str] = []
+    seen: set[str] = set()
+    # primary первым (если его нет в fallbacks — добавим)
+    ordered = [primary] if primary else []
+    for fb in fallbacks:
+        if fb not in ordered:
+            ordered.append(fb)
+
+    codex_disabled = bool(quota_state.get("disabled"))
+    disabled_at_raw = quota_state.get("disabled_at") or ""
+    kind = (quota_state.get("kind") or "").strip() or "weekly"
+    # Cooldown: weekly=7d, transient=1h
+    cooldown_sec = 7 * 24 * 3600 if kind == "weekly" else 3600
+
+    recovery_eta_str: str | None = None
+    if codex_disabled and disabled_at_raw:
+        try:
+            disabled_dt = datetime.datetime.fromisoformat(disabled_at_raw)
+            elapsed = (now_utc - disabled_dt).total_seconds()
+            remaining = max(0, int(cooldown_sec - elapsed))
+            recovery_eta_str = _format_recovery_time(remaining)
+        except (ValueError, TypeError):
+            recovery_eta_str = None
+
+    for model in ordered:
+        if not model or model in seen:
+            continue
+        seen.add(model)
+        if codex_disabled and model.startswith("codex-cli/"):
+            if recovery_eta_str:
+                chain.append(f"⏸ {model} — quota exhausted ({kind}, recovery {recovery_eta_str})")
+            else:
+                chain.append(f"⏸ {model} — quota exhausted ({kind})")
+        else:
+            chain.append(f"✅ {model}")
+    return chain
+
+
+def _format_recent_switches(entries: list[dict[str, Any]]) -> list[str]:
+    """Преобразует JSONL entries в строки `HH:MM from → to (reason)`."""
+    lines: list[str] = []
+    for entry in entries:
+        ts_raw = str(entry.get("ts") or "")
+        try:
+            ts_dt = datetime.datetime.fromisoformat(ts_raw)
+            ts_str = ts_dt.strftime("%H:%M")
+        except (ValueError, TypeError):
+            ts_str = "?"
+        from_m = str(entry.get("from") or "?")
+        to_m = str(entry.get("to") or "?")
+        reason = str(entry.get("reason") or "?")
+        lines.append(f"{ts_str} {from_m} → {to_m} ({reason})")
+    return lines
+
+
+async def handle_routes(bot: "KraabUserbot", message: Message) -> None:
+    """!routes — детальное состояние routing chain (Wave 48-B).
+
+    Показывает:
+    - Primary + active модель (last_fallback_model если codex disabled)
+    - Полную fallback chain с per-model status (✅ / ⏸ quota exhausted)
+    - Recovery ETA для codex моделей (если disabled)
+    - Последние 5 переключений из route_switches.jsonl
+    """
+    del bot
+
+    from pyrogram.enums import ParseMode
+
+    # Читаем runtime truth
+    try:
+        from ...core.openclaw_runtime_models import (
+            get_runtime_fallback_models,
+            get_runtime_primary_model,
+        )
+
+        primary = get_runtime_primary_model() or "—"
+        fallbacks = list(get_runtime_fallback_models() or [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("routes_runtime_read_failed", error=str(exc))
+        primary = "—"
+        fallbacks = []
+
+    quota_state = _read_codex_quota_state()
+    chain_lines = _format_chain_state(primary, fallbacks, quota_state)
+
+    # Активная модель = primary, если codex enabled, иначе last_fallback_model
+    if quota_state.get("disabled") and quota_state.get("last_fallback_model"):
+        active_model = str(quota_state.get("last_fallback_model"))
+        active_note = " (fallback after quota)"
+    else:
+        active_model = primary
+        active_note = ""
+
+    # Recent switches
+    try:
+        from ...integrations.route_switch_log import read_recent
+
+        switches = read_recent(limit=5)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("routes_switches_read_failed", error=str(exc))
+        switches = []
+    switch_lines = _format_recent_switches(switches)
+
+    parts: list[str] = ["📡 *Routing State*", ""]
+    parts.append(f"*Primary*: `{primary}`")
+    parts.append(f"*Active*: `{active_model}`{active_note}")
+    parts.append("")
+    parts.append("*Fallback chain*:")
+    if chain_lines:
+        parts.extend(chain_lines)
+    else:
+        parts.append("  (chain пустая)")
+    parts.append("")
+    parts.append("*Recent switches* (last 5):")
+    if switch_lines:
+        parts.extend(switch_lines)
+    else:
+        parts.append("  (no recent switches)")
+
+    await message.reply("\n".join(parts), parse_mode=ParseMode.MARKDOWN)
+
+
+# ---------------------------------------------------------------------------
 # !metrics — Wave 39-A: единый системный дашборд (one-card overview)
 # ---------------------------------------------------------------------------
 
@@ -1097,10 +1271,14 @@ __all__ = [
     "_CHECKPOINTS_DIR",
     "_count_today_calls",
     "_estimate_session_tokens",
+    "_format_chain_state",
+    "_format_recent_switches",
+    "_format_recovery_time",
     "_format_time_ago",
     "_probe_anthropic_vertex",
     "_probe_gemini_cli",
     "_probe_vertex_gemini",
+    "_read_codex_quota_state",
     "handle_bookmark",
     "handle_context",
     "handle_inbox",
@@ -1108,5 +1286,6 @@ __all__ = [
     "handle_metrics",
     "handle_note",
     "handle_quota",
+    "handle_routes",
     "handle_watch",
 ]
