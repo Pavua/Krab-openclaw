@@ -1234,7 +1234,9 @@ class ModelManager:
                 "loaded_models": loaded_models,
                 "ram": self.get_ram_usage(),
             }
-        except (httpx.HTTPError, OSError, KeyError, ValueError) as e:
+        except (httpx.HTTPError, OSError, KeyError, ValueError, RuntimeError) as e:
+            # RuntimeError покрывает «Cannot send a request, as the client has been closed»
+            # если singleton-клиент уже закрыт во время shutdown (Sentry PYTHON-FASTAPI-7X).
             return {"status": "error", "error": str(e)}
 
     async def close(self):

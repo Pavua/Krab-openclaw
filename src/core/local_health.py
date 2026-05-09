@@ -72,14 +72,31 @@ async def is_lm_studio_available(
     с fallback на OpenAI-совместимый `{base_url}/v1/models`.
 
     Returns True при status_code == 200, иначе False (включая сетевые ошибки).
+
+    Если переданный client уже закрыт (is_closed=True), функция автоматически
+    создаёт временный per-call клиент. Это предотвращает RuntimeError
+    «Cannot send a request, as the client has been closed» при вызовах
+    после shutdown (Sentry PYTHON-FASTAPI-7X).
     """
     base = base_url.rstrip("/")
     urls = [f"{base}/api/v1/models", f"{base}/v1/models"]
     headers = build_lm_studio_auth_headers()
+
+    # Если singleton-клиент закрыт — используем per-call клиент (root-cause fix).
+    # httpx.AsyncClient.is_closed == True после aclose() или __aexit__.
+    effective_client = (
+        client if (client is not None and not getattr(client, "is_closed", False)) else None
+    )
+    if client is not None and effective_client is None:
+        logger.warning(
+            "lm_studio_health_client_closed",
+            hint="singleton httpx client already closed; falling back to per-call client",
+        )
+
     for url in urls:
-        if client is not None:
+        if effective_client is not None:
             try:
-                resp = await client.get(url, timeout=timeout, headers=headers or None)
+                resp = await effective_client.get(url, timeout=timeout, headers=headers or None)
                 if resp.status_code == 200:
                     return True
                 _maybe_warn_auth_required(resp.status_code, url=url)
