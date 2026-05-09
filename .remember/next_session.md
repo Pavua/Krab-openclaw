@@ -4,12 +4,33 @@
 > Krab Ear имеет свой handoff в `/Users/pablito/Antigravity_AGENTS/Krab Ear/.remember/next_session.md`.
 > См. также [PROJECT_SEPARATION_GUIDE.md](../docs/PROJECT_SEPARATION_GUIDE.md).
 
-## TL;DR — Session 42 закрыта 2026-05-09 ~19:00, 3 коммита Wave 44-A/B/C
+## TL;DR — Session 42 закрыта 2026-05-09 ~20:05, **17 коммитов** Wave 44-A...L + UI-1/2/3 + i18n-1/2
 
-**FINAL STATE (закрытие 2026-05-09 ~19:00)**:
+**FINAL STATE (закрытие 2026-05-09 ~20:05)**:
 
-- **main HEAD**: `743b1d2` Wave 44-C (post-reconnect updates verify)
-- **3 коммита**: 44-A (Sentry statsPeriod coerce) + 44-B (watchdog gateway restart) + 44-C (split-brain post-reconnect verify)
+- **main HEAD**: `bdc3595` Wave 44-D-UI-3 (Hub fallback dropdown UX)
+- **17 коммитов** Session 42:
+  - 44-A `95e1a3f` Sentry statsPeriod coerce (+18 tests)
+  - 44-B `a471e86` watchdog gateway restart fix
+  - 44-C `743b1d2` split-brain post-reconnect verify (+6 tests, P0 fix)
+  - 44-D-UI `db2c0a0` inbox layout + RU localization
+  - 44-D-UI-2 `cc19417` light-mode + tooltips + precise time
+  - 44-D-i18n-1 `1640319` i18n.js scaffold + inbox POC
+  - 44-D-i18n-2 `31b61a7` full panel 471 attrs (10 pages, 9 sub-agents parallel)
+  - 44-E `978abde` Sentry PII redaction + split_brain BENIGN markers (+15 tests)
+  - 44-F `98f1e93` Memory wins (singleton + history cap + spam_guard cleanup +7 tests)
+  - 44-G `e7db78f` Dead code removal (-497 LOC, 4 files)
+  - 44-H `5c1f40b` proactive_watch hygiene (-90% DM noise + cron benign +3 tests)
+  - 44-I `5458f95` Active probe via GetDialogs (Wave 44-C false-positive fix +7 tests)
+  - 44-J-trading `f06ae11` paper trading bot for Swarm Traders
+  - 44-J-ops `a8b962d` krab_runtime_risk_audit script + docs
+  - 44-K `acd22d4` CLAUDE.md MRO chain (4 missing mixins)
+  - 44-L `e83da0e` .remember/ archive cleanup (26 files moved)
+  - 44-D-UI-3 `bdc3595` Hub fallback dropdown UX (show all + disabled markers)
+  - Plus merge commit `99ef16e4` (Wave 44-I/K/L from worktree branch into main)
+- **Krab live**: PID 21062 post Stop+Start, session=ready, all waves deployed
+- **Tests**: 1281/1285 passed (4 pre-existing `test_memory_adaptive_rerank_llm.py` failures unrelated)
+- **Total LOC delta**: +3500/-1200 across waves
 - **Krab live**: PID 27224, session=ready, `KRAB_PROACTIVE_ENABLED=1`
 - **E2E verified**: pavua DM → Krab reply за 4s после Stop+Start canonical
 - **Tests**: +24 (Wave 44-A: 18, 44-C: 6); 192 watchdog+sentry+mcp slice green; ruff clean

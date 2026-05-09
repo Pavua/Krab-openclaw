@@ -29,6 +29,19 @@
     <string>9222</string>
     <key>DEDICATED_CHROME_PROFILE_DIR</key>
     <string>/tmp/krab-chrome</string>
+    <!-- Wave 39-B (2026-05-09): proactive event detection (joins/media/ai). -->
+    <key>KRAB_PROACTIVE_ENABLED</key>
+    <string>1</string>
+    <!-- Wave 44-M (2026-05-09): bump wall-clock caps 600s→1800s + 300s→1800s
+         для длинных agentic tasks (research, multi-tool chains, codex-cli).
+         Liveness check (Wave 36-A zombie + Wave 44-I active probe) — отдельный
+         safety net через update_id frozen detection. -->
+    <key>KRAB_LLM_WALL_CLOCK_CAP_SEC</key>
+    <string>1800</string>
+    <key>KRAB_LLM_WALL_CLOCK_CAP_PHOTO_SEC</key>
+    <string>1800</string>
+    <key>KRAB_RESPONSE_HARD_CAP_SEC</key>
+    <string>1800</string>
   </dict>
 
   <key>RunAtLoad</key>
