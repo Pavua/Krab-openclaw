@@ -442,7 +442,7 @@ LLM analyzer читает swarm_artifacts/ + текущий prompt → пред�
 
 **Total: -1893 LOC (-27.6%)**, bridge < 5000 LOC впервые.
 
-**KraabUserbot MRO (19 mixins):** LLMTextProcessing → RuntimeStatus → VoiceProfile → AutoTranslate → AccessControl → LLMFlow → BackgroundTasks → Session → StartupState → CallbackHandler → NetworkWatchdog → TranslatorProfile → TelegramSendUtils → ReactionDispatch → CronTask → RelayInbox → SwarmTeamClients → MediaProcessors → BackgroundLoops.
+**KraabUserbot MRO (23 mixins):** LLMTextProcessing → RuntimeStatus → VoiceProfile → AutoTranslate → AccessControl → LLMFlow → BackgroundTasks → Session → StartupState → CallbackHandler → NetworkWatchdog → TranslatorProfile → TelegramSendUtils → ReactionDispatch → CronTask → RelayInbox → SwarmTeamClients → MediaProcessors → BackgroundLoops → VoiceHandlers → ProactiveWatch → ServiceOrchestration → DeliveryHelpers.
 
 **Pattern:** factory mixin classes в `src/userbot/*Mixin.py`, MRO inheritance, lazy imports внутри hot-path methods, structlog с `module=<mixin_name>` для traceability в production logs.
 
