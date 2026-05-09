@@ -71,19 +71,31 @@
         .section { display: none; }
         .section.active { display: block; }
         /* Snapshot table */
-        table.snapshots, table.switches { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        table.snapshots, table.switches, table.catchup { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
         table.snapshots th, table.snapshots td,
-        table.switches th, table.switches td {
+        table.switches th, table.switches td,
+        table.catchup th, table.catchup td {
             padding: 0.55rem 0.6rem; border-bottom: 1px solid rgba(255,255,255,0.08);
             text-align: left; vertical-align: top;
         }
         html[data-theme="light"] table.snapshots th, html[data-theme="light"] table.snapshots td,
-        html[data-theme="light"] table.switches th, html[data-theme="light"] table.switches td {
+        html[data-theme="light"] table.switches th, html[data-theme="light"] table.switches td,
+        html[data-theme="light"] table.catchup th, html[data-theme="light"] table.catchup td {
             border-bottom-color: rgba(15,23,42,0.08);
         }
-        table.snapshots th, table.switches th {
+        table.snapshots th, table.switches th, table.catchup th {
             color: rgba(255,255,255,0.55); font-weight: 500; font-size: 0.75rem; text-transform: uppercase;
         }
+        /* Wave 52-G: catchup per-chat breakdown details */
+        details.catchup-details summary {
+            cursor: pointer; user-select: none; font-size: 0.78rem; opacity: 0.75;
+        }
+        details.catchup-details[open] summary { opacity: 1; }
+        details.catchup-details ul {
+            margin: 0.4rem 0 0 1.2rem; padding: 0; font-size: 0.78rem;
+            font-family: ui-monospace, monospace; opacity: 0.85;
+        }
+        details.catchup-details li.has-error { color: #f87171; }
         .snap-restore-btn { background: rgba(125,211,252,0.18); border: 1px solid #7dd3fc;
             color: inherit; padding: 0.25rem 0.7rem; border-radius: 5px; cursor: pointer;
             font-size: 0.78rem; }
@@ -119,6 +131,7 @@
             <div class="section-tab active" data-section="runs" data-i18n="observability.section_runs">Runs</div>
             <div class="section-tab" data-section="snapshots" data-i18n="observability.section_snapshots">Snapshots</div>
             <div class="section-tab" data-section="switches" data-i18n="observability.section_switches">Route Switches</div>
+            <div class="section-tab" data-section="catchup" data-i18n="observability.section_catchup">Catchup History</div>
         </div>
 
         <!-- ─── Section: Runs (existing) ─────────────────────────────── -->
@@ -172,6 +185,29 @@
                 </thead>
                 <tbody id="snapshots-tbody">
                     <tr><td colspan="5" class="empty" data-i18n="common.loading">Загрузка…</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- ─── Section: Catchup History (Wave 52-G) ─────────────────── -->
+        <div class="section" id="section-catchup">
+            <div class="filter-bar">
+                <button class="tab" id="btn-refresh-catchup" data-i18n="observability.refresh">Обновить</button>
+                <span id="status-line-catchup" style="margin-left:auto;font-size:0.8rem;opacity:0.6"></span>
+            </div>
+            <table class="catchup">
+                <thead>
+                    <tr>
+                        <th data-i18n="observability.catchup_started">Начало</th>
+                        <th data-i18n="observability.catchup_duration">Длительность</th>
+                        <th data-i18n="observability.catchup_targets">Чатов</th>
+                        <th data-i18n="observability.catchup_caught">Поднято</th>
+                        <th data-i18n="observability.catchup_skipped">Self-skip</th>
+                        <th data-i18n="observability.catchup_breakdown">Разбивка</th>
+                    </tr>
+                </thead>
+                <tbody id="catchup-tbody">
+                    <tr><td colspan="6" class="empty" data-i18n="common.loading">Загрузка…</td></tr>
                 </tbody>
             </table>
         </div>
@@ -450,6 +486,79 @@
             });
         }
 
+        // ── Wave 52-G: Catchup history tab ────────────────────────────────
+        async function loadCatchup() {
+            const statusLine = document.getElementById('status-line-catchup');
+            const tbody = document.getElementById('catchup-tbody');
+            statusLine.textContent = '⟳ загрузка…';
+            try {
+                const res = await fetch('/api/observability/catchup-history?limit=20');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                renderCatchup(data.history || []);
+                statusLine.textContent = (data.history || []).length + ' sessions';
+            } catch (e) {
+                tbody.replaceChildren();
+                const tr = el('tr');
+                tr.appendChild(el('td', {colspan:'6', class:'empty'}, 'Ошибка: ' + e.message));
+                tbody.appendChild(tr);
+                statusLine.textContent = 'ошибка: ' + e.message;
+            }
+        }
+
+        function renderCatchup(entries) {
+            const tbody = document.getElementById('catchup-tbody');
+            tbody.replaceChildren();
+            if (!entries.length) {
+                const tr = el('tr');
+                tr.appendChild(el('td', {colspan:'6', class:'empty'},
+                    'Нет данных. История появится после первого startup catchup (Wave 52-G).'));
+                tbody.appendChild(tr);
+                return;
+            }
+            entries.forEach(e2 => {
+                const tr = el('tr');
+                let timeStr = '—';
+                if (e2.started_at_utc) {
+                    try { timeStr = new Date(e2.started_at_utc).toLocaleString(); }
+                    catch (err) { timeStr = String(e2.started_at_utc); }
+                }
+                tr.appendChild(el('td', null, timeStr));
+                const dur = (e2.duration_sec != null) ? e2.duration_sec.toFixed(2) + 's' : '—';
+                tr.appendChild(el('td', null, dur));
+                tr.appendChild(el('td', null, String(e2.target_count || 0)));
+                tr.appendChild(el('td', null, String(e2.total_caught_up || 0)));
+                tr.appendChild(el('td', null, String(e2.total_skipped_self || 0)));
+
+                const tdBreakdown = el('td');
+                const byChat = Array.isArray(e2.by_chat) ? e2.by_chat : [];
+                if (!byChat.length) {
+                    tdBreakdown.textContent = '—';
+                } else {
+                    const det = el('details', {class:'catchup-details'});
+                    const sum = el('summary', null, byChat.length + ' chats');
+                    det.appendChild(sum);
+                    const ul = el('ul');
+                    byChat.forEach(c => {
+                        const hasErr = c && c.error;
+                        const li = el('li', hasErr ? {class:'has-error'} : null);
+                        const cid = c.chat_id != null ? c.chat_id : '?';
+                        const caught = c.caught_up != null ? c.caught_up : 0;
+                        const skipped = c.skipped_self != null ? c.skipped_self : 0;
+                        const hsize = c.history_size != null ? c.history_size : 0;
+                        let txt = `${cid}: caught=${caught}, skipped=${skipped}, history=${hsize}`;
+                        if (hasErr) txt += ` — error: ${c.error}`;
+                        li.textContent = txt;
+                        ul.appendChild(li);
+                    });
+                    det.appendChild(ul);
+                    tdBreakdown.appendChild(det);
+                }
+                tr.appendChild(tdBreakdown);
+                tbody.appendChild(tr);
+            });
+        }
+
         function activateSection(name) {
             document.querySelectorAll('.section-tab').forEach(t => {
                 t.classList.toggle('active', t.dataset.section === name);
@@ -459,6 +568,7 @@
             });
             if (name === 'snapshots') loadSnapshots();
             else if (name === 'switches') loadSwitches();
+            else if (name === 'catchup') loadCatchup();
             else if (name === 'runs') loadRuns();
         }
 
@@ -485,6 +595,7 @@
             });
             document.getElementById('btn-refresh-snapshots').addEventListener('click', loadSnapshots);
             document.getElementById('btn-refresh-switches').addEventListener('click', loadSwitches);
+            document.getElementById('btn-refresh-catchup').addEventListener('click', loadCatchup);
 
             loadRuns();
             setInterval(() => {
@@ -495,6 +606,7 @@
                 if (name === 'runs') loadRuns();
                 else if (name === 'snapshots') loadSnapshots();
                 else if (name === 'switches') loadSwitches();
+                else if (name === 'catchup') loadCatchup();
             }, 15000);
         });
     })();

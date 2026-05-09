@@ -161,4 +161,38 @@ def build_observability_router(ctx: RouterContext) -> APIRouter:  # noqa: ARG001
                 "alerts": [],
             }
 
+    # ── Wave 52-G: catchup history tab ───────────────────────────────────────
+    @router.get("/catchup-history")
+    async def list_catchup_history(
+        limit: Annotated[int, Query(ge=1, le=200)] = 20,
+    ) -> dict:
+        """Tail последних ``limit`` записей JSONL ``catchup_history.jsonl``.
+
+        Reverse chronological (новые первыми). Malformed строки тихо
+        пропускаются. Файл может отсутствовать (до первого catchup) — в этом
+        случае возвращается пустой list.
+        """
+        from src.userbot.message_catchup import _resolve_history_path
+
+        path = _resolve_history_path()
+        entries: list[dict[str, Any]] = []
+        if path.exists():
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                lines = []
+            for raw in lines[-limit:]:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    parsed = json.loads(line)
+                    if isinstance(parsed, dict):
+                        entries.append(parsed)
+                except (ValueError, TypeError):
+                    continue
+        # Reverse chronological: новые первыми.
+        entries.reverse()
+        return {"ok": True, "count": len(entries), "history": entries}
+
     return router

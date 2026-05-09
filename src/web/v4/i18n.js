@@ -43,9 +43,13 @@
         col_time: 'Time', col_chat: 'Chat', col_model: 'Model',
         col_status: 'Status', col_duration: 'Duration', col_prompt: 'Prompt',
         section_runs: 'Runs', section_snapshots: 'Snapshots', section_switches: 'Route Switches',
+        section_catchup: 'Catchup History',
         snap_timestamp: 'Timestamp', snap_files: 'Files', snap_size: 'Size (KB)',
         snap_created: 'Created', snap_actions: 'Actions',
-        sw_time: 'Time', sw_from: 'From', sw_to: 'To', sw_reason: 'Reason', sw_kind: 'Kind'
+        sw_time: 'Time', sw_from: 'From', sw_to: 'To', sw_reason: 'Reason', sw_kind: 'Kind',
+        catchup_started: 'Started', catchup_duration: 'Duration',
+        catchup_targets: 'Chats', catchup_caught: 'Caught up',
+        catchup_skipped: 'Self-skipped', catchup_breakdown: 'Per-chat'
       },
       common: {
         connecting: 'Connecting…', updated: 'Updated', loading: 'Loading…',
@@ -587,9 +591,13 @@
         col_time: 'Время', col_chat: 'Чат', col_model: 'Модель',
         col_status: 'Статус', col_duration: 'Длительность', col_prompt: 'Запрос',
         section_runs: 'Запуски', section_snapshots: 'Снапшоты', section_switches: 'Переключения роутинга',
+        section_catchup: 'История catchup',
         snap_timestamp: 'Время', snap_files: 'Файлов', snap_size: 'Размер (KB)',
         snap_created: 'Создан', snap_actions: 'Действия',
-        sw_time: 'Время', sw_from: 'Откуда', sw_to: 'Куда', sw_reason: 'Причина', sw_kind: 'Тип'
+        sw_time: 'Время', sw_from: 'Откуда', sw_to: 'Куда', sw_reason: 'Причина', sw_kind: 'Тип',
+        catchup_started: 'Начало', catchup_duration: 'Длительность',
+        catchup_targets: 'Чатов', catchup_caught: 'Поднято',
+        catchup_skipped: 'Self-skip', catchup_breakdown: 'Разбивка'
       },
       common: {
         connecting: 'Подключение…', updated: 'Обновлено', loading: 'Загрузка…',

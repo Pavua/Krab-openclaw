@@ -45,6 +45,7 @@ import asyncio
 import json
 import os
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -58,6 +59,100 @@ logger = structlog.get_logger("Krab.userbot.message_catchup")
 
 # Дефолтный путь — consistent с другими krab_runtime_state/*.json.
 _DEFAULT_STATE_FILENAME = "last_seen_messages.json"
+
+# Wave 52-G: history файл — JSONL append-only, FIFO max 100 entries.
+_DEFAULT_HISTORY_FILENAME = "catchup_history.jsonl"
+_CATCHUP_HISTORY_MAX_ENTRIES = 100
+
+
+def _resolve_history_path() -> Path:
+    """Путь к JSONL файлу истории catchup-сессий (Wave 52-G)."""
+    base_dir = Path(
+        os.environ.get("KRAB_RUNTIME_STATE_DIR")
+        or str(Path.home() / ".openclaw" / "krab_runtime_state")
+    ).expanduser()
+    return base_dir / _DEFAULT_HISTORY_FILENAME
+
+
+def _record_catchup_history(
+    *,
+    started_at: float,
+    completed_at: float,
+    target_count: int,
+    per_chat_stats: list[dict[str, Any]],
+) -> None:
+    """Wave 52-G: persist одну запись о завершении catchup-сессии.
+
+    Защищено от ошибок ФС: при любой OSError только warning, без raise.
+    После append проверяет длину файла; если > _CATCHUP_HISTORY_MAX_ENTRIES —
+    тримит до последних N (FIFO).
+    """
+    try:
+        path = _resolve_history_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Aggregate totals из per_chat_stats.
+        total_caught = 0
+        total_skipped = 0
+        for s in per_chat_stats:
+            try:
+                total_caught += int(s.get("caught_up", 0) or 0)
+                total_skipped += int(s.get("skipped_self", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+
+        entry: dict[str, Any] = {
+            "started_at_utc": datetime.fromtimestamp(started_at, tz=timezone.utc).isoformat(),
+            "completed_at_utc": datetime.fromtimestamp(completed_at, tz=timezone.utc).isoformat(),
+            "duration_sec": round(max(0.0, completed_at - started_at), 3),
+            "target_count": int(target_count),
+            "total_caught_up": total_caught,
+            "total_skipped_self": total_skipped,
+            "by_chat": per_chat_stats,
+        }
+
+        line = json.dumps(entry, ensure_ascii=False)
+        # Append + fsync.
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+
+        # Trim FIFO до последних _CATCHUP_HISTORY_MAX_ENTRIES.
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = f.readlines()
+            if len(lines) > _CATCHUP_HISTORY_MAX_ENTRIES:
+                tail = lines[-_CATCHUP_HISTORY_MAX_ENTRIES:]
+                tmp_fd, tmp_path = tempfile.mkstemp(
+                    prefix=".catchup_history_",
+                    suffix=".jsonl.tmp",
+                    dir=str(path.parent),
+                )
+                try:
+                    with os.fdopen(tmp_fd, "w", encoding="utf-8") as tf:
+                        tf.writelines(tail)
+                    os.replace(tmp_path, path)
+                except OSError:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    raise
+        except OSError as exc:
+            logger.warning("catchup_history_trim_failed", error=str(exc))
+    except OSError as exc:
+        logger.warning("catchup_history_record_failed", error=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        # Не валим catchup, пишем warning.
+        logger.warning(
+            "catchup_history_record_unexpected",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
 
 
 def _resolve_state_path() -> Path:
@@ -491,8 +586,17 @@ class MessageCatchupMixin:
         result: dict[int, int] = {}
         per_chat_stats: list[dict[str, Any]] = []
         targets = self._resolve_catchup_target_chats()
+        # Wave 52-G: фиксируем wall-clock начала.
+        started_at = time.time()
         if not targets:
             logger.info("startup_catchup_skipped", reason="no_targets")
+            # Wave 52-G: записываем даже пустую сессию (нулевые таргеты).
+            _record_catchup_history(
+                started_at=started_at,
+                completed_at=time.time(),
+                target_count=0,
+                per_chat_stats=[],
+            )
             return result
 
         total_caught_up = 0
@@ -520,6 +624,7 @@ class MessageCatchupMixin:
                         "chat_id": chat_id,
                         "caught_up": 0,
                         "skipped_self": 0,
+                        "history_size": 0,
                         "error": str(exc),
                     }
                 )
@@ -527,6 +632,7 @@ class MessageCatchupMixin:
                 continue
             caught = int(stats.get("caught_up", 0))
             skipped = int(stats.get("skipped_self", 0))
+            history_size = int(stats.get("history_size", 0))
             total_caught_up += caught
             total_skipped_self += skipped
             result[chat_id] = caught
@@ -535,6 +641,8 @@ class MessageCatchupMixin:
                     "chat_id": chat_id,
                     "caught_up": caught,
                     "skipped_self": skipped,
+                    "history_size": history_size,
+                    "error": None,
                 }
             )
 
@@ -544,6 +652,13 @@ class MessageCatchupMixin:
             total_caught_up=total_caught_up,
             total_skipped_self=total_skipped_self,
             target_count=len(targets),
+        )
+        # Wave 52-G: persist history (defensive — никогда не прерывает catchup).
+        _record_catchup_history(
+            started_at=started_at,
+            completed_at=time.time(),
+            target_count=len(targets),
+            per_chat_stats=per_chat_stats,
         )
         return result
 
