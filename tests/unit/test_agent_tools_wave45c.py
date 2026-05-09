@@ -191,7 +191,7 @@ def test_sentry_missing_token_returns_2():
     rc, out, _ = _run_subprocess(
         "krab_sentry.py",
         ["issues", "--project", "p"],
-        env_extra={},
+        env_extra={"KRAB_TOOLS_DISABLE_DOTENV": "1"},
     )
     assert rc == 2
     assert out is not None and "SENTRY_AUTH_TOKEN" in out["error"]

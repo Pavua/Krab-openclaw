@@ -29,8 +29,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def _load_dotenv() -> dict[str, str]:
     """Минималистичный .env loader (без python-dotenv)."""
-    env_path = REPO_ROOT / ".env"
     out: dict[str, str] = {}
+    if os.environ.get("KRAB_TOOLS_DISABLE_DOTENV"):
+        return out
+    env_path = REPO_ROOT / ".env"
     if not env_path.is_file():
         return out
     try:
