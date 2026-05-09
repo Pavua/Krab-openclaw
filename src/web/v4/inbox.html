@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inbox | Krab</title>
+    <title>Входящие | Krab</title>
     <link href="/v4/liquid-glass.css" rel="stylesheet">
     <script src="/v4/theme-toggle.js" defer></script>
     <style>
@@ -138,24 +138,34 @@
 
         .inbox-item-main {
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
-            gap: 1rem;
+            gap: 0.4rem 1rem;
             flex: 1;
-            min-width: 300px;
+            min-width: 200px;
         }
 
         .severity-icon {
             font-size: 1.25rem;
+            flex-shrink: 0;
         }
 
         .item-title {
             font-weight: 500;
             font-size: 1.05rem;
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .badges {
             display: flex;
             gap: 0.5rem;
+            flex-basis: 100%;
+            margin-left: 2.25rem; /* выровнять под title (severity-icon ширина + gap) */
+            flex-wrap: wrap;
         }
 
         .badge {
@@ -164,6 +174,10 @@
             font-size: 0.75rem;
             background: rgba(255, 255, 255, 0.1);
             color: #ddd;
+            max-width: 18ch;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .badge.critical { background: rgba(255, 71, 87, 0.2); color: #ff4757; }
@@ -270,16 +284,16 @@
     <nav class="glass-nav">
         <div class="nav-logo">Krab AI</div>
         <div class="nav-links">
-            <a href="/v4/" class="nav-link">Hub</a>
-            <a href="/v4/chat" class="nav-link">Chat</a>
-            <a href="/costs" class="nav-link">Costs</a>
-            <a href="/inbox" class="nav-link active">Inbox</a>
-            <a href="/swarm" class="nav-link">Swarm</a>
-            <a href="/translator" class="nav-link">Translator</a>
-            <a href="/ops" class="nav-link">Ops</a>
-            <a href="/v4/research" class="nav-link">Research</a>
-            <a href="/settings" class="nav-link">Settings</a>
-            <a href="/commands" class="nav-link">Commands</a>
+            <a href="/v4/" class="nav-link">Главная</a>
+            <a href="/v4/chat" class="nav-link">Чат</a>
+            <a href="/costs" class="nav-link">Расходы</a>
+            <a href="/inbox" class="nav-link active">Входящие</a>
+            <a href="/swarm" class="nav-link">Свёрм</a>
+            <a href="/translator" class="nav-link">Переводчик</a>
+            <a href="/ops" class="nav-link">Операции</a>
+            <a href="/v4/research" class="nav-link">Поиск</a>
+            <a href="/settings" class="nav-link">Настройки</a>
+            <a href="/commands" class="nav-link">Команды</a>
             <div class="nav-bell-wrapper">
                 <a href="/inbox" class="nav-bell" title="Notifications">
                     <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -296,27 +310,27 @@
     <div class="glass-tab-bar">
         <a href="/v4/" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-            Hub
+            Главная
         </a>
         <a href="/v4/chat" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-            Chat
+            Чат
         </a>
         <a href="/costs" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-            Costs
+            Расходы
         </a>
         <a href="/inbox" class="tab-item active">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
-            Inbox
+            Входящие
         </a>
         <a href="/swarm" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-            Swarm
+            Свёрм
         </a>
         <a href="/translator" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6"></path><path d="M4 14l6-6 2-3"></path><path d="M2 5h12"></path><path d="M7 2h1"></path><path d="M22 22l-5-10-5 10"></path><path d="M14 18h6"></path></svg>
-            Trans
+            Перев
         </a>
     </div>
 
@@ -324,12 +338,12 @@
     <main class="container">
         <header class="page-header">
             <div style="display: flex; align-items: center; gap: 1rem;">
-                <h1>Inbox</h1>
-                <span class="last-updated" id="live-status">Connecting...</span>
+                <h1>Входящие</h1>
+                <span class="last-updated" id="live-status">Подключение…</span>
             </div>
             <div class="actions">
-                <button class="glass-button" id="btn-remediate-stale">Remediate Stale</button>
-                <button class="glass-button glass-button-primary" id="btn-ack-all">Ack All Open</button>
+                <button class="glass-button" id="btn-remediate-stale">Обработать устаревшие</button>
+                <button class="glass-button glass-button-primary" id="btn-ack-all">Подтвердить открытые</button>
             </div>
         </header>
 
@@ -340,10 +354,10 @@
 
         <!-- Filter Tabs -->
         <section class="filter-tabs" id="filter-tabs">
-            <div class="filter-tab active" data-filter="All">All</div>
-            <div class="filter-tab" data-filter="Open">Open</div>
-            <div class="filter-tab" data-filter="Acked">Acked</div>
-            <div class="filter-tab" data-filter="Processing">Processing</div>
+            <div class="filter-tab active" data-filter="All">Все</div>
+            <div class="filter-tab" data-filter="Open">Открытые</div>
+            <div class="filter-tab" data-filter="Acked">Принятые</div>
+            <div class="filter-tab" data-filter="Processing">В работе</div>
         </section>
 
         <!-- Items List -->
@@ -362,10 +376,10 @@
             const then = new Date(iso);
             if (isNaN(then)) return '';
             const diff = (Date.now() - then) / 1000;
-            if (diff < 60) return Math.floor(diff) + 's ago';
-            if (diff < 3600) return Math.floor(diff/60) + 'm ago';
-            if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
-            return Math.floor(diff/86400) + 'd ago';
+            if (diff < 60) return Math.floor(diff) + ' сек назад';
+            if (diff < 3600) return Math.floor(diff/60) + ' мин назад';
+            if (diff < 86400) return Math.floor(diff/3600) + ' ч назад';
+            return Math.floor(diff/86400) + ' д назад';
         }
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -493,10 +507,10 @@
                     try {
                         const data = JSON.parse(e.data);
                         console.warn('SSE error event:', data.error);
-                        showToast(data.error || 'SSE Error', 'error');
+                        showToast(data.error || 'Ошибка SSE', 'error');
                     } catch(err) {
                         console.warn('SSE disconnected');
-                        showToast('SSE disconnected', 'error');
+                        showToast('SSE отключён', 'error');
                     }
                 });
 
@@ -511,24 +525,24 @@
                 if (!data) return;
                 statsContainer.innerHTML = `
                     <div class="glass-card stat-card">
-                        <span class="stat-label">Open</span>
+                        <span class="stat-label">Открытых</span>
                         <span class="stat-value">${data.open || 0}</span>
                     </div>
                     <div class="glass-card stat-card">
-                        <span class="stat-label">Attention</span>
+                        <span class="stat-label">Внимание</span>
                         <span class="stat-value" style="color: #ffa502;">${data.attention || 0}</span>
                     </div>
                     <div class="glass-card stat-card">
-                        <span class="stat-label">Escalations</span>
+                        <span class="stat-label">Эскалации</span>
                         <span class="stat-value" style="color: #ff4757;">${data.escalations || 0}</span>
                     </div>
                     <div class="glass-card stat-card">
-                        <span class="stat-label">Stale</span>
+                        <span class="stat-label">Устаревшие</span>
                         <span class="stat-value" style="color: #1e90ff;">${data.stale || 0}</span>
                     </div>
                 `;
                 const now = new Date();
-                liveStatusEl.innerText = `Updated ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+                liveStatusEl.innerText = `Обновлено ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
             }
 
             function loadItemsFromData(items) {
@@ -550,7 +564,7 @@
                 if (!filtered || filtered.length === 0) {
                     itemsContainer.innerHTML = `
                         <div class="glass-card" style="text-align:center; padding: 3rem; color: var(--text-muted);">
-                            No items found for "${currentFilter}".
+                            Ничего не найдено в категории «${currentFilter}».
                         </div>
                     `;
                     return;
@@ -572,15 +586,15 @@
                                 <span class="time-ago">${formatTimeAgo(item.created_at_utc || item.created_at)}</span>
                                 ${item.status !== 'acked' 
                                     ? `<div class="inbox-actions">
-                                           <button class="glass-button btn-ack" data-id="${item.item_id || item.id}" data-action="ack">Ack</button>
-                                           <button class="glass-button btn-done" data-id="${item.item_id || item.id}" data-action="done">Done</button>
-                                           <button class="glass-button btn-dismiss" data-id="${item.item_id || item.id}" data-action="dismiss">Dismiss</button>
-                                       </div>` 
-                                    : `<span class="badge">Acked</span>`}
+                                           <button class="glass-button btn-ack" data-id="${item.item_id || item.id}" data-action="ack">Принять</button>
+                                           <button class="glass-button btn-done" data-id="${item.item_id || item.id}" data-action="done">Готово</button>
+                                           <button class="glass-button btn-dismiss" data-id="${item.item_id || item.id}" data-action="dismiss">Отклонить</button>
+                                       </div>`
+                                    : `<span class="badge">Принято</span>`}
                             </div>
                         </div>
                         <div class="inbox-item-body">
-                            ${item.body || 'No further details available for this event.'}
+                            ${item.body || 'Дополнительной информации нет.'}
                         </div>
                     </div>
                 `).join('');
@@ -601,15 +615,15 @@
                 if (action === 'remediate_stale' || action === 'ack_all_open') {
                     try {
                         await apiCall('/api/inbox/update', 'POST', { action, ...payload });
-                        showToast(`Successfully executed: ${action.replace(/_/g, ' ')}`);
+                        showToast(`Выполнено: ${action.replace(/_/g, ' ')}`);
                     } catch (error) {
-                        showToast(`Error executing ${action}`, 'error');
+                        showToast(`Ошибка выполнения ${action}`, 'error');
                     }
                     return;
                 }
 
                 if (!itemId) {
-                    showToast(`No item ID for action: ${action}`, 'error');
+                    showToast(`Не указан ID для действия: ${action}`, 'error');
                     return;
                 }
 
@@ -620,9 +634,9 @@
                         actor: 'owner-ui',
                         note: '',
                     });
-                    showToast(`✓ ${action}: success`);
+                    showToast(`✓ ${action}: успешно`);
                 } catch (error) {
-                    showToast(`Error: ${action}`, 'error');
+                    showToast(`Ошибка: ${action}`, 'error');
                 }
             }
 
