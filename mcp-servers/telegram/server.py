@@ -2919,6 +2919,46 @@ _DEFAULT_SENTRY_PROJECTS = ("python-fastapi", "krab-ear-agent", "krab-ear-backen
 _SENTRY_UA = "krab-mcp/1.0"
 # Задержки retry (сек) для 4xx/5xx: 3 попытки c экспоненциальным backoff
 _SENTRY_RETRY_DELAYS = (1.0, 2.0, 4.0)
+# Sentry SaaS 2025+ принимает только этот узкий enum для statsPeriod на /issues/
+# (старые '1h'/'7d'/'30d' deprecated, отдают 400 "Invalid stats_period").
+# Wave 44-A: нормализуем любое невалидное значение к ближайшему допустимому.
+_SENTRY_VALID_PERIODS = frozenset({"", "24h", "14d"})
+
+
+def _coerce_stats_period(raw: str) -> str:
+    """Coerce произвольное окно к ближайшему валидному Sentry statsPeriod.
+
+    Mapping (Wave 44-A):
+      - '' / '24h' / '14d' → keep as-is
+      - всё что меньше суток ('1h', '6h', '12h', '60m', etc) → '24h'
+      - всё что от 2д до 14д ('2d', '7d', '14d') → '14d'
+      - всё что больше 14д ('30d', '90d', '180d') → '14d' (max supported)
+      - всё непарсимое → '24h' (sane default)
+
+    Логирование через _dev_logger.info при любом изменении, чтобы caller заметил.
+    """
+    if raw in _SENTRY_VALID_PERIODS:
+        return raw
+    coerced = "24h"
+    rstripped = raw.strip().lower()
+    # парсим число + unit ('h'/'m'/'d')
+    m = re.fullmatch(r"(\d+)([hmd])", rstripped)
+    if m:
+        value = int(m.group(1))
+        unit = m.group(2)
+        if unit == "m":
+            coerced = "24h"
+        elif unit == "h":
+            coerced = "24h"  # любые часы → 24h (Sentry режет всё <24h)
+        elif unit == "d":
+            coerced = "14d" if value >= 2 else "24h"
+    _dev_logger.info(
+        "sentry stats_period coerced: %r → %r (Wave 44-A; valid: %s)",
+        raw,
+        coerced,
+        sorted(_SENTRY_VALID_PERIODS),
+    )
+    return coerced
 _KRAB_LAUNCHD_LOG = _PROJECT_ROOT / "logs" / "krab_launchd.out.log"
 _E2E_SMOKE_SCRIPT = _PROJECT_ROOT / "scripts" / "e2e_mcp_smoke.py"
 _START_LAUNCHER = Path("/Users/pablito/Antigravity_AGENTS/new start_krab.command")
@@ -2937,7 +2977,12 @@ class _SentryStatusInput(BaseModel):
         description="Slug проекта Sentry. Пусто → прогон по default-списку (python-fastapi, krab-ear-agent, krab-ear-backend).",
     )
     statsPeriod: str = Field(  # noqa: N815 — keep Sentry API naming
-        default="24h", description="Окно статистики (например 1h, 24h, 7d)."
+        default="24h",
+        description=(
+            "Окно статистики. Sentry SaaS принимает только {'', '24h', '14d'}; "
+            "любое другое значение (например '1h', '7d', '30d') будет coerced "
+            "к ближайшему валидному (Wave 44-A). '' = all-time."
+        ),
     )
     limit: int = Field(default=10, ge=1, le=100, description="Максимум issue'ов на проект.")
 
@@ -3040,13 +3085,15 @@ async def krab_sentry_status(params: _SentryStatusInput) -> str:
     by_project: dict[str, dict[str, Any]] = {}
     top: list[dict[str, Any]] = []
     count_total = 0
+    # Wave 44-A: Sentry SaaS принимает только {'', '24h', '14d'} — coerce остальное
+    effective_period = _coerce_stats_period(params.statsPeriod)
 
     try:
         async with httpx.AsyncClient() as client:
             for proj in projects:
                 try:
                     _, issues = await _sentry_get_issues(
-                        client, proj, params.statsPeriod, params.limit, token
+                        client, proj, effective_period, params.limit, token
                     )
                 except httpx.HTTPStatusError as exc:
                     by_project[proj] = {"error": f"HTTP {exc.response.status_code}"}
@@ -3079,7 +3126,8 @@ async def krab_sentry_status(params: _SentryStatusInput) -> str:
             "count_total": count_total,
             "by_project": by_project,
             "top": top,
-            "statsPeriod": params.statsPeriod,
+            "statsPeriod": effective_period,
+            "statsPeriod_requested": params.statsPeriod,
         },
         ensure_ascii=False,
         indent=2,
@@ -3127,7 +3175,8 @@ async def krab_sentry_resolve(params: _SentryResolveInput) -> str:
             for proj in projects:
                 if all(v is not None for v in target.values()):
                     break
-                for period in ("14d", "90d"):
+                # Wave 44-A: '90d' deprecated в Sentry SaaS — используем '' (all-time) как fallback
+                for period in ("14d", ""):
                     if all(v is not None for v in target.values()):
                         break
                     try:
