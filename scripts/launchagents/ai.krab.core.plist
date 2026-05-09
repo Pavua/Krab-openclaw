@@ -42,6 +42,12 @@
     <string>1800</string>
     <key>KRAB_RESPONSE_HARD_CAP_SEC</key>
     <string>1800</string>
+    <!-- Wave 44-O-nlu-wire (2026-05-09): client-side NLU intent dispatch.
+         When owner sends NL message matching !command pattern with confidence>=0.8,
+         dispatch directly without going through codex-cli LLM. Bypasses
+         model's tendency to describe rather than execute. -->
+    <key>KRAB_NLU_INTENT_DISPATCH_ENABLED</key>
+    <string>1</string>
   </dict>
 
   <key>RunAtLoad</key>
