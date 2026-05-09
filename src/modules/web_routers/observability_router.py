@@ -132,4 +132,33 @@ def build_observability_router(ctx: RouterContext) -> APIRouter:  # noqa: ARG001
         entries.reverse()
         return {"ok": True, "count": len(entries), "switches": entries}
 
+    # ── Wave 52-C: audit summary (bash + agent action logs aggregator) ──────
+    @router.get("/audit-summary")
+    async def get_audit_summary(
+        window_minutes: Annotated[int, Query(ge=1, le=1440)] = 60,
+    ) -> dict:
+        """Агрегаты + suspicious-pattern alerts по audit-логам (Wave 52-C).
+
+        Покрывает оба канала:
+
+        - ``/tmp/krab_bash_audit.log`` (bash_guard verdicts)
+        - ``~/.openclaw/krab_runtime_state/agent_audit.jsonl``
+          (multi-channel agent actions)
+
+        Read-only — анализатор не модифицирует логи.
+        """
+        try:
+            from src.core.agent_audit_analyzer import AuditAnalyzer
+
+            return AuditAnalyzer().analyze_recent(window_minutes=window_minutes)
+        except Exception as exc:  # graceful: всегда возвращаем dict
+            return {
+                "ok": False,
+                "window_minutes": window_minutes,
+                "error": f"{type(exc).__name__}: {exc}",
+                "bash_audit": {},
+                "agent_audit": {},
+                "alerts": [],
+            }
+
     return router
