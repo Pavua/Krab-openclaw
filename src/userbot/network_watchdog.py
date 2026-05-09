@@ -457,8 +457,47 @@ class NetworkWatchdogMixin:
                                     reconnected = await self._try_reconnect_pyrofork(self.client)
                                 if reconnected:
                                     self._last_telegram_event_ts = time.time()
-                                    logger.info("split_brain_resolved_via_reconnect")
-                                    _consecutive_zombie_failures = 0
+                                    # Wave 44-C: post-reconnect verification.
+                                    # Wave 39-D обнаруживал split-brain, но
+                                    # `_try_reconnect_pyrofork` мог вернуть True
+                                    # на TCP-уровне, оставив updates_subscriber мёртвым.
+                                    # Production observed twice 2026-05-09 (06:58, 18:46):
+                                    # log "split_brain_resolved_via_reconnect" есть,
+                                    # а incoming messages не обрабатываются.
+                                    # Re-probe update_id за post_reconnect_verify_sec —
+                                    # если всё ещё frozen → false-success → escalate.
+                                    _post_reconnect_verify_sec = max(
+                                        10.0, min(15.0, check_interval * 0.3)
+                                    )
+                                    updates_after_reconnect = await _probe_updates_flow_alive(
+                                        self, settle_sec=_post_reconnect_verify_sec
+                                    )
+                                    if updates_after_reconnect:
+                                        logger.info(
+                                            "split_brain_resolved_via_reconnect",
+                                            verified=True,
+                                            verify_settle_sec=_post_reconnect_verify_sec,
+                                        )
+                                        _consecutive_zombie_failures = 0
+                                    else:
+                                        logger.error(
+                                            "split_brain_reconnect_did_not_restore_updates",
+                                            action="process_exit_for_launchd_respawn",
+                                            verify_settle_sec=_post_reconnect_verify_sec,
+                                            last_seen_update_id=getattr(
+                                                self, "_last_seen_update_id", 0
+                                            ),
+                                        )
+                                        try:
+                                            await self._send_proactive_watch_alert(
+                                                "🧠 **Krab: false-recovery split-brain** — "
+                                                "reconnect succeeded, но updates_subscriber "
+                                                "всё ещё мёртв.\n"
+                                                "→ Эскалация: launchd respawn (Wave 44-C)."
+                                            )
+                                        except Exception:  # noqa: BLE001
+                                            pass
+                                        _launchd_exit_78()
                                 else:
                                     logger.error(
                                         "split_brain_escalation",
