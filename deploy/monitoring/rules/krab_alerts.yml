@@ -77,3 +77,76 @@ groups:
         annotations:
           summary: "Injection attempts > 36 per hour"
           description: "Под atak'ом или нужна tune паттернов validator. См. `src/core/memory_validator.py`."
+
+  # ── Wave 50-E: Wave 47-49 features (fallback chain / catchup / snapshots) ──
+  # Метрики ниже опираются на счётчики, которые landing вместе с экспортёрами
+  # для соответствующих событий (см. docs/CLAUDE_AUTO_PROMETHEUS.md → Pending).
+  # Prometheus трактует отсутствующую серию как "no data" — alert просто не
+  # сработает до первого scrape, никаких ложных алармов это не вызовет.
+  - name: krab_wave_47_49
+    interval: 1m
+    rules:
+      - alert: FallbackChainExhaustedAlert
+        # Wave 48-B: model_fallback_engaged — переключение по цепочке fallback.
+        # > 5 событий за 1ч = chain "ползёт" слишком часто, primary unhealthy.
+        expr: increase(krab_model_fallback_engaged_total[1h]) > 5
+        labels:
+          severity: warning
+          wave: "48-B"
+        annotations:
+          summary: "Fallback chain advanced > 5 раз за час"
+          description: "Routing нестабилен. См. `!routes` и `route_switches.jsonl`. Вероятная причина: primary провайдер деградировал."
+
+      - alert: CodexQuotaExhaustedAlert
+        # Wave 47: codex_disabled_transition — codex-cli ушёл в quota cooldown.
+        # Single occurrence — informational, не critical (есть auto-fallback).
+        expr: increase(krab_codex_disabled_transition_total[24h]) > 0
+        labels:
+          severity: info
+          wave: "47"
+        annotations:
+          summary: "Codex CLI исчерпал quota и переключился на cooldown"
+          description: "Auto-fallback работает (см. !quota). Информационный сигнал — никаких ручных действий."
+
+      - alert: MultiChatCatchupFailedAlert
+        # Wave 49: startup_catchup_chat_failed — per-chat ошибка догонялки.
+        # > 3 за час = systemic, не сетевой glitch.
+        expr: increase(krab_startup_catchup_chat_failed_total[1h]) > 3
+        labels:
+          severity: warning
+          wave: "49"
+        annotations:
+          summary: "Multi-chat catchup упал > 3 раз за час"
+          description: "Возможна Pyrogram session corruption или Telegram-side rate-limit. Смотри `message_catchup.py` логи."
+
+      - alert: StateSnapshotFailedAlert
+        # Wave 49: state_snapshot_failed — снэпшот runtime state провалился.
+        # Single occurrence — critical: при следующем рестарте потеряем context.
+        expr: increase(krab_state_snapshot_failed_total[24h]) > 0
+        labels:
+          severity: critical
+          wave: "49"
+        annotations:
+          summary: "State snapshot failed — рестарт может потерять context"
+          description: "См. `src/core/state_snapshots.py`. Проверь права на ~/.openclaw/krab_runtime_state/ и свободное место."
+
+      - alert: ProviderTimeoutHighAlert
+        # provider_timeout — тайминг-ошибка от облачного провайдера.
+        # > 10/min = провайдер деградировал, нужен manual switch.
+        expr: rate(krab_provider_timeout_total[5m]) > (10 / 60)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "provider_timeout > 10/min для {{ $labels.provider }}"
+          description: "Облачный провайдер тормозит. Рассмотри manual switch на резервный routing."
+
+      - alert: RouteSwitchHighFrequencyAlert
+        # Wave 48-B: routing flapping — > 20 переключений/ч = нестабильность.
+        expr: increase(krab_model_fallback_engaged_total[1h]) > 20
+        labels:
+          severity: warning
+          wave: "48-B"
+        annotations:
+          summary: "Route switches > 20/h — нестабильность routing"
+          description: "Анализируй `!routes` и `route_switches.jsonl`: возможен flapping из-за двух одинаково больных провайдеров."

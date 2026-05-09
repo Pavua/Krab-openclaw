@@ -1,13 +1,41 @@
-# Auto-generated Prometheus (11 алертов, 27 метрик)
+# Auto-generated Prometheus (13 алертов, 27 метрик)
 
-Обновлено: Session 38 (05.05.2026). Конфиг: `scripts/prometheus/`
+Обновлено: Wave 50-E (10.05.2026). Конфиг: `deploy/monitoring/rules/krab_alerts.yml`
+(прежняя ссылка на `scripts/prometheus/` из Session 38 была устаревшей; список из 11
+имён в Session 38-snapshot отражал план, а не реальный YAML — actual file всегда
+имел 7 правил до Wave 50-E).
 
-## Alerts (11)
+## Alerts (13)
 
-`ArchiveChunksStalled`, `ArchiveDbSizeCritical`, `ArchiveDbSizeWarning`,
-`ChatFilterModeMuteDominant`, `CommandInvocationSpike`, `KrabAutoRestartSpiking`,
-`KrabDown`, `LLMRouteLatencyHigh`, `MemoryValidatorConfirmFailedSpike`,
-`MemoryValidatorPendingHigh`, `RemindersQueueBacklog`
+Existing (7):
+`KrabLLMRouteDown`, `KrabMemoryValidatorOverload`, `KrabMetricsStale`,
+`KrabArchiveGrowingFast`, `KrabArchiveDBLarge`, `KrabAutoRestartSpiking`,
+`KrabInjectionSpike`
+
+Wave 50-E (6 new, для Wave 47-49 features):
+`FallbackChainExhaustedAlert` (warning, > 5/h),
+`CodexQuotaExhaustedAlert` (info, > 0/24h),
+`MultiChatCatchupFailedAlert` (warning, > 3/h),
+`StateSnapshotFailedAlert` (critical, > 0/24h),
+`ProviderTimeoutHighAlert` (warning, > 10/min for 5m),
+`RouteSwitchHighFrequencyAlert` (warning, > 20/h).
+
+### Pending exporters (Wave 50-E)
+
+YAML-правила landed, но соответствующие counter-метрики ещё не экспортируются
+из `src/core/prometheus_metrics.py`. До этого момента alerts смотрят на
+"no-data" series и не сработают (Prometheus поведение — алерты не триггерятся
+при отсутствии данных). Pending counters:
+
+* `krab_model_fallback_engaged_total{from_model,to_model,reason}` — wire
+  через `src/integrations/route_switch_log.py:append_switch`.
+* `krab_codex_disabled_transition_total` — wire через
+  `src/integrations/codex_quota_state.py`.
+* `krab_startup_catchup_chat_failed_total` — wire через
+  `src/userbot/message_catchup.py`.
+* `krab_state_snapshot_failed_total` — wire через `src/core/state_snapshots.py`.
+* `krab_provider_timeout_total{provider,model}` — wire через
+  `src/openclaw_client.py` (provider_timeout error code).
 
 ## Metrics (27)
 
