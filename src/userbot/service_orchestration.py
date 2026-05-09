@@ -34,6 +34,7 @@ from ..core.memory_indexer_worker import get_indexer
 from ..core.scheduler import krab_scheduler
 from ..core.silence_mode import silence_manager
 from ..core.silence_schedule import silence_schedule_manager
+from ..core.state_snapshots import state_snapshot_manager
 from ..core.swarm_auto_executor import swarm_auto_executor
 from ..core.swarm_channels import swarm_channels
 from ..core.swarm_scheduler import swarm_scheduler
@@ -53,6 +54,8 @@ class ServiceOrchestrationMixin:
     maintenance_task: asyncio.Task | None
     _silence_schedule_task: asyncio.Task | None
     _memory_indexer_task: asyncio.Task | None
+    # Wave 49-F: фоновый loop периодических snapshots state-файлов
+    _state_snapshot_task: "asyncio.Task | None" = None
 
     def _ensure_maintenance_started(self) -> None:
         """Запускает maintenance-задачу model_manager, если она еще не активна."""
@@ -74,6 +77,52 @@ class ServiceOrchestrationMixin:
         self._silence_schedule_task = asyncio.create_task(
             silence_schedule_manager.run_loop(_apply_mute, _remove_mute)
         )
+
+    def _ensure_state_snapshot_loop_started(self) -> None:
+        """
+        Wave 49-F: запускает фоновый loop периодических snapshots state-файлов.
+
+        - На старте сразу делает snapshot_now(reason="startup").
+        - Затем каждые KRAB_STATE_SNAPSHOT_INTERVAL_MINUTES (default 60) — scheduled.
+        - Cleanup (retention) применяется раз в сутки.
+        """
+        existing = getattr(self, "_state_snapshot_task", None)
+        if existing and not existing.done():
+            return
+
+        async def _runner() -> None:
+            # Startup snapshot — даже если loop потом упадёт, у нас есть свежий backup.
+            try:
+                state_snapshot_manager.snapshot_now(reason="startup")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("state_snapshot_startup_failed", error=str(exc))
+
+            last_cleanup_ts = 0.0
+            cleanup_interval_sec = 86400.0  # раз в сутки
+            while True:
+                try:
+                    interval_min = state_snapshot_manager.interval_minutes
+                    await asyncio.sleep(max(60, interval_min * 60))
+                    state_snapshot_manager.snapshot_now(reason="scheduled")
+                    # Cleanup раз в сутки.
+                    loop = asyncio.get_running_loop()
+                    now_mono = loop.time()
+                    if now_mono - last_cleanup_ts >= cleanup_interval_sec:
+                        state_snapshot_manager.cleanup_old()
+                        last_cleanup_ts = now_mono
+                except asyncio.CancelledError:
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("state_snapshot_loop_iteration_failed", error=str(exc))
+
+        try:
+            self._state_snapshot_task = asyncio.create_task(_runner())
+            logger.info(
+                "state_snapshot_loop_started",
+                interval_minutes=state_snapshot_manager.interval_minutes,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("state_snapshot_loop_start_failed", error=str(exc), non_fatal=True)
 
     def _ensure_memory_indexer_started(self) -> None:
         """Lazy boot Memory Indexer Worker (Phase 4)."""
@@ -167,6 +216,9 @@ class ServiceOrchestrationMixin:
                 cron_native_scheduler.start()
                 logger.info("cron_native_scheduler_runtime_started")
 
+            # Wave 49-F: периодические snapshots критичных state-файлов
+            self._ensure_state_snapshot_loop_started()
+
             # Swarm channels — live broadcast в Telegram-группы
             if self.me and self.client:
                 swarm_channels.bind(client=self.client, owner_id=self.me.id)
@@ -180,3 +232,13 @@ class ServiceOrchestrationMixin:
                 scheduler_enabled=scheduler_enabled,
                 client_connected=client_connected,
             )
+
+        # Wave 49-F: shutdown snapshot + остановка loop при graceful shutdown
+        snap_task = getattr(self, "_state_snapshot_task", None)
+        if snap_task and not snap_task.done():
+            try:
+                state_snapshot_manager.snapshot_now(reason="shutdown")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("state_snapshot_shutdown_failed", error=str(exc))
+            snap_task.cancel()
+            self._state_snapshot_task = None
