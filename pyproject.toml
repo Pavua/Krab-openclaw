@@ -8,12 +8,15 @@ asyncio_default_fixture_loop_scope = "function"
 timeout = 30
 timeout_method = "thread"
 addopts = "-v --tb=short --ignore=tests/tools/test_sync_krab_agent_skills.py -m 'not live'"
-# Session 39 backlog: 9 cross-file xdist flakes остаются (test_memo_service,
-# test_memory_adaptive_rerank_llm, test_photo_dm_owner, test_runtime_main).
-# Workaround: добавь `--dist=loadfile` к команде вручную — каждый файл идёт
-# в один worker, изолирует module-level state. НЕ включаем в addopts по
-# умолчанию: production network_watchdog os._exit(78) ломает xdist workers
-# когда срабатывает в test process (gw{N} node down: Not properly terminated).
+# Wave 51-F: исправлены 5 tests в test_photo_dm_owner.py (фикстура _make_bot
+# отставала от Wave 39-D / 46-A — нужны _last_seen_update_id, _last_telegram_event_ts,
+# _last_heartbeat_ok_ts атрибуты, иначе AttributeError). test_memo_service,
+# test_memory_adaptive_rerank_llm, test_runtime_main проходят как single-thread
+# так и под `pytest -n 4` (verified). Известные оставшиеся flakes (out-of-scope):
+# test_core_local_health.py (Wave 41 singleton client lifecycle vs respx mock).
+# Workaround при cross-file pollution: `--dist=loadfile` (каждый файл в один worker).
+# НЕ включаем в addopts по умолчанию: production network_watchdog os._exit(78)
+# ломает xdist workers когда срабатывает в test process.
 markers = [
     "wave13_skip: tests skipped в Wave 13 cleanup — pollution-sensitive, требует deeper refactor (см. backlog)",
     "live: requires running services (LM Studio / live Telegram / Chrome / cloud key) — skipped in default run",

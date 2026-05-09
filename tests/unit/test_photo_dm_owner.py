@@ -64,6 +64,12 @@ def _make_bot(owner_id: int = 777):
     bot._known_commands = set()
     bot._disclosure_sent_for_chat_ids = set()
     bot._session_messages_processed = 0
+    # Wave 51-F: добавлены attrs (Wave 39-D + 46-A) добавили эти counters
+    # в _process_message hot-path, тесты конструируют bot через __new__
+    # без __init__ — обязательные счётчики надо проставить руками.
+    bot._last_telegram_event_ts = 0.0
+    bot._last_seen_update_id = 0
+    bot._last_heartbeat_ok_ts = 0.0
     return bot
 
 
