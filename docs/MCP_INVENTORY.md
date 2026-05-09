@@ -30,7 +30,9 @@ python scripts/openclaw_mcp_register.py --add-all-with-tokens
 python scripts/openclaw_mcp_register.py --remove <name>
 ```
 
-## Зарегистрированы (`openclaw mcp list`, после Wave 45-F)
+## Зарегистрированы (`openclaw mcp list`, refresh Wave 53-H 2026-05-10)
+
+**Active**: 10 MCPs, ~213+ tools combined. krab-tor deprecated.
 
 | Name | Transport | URL / cmd | Назначение | Auth |
 |---|---|---|---|---|

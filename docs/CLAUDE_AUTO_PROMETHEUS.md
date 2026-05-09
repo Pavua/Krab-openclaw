@@ -1,6 +1,6 @@
-# Auto-generated Prometheus (13 алертов, 27 метрик)
+# Auto-generated Prometheus (13 алертов, 32 метрики)
 
-Обновлено: Wave 50-E (10.05.2026). Конфиг: `deploy/monitoring/rules/krab_alerts.yml`
+Обновлено: Wave 53-F (10.05.2026). Конфиг: `deploy/monitoring/rules/krab_alerts.yml`
 (прежняя ссылка на `scripts/prometheus/` из Session 38 была устаревшей; список из 11
 имён в Session 38-snapshot отражал план, а не реальный YAML — actual file всегда
 имел 7 правил до Wave 50-E).
@@ -20,22 +20,27 @@ Wave 50-E (6 new, для Wave 47-49 features):
 `ProviderTimeoutHighAlert` (warning, > 10/min for 5m),
 `RouteSwitchHighFrequencyAlert` (warning, > 20/h).
 
-### Pending exporters (Wave 50-E)
+### Wired counters (Wave 51-A, 2026-05-10)
 
-YAML-правила landed, но соответствующие counter-метрики ещё не экспортируются
-из `src/core/prometheus_metrics.py`. До этого момента alerts смотрят на
-"no-data" series и не сработают (Prometheus поведение — алерты не триггерятся
-при отсутствии данных). Pending counters:
+Counters teper ARE exported из `src/core/prometheus_metrics.py` — alerts
+смотрят на live data. 5 новых counters (label cardinality protected via
+helper string slicing):
 
-* `krab_model_fallback_engaged_total{from_model,to_model,reason}` — wire
-  через `src/integrations/route_switch_log.py:append_switch`.
-* `krab_codex_disabled_transition_total` — wire через
-  `src/integrations/codex_quota_state.py`.
-* `krab_startup_catchup_chat_failed_total` — wire через
-  `src/userbot/message_catchup.py`.
-* `krab_state_snapshot_failed_total` — wire через `src/core/state_snapshots.py`.
-* `krab_provider_timeout_total{provider,model}` — wire через
-  `src/openclaw_client.py` (provider_timeout error code).
+* `krab_model_fallback_engaged_total{from_model,to_model,reason}` — wired
+  в `src/openclaw_client.py` (Wave 47-A chain advance + Wave 44-V quota
+  fallback). Triggers `FallbackChainExhaustedAlert`.
+* `krab_codex_disabled_transition_total{kind}` — wired в
+  `src/integrations/codex_quota_state.py:mark_codex_disabled`. kind=weekly|transient.
+  Triggers `CodexQuotaExhaustedAlert`.
+* `krab_startup_catchup_chat_failed_total{chat_id}` — wired в
+  `src/userbot/message_catchup.py:_catchup_chat_history`. Triggers
+  `MultiChatCatchupFailedAlert`.
+* `krab_state_snapshot_failed_total{reason}` — wired в
+  `src/core/state_snapshots.py` (3 hooks: copy_failed/list_entry_failed/restore_failed).
+  Triggers `StateSnapshotFailedAlert`.
+* `krab_provider_timeout_total{provider,model}` — wired в
+  `src/openclaw_client.py` (semantic_error_detected + httpx.TimeoutException).
+  Triggers `ProviderTimeoutHighAlert`.
 
 ## Metrics (27)
 

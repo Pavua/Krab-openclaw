@@ -2,6 +2,17 @@
 
 Krab AI — это мощный инструмент на базе Pyrogram, интегрирующий современные языковые модели (через OpenClaw API или LM Studio) прямо в ваш Telegram аккаунт. Проект прошел полный цикл архитектурного рефакторинга для обеспечения стабильности, безопасности и производительности.
 
+✨ What's New (Session 43+44, 2026-05-10)
+
+- **10 MCPs registered** (was 4): context7, firecrawl, github, sentry, krab-hammerspoon, krab-telegram×2, tor-full (25 tools), osint-tools (7), hexstrike-ai (151, manual start)
+- **Per-response model footer** `📡 _model-name (fallback?)_` — owner всегда видит активную модель
+- **Multi-chat catchup**: на startup поднимает missed messages из owner DM + Krab Swarm group
+- **State snapshots scheduled**: hourly backups (24/keep, 7d/age) с CLI restore
+- **New owner commands**: `!routes` (chain detail), `!replay` (manual catchup), `!mcp` (inventory), `!health detail` (full state)
+- **Python CI 🟢** (was red since Apr 2026): ruff + pytest unit subset, ~10s
+- **4 observability endpoints**: /api/observability/{snapshots, route-switches, catchup-history, audit-summary}
+- **13795+ tests collected**, ~510 added in S43+44
+
 🚀 Ключевые особенности
 
 🛡️ Защищенная архитектура: Полная декомпозиция кода и использование кастомной иерархии исключений (KrabError) для стабильной работы.
