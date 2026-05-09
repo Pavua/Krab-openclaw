@@ -159,5 +159,107 @@ venv/bin/pytest tests/unit/test_safety_net_wave44s.py -q
 | `scripts/agent_tools/krab_audit_wrapper.py` | Layer 2 |
 | `src/userbot/access_control.py` (agentic_stance) | Layer 3 |
 | `src/core/agent_action_rate_limiter.py` | Layer 4 |
+| `scripts/agent_tools/browser_url_guard.py` | Wave 44-T (money) |
 | `tests/unit/test_safety_net_wave44s.py` | Tests |
+| `tests/unit/test_money_safety_wave44t.py` | Wave 44-T tests |
 | `docs/AGENT_SAFETY_NET_WAVE44S.md` | This doc |
+
+---
+
+# 💸 Wave 44-T-money-safety: MONEY JAIL BAR
+
+**Дата:** 2026-05-09. Дополняет Wave 44-S новой категорией: финансовые
+операции являются абсолютным запретом, не override-able через обычный
+prompt context. Override — только owner_confirm token.
+
+## Threat surface
+
+С codex sandbox `danger-full-access` + browser w/ user profile +
+multi-channel send Krab имеет теоретическую capability:
+- transfer money (через залогиненный paypal/bank profile в браузере),
+- покупки (Amazon one-click),
+- post on social media,
+- sign contracts.
+
+**Не приемлемо.** User pavua принял риск на capability в целом, но
+финансы = jail-bar (per `user_profile`).
+
+## bash_guard.sh extensions
+
+### BLOCK (exit 78) — money txn patterns
+| Pattern | Reason |
+|---|---|
+| `paypal.com/sendmoney/...`, `venmo.com/payment/...`, `wise.com/.../transfer`, `revolut.com/.../transfer`, `cash.app/$...`, `zellepay.com/.../send`, `stripe.com/v1/(charges\|payment_intents\|transfers)` | payment processor txn |
+| Bank-domain URL with `/transfer`, `/pay`, `/wire`, `/sendmoney`, `/billpay` (chase, BofA, Citi, Wells, HSBC, Barclays, Santander, BBVA, Caixa, Sabadell, ING, DB) | bank txn |
+| Browser-tool invocation (krab_browser, playwright, selenium, chrome, etc.) → ANY financial domain (banks + processors + crypto) | browser nav block |
+| Generic URL with `/transfer`, `/pay`, `/checkout`, `/wire-transfer`, `/billpay`, `/sendmoney` | generic txn URL |
+| Crypto exchange WRITE ops: `binance.com/api/.../order`, `coinbase.com/(buy\|sell\|send)`, `kraken.com/.../(AddOrder\|Withdraw)`, `bybit.com/.../order`, `okx.com/api/v5/trade/order`, FTX (defunct, blocklist anyway) | crypto write |
+| Gov/tax payment endpoints: `irs.gov/.../payment`, `gov.uk/pay`, `agenciatributaria.es/.../pago`, `/tax-return-submit` | gov/tax payment |
+| Money keywords in command body: `(send\|transfer\|wire\|pay\|переведи\|отправь\|купи\|оплати) <number> (USD\|EUR\|GBP\|RUB\|USDT\|USDC\|BTC\|ETH\|SOL\|$\|€\|£\|₽)` | semantic guard |
+
+### CONFIRM (exit 79) — soft confirm via owner_token
+| Pattern | Reason |
+|---|---|
+| `(buy\|purchase\|subscribe to\|order now\|checkout)` keyword без явной валюты | "buy domain" / "subscribe" |
+| `curl https://<financial-domain>` без txn-path (читаем dashboard) | financial read-only |
+
+Crypto **read-only** (price, depth, klines, GET endpoints) — ALLOW. Только
+write/order paths blocked.
+
+## browser_url_guard.py
+
+Path: `scripts/agent_tools/browser_url_guard.py` (chmod +x).
+
+API:
+```bash
+python browser_url_guard.py --url <URL> [--owner-confirm-token <T>]
+```
+
+Exit codes:
+- `0` ALLOW (returns `{"ok":true,"verdict":"ALLOW",...}` on stdout)
+- `78` BLOCK (`{"ok":false,"verdict":"BLOCK",...}` on stderr)
+- `79` NEEDS_OWNER_CONFIRM (`{"ok":false,"verdict":"CONFIRM",...}` on stderr)
+
+Caller (krab_browser.py / browser tool) MUST invoke this before any
+`open`/`navigate`/`click`/`screenshot` step. Missing call = bug.
+
+Classification logic (in `classify(url)`):
+1. Non-http(s) schemes (`javascript:`, `file:`, `data:`, `ftp:`) → BLOCK.
+2. Domain+path matches in `_BLOCK_DOMAIN_PATH_PATTERNS` (paypal/sendmoney,
+   venmo/payment, wise/transfer, stripe charges, binance order, coinbase
+   buy/sell/send, kraken AddOrder/Withdraw, bybit order, okx trade/order,
+   irs payment, gov.uk/pay, agenciatributaria pago) → BLOCK.
+3. Generic transactional path keywords → BLOCK.
+4. `/transfer`, `/pay`, `/wire` on any domain → BLOCK.
+5. Read-only access to financial domains (paypal.com root, chase.com root,
+   binance.com without order path, etc.) → CONFIRM.
+6. Otherwise → ALLOW.
+
+## Override mechanism
+
+**Только** через `--owner-confirm-token <T>` где T = contents of
+`/Users/pablito/.openclaw/krab_runtime_state/owner_confirm.token`.
+
+Owner rotates token weekly (см. Wave 44-S section).
+
+NB: BLOCK verdicts (txn URLs, money keywords) **не override-able** через
+token — это by design, jail-bar. Только CONFIRM-tier (read-only financial
+domain access, "buy domain" lexical hits) можно release через token.
+
+## Verification
+
+```bash
+# bash_guard money tests
+bash scripts/agent_tools/bash_guard.sh --cmd "curl https://paypal.com/sendmoney/x"  # 78
+bash scripts/agent_tools/bash_guard.sh --cmd "python krab_browser.py open --url https://chase.com"  # 78
+bash scripts/agent_tools/bash_guard.sh --cmd "curl https://chase.com"  # 79
+bash scripts/agent_tools/bash_guard.sh --cmd "curl https://google.com"  # 0
+
+# browser_url_guard
+python scripts/agent_tools/browser_url_guard.py --url https://google.com    # 0
+python scripts/agent_tools/browser_url_guard.py --url https://paypal.com/sendmoney/x  # 78
+python scripts/agent_tools/browser_url_guard.py --url https://paypal.com/   # 79
+
+# tests
+venv/bin/pytest tests/unit/test_money_safety_wave44t.py -q
+```
