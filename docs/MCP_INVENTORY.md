@@ -1,7 +1,14 @@
 # MCP Inventory
 
 Полный реестр MCP-серверов, доступных для Krab agent loop через OpenClaw gateway.
-Обновлено: 09.05.2026 (Wave 45-F: +tor-full, +osint-tools; documented hive-crypto + hexstrike-ai).
+Обновлено: 10.05.2026 (Wave 50-B: deprecation `krab-tor` → `tor-full`).
+
+> **Wave 50-B deprecation note (2026-05-10):** `krab-tor` (3-tool SSE wrapper
+> на :8014) снят с регистрации в OpenClaw — `tor-full` (25 tools, stdio)
+> обладает superset функциональностью (browse_onion / circuit-identity /
+> shodan / censys / gpg / port_scan и др). 7-day observation period после
+> Wave 45-F прошёл без issues. `src/mcp_tor_server.py` + plist preserved
+> для archaeology и emergency fallback. См. секцию «Tor MCP» ниже.
 
 Runtime authority — `openclaw mcp list` (`/Users/pablito/.openclaw/openclaw.json`).
 Этот документ — справочник: что зарегистрировано, что доступно как кабель,
@@ -30,7 +37,7 @@ python scripts/openclaw_mcp_register.py --remove <name>
 | `krab-telegram` | sse | `127.0.0.1:8011/sse` | Telegram userbot (yung_nagato session) | Pyrogram session file |
 | `krab-telegram-owner` | sse | `127.0.0.1:8012/sse` | Telegram userbot (p0lrd / owner main) | Pyrogram session file |
 | `krab-hammerspoon` | sse | `127.0.0.1:8013/sse` | macOS window mgmt через Hammerspoon HTTP `:10101` | none (localhost) |
-| `krab-tor` | sse | `127.0.0.1:8014/sse` | Анонимный HTTP через Tor SOCKS5 (`tor_status`/`tor_fetch`/`tor_check_exit_ip`) | none (localhost) |
+| ~~`krab-tor`~~ | ~~sse~~ | ~~`127.0.0.1:8014/sse`~~ | **DEPRECATED Wave 50-B (2026-05-10)** — заменён на `tor-full` (25 tools, superset). LaunchAgent unloaded; код preserved в `src/mcp_tor_server.py` для archaeology + fallback. | n/a |
 | `context7` | stdio | `npx -y @upstash/context7-mcp` | Live API docs lookup для библиотек/SDK | none (rate-limited) |
 | `github` | streamable-http | `https://api.githubcopilot.com/mcp/` | Issues / PRs / repos / actions | `${GITHUB_PERSONAL_ACCESS_TOKEN}` (header) |
 | `firecrawl` | stdio | `npx -y firecrawl-mcp` | Web scraping/crawl/map | `${FIRECRAWL_API_KEY}` |
@@ -98,11 +105,26 @@ planetscale, huggingface, cloudflare
 **НЕ** резолвятся скриптом — OpenClaw сам разворачивает их через
 `env.shellEnv.enabled=true` в `~/.openclaw/openclaw.json` при чтении конфига.
 
-## Tor MCP (новое в Wave 44-Z)
+## Tor MCP (Wave 44-Z `krab-tor` → Wave 45-F `tor-full` → Wave 50-B deprecation)
+
+### Текущий статус (Wave 50-B, 2026-05-10)
+
+Активный Tor MCP — **`tor-full`** (stdio, 25 tools), репо
+`/Users/pablito/Antigravity_AGENTS/tor-mcp/`. Зарегистрирован в OpenClaw
+через `scripts/openclaw_mcp_register.py --add tor-full` (Wave 45-F).
+
+`krab-tor` (3-tool SSE wrapper, Wave 44-Z) **DEPRECATED**:
+- LaunchAgent `com.krab.mcp-tor` unloaded оркестратором.
+- OpenClaw запись `krab-tor` снята (`openclaw mcp unset krab-tor`).
+- `src/mcp_tor_server.py` + `scripts/launchagents/com.krab.mcp-tor.plist`
+  preserved для archaeology + emergency fallback.
+- `tests/unit/test_mcp_tor_server.py` (8/8) всё ещё pass — regression safety.
+
+### Архаика: `krab-tor` (Wave 44-Z, deprecated)
 
 **Файл:** `src/mcp_tor_server.py`. **Тесты:** `tests/unit/test_mcp_tor_server.py` (8/8).
 
-Tools:
+Tools (subset; все доступны в `tor-full` + 22 ещё):
 - `tor_status()` → `{"available": bool, "exit_ip": str | None, "error": str | None}`.
 - `tor_check_exit_ip()` → `{"ip": str | None}`.
 - `tor_fetch(url, method, headers, timeout)` → `{"ok": bool, "status": int, "text": str (≤50KB), "url": str}` или `{"ok": False, "error": str}`.
@@ -114,6 +136,15 @@ Tools:
 **Legal use only.** Tor MCP не делает исключений для запрещённого контента.
 Назначение: research, region-blocked docs, IP-rotation для тестов rate-limiter'ов,
 .onion-зеркала легальных сервисов.
+
+### Manual fallback (если tor-full недоступен)
+
+```bash
+# Вернуть krab-tor временно (до восстановления tor-full):
+launchctl load ~/Library/LaunchAgents/com.krab.mcp-tor.plist  # если plist ещё на месте
+openclaw mcp set krab-tor '{"transport":"sse","url":"http://127.0.0.1:8014/sse"}'
+openclaw gateway  # перечитать конфиг
+```
 
 ## Как добавить новый MCP
 
@@ -188,7 +219,7 @@ Krab venv (`~/Antigravity_AGENTS/Краб/venv`).
 
 | Repo | Tools | Status | Назначение |
 |---|---|---|---|
-| `tor-mcp/` | 25 | **Registered** as `tor-full` | Полноценный Tor — `tor_status`/`tor_fetch`/`tor_check_exit_ip` + circuit/identity/dark-web search. Перекрывает legacy `krab-tor` (4-tool subset). |
+| `tor-mcp/` | 25 | **Registered** as `tor-full` (Wave 45-F). Replacement для `krab-tor` (Wave 50-B deprecation 2026-05-10). | Полноценный Tor — `tor_status`/`tor_fetch`/`tor_check_exit_ip` + circuit/identity/dark-web search + shodan/censys/virustotal/gpg/port_scan. Superset over deprecated `krab-tor` (3-tool subset). |
 | `osint-tools-mcp-server/` | 7 | **Registered** as `osint-tools` (Wave 45-F) | OSINT toolkit — username/email/DNS/subdomain enum через sherlock/holehe/maigret/theharvester. Deps в Krab venv. |
 | `hive-crypto-mcp/` | 376 | **Deferred** | Hive Intelligence — crypto/blockchain market data. Требует `HIVE_API_KEY` (https://hiveintelligence.xyz). После получения ключа активировать через `--add hive-crypto`. |
 | `hexstrike-ai/` | 151 | **Deferred (HIGH RISK)** | Offensive security — recon/exploit/CTF tools (nmap/sqlmap/metasploit-grade). Требует isolated venv + ACL gate + owner approval перед регистрацией. **НЕ** активировать через `--add-all-with-tokens`. |

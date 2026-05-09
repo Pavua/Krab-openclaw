@@ -159,7 +159,15 @@ command = "/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python"
 args = ["/Users/pablito/Antigravity_AGENTS/tor-mcp/server.py"]
 required_env = []
 status = "registered"
-notes = "Зарегистрирован в OpenClaw как `tor-full`. Перекрывает функции `krab-tor` (legacy 4-tool subset) — рассмотреть deprecation `krab-tor` после 7 дней наблюдения."
+notes = "Зарегистрирован в OpenClaw как `tor-full`. Replacement для `krab-tor` (deprecated Wave 50-B 2026-05-10). 7-дневный observation period passed без issues."
+
+[krab-tor]
+description = "DEPRECATED Wave 50-B — minimal 3-tool wrapper (`tor_status`/`tor_check_exit_ip`/`tor_fetch`)"
+transport = "sse"
+url = "http://127.0.0.1:8014/sse"
+required_env = []
+status = "deprecated"
+notes = "DEPRECATED 2026-05-10: replaced by `tor-full` (25 tools, superset). LaunchAgent unloaded оркестратором; `src/mcp_tor_server.py` preserved для archaeology + emergency fallback. NOT auto-registered helper-ом."
 
 [osint-tools]
 description = "OSINT свёрстка: sherlock + holehe + maigret + theharvester (7 tools)"

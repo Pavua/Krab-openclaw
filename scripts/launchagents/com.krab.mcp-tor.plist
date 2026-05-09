@@ -1,4 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DEPRECATED Wave 50-B (2026-05-10): replaced by tor-full (25 tools).
+  Plist preserved для git history. LaunchAgent больше НЕ должен загружаться:
+  оркестратор выполняет `launchctl unload ~/Library/LaunchAgents/com.krab.mcp-tor.plist`
+  и `rm` копии из ~/Library/LaunchAgents/. Replacement — `tor-full` MCP
+  (`/Users/pablito/Antigravity_AGENTS/tor-mcp/server.py`, stdio, 25 tools)
+  обладает superset функциональностью (browse_onion, circuit/identity мгмт,
+  shodan/censys/virustotal, gpg, port_scan и др).
+
+  Этот файл оставлен в репо как:
+  - reference SSE LaunchAgent template для будущих MCP-сёрверов;
+  - аварийный fallback, если tor-full окажется недоступен (manual reload).
+-->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
   <dict>
@@ -6,7 +19,7 @@
     <string>com.krab.mcp-tor</string>
 
     <key>Comment</key>
-    <string>Krab Tor MCP — SSE on :8014, anonymous HTTP via SOCKS5 (Wave 44-Z)</string>
+    <string>DEPRECATED Wave 50-B (2026-05-10) — replaced by tor-full (25 tools). Was: Krab Tor MCP SSE :8014 (Wave 44-Z).</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
