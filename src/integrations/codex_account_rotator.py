@@ -147,10 +147,14 @@ def record_call(
     *,
     success: bool = True,
     error: str | None = None,
+    cooldown: timedelta | None = None,
 ) -> None:
     """Обновляет state после вызова codex CLI.
 
     При quota/rate-limit ошибке автоматически вызывает record_quota_exhaustion.
+
+    Wave 44-V: ``cooldown`` опциональный — если задан, используется как длительность
+    cooldown'а для quota error. Иначе fallback на ``QUOTA_RESET_HOURS``.
     """
     state = _load_state()
     s = state.setdefault(account_name, {})
@@ -169,9 +173,10 @@ def record_call(
         and any(k in error.lower() for k in ("quota", "rate limit", "429", "exceeded"))
     ):
         # Не сохраняем основной state — запись будет в record_quota_exhaustion
+        _cooldown = cooldown if cooldown is not None else timedelta(hours=QUOTA_RESET_HOURS)
         record_quota_exhaustion(
             account_name,
-            datetime.now(timezone.utc) + timedelta(hours=QUOTA_RESET_HOURS),
+            datetime.now(timezone.utc) + _cooldown,
         )
         return
 

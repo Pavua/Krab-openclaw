@@ -163,12 +163,22 @@ def build_model_router(ctx: RouterContext) -> APIRouter:
             "active_display": active_display,
         }
 
+        # Wave 44-V: codex quota state — exposed для owner panel мониторинга
+        codex_accounts_exhausted = False
+        try:
+            from src.integrations.codex_quota_state import is_codex_disabled
+
+            codex_accounts_exhausted = bool(is_codex_disabled())
+        except Exception:  # noqa: BLE001
+            pass
+
         return {
             "ok": True,
             "route": route,
             "provider": provider_str,
             "active_model": active_model,
             "reconciled_state": reconciled_state,
+            "codex_accounts_exhausted": codex_accounts_exhausted,
         }
 
     # ---------- POST /api/model/switch ------------------------------------

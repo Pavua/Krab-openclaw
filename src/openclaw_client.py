@@ -3427,12 +3427,74 @@ class OpenClawClient:
                                         binary=_cli_binary,
                                     )
                             except Exception as _cli_exc:  # noqa: BLE001
+                                # Wave 44-V: распознаём CodexQuotaExhaustedError для
+                                # debounced owner alert + структурного fallback log.
+                                _is_codex_quota = (
+                                    type(_cli_exc).__name__ == "CodexQuotaExhaustedError"
+                                )
+                                if _is_codex_quota:
+                                    # next model в chain после текущего attempt_model
+                                    try:
+                                        from .integrations.codex_quota_state import (
+                                            mark_codex_disabled,
+                                        )
+
+                                        _next_chain = list(get_runtime_fallback_models()) or []
+                                        # Первая non-codex модель — ожидаемый fallback
+                                        _expected_fb = next(
+                                            (
+                                                m
+                                                for m in _next_chain
+                                                if not m.startswith("codex-cli/")
+                                            ),
+                                            "primary-fallback",
+                                        )
+                                        _kind = getattr(_cli_exc, "kind", "weekly") or "weekly"
+                                        _is_transition = mark_codex_disabled(
+                                            fallback_model=_expected_fb, kind=_kind
+                                        )
+                                        logger.warning(
+                                            "model_fallback_engaged",
+                                            **{
+                                                "from": attempt_model,
+                                                "to": _expected_fb,
+                                                "reason": "quota",
+                                                "kind": _kind,
+                                                "transition": _is_transition,
+                                            },
+                                        )
+                                        if _is_transition:
+                                            try:
+                                                _notifier = getattr(
+                                                    self, "_codex_quota_notifier", None
+                                                )
+                                                if callable(_notifier):
+                                                    _msg = (
+                                                        "⚠️ Codex квота исчерпана для всех "
+                                                        f"accounts ({_kind}). Переключился на "
+                                                        f"{_expected_fb}. Auto-recovery когда "
+                                                        "квота сбросится."
+                                                    )
+                                                    import asyncio as _aio
+
+                                                    _aio.create_task(_notifier(_msg))
+                                            except Exception as _notif_exc:  # noqa: BLE001
+                                                logger.debug(
+                                                    "codex_quota_notify_failed",
+                                                    error=str(_notif_exc),
+                                                )
+                                    except Exception as _q_exc:  # noqa: BLE001
+                                        logger.debug(
+                                            "codex_quota_state_update_failed",
+                                            error=str(_q_exc),
+                                        )
                                 logger.warning(
                                     "cli_subprocess_failed_falling_back",
                                     model=attempt_model,
                                     binary=_cli_binary,
                                     error=str(_cli_exc),
                                     error_type=type(_cli_exc).__name__,
+                                    quota_exhausted=_is_codex_quota,
                                 )
                     except (NameError, ImportError) as _cli_init_exc:
                         logger.warning(

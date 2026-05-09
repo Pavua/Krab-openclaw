@@ -127,6 +127,243 @@ def _build_cmd(
     return [binary_path, "-p", prompt_text]
 
 
+async def _run_codex_subprocess_once(
+    *,
+    binary_path: str,
+    model_id: str,
+    prompt_text: str,
+    timeout_sec: float,
+    codex_home: str | None,
+) -> tuple[int | None, str, str]:
+    """Один прогон codex subprocess. Возвращает (returncode, stdout, stderr).
+
+    Wave 44-V helper. Не записывает rotator state — caller сам решает.
+    """
+    cmd = _build_cmd(binary_path, "codex", model_id, prompt_text)
+    _env: dict[str, str] | None = None
+    if codex_home:
+        _env = {**os.environ, "CODEX_HOME": codex_home}
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=_env,
+    )
+    try:
+        stdout_data, stderr_data = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=timeout_sec,
+        )
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:  # noqa: BLE001
+            pass
+        raise RuntimeError(f"CLI subprocess timeout после {timeout_sec}s: codex") from None
+
+    stdout_text = stdout_data.decode("utf-8", errors="ignore")
+    stderr_text = stderr_data.decode("utf-8", errors="ignore")
+    return proc.returncode, stdout_text, stderr_text
+
+
+async def _complete_codex_with_account_rotation(
+    *,
+    binary_path: str,
+    model_id: str,
+    prompt_text: str,
+    timeout_sec: float,
+) -> str:
+    """Wave 44-V: codex CLI с авто-сменой аккаунта при quota errors.
+
+    Если все accounts исчерпали квоту, поднимает CodexQuotaExhaustedError
+    чтобы caller fall back на следующую модель из chain.
+    """
+    from .codex_account_rotator import (
+        get_account_name_from_home,
+        get_next_codex_home,
+        list_accounts,
+        record_call,
+    )
+    from .codex_quota_state import (
+        CodexQuotaExhaustedError,
+        classify_quota,
+        cooldown_for_kind,
+        is_quota_error,
+    )
+
+    _perf_start = time.time()
+    _perf_success = False
+    _perf_response_len = 0
+    _perf_error_type: str | None = None
+    _perf_error_message: str | None = None
+    full_model = f"codex-cli/{model_id}"
+
+    max_attempts = max(2, len([a for a in list_accounts() if a.get("logged_in")]) + 1)
+
+    add_bypass_breadcrumb(
+        bypass_kind="cli",
+        event="engaged",
+        model=model_id,
+        extra={"binary": "codex", "prompt_len": len(prompt_text)},
+    )
+
+    try:
+        for attempt_idx in range(max_attempts):
+            codex_home = get_next_codex_home()
+            if not codex_home:
+                logger.warning(
+                    "codex_all_accounts_exhausted",
+                    attempt=attempt_idx + 1,
+                    max_attempts=max_attempts,
+                )
+                add_bypass_breadcrumb(
+                    bypass_kind="cli",
+                    event="quota_exhausted",
+                    model=model_id,
+                    extra={"binary": "codex"},
+                    level="warning",
+                )
+                _perf_error_type = "CodexQuotaExhaustedError"
+                _perf_error_message = "all codex accounts exhausted"
+                raise CodexQuotaExhaustedError(
+                    "All codex accounts hit quota — falling back to next model in chain",
+                    kind="weekly",
+                )
+
+            account_name = get_account_name_from_home(codex_home)
+            logger.info(
+                "codex_multi_account_selected",
+                home=codex_home,
+                account=account_name,
+                attempt=attempt_idx + 1,
+            )
+
+            try:
+                returncode, stdout_text, stderr_text = await _run_codex_subprocess_once(
+                    binary_path=binary_path,
+                    model_id=model_id,
+                    prompt_text=prompt_text,
+                    timeout_sec=timeout_sec,
+                    codex_home=codex_home,
+                )
+            except RuntimeError as _exc:
+                _perf_error_type = type(_exc).__name__
+                _perf_error_message = str(_exc)[:300]
+                raise
+
+            stderr_preview = stderr_text[:500]
+            text = stdout_text.strip()
+            _is_quota = is_quota_error(stderr=stderr_text, stdout=stdout_text)
+
+            if _is_quota:
+                kind = classify_quota(stderr=stderr_text, stdout=stdout_text)
+                cooldown = cooldown_for_kind(kind)
+                logger.warning(
+                    "codex_quota_detected",
+                    provider=full_model,
+                    account=account_name,
+                    kind=kind,
+                    cooldown_hours=int(cooldown.total_seconds() // 3600),
+                    stderr_preview=stderr_preview[:200],
+                )
+                try:
+                    record_call(
+                        account_name,
+                        success=False,
+                        error=stderr_preview or "quota_exhausted",
+                        cooldown=cooldown,
+                    )
+                except Exception as _rec_exc:  # noqa: BLE001
+                    logger.debug("codex_rotator_record_failed", error=str(_rec_exc))
+                continue
+
+            if returncode != 0:
+                logger.warning(
+                    "cli_subprocess_nonzero_exit",
+                    model=model_id,
+                    binary="codex",
+                    returncode=returncode,
+                    stderr=stderr_preview,
+                )
+                add_bypass_breadcrumb(
+                    bypass_kind="cli",
+                    event="failure",
+                    model=model_id,
+                    extra={
+                        "binary": "codex",
+                        "returncode": returncode,
+                        "stderr_preview": stderr_preview[:200],
+                    },
+                    level="warning",
+                )
+                try:
+                    record_call(account_name, success=False, error=stderr_preview)
+                except Exception as _rec_exc:  # noqa: BLE001
+                    logger.debug("codex_rotator_record_failed", error=str(_rec_exc))
+
+            try:
+                record_call(account_name, success=True)
+            except Exception as _rec_exc:  # noqa: BLE001
+                logger.debug("codex_rotator_record_failed", error=str(_rec_exc))
+
+            logger.info(
+                "cli_subprocess_complete_done",
+                model=model_id,
+                binary="codex",
+                response_len=len(text),
+                returncode=returncode,
+                account=account_name,
+                attempt=attempt_idx + 1,
+            )
+            add_bypass_breadcrumb(
+                bypass_kind="cli",
+                event="success",
+                model=model_id,
+                extra={
+                    "binary": "codex",
+                    "response_len": len(text),
+                    "account": account_name,
+                },
+            )
+            _perf_success = True
+            _perf_response_len = len(text)
+            return text
+
+        _perf_error_type = "CodexQuotaExhaustedError"
+        _perf_error_message = "max_attempts exhausted"
+        raise CodexQuotaExhaustedError(
+            "Codex max_attempts exceeded — all retried accounts hit quota",
+            kind="weekly",
+        )
+    except CodexQuotaExhaustedError as exc:
+        _perf_error_type = type(exc).__name__
+        _perf_error_message = str(exc)[:300]
+        raise
+    except Exception as exc:
+        logger.warning(
+            "cli_subprocess_failed",
+            model=model_id,
+            binary="codex",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        _perf_error_type = type(exc).__name__
+        _perf_error_message = str(exc)[:300]
+        raise
+    finally:
+        record_bypass_call(
+            kind="cli",
+            model=full_model,
+            duration_sec=time.time() - _perf_start,
+            success=_perf_success,
+            response_len=_perf_response_len,
+            error_type=_perf_error_type,
+            error_message=_perf_error_message,
+        )
+
+
 async def complete_via_cli(
     *,
     model: str,
@@ -146,7 +383,9 @@ async def complete_via_cli(
         text response (str). Пустая строка если CLI вернул empty.
 
     Raises:
-        RuntimeError: если binary не найден или subprocess fails
+        RuntimeError: если binary не найден или subprocess fails.
+        CodexQuotaExhaustedError: для codex — когда ВСЕ accounts исчерпали квоту
+            (caller должен fall back на следующую модель из chain). Wave 44-V.
     """
     is_cli, binary_name = is_cli_model(model)
     if not is_cli or binary_name is None:
@@ -165,24 +404,20 @@ async def complete_via_cli(
         logger.warning("cli_subprocess_no_messages", model=model_id, binary=binary_name)
         return ""
 
-    # Wave 24-A: Multi-account rotation для codex — выбираем CODEX_HOME из пула
+    # Wave 44-V: для codex — внутренний retry loop по аккаунтам при quota errors.
+    # Каждый exhausted account помечается соответствующим cooldown'ом
+    # (weekly=7d / transient=1h). Если accounts закончились → CodexQuotaExhaustedError.
+    if binary_name == "codex":
+        return await _complete_codex_with_account_rotation(
+            binary_path=binary_path,
+            model_id=model_id,
+            prompt_text=prompt_text,
+            timeout_sec=timeout_sec,
+        )
+
+    # Не-codex CLI (gemini) — single-shot вызов без rotation
     env_overrides: dict[str, str] = {}
     _rotator_account: str | None = None
-    if binary_name == "codex":
-        try:
-            from .codex_account_rotator import get_account_name_from_home, get_next_codex_home
-
-            _codex_home = get_next_codex_home()
-            if _codex_home:
-                env_overrides["CODEX_HOME"] = _codex_home
-                _rotator_account = get_account_name_from_home(_codex_home)
-                logger.info(
-                    "codex_multi_account_selected",
-                    home=_codex_home,
-                    account=_rotator_account,
-                )
-        except Exception as _rot_exc:  # noqa: BLE001
-            logger.debug("codex_rotator_skipped", error=str(_rot_exc))
 
     logger.info(
         "cli_subprocess_complete_start",
@@ -267,22 +502,8 @@ async def complete_via_cli(
 
         text = stdout_data.decode("utf-8", errors="ignore").strip()
 
-        # Wave 24-A: фиксируем результат вызова в rotator state
-        if _rotator_account and binary_name == "codex":
-            try:
-                from .codex_account_rotator import record_call
-
-                # Quota error по stderr и returncode
-                _is_quota_err = proc.returncode != 0 and any(
-                    k in stderr_text.lower() for k in ("quota", "rate limit", "429", "exceeded")
-                )
-                record_call(
-                    _rotator_account,
-                    success=not _is_quota_err,
-                    error=stderr_text if _is_quota_err else None,
-                )
-            except Exception as _rec_exc:  # noqa: BLE001
-                logger.debug("codex_rotator_record_failed", error=str(_rec_exc))
+        # Wave 44-V: codex теперь обрабатывается в _complete_codex_with_account_rotation,
+        # сюда падают только non-codex (gemini) — без rotator state записи.
 
         logger.info(
             "cli_subprocess_complete_done",

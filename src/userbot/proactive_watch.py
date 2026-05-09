@@ -101,6 +101,59 @@ class ProactiveWatchMixin:
                 notifier=self._send_proactive_watch_alert,
             )
 
+        # Wave 44-V: регистрируем codex quota notifier + recovery probe loop
+        try:
+            from ..openclaw_client import openclaw_client as _oc_client
+
+            _oc_client._codex_quota_notifier = self._send_proactive_watch_alert  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("codex_quota_notifier_wire_failed", error=str(exc))
+
+        _cq_task = getattr(self, "_codex_quota_recovery_task", None)
+        if _cq_task is None or _cq_task.done():
+            self._codex_quota_recovery_task = asyncio.create_task(
+                self._run_codex_quota_recovery_loop()
+            )
+
+    async def _run_codex_quota_recovery_loop(self) -> None:
+        """Wave 44-V: раз в час проверяет, восстановились ли codex accounts.
+
+        Если ANY account стал available после exhaustion — отправляет debounced
+        recovery alert владельцу и снимает codex_disabled флаг.
+        """
+        interval_sec = 3600  # 1h — соответствует transient cooldown минимуму
+        try:
+            while True:
+                await asyncio.sleep(interval_sec)
+                try:
+                    from ..integrations.codex_account_rotator import list_accounts
+                    from ..integrations.codex_quota_state import (
+                        is_codex_disabled,
+                        mark_codex_recovered,
+                    )
+
+                    if not is_codex_disabled():
+                        continue
+                    accounts = list_accounts()
+                    available = [a for a in accounts if a.get("available") and a.get("logged_in")]
+                    if not available:
+                        continue
+                    # Хотя бы один аккаунт available → recovery transition
+                    if mark_codex_recovered():
+                        try:
+                            await self._send_proactive_watch_alert(
+                                "✅ Codex восстановлен — primary вернулся к codex-cli/* "
+                                f"(доступно accounts: {len(available)})."
+                            )
+                        except Exception as notify_exc:  # noqa: BLE001
+                            logger.debug("codex_recovery_notify_failed", error=str(notify_exc))
+                except Exception as inner_exc:  # noqa: BLE001
+                    logger.debug("codex_quota_recovery_iter_failed", error=str(inner_exc))
+        except asyncio.CancelledError:
+            logger.info("codex_quota_recovery_task_cancelled")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("codex_quota_recovery_loop_failed", error=str(exc), non_fatal=True)
+
     async def _run_proactive_watch_loop(self) -> None:
         """
         Периодически снимает owner-oriented runtime digest.
