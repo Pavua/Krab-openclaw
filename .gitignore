@@ -50,3 +50,4 @@ node_modules/
 .remember/
 .claude/
 docs/superpowers/
+uv.lock
