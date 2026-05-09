@@ -588,6 +588,16 @@ class KraabUserbot(
 
             await run_cmd(handle_proactive, m)
 
+        # Wave 44-N-cli: !dreaming — OpenClaw Dreaming integration (owner-only).
+        @self.client.on_message(
+            filters.command("dreaming", prefixes=prefixes) & _make_command_filter("dreaming"),
+            group=-1,
+        )
+        async def wrap_dreaming(c, m):
+            from .handlers.commands.dreaming import handle_dreaming  # noqa: PLC0415
+
+            await run_cmd(handle_dreaming, m)
+
         @self.client.on_message(
             filters.command("block", prefixes=prefixes) & _make_command_filter("block"), group=-1
         )

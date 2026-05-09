@@ -4520,5 +4520,123 @@ class OpenClawClient:
             "actions": actions,
         }
 
+    # ── Dreaming RPC (Wave 44-N-cli) ─────────────────────────────────
+    # OpenClaw 2026.5.x exposes `doctor.memory.*` RPC methods for the
+    # Dreaming feature (агент memory consolidation). Реальный транспорт —
+    # WebSocket Gateway (`/ws`) с JSON-RPC 2.0 envelope. Если WebSocket
+    # недоступен или сервер не имплементировал метод — fallback на
+    # HTTP `/api/openclaw/rpc` (если/когда появится).
+    #
+    # Все методы возвращают payload словаря (`result` JSON-RPC). При
+    # ошибках — `{"error": {...}}` или поднимают `RuntimeError` с
+    # человекочитаемым сообщением для CLI.
+
+    async def _gateway_jsonrpc(
+        self,
+        method: str,
+        params: Optional[dict[str, Any]] = None,
+        *,
+        timeout: float = 10.0,
+    ) -> dict[str, Any]:
+        """Выполняет JSON-RPC к OpenClaw Gateway.
+
+        Strategy:
+        1) WebSocket `<ws_url>/ws` с JSON-RPC 2.0 envelope.
+        2) Fallback: HTTP POST `<base_url>/api/openclaw/rpc`.
+
+        Возвращает dict (result). Если оба транспорта упали —
+        RuntimeError с диагностикой.
+        """
+        import json as _json
+
+        params = params or {}
+        envelope = {
+            "jsonrpc": "2.0",
+            "id": int(time.time() * 1000),
+            "method": method,
+            "params": params,
+        }
+        # WebSocket attempt
+        ws_url = self.base_url.replace("http://", "ws://").replace("https://", "wss://") + "/ws"
+        ws_error: Optional[str] = None
+        try:
+            import websockets  # type: ignore[import-not-found]
+
+            async with websockets.connect(ws_url, open_timeout=timeout) as ws:
+                await ws.send(_json.dumps(envelope))
+                raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+                resp = _json.loads(raw) if isinstance(raw, str) else _json.loads(raw.decode())
+                if isinstance(resp, dict):
+                    if "error" in resp and resp["error"]:
+                        err = resp["error"]
+                        msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                        raise RuntimeError(f"RPC error: {msg}")
+                    if "result" in resp:
+                        result = resp["result"]
+                        return result if isinstance(result, dict) else {"value": result}
+                    return resp  # treat as raw result
+                return {"value": resp}
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            ws_error = f"{type(exc).__name__}: {exc}"
+            logger.debug("dreaming_ws_rpc_failed", method=method, error=ws_error)
+
+        # HTTP fallback
+        try:
+            resp = await self._http_client.post(
+                f"{self.base_url}/api/openclaw/rpc",
+                json=envelope,
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, dict):
+                if "error" in data and data["error"]:
+                    err = data["error"]
+                    msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                    raise RuntimeError(f"RPC error: {msg}")
+                if "result" in data:
+                    result = data["result"]
+                    return result if isinstance(result, dict) else {"value": result}
+                return data
+            return {"value": data}
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            http_error = f"{type(exc).__name__}: {exc}"
+            raise RuntimeError(
+                f"OpenClaw RPC '{method}' недоступен: ws={ws_error}, http={http_error}"
+            ) from exc
+
+    async def dreaming_status(self) -> dict[str, Any]:
+        """Returns `dreaming` sub-object из `doctor.memory.status`."""
+        result = await self._gateway_jsonrpc("doctor.memory.status")
+        # Some implementations wrap whole status under "dreaming",
+        # some return full memory.status with `dreaming` nested.
+        if isinstance(result, dict) and "dreaming" in result:
+            return result["dreaming"] or {}
+        return result
+
+    async def dream_diary(self) -> dict[str, Any]:
+        """Returns full response from `doctor.memory.dreamDiary`."""
+        return await self._gateway_jsonrpc("doctor.memory.dreamDiary")
+
+    async def dreaming_repair(self) -> dict[str, Any]:
+        """`doctor.memory.repairDreamingArtifacts` — archive corpus + ingestion + diary."""
+        return await self._gateway_jsonrpc("doctor.memory.repairDreamingArtifacts", timeout=30.0)
+
+    async def dream_diary_dedupe(self) -> dict[str, Any]:
+        """`doctor.memory.dedupeDreamDiary` — remove duplicate entries (safe)."""
+        return await self._gateway_jsonrpc("doctor.memory.dedupeDreamDiary", timeout=30.0)
+
+    async def dream_diary_backfill(self) -> dict[str, Any]:
+        """`doctor.memory.backfillDreamDiary` — rebuild diary from events."""
+        return await self._gateway_jsonrpc("doctor.memory.backfillDreamDiary", timeout=60.0)
+
+    async def dream_diary_reset(self) -> dict[str, Any]:
+        """`doctor.memory.resetDreamDiary` — DESTRUCTIVE: reset diary."""
+        return await self._gateway_jsonrpc("doctor.memory.resetDreamDiary", timeout=30.0)
+
 
 openclaw_client = OpenClawClient()
