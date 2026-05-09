@@ -309,3 +309,44 @@ def test_vec_query_histogram_records_observation(
     mock_ctx.__exit__.assert_called_once()
     # Result — пустой (sqlite-vec MATCH недоступен в :memory:)
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Wave 44-F: _encode_query использует singleton get_embedding_model.
+# ---------------------------------------------------------------------------
+
+
+def test_encode_query_uses_singleton_model(monkeypatch):
+    """_encode_query должен вызывать get_embedding_model() из memory_embeddings,
+    а не загружать StaticModel.from_pretrained заново на каждый recall.
+
+    Wave 44-F: устраняет ~50 МБ повторной загрузки Model2Vec на каждый _encode_query.
+    """
+    import numpy as np
+
+    from src.core import memory_embeddings, memory_hybrid_reranker
+
+    call_count = {"n": 0}
+
+    class _FakeModel:
+        def encode(self, batch):
+            return np.zeros((len(batch), 4), dtype=np.float32)
+
+    fake = _FakeModel()
+
+    def _fake_get_model():
+        call_count["n"] += 1
+        return fake
+
+    # Сбрасываем singleton, монкипатчим публичный API.
+    monkeypatch.setattr(memory_embeddings, "_MODEL", None)
+    monkeypatch.setattr(memory_embeddings, "get_embedding_model", _fake_get_model)
+
+    out1 = memory_hybrid_reranker._encode_query("первый запрос")
+    out2 = memory_hybrid_reranker._encode_query("второй запрос")
+    out3 = memory_hybrid_reranker._encode_query("третий запрос")
+
+    assert out1 is not None and out2 is not None and out3 is not None
+    # Главное: get_embedding_model вызывался каждый раз, но он сам внутри
+    # возвращает закэшированную модель (singleton) — нет StaticModel.from_pretrained.
+    assert call_count["n"] == 3

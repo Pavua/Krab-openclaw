@@ -48,3 +48,40 @@ class TestConfig:
 
         assert "!краб" in Config.TRIGGER_PREFIXES
         assert "@краб" in Config.TRIGGER_PREFIXES
+
+
+# ---------------------------------------------------------------------------
+# Wave 44-F: HISTORY_WINDOW_MAX_CHARS default + env override.
+# ---------------------------------------------------------------------------
+
+
+class TestHistoryWindowMaxCharsCap:
+    """Wave 44-F: HISTORY_WINDOW_MAX_CHARS теперь по умолчанию 200KB."""
+
+    def _reload_config(self):
+        import importlib
+
+        import src.config as cfg_mod
+
+        return importlib.reload(cfg_mod).Config
+
+    def test_default_is_200kb(self, monkeypatch):
+        """По умолчанию (без env) cap = 200000 символов."""
+        monkeypatch.delenv("KRAB_HISTORY_WINDOW_MAX_CHARS", raising=False)
+        monkeypatch.delenv("HISTORY_WINDOW_MAX_CHARS", raising=False)
+        Config = self._reload_config()
+        assert Config.HISTORY_WINDOW_MAX_CHARS == 200000
+
+    def test_krab_env_override(self, monkeypatch):
+        """KRAB_HISTORY_WINDOW_MAX_CHARS переопределяет дефолт."""
+        monkeypatch.setenv("KRAB_HISTORY_WINDOW_MAX_CHARS", "50000")
+        monkeypatch.delenv("HISTORY_WINDOW_MAX_CHARS", raising=False)
+        Config = self._reload_config()
+        assert Config.HISTORY_WINDOW_MAX_CHARS == 50000
+
+    def test_zero_disables_cap(self, monkeypatch):
+        """0 → None (без лимита) для совместимости со старым поведением."""
+        monkeypatch.setenv("KRAB_HISTORY_WINDOW_MAX_CHARS", "0")
+        monkeypatch.delenv("HISTORY_WINDOW_MAX_CHARS", raising=False)
+        Config = self._reload_config()
+        assert Config.HISTORY_WINDOW_MAX_CHARS is None

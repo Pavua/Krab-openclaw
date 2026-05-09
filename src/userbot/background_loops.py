@@ -243,6 +243,23 @@ class BackgroundLoopsMixin:
                     error_type=type(exc).__name__,
                 )
 
+            # ── 4b. Wave 44-F: spam_guard _flood_tracker cleanup — 1h ──
+            try:
+                spam_period = 3600.0  # 1 час
+                last_run = float(self._idea_tick_state.get("spam_guard_cleanup", 0.0))
+                if (now_ts - last_run) >= spam_period:
+                    from ..core.spam_guard import cleanup_stale_entries  # noqa: PLC0415
+
+                    removed = cleanup_stale_entries()
+                    logger.debug("spam_guard_cleanup_done", removed=removed)
+                    self._idea_tick_state["spam_guard_cleanup"] = now_ts
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "idea_tick_spam_guard_cleanup_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
             # ── 5. Wave 38-B: skill_curator A/B evaluation — 04:00 UTC ─
             # SkillCurator Step 4: auto-apply если кандидат победил в A/B тесте.
             # Запускается раз в сутки в 04:00 UTC. Гейт: KRAB_SKILL_CURATOR_CRON_ENABLED=1.

@@ -417,3 +417,76 @@ class TestConfigPersistence:
         monkeypatch.setattr("src.core.spam_guard._CONFIG_PATH", cfg_path)
         assert is_enabled(99) is False
         assert get_action(99) == DEFAULT_ACTION
+
+
+# ---------------------------------------------------------------------------
+# Wave 44-F: cleanup_stale_entries
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupStaleEntries:
+    """Тесты периодической очистки _flood_tracker."""
+
+    def setup_method(self):
+        from src.core.spam_guard import _flood_tracker
+
+        _flood_tracker.clear()
+
+    def teardown_method(self):
+        from src.core.spam_guard import _flood_tracker
+
+        _flood_tracker.clear()
+
+    def test_cleanup_removes_empty_deques(self):
+        """Stale записи (все timestamp'ы старше окна) полностью удаляются."""
+        import collections
+
+        from src.core.spam_guard import (
+            FLOOD_WINDOW_SEC,
+            _flood_tracker,
+            cleanup_stale_entries,
+        )
+
+        old = time.monotonic() - FLOOD_WINDOW_SEC - 100
+        _flood_tracker["chat_a"][1] = collections.deque([old, old])
+        _flood_tracker["chat_a"][2] = collections.deque([old])
+
+        removed = cleanup_stale_entries()
+        assert removed == 2
+        # chat_a полностью удалён, т.к. все user'ы stale
+        assert "chat_a" not in _flood_tracker
+
+    def test_cleanup_preserves_active_entries(self):
+        """Активные записи (свежие timestamp'ы) не удаляются."""
+        import collections
+
+        from src.core.spam_guard import _flood_tracker, cleanup_stale_entries
+
+        now = time.monotonic()
+        _flood_tracker["chat_b"][10] = collections.deque([now - 1.0])
+
+        removed = cleanup_stale_entries()
+        assert removed == 0
+        assert "chat_b" in _flood_tracker
+        assert 10 in _flood_tracker["chat_b"]
+
+    def test_cleanup_mixed(self):
+        """Смешанный кейс: один user stale, другой активен — chat остаётся."""
+        import collections
+
+        from src.core.spam_guard import (
+            FLOOD_WINDOW_SEC,
+            _flood_tracker,
+            cleanup_stale_entries,
+        )
+
+        now = time.monotonic()
+        old = now - FLOOD_WINDOW_SEC - 50
+        _flood_tracker["chat_c"][1] = collections.deque([old])
+        _flood_tracker["chat_c"][2] = collections.deque([now])
+
+        removed = cleanup_stale_entries()
+        assert removed == 1
+        assert "chat_c" in _flood_tracker
+        assert 1 not in _flood_tracker["chat_c"]
+        assert 2 in _flood_tracker["chat_c"]

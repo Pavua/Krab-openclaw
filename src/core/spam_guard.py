@@ -140,6 +140,41 @@ def _check_flood(chat_id: int | str, user_id: int) -> bool:
     return len(dq) > FLOOD_MSG_LIMIT
 
 
+# ---------------------------------------------------------------------------
+# Wave 44-F: периодическая очистка stale записей _flood_tracker.
+# ---------------------------------------------------------------------------
+
+
+def cleanup_stale_entries() -> int:
+    """Удаляет stale записи из _flood_tracker.
+
+    Очищает истёкшие timestamp'ы из всех deque, затем удаляет:
+    - user_id → deque, если deque пустой;
+    - chat_key, если у него больше нет активных user'ов.
+
+    Возвращает количество удалённых user-записей (для метрик/логирования).
+    Безопасно вызывать из периодической background-петли.
+    """
+    now = time.monotonic()
+    removed = 0
+    # Снимаем snapshot ключей — мутация во время итерации запрещена.
+    for chat_key in list(_flood_tracker.keys()):
+        users = _flood_tracker.get(chat_key)
+        if users is None:
+            continue
+        for user_id in list(users.keys()):
+            dq = users[user_id]
+            # Снимаем устаревшие отметки.
+            while dq and now - dq[0] > FLOOD_WINDOW_SEC:
+                dq.popleft()
+            if not dq:
+                del users[user_id]
+                removed += 1
+        if not users:
+            del _flood_tracker[chat_key]
+    return removed
+
+
 def _count_links(text: str) -> int:
     """Возвращает количество ссылок/упоминаний в тексте."""
     return len(_URL_RE.findall(text or ""))

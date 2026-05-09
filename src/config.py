@@ -252,8 +252,17 @@ class Config:
 
     # Dialog history: sliding window (Phase 6)
     HISTORY_WINDOW_MESSAGES: int = int(os.getenv("HISTORY_WINDOW_MESSAGES", "50"))
+    # Wave 44-F: cap по умолчанию 200KB на чат, чтобы base64-фото не раздували RSS.
+    # Cloud Gemini 3 Pro имеет 1M токенов контекста — 200KB безопасны.
+    # Пустая строка/"0" → None (без лимита, для совместимости со старым поведением).
     HISTORY_WINDOW_MAX_CHARS: Optional[int] = (
-        int(x) if (x := os.getenv("HISTORY_WINDOW_MAX_CHARS", "").strip()) else None
+        (int(x) if int(x) > 0 else None)
+        if (
+            x := os.getenv(
+                "KRAB_HISTORY_WINDOW_MAX_CHARS", os.getenv("HISTORY_WINDOW_MAX_CHARS", "200000")
+            ).strip()
+        )
+        else None
     )
     # Более жёсткое окно для локального inference-маршрута.
     # Почему отдельно:

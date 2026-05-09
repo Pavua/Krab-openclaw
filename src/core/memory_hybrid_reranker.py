@@ -403,15 +403,16 @@ def _encode_query(query: str) -> Optional[bytes]:
 
     None при любом сбое (нет модели, нет numpy, exception в encode).
     """
+    # Wave 44-F: используем singleton get_embedding_model() из memory_embeddings,
+    # чтобы избежать повторной загрузки Model2Vec (~50 МБ) на каждый recall.
     try:
-        from model2vec import StaticModel  # type: ignore[import-not-found]
-
-        from src.core.memory_embedder import DEFAULT_MODEL_NAME, serialize_f32
+        from src.core.memory_embedder import serialize_f32
+        from src.core.memory_embeddings import get_embedding_model
     except Exception as exc:  # noqa: BLE001
         logger.warning("hybrid_semantic_import_failed", error=str(exc))
         return None
     try:
-        model = StaticModel.from_pretrained(DEFAULT_MODEL_NAME)
+        model = get_embedding_model()
         vec = model.encode([query])[0]
         return serialize_f32(vec)
     except Exception as exc:  # noqa: BLE001
