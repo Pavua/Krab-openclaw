@@ -69,6 +69,12 @@ _SWARM_STALL_FACTOR: float = 2.0
 
 logger = get_logger(__name__)
 
+# Wave 44-H: per-reason memory-dedup window и список reasons, исключённых
+# из owner DM notify. `frontmost_app_changed` ранее давал 17 DM/день/30 memory
+# writes — signal/noise 6%. Снижаем до ~4/день только в memory, без alert.
+_FRONTMOST_MEMORY_DEDUP_SEC = 900  # 15 min
+_NOTIFY_EXCLUDED_REASONS: set[str] = {"frontmost_app_changed"}
+
 
 def _now_utc_iso() -> str:
     """Возвращает timezone-aware UTC timestamp для snapshot/state."""
@@ -365,6 +371,12 @@ class ProactiveWatchService:
             last_status = str(
                 state_block.get("lastStatus") or state_block.get("lastRunStatus") or "unknown"
             ).strip()
+            last_error = str(
+                state_block.get("lastError")
+                or state_block.get("lastErrorMessage")
+                or state_block.get("last_error")
+                or ""
+            ).strip()
 
             updated[job_id] = {"last_run_at_ms": last_run_at_ms, "last_status": last_status}
 
@@ -374,9 +386,15 @@ class ProactiveWatchService:
 
             _ok_statuses = {"ok", "success", "succeeded", "completed"}
             is_ok = last_status.lower() in _ok_statuses
-            severity = (
-                "warning" if last_status.lower() in ("error", "failed", "failure") else "info"
-            )
+            # Wave 44-H: benign env-level conflict — gateway respawn naturally
+            # kills long-running codex-cli jobs (Nightly Self-Diagnostics fails
+            # 8/15 runs at 03:00). Не actionable, downgrade severity до info.
+            _benign_error_markers = ("cron: job interrupted by gateway restart",)
+            is_benign_interrupt = any(marker in last_error for marker in _benign_error_markers)
+            if last_status.lower() in ("error", "failed", "failure"):
+                severity = "info" if is_benign_interrupt else "warning"
+            else:
+                severity = "info"
             # Статус inbox item: успешный запуск → сразу закрываем (done),
             # ошибка → оставляем open для owner review.
             item_status = "done" if is_ok else "open"
@@ -471,11 +489,31 @@ class ProactiveWatchService:
         except Exception as exc:  # noqa: BLE001
             logger.warning("inbox_janitor_failed", error=str(exc))
 
-        if persist_memory and (manual or bool(reason)):
+        # Wave 44-H: per-reason memory dedup window. Для шумных reasons
+        # (frontmost_app_changed) пропускаем write если последний был < N сек.
+        memory_writes_per_reason: dict[str, str] = dict(
+            state.get("last_memory_write_per_reason") or {}
+        )
+        skip_memory_write = False
+        if persist_memory and not manual and reason == "frontmost_app_changed":
+            prev_ts = memory_writes_per_reason.get(reason) or ""
+            if prev_ts:
+                try:
+                    elapsed = (
+                        datetime.now(timezone.utc) - datetime.fromisoformat(prev_ts)
+                    ).total_seconds()
+                    if elapsed < _FRONTMOST_MEMORY_DEDUP_SEC:
+                        skip_memory_write = True
+                except ValueError:
+                    pass
+
+        if persist_memory and (manual or bool(reason)) and not skip_memory_write:
             wrote_memory = append_workspace_memory_entry(
                 self.render_memory_entry(snapshot, reason=reason, manual=manual),
                 source="proactive-watch",
             )
+            if wrote_memory and reason:
+                memory_writes_per_reason[reason] = snapshot.ts_utc
 
         last_alert_ts = str(state.get("last_alert_ts") or "")
         last_alerted_reason = str(state.get("last_alerted_reason") or "")
@@ -508,7 +546,10 @@ class ProactiveWatchService:
             except ValueError:
                 pass
 
-        if notify and reason and notifier is not None and cooldown_ok:
+        # Wave 44-H: исключаем low-signal reasons из owner DM (frontmost_app_changed).
+        # Memory write остаётся (с dedup), trace/inbox остаются — только DM не идёт.
+        notify_allowed_for_reason = reason not in _NOTIFY_EXCLUDED_REASONS
+        if notify and reason and notifier is not None and cooldown_ok and notify_allowed_for_reason:
             try:
                 await notifier(digest)
                 alerted = True
@@ -530,6 +571,7 @@ class ProactiveWatchService:
             "last_gateway_alert_ts": snapshot.ts_utc
             if (alerted and reason in _gateway_reasons)
             else last_gateway_alert_ts,
+            "last_memory_write_per_reason": memory_writes_per_reason,
         }
         self._save_state(payload)
         if reason:

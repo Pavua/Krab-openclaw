@@ -821,3 +821,158 @@ async def test_run_error_digest_dedupe_same_hour(
     ]
     # Дедупликация по часу: только один item
     assert len(digest_items) == 1
+
+
+# ---------------------------------------------------------------------------
+# Wave 44-H: frontmost_app_changed memory dedup + notify exclusion + cron benign
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_frontmost_app_changed_memory_dedup_within_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """3 frontmost_app_changed события в пределах 900s → только 1 memory write."""
+    service = ProactiveWatchService(state_path=tmp_path / "state.json", alert_cooldown_sec=60)
+
+    # baseline + 3 frontmost-смены через 100s каждое — все < 900s окна.
+    snapshots = [
+        _snapshot(macos_frontmost_app="Chrome"),
+        _snapshot(ts_utc="2026-03-12T05:01:40+00:00", macos_frontmost_app="Slack"),
+        _snapshot(ts_utc="2026-03-12T05:03:20+00:00", macos_frontmost_app="VSCode"),
+        _snapshot(ts_utc="2026-03-12T05:05:00+00:00", macos_frontmost_app="Terminal"),
+    ]
+
+    async def _collect():
+        return snapshots.pop(0)
+
+    monkeypatch.setattr(service, "collect_snapshot", _collect)
+    monkeypatch.setattr(
+        proactive_watch_module,
+        "_fetch_openclaw_cron_jobs",
+        AsyncMock(return_value=[]),
+    )
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        proactive_watch_module,
+        "append_workspace_memory_entry",
+        lambda text, **kwargs: calls.append(text) or True,
+    )
+
+    # Замораживаем "now" для детерминированного elapsed расчёта
+    class _FrozenDT:
+        _t = datetime(2026, 3, 12, 5, 1, 40, tzinfo=timezone.utc)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls._t
+
+        @classmethod
+        def fromisoformat(cls, s):
+            return datetime.fromisoformat(s)
+
+    monkeypatch.setattr(proactive_watch_module, "datetime", _FrozenDT)
+
+    # baseline (no reason)
+    await service.capture(manual=False, persist_memory=True, notify=False)
+    # 1-я смена → write
+    _FrozenDT._t = datetime(2026, 3, 12, 5, 1, 40, tzinfo=timezone.utc)
+    r1 = await service.capture(manual=False, persist_memory=True, notify=False)
+    # 2-я смена через 100s — должно дедупиться
+    _FrozenDT._t = datetime(2026, 3, 12, 5, 3, 20, tzinfo=timezone.utc)
+    r2 = await service.capture(manual=False, persist_memory=True, notify=False)
+    # 3-я смена через ещё 100s — всё ещё внутри 900s окна
+    _FrozenDT._t = datetime(2026, 3, 12, 5, 5, 0, tzinfo=timezone.utc)
+    r3 = await service.capture(manual=False, persist_memory=True, notify=False)
+
+    assert r1["reason"] == "frontmost_app_changed"
+    assert r1["wrote_memory"] is True
+    assert r2["reason"] == "frontmost_app_changed"
+    assert r2["wrote_memory"] is False
+    assert r3["wrote_memory"] is False
+    # Только 1 запись в memory
+    frontmost_calls = [c for c in calls if "watch=frontmost_app_changed" in c]
+    assert len(frontmost_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_frontmost_app_changed_does_not_trigger_notifier(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """frontmost_app_changed не должен вызывать owner DM (notify excluded set)."""
+    service = ProactiveWatchService(state_path=tmp_path / "state.json", alert_cooldown_sec=60)
+    snapshots = [
+        _snapshot(macos_frontmost_app="Chrome"),
+        _snapshot(
+            ts_utc="2026-03-12T05:05:00+00:00",
+            macos_frontmost_app="Slack",
+        ),
+    ]
+
+    async def _collect():
+        return snapshots.pop(0)
+
+    monkeypatch.setattr(service, "collect_snapshot", _collect)
+    monkeypatch.setattr(
+        proactive_watch_module, "append_workspace_memory_entry", lambda text, **kwargs: True
+    )
+    monkeypatch.setattr(
+        proactive_watch_module,
+        "_fetch_openclaw_cron_jobs",
+        AsyncMock(return_value=[]),
+    )
+    notifier = AsyncMock()
+
+    await service.capture(manual=False, persist_memory=True, notify=True, notifier=notifier)
+    result = await service.capture(
+        manual=False, persist_memory=True, notify=True, notifier=notifier
+    )
+
+    assert result["reason"] == "frontmost_app_changed"
+    assert result["alerted"] is False
+    notifier.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cron_benign_gateway_interrupt_marked_info(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Cron error 'job interrupted by gateway restart' → severity=info, не warning."""
+    service = ProactiveWatchService(state_path=tmp_path / "state.json", alert_cooldown_sec=60)
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    monkeypatch.setattr(proactive_watch_module, "inbox_service", inbox)
+
+    benign_job = {
+        "id": "nightly-self-diagnostics",
+        "name": "Nightly Self-Diagnostics",
+        "state": {
+            "lastRunAtMs": 1_700_000_000_000,
+            "lastStatus": "error",
+            "lastError": "cron: job interrupted by gateway restart at 03:05",
+        },
+    }
+    real_error_job = {
+        "id": "data-export",
+        "name": "Data Export",
+        "state": {
+            "lastRunAtMs": 1_700_000_001_000,
+            "lastStatus": "error",
+            "lastError": "ConnectionRefused: postgres:5432",
+        },
+    }
+
+    monkeypatch.setattr(
+        proactive_watch_module,
+        "_fetch_openclaw_cron_jobs",
+        AsyncMock(return_value=[benign_job, real_error_job]),
+    )
+
+    state: dict = {"last_cron_runs": {}}
+    await service._check_and_trace_cron_executions(state)
+
+    items = inbox.list_items(kind="proactive_action", limit=20)
+    by_job = {it["metadata"]["job_id"]: it for it in items}
+
+    assert by_job["nightly-self-diagnostics"]["severity"] == "info"
+    assert by_job["data-export"]["severity"] == "warning"
