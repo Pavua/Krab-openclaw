@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -30,6 +31,86 @@ from typing import Any
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+
+# ── Wave 44-E: PII redaction ────────────────────────────────────────────────
+# До Wave 44-E активный bootstrap/sentry_init.py НЕ редактировал PII — любой
+# logger.error содержащий TG bot token / API key / Bearer token утекал raw в
+# Sentry SaaS. Старый src/core/sentry_integration.py имел такие паттерны, но
+# был deprecated и не подключён к boot path. Порт сюда закрывает security gap.
+#
+# Порядок паттернов важен: специфичные раньше общих. Маркер `<TG_BOT_TOKEN>`
+# / `<GOOGLE_API_KEY>` / `<API_KEY>` / `Bearer <TOKEN>` совпадает по форме
+# с устаревшим redactor для совместимости тестов и логов.
+_PII_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # Bot API / Telegram токены: <numeric_id>:<35+ char alphanumeric>
+    (re.compile(r"\b\d{9,11}:[A-Za-z0-9_-]{30,}\b"), "<TG_BOT_TOKEN>"),
+    # Google API ключи: AIza… (35-39 chars обычно, жадно до границы)
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{20,}"), "<GOOGLE_API_KEY>"),
+    # OpenAI / Anthropic / generic provider keys: sk-…
+    (re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"), "<API_KEY>"),
+    # Sentry DSN
+    (re.compile(r"https://[a-zA-Z0-9]{16,}@[a-zA-Z0-9]+\.ingest\.[a-z.]+/\d+"), "<SENTRY_DSN>"),
+    # Bearer / OAuth header tokens
+    (re.compile(r"(?i)bearer\s+[A-Za-z0-9_.\-=]{20,}"), "Bearer <TOKEN>"),
+)
+# Маркер уже редактированной строки — для идемпотентности.
+_REDACTED_MARKER_RE: re.Pattern[str] = re.compile(
+    r"<(?:TG_BOT_TOKEN|GOOGLE_API_KEY|API_KEY|SENTRY_DSN|TOKEN)>"
+)
+
+
+def _redact_string(s: str) -> str:
+    """Применяет все PII-паттерны к строке. Idempotent: если строка уже
+    содержит только маркер — паттерны её не матчат повторно."""
+    if not isinstance(s, str) or not s:
+        return s or ""
+    for pat, repl in _PII_PATTERNS:
+        s = pat.sub(repl, s)
+    return s
+
+
+def _redact_dict(d: dict[str, Any]) -> dict[str, Any]:
+    """Рекурсивный redact values в dict. Keys не трогаем (структура)."""
+    out: dict[str, Any] = {}
+    for k, v in d.items():
+        if isinstance(v, str):
+            out[k] = _redact_string(v)
+        elif isinstance(v, dict):
+            out[k] = _redact_dict(v)
+        elif isinstance(v, list):
+            out[k] = [_redact_string(x) if isinstance(x, str) else x for x in v]
+        else:
+            out[k] = v
+    return out
+
+
+def _apply_pii_redaction(event: dict[str, Any]) -> None:
+    """In-place редакция PII во всех полях события Sentry, где может оседать
+    raw текст: message, logentry.message, exception.value, breadcrumbs, extra,
+    tags. Defensive: любой неожиданный shape — skip без exception."""
+    try:
+        if isinstance(event.get("message"), str):
+            event["message"] = _redact_string(event["message"])
+        logentry = event.get("logentry")
+        if isinstance(logentry, dict) and isinstance(logentry.get("message"), str):
+            logentry["message"] = _redact_string(logentry["message"])
+        for ex in (event.get("exception", {}) or {}).get("values", []) or []:
+            if isinstance(ex, dict) and isinstance(ex.get("value"), str):
+                ex["value"] = _redact_string(ex["value"])
+        for crumb in (event.get("breadcrumbs", {}) or {}).get("values", []) or []:
+            if isinstance(crumb, dict):
+                if isinstance(crumb.get("message"), str):
+                    crumb["message"] = _redact_string(crumb["message"])
+                if isinstance(crumb.get("data"), dict):
+                    crumb["data"] = _redact_dict(crumb["data"])
+        if isinstance(event.get("extra"), dict):
+            event["extra"] = _redact_dict(event["extra"])
+        if isinstance(event.get("tags"), dict):
+            event["tags"] = _redact_dict(event["tags"])
+    except Exception:  # noqa: BLE001
+        # Никогда не ломаем error reporting из-за бага в редакции.
+        pass
 
 
 # ── Wave 14-F (Session 33): per-session event dedupe ─────────────────────────
@@ -207,6 +288,14 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     # to cloud routing on Telegram queries (telegram_query_detector).
     # Non-zero exit handled by retry layer.
     "cli_subprocess_nonzero_exit",
+    # Wave 44-E (09.05.2026): split_brain markers — наши собственные intentional
+    # escalations при detection split-brain (telegram updates flow stalled).
+    # logger.error используется чтобы LaunchAgent перезапустил процесс через
+    # _launchd_exit_78 — это by design, не Sentry-bug. PYTHON-FASTAPI-87 захватывал
+    # эти события как "новые issue" каждый раз. Локально через structlog логи
+    # сохраняются (фильтр работает только на Sentry capture).
+    "split_brain_reconnect_did_not_restore_updates",
+    "split_brain_escalation",
     # Wave 43-Z (09.05.2026): pyrogram-internal TCP StreamReader concurrency race.
     # Session.restart() вызывается через self.loop.create_task(self.restart()) из
     # handle_packet при ConnectionResetError. Несколько конкурентных задач пытаются
@@ -398,6 +487,10 @@ def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] 
     except Exception:  # noqa: BLE001
         # Defensive: dedupe-bug не должен топить error reporting.
         return event
+    # Wave 44-E: PII redaction перед отправкой. In-place — мутирует event
+    # фильтруя tokens/keys/Bearer/DSN из всех текстовых полей. Defensive:
+    # внутренние exceptions проглочены, чтобы не ломать reporting.
+    _apply_pii_redaction(event)
     return event
 
 
