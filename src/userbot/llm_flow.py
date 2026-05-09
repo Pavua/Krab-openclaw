@@ -479,6 +479,40 @@ class LLMFlowMixin:
 
         _flow_start_ts = time.time()  # Точка отсчёта для auto-inject медиафайлов
 
+        # Wave 44-O-nlu-wire: NLU command gate — если owner в DM пишет
+        # natural-language фразу, mapping которой → !command имеет
+        # confidence ≥ 0.8, dispatch handler напрямую без LLM call.
+        # Feature-gated: KRAB_NLU_INTENT_DISPATCH_ENABLED=1 (default OFF).
+        try:
+            from .nlu_command_gate import is_enabled as _nlu_enabled
+            from .nlu_command_gate import try_nlu_command_dispatch
+
+            if _nlu_enabled():
+                _nlu_handled = await try_nlu_command_dispatch(
+                    self,
+                    message,
+                    query=query,
+                    chat_id=chat_id,
+                    is_self=is_self,
+                )
+                if _nlu_handled:
+                    logger.info(
+                        "nlu_gate_short_circuit",
+                        chat_id=chat_id,
+                    )
+                    # Cancel typing/action task — мы выходим без LLM call.
+                    try:
+                        action_stop_event.set()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "nlu_gate_hook_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
         # Feature K: thread coherence (observability-only — только log + metric).
         # Не модифицируем query/ответ; помогает диагностировать когда тред
         # «уплыл» и Krab отвечает не на ту тему. Fail-open.
