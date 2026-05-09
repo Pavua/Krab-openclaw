@@ -261,6 +261,10 @@ def cmd_add_all_with_tokens(
     except RegisterError:
         already = set()
     for name, spec in sorted(inv.items()):
+        # Wave 50-B: skip deprecated entries (e.g. krab-tor replaced by tor-full).
+        if str(spec.get("status", "")).lower() == "deprecated":
+            skipped.append((name, ["deprecated"]))
+            continue
         ok, missing = has_required_tokens(spec, env)
         if not ok:
             skipped.append((name, missing))

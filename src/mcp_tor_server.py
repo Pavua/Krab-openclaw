@@ -1,5 +1,21 @@
 # -*- coding: utf-8 -*-
-"""
+"""DEPRECATED Wave 50-B (2026-05-10).
+
+Заменён на полноценный tor-full MCP в ``/Users/pablito/Antigravity_AGENTS/tor-mcp/``
+(25 tools vs 3 tool subset здесь). Файл сохранён для:
+
+- reference architecture (FastMCP wrapper над ``tor_bridge.py``);
+- возможного fallback, если tor-full недоступен;
+- ``tests/unit/test_mcp_tor_server.py`` всё ещё pass (regression safety).
+
+Не запускается автоматически (LaunchAgent unloaded оркестратором). Manual run:
+
+    venv/bin/python -m src.mcp_tor_server
+
+Original Wave 44-Z docstring ниже сохранён без изменений ради archaeology.
+
+---
+
 Krab Tor MCP Server (Wave 44-Z).
 
 Экспонирует Tor SOCKS5 daemon как MCP tools для агентного контура
