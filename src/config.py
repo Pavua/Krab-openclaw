@@ -520,6 +520,13 @@ class Config:
     # Default 180s (3 мин тишины после activity = зависание post-tool-call).
     # 0 = отключено.
     KRAB_LLM_IDLE_TIMEOUT_SEC: float = float(os.getenv("KRAB_LLM_IDLE_TIMEOUT_SEC", "180"))
+    # Wave 44-W: codex agent — soft hard-cap на subprocess (отдельно от
+    # KRAB_LLM_WALL_CLOCK_CAP_SEC, который применяется к LLM flow в целом).
+    # Streaming output reader использует idle_timeout как primary detector;
+    # этот hard cap — fallback если codex эмитит byte раз в N секунд бесконечно.
+    # Default 7200s (2 часа) — codex agent task может идти долго при tool_calls.
+    # 0 = отключить hard cap полностью (полагаемся только на stagnation detector).
+    KRAB_CODEX_AGENT_HARD_CAP_SEC: float = float(os.getenv("KRAB_CODEX_AGENT_HARD_CAP_SEC", "7200"))
     # Интервал heartbeat-обновлений temp_msg с прогрессом (секунды).
     KRAB_LLM_HEARTBEAT_INTERVAL_SEC: float = float(
         os.getenv("KRAB_LLM_HEARTBEAT_INTERVAL_SEC", "60")
@@ -785,6 +792,8 @@ class Config:
                     cls.KRAB_RESPONSE_HARD_CAP_SEC = float(value)
                 elif key == "KRAB_LLM_IDLE_TIMEOUT_SEC":
                     cls.KRAB_LLM_IDLE_TIMEOUT_SEC = float(value)
+                elif key == "KRAB_CODEX_AGENT_HARD_CAP_SEC":
+                    cls.KRAB_CODEX_AGENT_HARD_CAP_SEC = float(value)
                 elif key == "KRAB_LLM_HEARTBEAT_INTERVAL_SEC":
                     cls.KRAB_LLM_HEARTBEAT_INTERVAL_SEC = max(10.0, float(value))
                 elif key == "LM_STUDIO_NATIVE_REASONING_MODE":
