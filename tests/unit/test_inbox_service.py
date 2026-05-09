@@ -754,6 +754,111 @@ def test_archive_by_kind_empty_kind_returns_error(tmp_path: Path) -> None:
     assert result["ok"] is False
 
 
+def test_sweep_acked_closes_owner_mention_items(tmp_path: Path) -> None:
+    """Wave 39-C: sweep_acked_proactive_actions должен закрывать acked owner_mention items.
+
+    Сценарий: bulk_ack_stale переводит open→acked для owner_mention, но janitor
+    раньше не включал owner_mention в _AUTO_SWEEP_KINDS → items висели вечно как
+    stale_processing_owner_mentions в summary.
+    """
+    service = InboxService(state_path=tmp_path / "inbox.json")
+
+    # Создаём owner_mention и переводим в acked (имитируем bulk_ack_stale)
+    mention = service.upsert_incoming_owner_request(
+        chat_id="-1001804661353",
+        message_id="767083",
+        text="Старый acked owner_mention — должен быть закрыт janitor-ом",
+        sender_username="p0lrd",
+        chat_type="supergroup",
+        is_reply_to_me=True,
+        has_trigger=False,
+    )
+    mention_id = mention["item"]["item_id"]
+    service.set_item_status(
+        mention_id, status="acked", actor="owner-ui", note="bulk_ack_stale_acked"
+    )
+
+    # Перемотаем timestamp на "достаточно старый" чтобы sweep взял
+    state = service._load_state()
+    stale_ts = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(timespec="seconds")
+    for item in state["items"]:
+        if item["item_id"] == mention_id:
+            item["updated_at_utc"] = stale_ts
+            item.setdefault("metadata", {})["last_action_at_utc"] = stale_ts
+    service.state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+    # Запускаем sweep с owner_mention kind явно
+    result = service.sweep_acked_proactive_actions(
+        kind="owner_mention",
+        age_threshold_minutes=60,
+        actor="system-janitor",
+    )
+
+    assert result["swept"] == 1, "owner_mention должен быть swept"
+    assert result["matched"] == 1
+
+    # Проверяем статус в state
+    items_after = service._load_items()
+    mention_after = next(i for i in items_after if i.item_id == mention_id)
+    assert mention_after.status == "done", "owner_mention после sweep должен быть done"
+
+    # Summary не должен показывать stale_processing_owner_mentions
+    summary = service.get_summary()
+    assert summary["stale_processing_owner_mentions"] == 0
+    assert summary["processing_owner_mentions"] == 0
+
+
+def test_bulk_ack_stale_then_sweep_eliminates_stale_processing_counter(tmp_path: Path) -> None:
+    """Wave 39-C: bulk_ack_stale → sweep pipeline: stale_processing_owner_mentions = 0.
+
+    Полная имитация production инцидента 09.05.2026: owner-ui вызывает
+    bulk_ack_stale (open→acked), а затем janitor sweep должен закрыть acked
+    owner_mention за два прохода без ручного вмешательства.
+    """
+    service = InboxService(state_path=tmp_path / "inbox.json")
+
+    # Создаём 3 owner_mention как open
+    ids = []
+    for i in range(3):
+        m = service.upsert_incoming_owner_request(
+            chat_id="-100999",
+            message_id=str(1000 + i),
+            text=f"Mention {i}",
+            sender_username="p0lrd",
+            chat_type="supergroup",
+        )
+        ids.append(m["item"]["item_id"])
+
+    # Имитируем bulk_ack_stale: переводим open→acked
+    stale_ts = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat(timespec="seconds")
+    state = service._load_state()
+    for item in state["items"]:
+        if item["item_id"] in ids:
+            item["status"] = "acked"
+            item["updated_at_utc"] = stale_ts
+            item.setdefault("metadata", {})["last_action_at_utc"] = stale_ts
+            item["metadata"]["last_action_actor"] = "owner-ui"
+            item["metadata"]["last_action_note"] = "bulk_ack_stale_acked"
+    service.state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+    # До sweep summary должен показывать 3 stale_processing_owner_mentions
+    summary_before = service.get_summary()
+    assert summary_before["stale_processing_owner_mentions"] == 3
+
+    # Sweep закрывает owner_mention acked→done
+    sweep_result = service.sweep_acked_proactive_actions(age_threshold_minutes=60)
+    assert sweep_result["swept"] == 3
+
+    # После sweep stale_processing_owner_mentions = 0
+    summary_after = service.get_summary()
+    assert summary_after["stale_processing_owner_mentions"] == 0
+    assert summary_after["processing_owner_mentions"] == 0
+
+
 def test_list_items_open_filter_excludes_all_closed_statuses(tmp_path: Path) -> None:
     """Фильтр status='open' должен исключать done, cancelled, approved, rejected."""
     service = InboxService(state_path=tmp_path / "inbox.json")

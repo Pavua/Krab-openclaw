@@ -740,7 +740,11 @@ class InboxService:
     #: потому что оба создаются background pipeline-ами как owner-visible trace,
     #: и ``acked`` для них означает "background processing started", а не
     #: "owner ack pending".
-    _AUTO_SWEEP_KINDS: frozenset[str] = frozenset({"proactive_action", "owner_request"})
+    # owner_mention включён: bulk_ack_stale переводит open→acked, janitor должен
+    # закрывать acked owner_mention так же, как owner_request (Wave 39-C fix)
+    _AUTO_SWEEP_KINDS: frozenset[str] = frozenset(
+        {"proactive_action", "owner_request", "owner_mention"}
+    )
 
     def sweep_acked_proactive_actions(
         self,

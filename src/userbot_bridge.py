@@ -405,6 +405,10 @@ class KraabUserbot(
         # Раньше heartbeat success обновлял _last_telegram_event_ts → silence
         # detector обманывался при split-brain pyrogram session.
         self._last_heartbeat_ok_ts: float = time.time()
+        # Wave 39-D: трекинг update_id для true split-brain detection.
+        # message.id монотонно растёт в пределах чата и служит proxy для
+        # живости updates_subscriber. Frozen id + alive invoke = split-brain.
+        self._last_seen_update_id: int = 0
         self._network_offline_monitor_task: Optional[asyncio.Task] = None
         # Runtime-состояние старта userbot для health/handoff и контролируемой деградации.
         self._startup_state = "initializing"
@@ -3350,6 +3354,12 @@ class KraabUserbot(
         """Главный обработчик входящих сообщений"""
         # Обновляем метку последнего TG-события для network offline monitor.
         self._last_telegram_event_ts = time.time()
+        # Wave 39-D: трекаем message.id как proxy для update_id.
+        # message.id монотонно растёт (per-chat), служит сигналом живости
+        # updates_subscriber. Обновляем только если новый id больше.
+        _uid = getattr(message, "id", 0) or 0
+        if _uid > self._last_seen_update_id:
+            self._last_seen_update_id = _uid
         # Correlation ID: короткий UUID (48-bit entropy) для связывания логов
         # одного запроса через весь pipeline (bridge → openclaw_client → swarm → indexer).
         # Наследуется автоматически в asyncio.create_task / asyncio.to_thread

@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from ..config import config
+from ..core.repetition_guard import repetition_guard as _repetition_guard
 from ._send_queue import telegram_send_queue as _telegram_send_queue
 
 if TYPE_CHECKING:
@@ -85,6 +86,110 @@ def _resolve_reply_target(source_message: "Message", query: str | None) -> "Mess
     if referenced and _query_has_anaphora(query):
         return referenced
     return source_message
+
+
+# Wave 39-X: output-based reply target redirect.
+#
+# Wave 37-B (anaphora-based) — узкий proxy. Реальный сигнал кому Krab
+# адресует — это сам outgoing text. LLM умный, начинает ответ с
+# "🐶, ..." / "@user, ..." когда хочет address кого-то конкретно.
+# Helper парсит начало text и matches против referenced.from_user.
+#
+# Regression case (09.05.2026 02:13-02:14 в YMB FAMILY FOREVER):
+# - pavua reply на 🐶's join: "Краб, поправил, попробуй снова" (НЕТ anaphora)
+# - LLM выдал: "🐶, контрольный пинг 🦀 ..." (правильно адресует 🐶)
+# - Wave 37-B regex miss → reply_target = pavua (wrong)
+# - Wave 39-X: парсит "🐶," → matches first_name="🐶" → reply_target = 🐶 message ✓
+
+
+_REPLY_TARGET_BOUNDARY = {",", ":", " ", "!", "?", ".", ";", ")", "—", "-", "\n", "\t"}
+
+
+def _output_starts_with_addressee(
+    response_head: str, *, user_id: int | None, username: str, first_name: str
+) -> bool:
+    """Wave 39-X helper: True если response_head начинается с addressee
+    matching user (markdown link / @username / first_name).
+
+    Word-boundary protection: candidate должен быть followed by
+    punctuation/space/newline (избегаем 'Ан' в 'Антон').
+    """
+    if not response_head:
+        return False
+
+    candidates: list[str] = []
+    if user_id is not None:
+        # Markdown link с user_id (приоритетный — explicit)
+        # Не знаем text внутри [...], проверяем только по user_id
+        marker = f"](tg://user?id={user_id})"
+        if marker in response_head[:200]:  # within first 200 chars
+            # Проверим что link находится В НАЧАЛЕ (через regex match вместо
+            # просто `in`). Для simplicity допускаем offset до 5 leading whitespace.
+            stripped = response_head.lstrip()
+            if stripped.startswith("[") and marker in stripped[: stripped.find(")") + 1]:
+                return True
+
+    if username:
+        candidates.append(f"@{username}")
+    if first_name:
+        candidates.append(first_name)
+
+    head = response_head.lstrip()
+    for cand in candidates:
+        if not cand or not head.startswith(cand):
+            continue
+        next_pos = len(cand)
+        if next_pos >= len(head):
+            return True  # candidate == whole head
+        if head[next_pos] in _REPLY_TARGET_BOUNDARY:
+            return True
+    return False
+
+
+def _resolve_reply_target_from_output(
+    source_message: "Message",
+    response_text: str | None,
+    *,
+    fallback_query: str | None = None,
+) -> "Message":
+    """Wave 39-X: primary reply target resolution by parsing Krab's outgoing text.
+
+    Если response_text начинается с addressee (markdown link, @username,
+    или first_name) и тот addressee matches referenced.from_user —
+    redirect reply target на referenced. Иначе — fallback на Wave 37-B
+    anaphora-based resolution.
+
+    Args:
+        source_message: incoming user message (trigger).
+        response_text: full LLM response text Krab'а до отправки.
+        fallback_query: original user query для anaphora fallback.
+
+    Returns:
+        Message на которое нужно делать reply. Если redirect не сработал —
+        source_message (default).
+    """
+    referenced = getattr(source_message, "reply_to_message", None)
+    if referenced is None:
+        return _resolve_reply_target(source_message, fallback_query)
+
+    referenced_user = getattr(referenced, "from_user", None)
+    if referenced_user is None:
+        return _resolve_reply_target(source_message, fallback_query)
+
+    if not response_text:
+        return _resolve_reply_target(source_message, fallback_query)
+
+    user_id = getattr(referenced_user, "id", None)
+    username = (getattr(referenced_user, "username", "") or "").strip()
+    first_name = (getattr(referenced_user, "first_name", "") or "").strip()
+
+    head = response_text[:200]  # take only начало для match
+    if _output_starts_with_addressee(
+        head, user_id=user_id, username=username, first_name=first_name
+    ):
+        return referenced
+
+    return _resolve_reply_target(source_message, fallback_query)
 
 
 # Wave 38: inline mention link для users без @username.
@@ -231,6 +336,22 @@ class DeliveryHelpersMixin:
                 "parts_count": 1,
             }
 
+        # Wave 39-A: repetition guard — проверяем перед отправкой.
+        # Если Krab уже недавно отвечал похоже в этом чате — сигнализируем
+        # кратким уведомлением вместо полного повтора.
+        # Дизайн-выбор: prepend «(повторяюсь)» к первой части, а не suppress
+        # полностью — пользователь видит что guard сработал и может запросить
+        # другой ответ. Silent suppress скрыл бы проблему.
+        _chat_id_for_guard = source_message.chat.id
+        _delivery_text = full_response  # текст для record после отправки
+        if _repetition_guard.is_repetition(_chat_id_for_guard, full_response):
+            logger.warning(
+                "repetition_suppressed",
+                chat_id=_chat_id_for_guard,
+                text_preview=full_response[:80],
+            )
+            full_response = "🦀 Уже сказал близко по теме чуть выше."
+
         parts = self._split_message(f"🦀 {query}\n\n{full_response}" if is_self else full_response)
         delivered_ids: list[str] = []
 
@@ -245,6 +366,8 @@ class DeliveryHelpersMixin:
             self._maybe_record_smart_trigger_response(
                 source_message.chat.id, delivered_ids, full_response
             )
+            # Wave 39-A: фиксируем оригинальный текст ответа для следующей проверки
+            _repetition_guard.record(_chat_id_for_guard, _delivery_text)
             self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
             return {
                 "delivery_mode": "edit_and_reply",
@@ -279,6 +402,8 @@ class DeliveryHelpersMixin:
             self._maybe_record_smart_trigger_response(
                 source_message.chat.id, delivered_ids, full_response
             )
+            # Wave 39-A: фиксируем оригинальный текст для repetition guard
+            _repetition_guard.record(_chat_id_for_guard, _delivery_text)
             self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
             return {
                 "delivery_mode": "send_message",
@@ -286,10 +411,14 @@ class DeliveryHelpersMixin:
                 "parts_count": len(parts),
             }
 
-        # Wave 37-B (P1-3): redirect reply target когда user написал
-        # "Краб, спроси его..." в reply на чужое сообщение — Krab должен
-        # отвечать на оригинал, не на trigger.
-        reply_target = _resolve_reply_target(source_message, query)
+        # Wave 39-X: output-based reply target redirect (primary).
+        # Парсит начало full_response (LLM output). Если LLM начал ответ с
+        # "🐶, ..." / "@user, ..." / [name](tg://user?id=N) — это explicit
+        # addressee, и reply_to должен быть на этого user'а (если он matches
+        # referenced.from_user). Wave 37-B (anaphora) остаётся как fallback.
+        reply_target = _resolve_reply_target_from_output(
+            source_message, full_response, fallback_query=query
+        )
 
         # Wave 38: если redirect сработал — inject inline mention к автору
         # referenced message в text parts (clickable @ для users без username).
@@ -314,6 +443,8 @@ class DeliveryHelpersMixin:
         self._maybe_record_smart_trigger_response(
             source_message.chat.id, delivered_ids, full_response
         )
+        # Wave 39-A: фиксируем оригинальный текст для repetition guard
+        _repetition_guard.record(_chat_id_for_guard, _delivery_text)
         result = {
             "delivery_mode": "edit_and_reply",
             "text_message_ids": delivered_ids,

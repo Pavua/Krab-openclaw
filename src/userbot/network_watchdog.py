@@ -134,9 +134,38 @@ async def _probe_telegram_session_alive(client: object, *, timeout_sec: float = 
         return False
 
 
+async def _probe_updates_flow_alive(
+    owner: object,
+    *,
+    settle_sec: float = 30.0,
+) -> bool:
+    """Wave 39-D: True если update_id двигался за settle_sec.
+
+    Детектит split-brain: invoke alive + updates_subscriber dead.
+    GetUsers работает (heartbeat success), но реальные Telegram updates
+    не приходят → _last_seen_update_id заморожен.
+
+    ``owner`` должен иметь атрибут ``_last_seen_update_id`` (int).
+    Вынесено на уровень модуля (не метод класса) для удобства тестирования.
+    """
+    baseline = getattr(owner, "_last_seen_update_id", 0)
+    await asyncio.sleep(settle_sec)
+    current = getattr(owner, "_last_seen_update_id", 0)
+    alive = current > baseline
+    logger.debug(
+        "updates_flow_probe",
+        baseline=baseline,
+        current=current,
+        alive=alive,
+        settle_sec=settle_sec,
+    )
+    return alive
+
+
 class NetworkWatchdogMixin:
     """Wave 31-C: TCP-probe + петля мониторинга offline сети.
-    Wave 36-A: MTProto session probe + zombie-escalation."""
+    Wave 36-A: MTProto session probe + zombie-escalation.
+    Wave 39-D: true split-brain detection через update_id tracking."""
 
     @staticmethod
     async def _probe_telegram_dc(timeout: float = 5.0) -> bool:
@@ -405,6 +434,45 @@ class NetworkWatchdogMixin:
                                 )
                                 # os._exit обходит asyncio cleanup — launchd respawn через exit 78
                                 _launchd_exit_78()
+                        else:
+                            # Wave 39-D: invoke alive — но проверяем updates flow.
+                            # GetUsers прошёл (session_alive=True), но возможен
+                            # split-brain: invoke API работает, updates_subscriber мёртв.
+                            # Измеряем движение _last_seen_update_id за ~30с.
+                            # Settle < check_interval, чтобы не блокировать петлю надолго.
+                            _split_settle = min(30.0, check_interval * 0.5)
+                            updates_alive = await _probe_updates_flow_alive(
+                                self, settle_sec=_split_settle
+                            )
+                            if not updates_alive:
+                                logger.warning(
+                                    "telegram_split_brain_detected",
+                                    silence_sec=round(silence_sec, 1),
+                                    settle_sec=_split_settle,
+                                    last_seen_update_id=getattr(self, "_last_seen_update_id", 0),
+                                )
+                                # Пробуем graceful reconnect первым.
+                                reconnected = False
+                                if self.client:
+                                    reconnected = await self._try_reconnect_pyrofork(self.client)
+                                if reconnected:
+                                    self._last_telegram_event_ts = time.time()
+                                    logger.info("split_brain_resolved_via_reconnect")
+                                    _consecutive_zombie_failures = 0
+                                else:
+                                    logger.error(
+                                        "split_brain_escalation",
+                                        action="process_exit_for_launchd_respawn",
+                                    )
+                                    try:
+                                        await self._send_proactive_watch_alert(
+                                            "🧠 **Krab: split-brain сессия** — invoke alive, "
+                                            "но updates_subscriber мёртв.\n"
+                                            "Graceful reconnect не помог → перезапуск процесса."
+                                        )
+                                    except Exception:  # noqa: BLE001
+                                        pass
+                                    _launchd_exit_78()
                     else:
                         # Тишина меньше zombie-порога — просто тихий час
                         _consecutive_zombie_failures = 0
