@@ -68,6 +68,54 @@ venv/bin/python scripts/agent_tools/krab_run_command.py --command "!swarm teams"
    результат вернётся в Telegram, не в JSON.
 4. Логи всех запусков: `tail -50 /tmp/krab_agent_tools.log`.
 
+### 5. `krab_browser.py` (Wave 44-T-browser-profile)
+
+Bash-вызываемый Chrome через Playwright. Подключается к running Chrome
+по CDP (`http://127.0.0.1:9222`) — все логины pavua (Google, GitHub,
+Telegram Web и т.д.) доступны. Если Chrome не запущен с
+`--remote-debugging-port=9222` — fallback на изолированный профиль
+`/tmp/krab_chrome_profile_isolated` (без логинов).
+
+```bash
+# Открыть страницу
+venv/bin/python scripts/agent_tools/krab_browser.py open \
+    --url https://github.com
+# {"ok": true, "title": "GitHub", "final_url": "...", ...}
+
+# Скриншот (валидируется через Wave 44-Q image_validator)
+venv/bin/python scripts/agent_tools/krab_browser.py screenshot \
+    --url https://example.com --output /tmp/x.png --full-page
+
+# Извлечь текст
+venv/bin/python scripts/agent_tools/krab_browser.py extract \
+    --url https://news.ycombinator.com --selector ".titleline"
+
+# Клик по элементу
+venv/bin/python scripts/agent_tools/krab_browser.py click \
+    --url https://example.com --selector "button.submit"
+
+# Ввод в input + submit
+venv/bin/python scripts/agent_tools/krab_browser.py type \
+    --url https://google.com --selector "textarea[name=q]" \
+    --text "Krab agent" --submit
+
+# JS execution в DOM (XSS-risk: requires --owner-token)
+venv/bin/python scripts/agent_tools/krab_browser.py js_run \
+    --url https://example.com --js "document.title" \
+    --owner-token "$(cat ~/.openclaw/krab_runtime_state/owner_confirm.token)"
+```
+
+**Hard-block hostlist** (HARD BLOCK при navigation):
+- Banks: `paypal.com`, `chase.com`, `bbva.com`, `caixabank.es`,
+  `revolut.com`, `wise.com`, `n26.com`, `santander.com`, ...
+- Crypto exchanges: `binance.com`, `coinbase.com`, `kraken.com`, `bybit.com`, ...
+- Government/tax: `*.gov`, `irs.gov`, `agenciatributaria*`
+
+Override: `--allow-financial --owner-token <token>` (token из
+`~/.openclaw/krab_runtime_state/owner_confirm.token`).
+
+`js_run` всегда требует валидный `--owner-token`.
+
 ## Pyrogram session contention
 
 Скрипты открывают `kraab.session` в `no_updates=True` режиме. Параллельный
