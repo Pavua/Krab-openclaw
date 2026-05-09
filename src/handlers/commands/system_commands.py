@@ -2315,6 +2315,7 @@ def _parse_catchup_args(raw: str) -> tuple[str, int | None, int | None]:
         return ("default", None, None)
 
     first = tokens[0].lower()
+    lookback: int | None
     if first == "here":
         if len(tokens) == 1:
             return ("here", None, None)
@@ -2337,7 +2338,7 @@ def _parse_catchup_args(raw: str) -> tuple[str, int | None, int | None]:
 
     if is_chat_id:
         chat_id = first_int
-        lookback: int | None = None
+        lookback = None
         if len(tokens) >= 2:
             lookback = int(tokens[1])
             if lookback <= 0:
