@@ -147,3 +147,41 @@ url = "https://mcp.cloudflare.com/sse"
 required_env = ["CLOUDFLARE_API_TOKEN"]
 [cloudflare.headers]
 Authorization = "Bearer ${CLOUDFLARE_API_TOKEN}"
+
+# ---------------------------------------------------------------------------
+# Local custom MCPs из ~/Antigravity_AGENTS/ (Wave 45-F MCP expansion)
+# ---------------------------------------------------------------------------
+
+[tor-full]
+description = "Полноценный Tor MCP — circuit/identity/dark-web fetch (25 tools)"
+transport = "stdio"
+command = "/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python"
+args = ["/Users/pablito/Antigravity_AGENTS/tor-mcp/server.py"]
+required_env = []
+notes = "Зарегистрирован в OpenClaw как `tor-full`. Перекрывает функции `krab-tor` (legacy 4-tool subset) — рассмотреть deprecation `krab-tor` после 7 дней наблюдения."
+
+[osint-tools]
+description = "OSINT свёрстка: sherlock + holehe + maigret + theharvester (7 tools)"
+transport = "stdio"
+command = "/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python"
+args = ["/Users/pablito/Antigravity_AGENTS/osint-tools-mcp-server/src/osint_tools_mcp_server.py"]
+required_env = []
+notes = "Зарегистрирован в OpenClaw как `osint-tools`. Deps установлены в Krab venv (Wave 45-F). networkx понижен 3.6→2.8 ради maigret/pyvis (без impact на Krab src)."
+
+[hive-crypto]
+description = "Hive Intelligence — crypto/blockchain market data (376 tools)"
+transport = "stdio"
+command = "npx"
+args = ["-y", "hive-intelligence"]
+required_env = ["HIVE_API_KEY"]
+[hive-crypto.headers]
+Authorization = "Bearer ${HIVE_API_KEY}"
+notes = "DEFERRED: ожидает HIVE_API_KEY (см. https://hiveintelligence.xyz). После получения ключа активировать через --add-all-with-tokens."
+
+[hexstrike-ai]
+description = "Offensive security toolkit — recon/exploit/CTF (151 tools)"
+transport = "stdio"
+command = "/path/to/hexstrike-venv/bin/python"
+args = ["/Users/pablito/Antigravity_AGENTS/hexstrike-ai/hexstrike_mcp.py"]
+required_env = []
+notes = "DEFERRED: HIGH RISK — offensive security tools (nmap/sqlmap/metasploit-grade). Требует isolated venv + ACL gate + owner approval перед регистрацией. НЕ активировать через --add-all-with-tokens."
