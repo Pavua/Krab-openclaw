@@ -578,6 +578,16 @@ class KraabUserbot(
         async def wrap_chatpolicy(c, m):
             await run_cmd(handle_chatpolicy, m)
 
+        # Wave 39-B: !proactive — управление proactive event detection per chat.
+        @self.client.on_message(
+            filters.command("proactive", prefixes=prefixes) & _make_command_filter("proactive"),
+            group=-1,
+        )
+        async def wrap_proactive(c, m):
+            from .handlers.commands.proactive import handle_proactive  # noqa: PLC0415
+
+            await run_cmd(handle_proactive, m)
+
         @self.client.on_message(
             filters.command("block", prefixes=prefixes) & _make_command_filter("block"), group=-1
         )
@@ -2508,6 +2518,57 @@ class KraabUserbot(
                         decision_path=smart_trigger_result.decision_path,
                         confidence=smart_trigger_result.confidence,
                     )
+
+                    # Wave 39-B: proactive event dispatch — ТОЛЬКО если smart
+                    # trigger сказал NO. Feature gated через
+                    # KRAB_PROACTIVE_ENABLED env var (default 0 → noop).
+                    # Проверяет 8 gate'ов (global / opt-in / quota / burst /
+                    # backoff). При should_respond=True bumps has_implicit_trigger
+                    # → дальше идёт стандартный LLM flow.
+                    if not has_implicit_trigger:
+                        try:
+                            from .core.feedback_tracker import (  # noqa: PLC0415
+                                get_tracker as _get_proactive_tracker,
+                            )
+                            from .core.proactive_dispatcher import (  # noqa: PLC0415
+                                ProactiveDispatcher,
+                            )
+
+                            # Singleton lazy init на bridge instance.
+                            if not hasattr(self, "_proactive_dispatcher"):
+                                self._proactive_dispatcher = ProactiveDispatcher(
+                                    policy_store=_get_policy_store(),
+                                    feedback_tracker=_get_proactive_tracker(),
+                                )
+
+                            proactive_decision = self._proactive_dispatcher.dispatch_sync(
+                                message=message,
+                                chat_id=str(chat_id),
+                                existing_trigger_decision_was_none=True,
+                            )
+                            if proactive_decision.should_respond:
+                                has_implicit_trigger = True
+                                logger.info(
+                                    "proactive_event_dispatched",
+                                    chat_id=str(chat_id),
+                                    event_type=proactive_decision.event_type,
+                                    reason=proactive_decision.reason,
+                                )
+                            elif proactive_decision.event_type != "none":
+                                # Event обнаружен но gate сказал skip — debug-level
+                                # для observability без spam.
+                                logger.debug(
+                                    "proactive_event_skipped",
+                                    chat_id=str(chat_id),
+                                    event_type=proactive_decision.event_type,
+                                    reason=proactive_decision.reason,
+                                )
+                        except Exception as _proactive_exc:  # noqa: BLE001
+                            logger.warning(
+                                "proactive_dispatch_failed",
+                                chat_id=str(chat_id),
+                                error=str(_proactive_exc)[:200],
+                            )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "smart_trigger_failed",

@@ -16,6 +16,7 @@ inbox_state.json / chat_filters.json).
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -28,6 +29,22 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 _STORE_PATH = Path.home() / ".openclaw" / "krab_runtime_state" / "chat_response_policies.json"
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Читает bool из env: '1'/'true' → True, '0'/'false' → False, иначе default."""
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in ("1", "true", "yes"):
+        return True
+    if raw in ("0", "false", "no"):
+        return False
+    return default
+
+
+# Дефолты proactive-флагов (читаются один раз при импорте модуля)
+_PROACTIVE_JOINS_DEFAULT: bool = _env_bool("KRAB_PROACTIVE_JOINS_DEFAULT", default=True)
+_PROACTIVE_MEDIA_DEFAULT: bool = _env_bool("KRAB_PROACTIVE_MEDIA_DEFAULT", default=False)
+_PROACTIVE_AI_DEFAULT: bool = _env_bool("KRAB_PROACTIVE_AI_DEFAULT", default=False)
 
 # Авто-подстройка
 _NEGATIVE_WINDOW_SEC = 24 * 3600
@@ -71,6 +88,10 @@ class ChatResponsePolicy:
     notes: str = ""
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+    # Proactive event detection флаги (Wave 39-B-2)
+    proactive_joins: bool = field(default_factory=lambda: _PROACTIVE_JOINS_DEFAULT)
+    proactive_media: bool = field(default_factory=lambda: _PROACTIVE_MEDIA_DEFAULT)
+    proactive_ai: bool = field(default_factory=lambda: _PROACTIVE_AI_DEFAULT)
 
     def effective_threshold(self) -> float:
         if self.threshold_override is not None:
@@ -89,6 +110,17 @@ class ChatResponsePolicy:
             mode = ChatMode(mode_raw) if not isinstance(mode_raw, ChatMode) else mode_raw
         except ValueError:
             mode = ChatMode.NORMAL
+
+        # Backward-compat: старые JSON без proactive-полей → ENV-дефолты
+        _sentinel = object()
+        joins_raw = data.get("proactive_joins", _sentinel)
+        media_raw = data.get("proactive_media", _sentinel)
+        ai_raw = data.get("proactive_ai", _sentinel)
+
+        proactive_joins = _PROACTIVE_JOINS_DEFAULT if joins_raw is _sentinel else bool(joins_raw)
+        proactive_media = _PROACTIVE_MEDIA_DEFAULT if media_raw is _sentinel else bool(media_raw)
+        proactive_ai = _PROACTIVE_AI_DEFAULT if ai_raw is _sentinel else bool(ai_raw)
+
         return cls(
             chat_id=str(data["chat_id"]),
             mode=mode,
@@ -103,6 +135,9 @@ class ChatResponsePolicy:
             notes=str(data.get("notes") or ""),
             created_at=float(data.get("created_at") or time.time()),
             updated_at=float(data.get("updated_at") or time.time()),
+            proactive_joins=proactive_joins,
+            proactive_media=proactive_media,
+            proactive_ai=proactive_ai,
         )
 
 
