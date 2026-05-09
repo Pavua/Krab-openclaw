@@ -110,3 +110,71 @@ def test_logging_integration_constants_match_intent() -> None:
     """Sanity: убеждаемся что logging.INFO/ERROR — стабильные int-константы."""
     assert logging.INFO == 20
     assert logging.ERROR == 40
+
+
+# ─── Wave 43-Z fixes (09.05.2026) ────────────────────────────────────────────
+
+
+def test_before_send_drops_pyrogram_streamreader_race() -> None:
+    """PYTHON-FASTAPI-4T/4S: pyrogram concurrent read() RuntimeError → дропается как benign."""
+    from src.bootstrap.sentry_init import _before_send, _reset_dedupe_state_for_tests
+
+    _reset_dedupe_state_for_tests()
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "RuntimeError",
+                    "value": "read() called while another coroutine is already waiting for incoming data",
+                    "stacktrace": {"frames": []},
+                }
+            ]
+        }
+    }
+    assert _before_send(event, {}) is None, "pyrogram StreamReader race должна быть benign"
+
+
+def test_before_send_drops_cancelled_error_in_logentry_message() -> None:
+    """PYTHON-FASTAPI-Z: uvicorn.error logger.error('Traceback...CancelledError') → дропается при shutdown."""
+    from src.bootstrap.sentry_init import _before_send, _reset_dedupe_state_for_tests
+
+    _reset_dedupe_state_for_tests()
+    # Событие без exception block — только message с трейсбеком содержащим CancelledError
+    # logger = uvicorn.error → _is_shutdown_cancelled_error fast path 2 вернёт True
+    event = {
+        "logger": "uvicorn.error",
+        "message": (
+            "Traceback (most recent call last):\n"
+            "  File '...asyncio/tasks.py', ...\n"
+            "asyncio.exceptions.CancelledError\n"
+        ),
+    }
+    assert _before_send(event, {}) is None, "uvicorn.error CancelledError logentry должна дропаться"
+
+
+def test_before_send_keeps_cancelled_error_in_non_uvicorn_message() -> None:
+    """CancelledError в message от НЕ-uvicorn logger — НЕ дропается (может быть реальный timeout)."""
+    from src.bootstrap.sentry_init import _before_send, _reset_dedupe_state_for_tests
+
+    _reset_dedupe_state_for_tests()
+    event = {
+        "logger": "src.openclaw_client",
+        "message": "LLM call cancelled: asyncio.exceptions.CancelledError",
+    }
+    # Не uvicorn → _is_shutdown_cancelled_error вернёт False → событие должно пройти
+    result = _before_send(event, {})
+    assert result is not None, "CancelledError от non-uvicorn logger не должна дропаться"
+
+
+def test_before_send_drops_cancelled_error_in_logentry_dict() -> None:
+    """PYTHON-FASTAPI-Z step 3b: CancelledError в logentry dict (LoggingIntegration формат)."""
+    from src.bootstrap.sentry_init import _before_send, _reset_dedupe_state_for_tests
+
+    _reset_dedupe_state_for_tests()
+    event = {
+        "logger": "uvicorn.lifespan",
+        "logentry": {
+            "message": "Traceback...asyncio.exceptions.CancelledError",
+        },
+    }
+    assert _before_send(event, {}) is None, "uvicorn.lifespan CancelledError logentry dict должна дропаться"

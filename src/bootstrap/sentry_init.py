@@ -207,6 +207,14 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     # to cloud routing on Telegram queries (telegram_query_detector).
     # Non-zero exit handled by retry layer.
     "cli_subprocess_nonzero_exit",
+    # Wave 43-Z (09.05.2026): pyrogram-internal TCP StreamReader concurrency race.
+    # Session.restart() вызывается через self.loop.create_task(self.restart()) из
+    # handle_packet при ConnectionResetError. Несколько конкурентных задач пытаются
+    # restart одновременно → два recv_worker() читают из одного StreamReader.
+    # Это pyrogram-internal bug (pyrofork), не наш код. Krab обрабатывает через
+    # _stop_swarm_team_clients / reserve_bot stop с per-team try/except.
+    # Sentry issues: PYTHON-FASTAPI-4T (5 events) + PYTHON-FASTAPI-4S (3 events).
+    "read() called while another coroutine is already waiting for incoming data",
 )
 
 
@@ -355,9 +363,30 @@ def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] 
         # 3. logentry / message — на случай если warning попал через logging integration
         message = event.get("message")
         if isinstance(message, str):
+            # Wave 43-Z (09.05.2026): LoggingIntegration пишет uvicorn.error logger.error()
+            # как logentry event без exception block. CancelledError от shutdown попадает
+            # в message в виде "...asyncio.exceptions.CancelledError" в полном traceback.
+            # _is_shutdown_cancelled_error не вызывался для logentry-path — root cause
+            # PYTHON-FASTAPI-Z (390 events). Фиксируем: если CancelledError в тексте
+            # и logger — uvicorn → применяем frame-aware narrowing.
+            if "CancelledError" in message:
+                if _is_shutdown_cancelled_error(event, hint):
+                    return None
             for marker in _BENIGN_ERROR_MARKERS:
                 if marker in message:
                     return None
+        # 3b. logentry структурный — Sentry LoggingIntegration может положить message
+        #     в event["logentry"]["message"] (dict) вместо event["message"] (str).
+        logentry = event.get("logentry") or {}
+        if isinstance(logentry, dict):
+            le_msg = str(logentry.get("message") or "")
+            if le_msg:
+                if "CancelledError" in le_msg:
+                    if _is_shutdown_cancelled_error(event, hint):
+                        return None
+                for marker in _BENIGN_ERROR_MARKERS:
+                    if marker in le_msg:
+                        return None
     except Exception:  # noqa: BLE001
         # Никогда не ломаем error reporting из-за бага в фильтре.
         return event
