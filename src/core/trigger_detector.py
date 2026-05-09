@@ -87,6 +87,35 @@ _IMPLICIT_QUESTION_PATTERNS: list[re.Pattern[str]] = [
 # Базовый вес вопроса в воздух (40 % — ниже порога «один на один»)
 _IMPLICIT_QUESTION_SCORE = 0.4
 
+# Wave 40-T: ironic mentions — упоминание Краба в риторическом вопросе.
+# Примеры: "ну где же Краб?", "куда пропал Краб?", "что молчит Краб?",
+# "почему Краб не отвечает?". Score = 0.7 — выше threshold 0.6, чтобы
+# проходить smart routing Stage 3 regex_high → respond.
+_IRONIC_KRAB_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"\b(?:ну\s+)?где\s+(?:же\s+)?(?:краб|kraab|нагато)\b", re.IGNORECASE),
+    re.compile(
+        r"\bкуда\s+(?:пропал|делся|подевал[ас]я|исчез|спрятал[ас]я)\s+(?:краб|kraab)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bчто\s+молч\w+\s+(?:краб|kraab)\b", re.IGNORECASE),
+    re.compile(
+        r"\bпочему\s+(?:краб|kraab)\s+(?:не\s+)?(?:отвеч\w+|молч\w+|спит)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bкраб\s+(?:где|куда|почему\s+молч)\b", re.IGNORECASE),
+]
+
+# Compound mentions: Краб упомянут рядом с @username — расширяет explicit
+# detection на случаи где Krab не main subject но part of multi-target call.
+# Pattern допускает Krab + @user в любом порядке в пределах 50 символов.
+_COMPOUND_MENTION_PATTERN = re.compile(
+    r"(?:@[A-Za-z][A-Za-z0-9_]{2,}.{0,50}?\b(?:краб|kraab)\b)"
+    r"|(?:\b(?:краб|kraab)\b.{0,50}?@[A-Za-z][A-Za-z0-9_]{2,})",
+    re.IGNORECASE,
+)
+
+_IRONIC_KRAB_SCORE = 0.7
+
 # Generic AI-алиасы: «бот», «ии», «нейронка» и т.п. рядом с вопросом
 _GENERIC_AI_PATTERN = re.compile(
     r"\b(ии|бот|ai|assistant|ассистент|нейронка|помощник|нейросеть|chatgpt|gpt)\b",
@@ -298,6 +327,26 @@ def detect_implicit_mention(
                 _IMPLICIT_QUESTION_CTX_SCORE,
                 "implicit_question_ctx",
             )
+
+    # 2.0. Wave 40-T: ironic Krab mentions ("ну где же Краб?", "куда пропал Краб")
+    # — high score, чтобы пройти smart routing threshold даже без hard gate.
+    for pat in _IRONIC_KRAB_PATTERNS:
+        m = pat.search(text_s)
+        if m:
+            return TriggerResult(
+                TriggerType.IMPLICIT_QUESTION,
+                _IRONIC_KRAB_SCORE,
+                f"ironic:{m.group(0)}",
+            )
+
+    # 2.1. Wave 40-T: compound mentions — Краб + @username в одном сообщении.
+    cm = _COMPOUND_MENTION_PATTERN.search(text_s)
+    if cm:
+        return TriggerResult(
+            TriggerType.IMPLICIT_QUESTION,
+            _IRONIC_KRAB_SCORE,
+            f"compound:{cm.group(0)[:60]}",
+        )
 
     # 2. Implicit question-at-AI
     for pat in _IMPLICIT_QUESTION_PATTERNS:

@@ -2915,6 +2915,10 @@ async def calendar_create_event(params: _CalendarCreateInput) -> str:
 _SENTRY_API_BASE = "https://de.sentry.io/api/0"
 _SENTRY_ORG = os.getenv("SENTRY_ORG_SLUG", "po-zm")
 _DEFAULT_SENTRY_PROJECTS = ("python-fastapi", "krab-ear-agent", "krab-ear-backend")
+# User-Agent предотвращает Cloudflare WAF 400 на long-lived connections (Wave 40-S)
+_SENTRY_UA = "krab-mcp/1.0"
+# Задержки retry (сек) для 4xx/5xx: 3 попытки c экспоненциальным backoff
+_SENTRY_RETRY_DELAYS = (1.0, 2.0, 4.0)
 _KRAB_LAUNCHD_LOG = _PROJECT_ROOT / "logs" / "krab_launchd.out.log"
 _E2E_SMOKE_SCRIPT = _PROJECT_ROOT / "scripts" / "e2e_mcp_smoke.py"
 _START_LAUNCHER = Path("/Users/pablito/Antigravity_AGENTS/new start_krab.command")
@@ -2972,13 +2976,39 @@ class _DeployVerifyInput(BaseModel):
 async def _sentry_get_issues(
     client: httpx.AsyncClient, project: str, stats_period: str, limit: int, token: str
 ) -> tuple[int, list[dict[str, Any]]]:
+    """GET /issues/ с User-Agent и exponential backoff retry на 4xx/5xx (Wave 40-S)."""
     url = f"{_SENTRY_API_BASE}/projects/{_SENTRY_ORG}/{project}/issues/"
     params = {"statsPeriod": stats_period, "query": "is:unresolved", "limit": str(limit)}
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = await client.get(url, params=params, headers=headers, timeout=15.0)
-    resp.raise_for_status()
-    data = resp.json() or []
-    return resp.status_code, data
+    # User-Agent обязателен — без него Cloudflare WAF отдаёт 400 на long-lived соединениях
+    headers = {"Authorization": f"Bearer {token}", "User-Agent": _SENTRY_UA}
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate((*_SENTRY_RETRY_DELAYS, None)):
+        try:
+            resp = await client.get(url, params=params, headers=headers, timeout=15.0)
+            if resp.status_code < 400:
+                # 2xx/3xx — успех, не retry'им
+                data = resp.json() or []
+                return resp.status_code, data
+            # 4xx/5xx — поднимаем исключение и смотрим, есть ли ещё попытки
+            last_exc = httpx.HTTPStatusError(
+                f"HTTP {resp.status_code}", request=resp.request, response=resp
+            )
+        except httpx.HTTPStatusError as exc:
+            last_exc = exc
+        except Exception as exc:  # noqa: BLE001
+            # Сетевые ошибки тоже retry'им
+            last_exc = exc
+        if delay is None:
+            break  # исчерпали все попытки
+        _dev_logger.warning(
+            "sentry GET %s attempt %d failed (%s), retry in %.1fs",
+            project,
+            attempt + 1,
+            last_exc,
+            delay,
+        )
+        await asyncio.sleep(delay)
+    raise last_exc  # type: ignore[misc]
 
 
 @mcp.tool(
@@ -3086,7 +3116,8 @@ async def krab_sentry_resolve(params: _SentryResolveInput) -> str:
     target = {sid.strip().upper(): None for sid in params.shortIds if sid.strip()}
     resolved: list[dict[str, str]] = []
     failed: list[dict[str, str]] = []
-    headers = {"Authorization": f"Bearer {token}"}
+    # User-Agent обязателен — без него Cloudflare WAF отдаёт 400 на long-lived соединениях (Wave 40-S)
+    headers = {"Authorization": f"Bearer {token}", "User-Agent": _SENTRY_UA}
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -3122,27 +3153,43 @@ async def krab_sentry_resolve(params: _SentryResolveInput) -> str:
             for proj, ids in by_proj.items():
                 url = f"{_SENTRY_API_BASE}/projects/{_SENTRY_ORG}/{proj}/issues/"
                 query = [("id", i) for i in ids]
-                try:
-                    resp = await client.put(
-                        url,
-                        params=query,
-                        headers=headers,
-                        json={"status": "resolved"},
-                    )
-                    if 200 <= resp.status_code < 300:
-                        for i in ids:
-                            # найдём shortId обратно
-                            sid = next(
-                                (s for s, m in target.items() if m and m.get("id") == i),
-                                i,
-                            )
-                            resolved.append({"shortId": sid, "project": proj})
-                    else:
-                        failed.append(
-                            {"project": proj, "error": f"HTTP {resp.status_code}", "ids": ids}
+                # Exponential backoff retry на 4xx/5xx (Wave 40-S)
+                put_success = False
+                put_exc: Exception | None = None
+                for attempt, delay in enumerate((*_SENTRY_RETRY_DELAYS, None)):
+                    try:
+                        resp = await client.put(
+                            url,
+                            params=query,
+                            headers=headers,
+                            json={"status": "resolved"},
                         )
-                except Exception as exc:  # noqa: BLE001
-                    failed.append({"project": proj, "error": str(exc), "ids": ids})
+                        if 200 <= resp.status_code < 300:
+                            put_success = True
+                            break
+                        put_exc = Exception(f"HTTP {resp.status_code}")
+                    except Exception as exc:  # noqa: BLE001
+                        put_exc = exc
+                    if delay is None:
+                        break
+                    _dev_logger.warning(
+                        "sentry PUT %s attempt %d failed (%s), retry in %.1fs",
+                        proj,
+                        attempt + 1,
+                        put_exc,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                if put_success:
+                    for i in ids:
+                        # найдём shortId обратно
+                        sid = next(
+                            (s for s, m in target.items() if m and m.get("id") == i),
+                            i,
+                        )
+                        resolved.append({"shortId": sid, "project": proj})
+                else:
+                    failed.append({"project": proj, "error": str(put_exc), "ids": ids})
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
 
@@ -3242,9 +3289,7 @@ async def krab_run_e2e(params: _RunE2EInput) -> str:
     # Если Краб не поднят — e2e смок выдаёт exit_code=2 и лог "Krab not healthy".
     # Подсказываем оператору как это починить.
     if result.returncode == 2 or "not healthy" in output.lower():
-        payload["suggestion"] = (
-            "Start Krab via 'new start_krab.command' и повтори запрос"
-        )
+        payload["suggestion"] = "Start Krab via 'new start_krab.command' и повтори запрос"
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
