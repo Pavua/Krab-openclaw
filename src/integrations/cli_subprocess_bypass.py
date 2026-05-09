@@ -26,10 +26,167 @@ import time
 from typing import Any
 
 from ..core.logger import get_logger
+from ..userbot.llm_retry import LLMRetryableError
 from ._bypass_perf import record_bypass_call
 from ._bypass_sentry import add_bypass_breadcrumb
+from ._observability_log import record_agent_run
 
 logger = get_logger(__name__)
+
+
+def _get_idle_timeout_sec() -> float:
+    """Wave 44-W: idle gap threshold перед kill subprocess'a."""
+    raw = os.environ.get("KRAB_LLM_IDLE_TIMEOUT_SEC", "180")
+    try:
+        return max(1.0, float(raw))
+    except (TypeError, ValueError):
+        return 180.0
+
+
+def _get_codex_hard_cap_sec() -> float:
+    """Wave 44-W: hard cap fallback. 0 = disabled."""
+    raw = os.environ.get("KRAB_CODEX_AGENT_HARD_CAP_SEC", "7200")
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 7200.0
+
+
+async def _stream_with_stagnation(
+    proc: Any,
+    *,
+    idle_timeout_sec: float,
+    hard_cap_sec: float,
+    quota_check: bool = False,
+) -> tuple[int | None, bytes, bytes]:
+    """Wave 44-W: stream stdout/stderr line-by-line tracking last_output time.
+
+    Kill при idle gap > idle_timeout_sec → LLMRetryableError("stagnation_timeout").
+    Kill при total elapsed > hard_cap_sec (если > 0) → LLMRetryableError("hard_cap_timeout").
+    Любой byte stdout или stderr resets idle clock.
+
+    quota_check: для codex — early bail if stderr matches quota patterns
+        (Wave 44-V quota detection приоритет over stagnation).
+
+    Tests: если ``proc.stdout.readline`` не возвращает awaitable (mock без AsyncMock),
+    fallback на ``proc.communicate()`` с asyncio.wait_for под hard_cap или idle*4.
+    """
+    # Tests-friendly fallback: если readline не awaitable — используем communicate
+    is_streaming = True
+    try:
+        _readline_test = proc.stdout.readline()
+        if asyncio.iscoroutine(_readline_test):
+            _readline_test.close()
+        elif not hasattr(_readline_test, "__await__"):
+            is_streaming = False
+    except Exception:  # noqa: BLE001
+        is_streaming = False
+
+    if not is_streaming:
+        timeout = hard_cap_sec if hard_cap_sec > 0 else max(idle_timeout_sec * 4, 60.0)
+        try:
+            stdout_data, stderr_data = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        return proc.returncode, stdout_data, stderr_data
+
+    start = time.time()
+    last_output = start
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    quota_hit = False
+
+    async def _read_stream(stream: Any, chunks: list[bytes], is_stderr: bool) -> None:
+        nonlocal last_output, quota_hit
+        while True:
+            try:
+                line = await stream.readline()
+            except Exception:  # noqa: BLE001
+                break
+            if not line:
+                break
+            chunks.append(line)
+            last_output = time.time()
+            if quota_check and is_stderr:
+                try:
+                    from .codex_quota_state import is_quota_error
+
+                    accumulated = b"".join(chunks).decode("utf-8", errors="ignore")
+                    if is_quota_error(stderr=accumulated):
+                        quota_hit = True
+                        break
+                except Exception:  # noqa: BLE001
+                    pass
+
+    out_task = asyncio.create_task(_read_stream(proc.stdout, stdout_chunks, False))
+    err_task = asyncio.create_task(_read_stream(proc.stderr, stderr_chunks, True))
+
+    try:
+        while True:
+            now = time.time()
+            elapsed_total = now - start
+            elapsed_idle = now - last_output
+
+            if proc.returncode is not None or (out_task.done() and err_task.done()):
+                break
+
+            if quota_hit:
+                break
+
+            if elapsed_idle > idle_timeout_sec:
+                logger.warning(
+                    "codex_stagnation_killed",
+                    idle_sec=round(elapsed_idle, 1),
+                    total_sec=round(elapsed_total, 1),
+                    idle_threshold=idle_timeout_sec,
+                )
+                try:
+                    proc.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+                raise LLMRetryableError(
+                    f"codex stagnation: no output for {elapsed_idle:.0f}s",
+                    error_text=f"stagnation_timeout idle={elapsed_idle:.0f}s",
+                )
+
+            if hard_cap_sec > 0 and elapsed_total > hard_cap_sec:
+                logger.warning(
+                    "codex_hard_cap_killed",
+                    total_sec=round(elapsed_total, 1),
+                    hard_cap=hard_cap_sec,
+                )
+                try:
+                    proc.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+                raise LLMRetryableError(
+                    f"codex hard cap: total {elapsed_total:.0f}s > {hard_cap_sec}s",
+                    error_text=f"hard_cap_timeout total={elapsed_total:.0f}s",
+                )
+
+            await asyncio.sleep(min(5.0, max(0.5, idle_timeout_sec / 10)))
+    finally:
+        for task in (out_task, err_task):
+            if not task.done():
+                try:
+                    await asyncio.wait_for(task, timeout=2.0)
+                except Exception:  # noqa: BLE001
+                    task.cancel()
+        if proc.returncode is None:
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+            except Exception:  # noqa: BLE001
+                pass
+
+    return proc.returncode, b"".join(stdout_chunks), b"".join(stderr_chunks)
 
 
 # Маппинг префиксов провайдеров на имена CLI-бинарей
@@ -150,22 +307,35 @@ async def _run_codex_subprocess_once(
         stderr=asyncio.subprocess.PIPE,
         env=_env,
     )
+    # Wave 44-W: streaming reader с stagnation detection.
+    # idle_timeout — primary trigger (быстрый kill зависшего codex);
+    # hard_cap_sec — fallback (для случаев когда codex эмитит byte раз в N сек).
+    # timeout_sec (legacy param) используется как hard_cap если он < codex_hard_cap,
+    # либо если codex_hard_cap отключён (=0). По умолчанию 7200s = 2 часа.
+    idle_timeout = _get_idle_timeout_sec()
+    codex_cap = _get_codex_hard_cap_sec()
+    if codex_cap == 0:
+        # Hard cap отключён → используем legacy timeout_sec как safety net
+        hard_cap = max(timeout_sec, 1.0)
+    else:
+        # Берём minimum чтобы не превышать caller's timeout_sec
+        hard_cap = min(codex_cap, max(timeout_sec, 1.0))
     try:
-        stdout_data, stderr_data = await asyncio.wait_for(
-            proc.communicate(),
-            timeout=timeout_sec,
+        returncode, stdout_data, stderr_data = await _stream_with_stagnation(
+            proc,
+            idle_timeout_sec=idle_timeout,
+            hard_cap_sec=hard_cap,
+            quota_check=True,
         )
     except asyncio.TimeoutError:
-        try:
-            proc.kill()
-            await proc.wait()
-        except Exception:  # noqa: BLE001
-            pass
         raise RuntimeError(f"CLI subprocess timeout после {timeout_sec}s: codex") from None
+    except LLMRetryableError:
+        # Wave 44-W: stagnation/hard_cap уже kill'нул proc, передаём наверх
+        raise
 
     stdout_text = stdout_data.decode("utf-8", errors="ignore")
     stderr_text = stderr_data.decode("utf-8", errors="ignore")
-    return proc.returncode, stdout_text, stderr_text
+    return returncode, stdout_text, stderr_text
 
 
 async def _complete_codex_with_account_rotation(
@@ -249,6 +419,12 @@ async def _complete_codex_with_account_rotation(
                     codex_home=codex_home,
                 )
             except RuntimeError as _exc:
+                _perf_error_type = type(_exc).__name__
+                _perf_error_message = str(_exc)[:300]
+                raise
+            except LLMRetryableError as _exc:
+                # Wave 44-W: stagnation/hard_cap → caller увидит retryable.
+                # НЕ помечаем account как exhausted (это codex hang, не quota).
                 _perf_error_type = type(_exc).__name__
                 _perf_error_message = str(_exc)[:300]
                 raise
@@ -353,15 +529,40 @@ async def _complete_codex_with_account_rotation(
         _perf_error_message = str(exc)[:300]
         raise
     finally:
+        _duration = time.time() - _perf_start
         record_bypass_call(
             kind="cli",
             model=full_model,
-            duration_sec=time.time() - _perf_start,
+            duration_sec=_duration,
             success=_perf_success,
             response_len=_perf_response_len,
             error_type=_perf_error_type,
             error_message=_perf_error_message,
         )
+        # Wave 44-U observability: telemetry для Owner panel /observability dashboard
+        try:
+            record_agent_run(
+                model=full_model,
+                kind="krab-bypass",
+                prompt_text=prompt_text,
+                response_text="",  # response не сохраняем тут — только excerpt в not-codex
+                started_at=_perf_start,
+                completed_at=time.time(),
+                duration_sec=_duration,
+                status="ok"
+                if _perf_success
+                else (
+                    "timeout"
+                    if _perf_error_type == "RuntimeError"
+                    and "timeout" in (_perf_error_message or "").lower()
+                    else "error"
+                ),
+                exit_code=None,
+                stderr_excerpt=_perf_error_message or "",
+                extra={"binary": "codex", "response_len": _perf_response_len},
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def complete_via_cli(
@@ -454,19 +655,18 @@ async def complete_via_cli(
             stderr=asyncio.subprocess.PIPE,
             env=_env,
         )
+        # Wave 44-W: streaming с stagnation detection и для gemini.
+        # idle_timeout — primary, hard_cap = timeout_sec (legacy contract сохраняется).
+        idle_timeout = _get_idle_timeout_sec()
         try:
-            stdout_data, stderr_data = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=timeout_sec,
+            returncode, stdout_data, stderr_data = await _stream_with_stagnation(
+                proc,
+                idle_timeout_sec=idle_timeout,
+                hard_cap_sec=max(timeout_sec, 1.0),
+                quota_check=False,
             )
+            # `returncode` matches proc.returncode after _stream_with_stagnation
         except asyncio.TimeoutError:
-            # Принудительно завершаем процесс при таймауте
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:  # noqa: BLE001
-                pass
-            # Breadcrumb: таймаут CLI subprocess (Wave 30-B)
             add_bypass_breadcrumb(
                 bypass_kind="cli",
                 event="timeout",
@@ -475,6 +675,15 @@ async def complete_via_cli(
                 level="warning",
             )
             raise RuntimeError(f"CLI subprocess timeout после {timeout_sec}s: {binary_name}")
+        except LLMRetryableError as _exc:
+            add_bypass_breadcrumb(
+                bypass_kind="cli",
+                event="stagnation",
+                model=model_id,
+                extra={"binary": binary_name, "reason": str(_exc)[:200]},
+                level="warning",
+            )
+            raise
 
         stderr_text = stderr_data.decode("utf-8", errors="ignore")[:500]
 
@@ -541,12 +750,41 @@ async def complete_via_cli(
         raise
     finally:
         # Wave 31-A: записываем latency в JSONL (graceful — не крашит bypass)
+        _duration = time.time() - _perf_start
         record_bypass_call(
             kind="cli",
             model=model,
-            duration_sec=time.time() - _perf_start,
+            duration_sec=_duration,
             success=_perf_success,
             response_len=_perf_response_len,
             error_type=_perf_error_type,
             error_message=_perf_error_message,
         )
+        # Wave 44-U observability: telemetry для Owner panel /observability dashboard
+        try:
+            _status = (
+                "ok"
+                if _perf_success
+                else (
+                    "timeout"
+                    if (
+                        _perf_error_type == "RuntimeError"
+                        and "timeout" in (_perf_error_message or "").lower()
+                    )
+                    else "error"
+                )
+            )
+            record_agent_run(
+                model=model,
+                kind="krab-bypass",
+                prompt_text=prompt_text,
+                response_text="",
+                started_at=_perf_start,
+                completed_at=time.time(),
+                duration_sec=_duration,
+                status=_status,
+                stderr_excerpt=_perf_error_message or "",
+                extra={"binary": binary_name, "response_len": _perf_response_len},
+            )
+        except Exception:  # noqa: BLE001
+            pass

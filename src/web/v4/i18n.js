@@ -32,7 +32,16 @@
         hub: 'Hub', chat: 'Chat', costs: 'Costs', inbox: 'Inbox',
         swarm: 'Swarm', translator: 'Translator', trans_short: 'Trans',
         ops: 'Ops', research: 'Research', settings: 'Settings', commands: 'Commands',
+        observability: 'Observability',
         notifications_title: 'Notifications'
+      },
+      observability: {
+        title: 'Observability — Agent Runs',
+        subtitle: 'Live and historical Krab CLI bypass agent runs (codex/gemini-cli).',
+        tab_all: 'All', tab_live: 'Live (10 min)', tab_completed: '24 hours', tab_errors: 'Errors',
+        refresh: 'Refresh', modal_title: 'Run Detail',
+        col_time: 'Time', col_chat: 'Chat', col_model: 'Model',
+        col_status: 'Status', col_duration: 'Duration', col_prompt: 'Prompt'
       },
       common: {
         connecting: 'Connecting…', updated: 'Updated', loading: 'Loading…',
@@ -563,7 +572,16 @@
         hub: 'Главная', chat: 'Чат', costs: 'Расходы', inbox: 'Входящие',
         swarm: 'Свёрм', translator: 'Переводчик', trans_short: 'Перев',
         ops: 'Операции', research: 'Поиск', settings: 'Настройки', commands: 'Команды',
+        observability: 'Observability',
         notifications_title: 'Уведомления'
+      },
+      observability: {
+        title: 'Observability — Agent Runs',
+        subtitle: 'Live и история runs Krab CLI bypass-агентов (codex/gemini-cli).',
+        tab_all: 'Все', tab_live: 'Live (10 мин)', tab_completed: '24 часа', tab_errors: 'Ошибки',
+        refresh: 'Обновить', modal_title: 'Детали запуска',
+        col_time: 'Время', col_chat: 'Чат', col_model: 'Модель',
+        col_status: 'Статус', col_duration: 'Длительность', col_prompt: 'Запрос'
       },
       common: {
         connecting: 'Подключение…', updated: 'Обновлено', loading: 'Загрузка…',

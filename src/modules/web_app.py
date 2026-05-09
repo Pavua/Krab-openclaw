@@ -8854,6 +8854,13 @@ class WebApp:
 
         self.app.include_router(_build_bypass_perf(self._make_router_context()))
 
+        # Wave 44-U: /api/observability/* — agent runs visibility
+        from .web_routers.observability_router import (
+            build_observability_router as _build_observability,
+        )
+
+        self.app.include_router(_build_observability(self._make_router_context()))
+
         # /api/swarm/{status,memory} перенесены в swarm_router (Wave ZZ, Session 26).
 
         # ── Browser Bridge API + Dedicated Chrome ───────────────────────────

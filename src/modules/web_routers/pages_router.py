@@ -190,6 +190,11 @@ def build_pages_router(ctx: RouterContext) -> APIRouter:
     async def commands_dashboard():
         return _v4_html_or_stub("commands.html", "<h1>Commands dashboard not ready</h1>")
 
+    @router.get("/observability", response_class=HTMLResponse)
+    async def observability_dashboard():
+        # Wave 44-U: Krab agent runs visibility dashboard.
+        return _v4_html_or_stub("observability.html", "<h1>Observability dashboard not ready</h1>")
+
     # ── /v4/* → 301 redirects to primary routes ───────────────────────
 
     @router.get("/v4/costs", response_class=HTMLResponse)
