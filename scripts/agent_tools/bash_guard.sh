@@ -164,54 +164,9 @@ block_check() {
         echo "defaults write security"
         return 0
     fi
-    # ==========================================================
-    # Wave 44-T-money-safety: финансовые/банковские jail-bars
-    # ==========================================================
-    # Payment processors — TRANSACTIONAL endpoints only
-    if [[ "$CMD" =~ (paypal\.com/(send|sendmoney|cgi-bin/webscr|checkout|donate)|venmo\.com/(payment|pay)|wise\.com/[a-z]+/transfer|revolut\.com/[a-z]+/transfer|cash\.app/\\$|zellepay\.com/[a-z]+/send|stripe\.com/v1/(charges|payment_intents|transfers)) ]]; then
-        echo "money: payment processor txn URL"
-        return 0
-    fi
-    # Bank TRANSACTIONAL endpoints
-    if [[ "$CMD" =~ https?://[^[:space:]\"\']*(chase\.com|bankofamerica\.com|citibank\.com|wellsfargo\.com|hsbc\.com|barclays\.co\.uk|santander\.com|bbva\.com|caixabank\.es|sabadell\.com|ing\.com|deutsche-bank\.de)[^[:space:]\"\']*(/transfer|/pay|/wire|/sendmoney|/billpay) ]]; then
-        echo "money: bank txn URL"
-        return 0
-    fi
-    # Browser navigation to ANY financial domain — block (interactive risk)
-    if [[ "$CMD" =~ (krab_browser|playwright|browser_tool|selenium|chromium|firefox|safari) ]] && \
-       [[ "$CMD" =~ (paypal\.com|venmo\.com|wise\.com|revolut\.com|cash\.app|zellepay\.com|chase\.com|bankofamerica\.com|citibank\.com|wellsfargo\.com|hsbc\.com|barclays\.co\.uk|santander\.com|bbva\.com|caixabank\.es|sabadell\.com|ing\.com|deutsche-bank\.de|binance\.com|coinbase\.com|kraken\.com|bybit\.com|okx\.com) ]]; then
-        echo "money: browser navigation to financial domain"
-        return 0
-    fi
-    # Generic banking patterns
-    if [[ "$CMD" =~ (\.bank\.com|/ibank|/e-banking|/online-banking|/wire-transfer|/billpay|/sendmoney|/checkout/pay) ]]; then
-        echo "money: banking pattern"
-        return 0
-    fi
-    # Transfer/pay paths in URLs (curl/wget heuristic)
-    if [[ "$CMD" =~ (curl|wget|http)[^|]*[[:space:]\"\']+https?://[^[:space:]\"\']*/(transfer|pay|checkout|wire)([/?\"\'[:space:]]|$) ]]; then
-        echo "money: /transfer or /pay URL"
-        return 0
-    fi
-    # Crypto exchange WRITE/order operations (read-only allowed, see below)
-    if [[ "$CMD" =~ (binance\.com/api/[^[:space:]]*order|coinbase\.com/(buy|sell|send)|kraken\.com/[^[:space:]]*(AddOrder|Withdraw)|bybit\.com/[^[:space:]]*order|ftx\.com|okx\.com/api/v5/trade/order|bitstamp\.net/api/v2/buy|kucoin\.com/api/v[0-9]+/orders) ]]; then
-        echo "money: crypto exchange write op"
-        return 0
-    fi
-    # Government/tax payment endpoints
-    if [[ "$CMD" =~ (irs\.gov/[^[:space:]]*payment|gov\.uk/pay|agenciatributaria\.es/[^[:space:]]*pago|/tax-return-submit) ]]; then
-        echo "money: gov/tax payment"
-        return 0
-    fi
-    # Money keywords (English + Russian) — semantic guard against
-    # "send 100 USD to ...", "transfer 5 ETH to ...", "buy X for Y"
-    shopt -s nocasematch
-    if [[ "$CMD" =~ (send|transfer|wire|переведи|отправь|купи|оплати)[[:space:]]+[0-9]+([,.][0-9]+)?[[:space:]]*(usd|eur|gbp|rub|usdt|usdc|btc|eth|sol|\$|€|£|₽) ]]; then
-        shopt -u nocasematch
-        echo "money: send-N-currency keyword pattern"
-        return 0
-    fi
-    shopt -u nocasematch
+    # Wave 44-T-money-safety RE-CATEGORIZED to confirm_check per owner choice
+    # (HARD BLOCK was too restrictive; owner_token allows override now).
+    # See confirm_check() below for money rules.
     return 1
 }
 
@@ -249,17 +204,60 @@ confirm_check() {
         return 0
     fi
     # ==========================================================
-    # Wave 44-T-money-safety: SOFT confirm для денежных keywords
+    # Wave 44-T-money-safety v2 (owner choice #1): CONFIRM tier instead of BLOCK
     # ==========================================================
-    # buy / purchase / order / subscribe / checkout (без явной валюты)
-    if [[ "$CMD" =~ (^|[[:space:]\"\'])(buy|purchase|subscribe[[:space:]]+to|order[[:space:]]+now|checkout)([[:space:]\"\']|$) ]]; then
-        echo "money: purchase/subscribe keyword (soft confirm)"
+    # Payment processor TRANSACTIONAL endpoints
+    if [[ "$CMD" =~ (paypal\.com/(send|sendmoney|cgi-bin/webscr|checkout|donate)|venmo\.com/(payment|pay)|wise\.com/[a-z]+/transfer|revolut\.com/[a-z]+/transfer|cash\.app/\\$|zellepay\.com/[a-z]+/send|stripe\.com/v1/(charges|payment_intents|transfers)) ]]; then
+        echo "money: payment processor txn URL (confirm)"
         return 0
     fi
-    # READ-ONLY access к финансовым доменам — только при наличии token
-    # (paypal.com/dashboard, my-bank.com и т.п. без /transfer-pattern)
+    # Bank TRANSACTIONAL endpoints
+    if [[ "$CMD" =~ https?://[^[:space:]\"\']*(chase\.com|bankofamerica\.com|citibank\.com|wellsfargo\.com|hsbc\.com|barclays\.co\.uk|santander\.com|bbva\.com|caixabank\.es|sabadell\.com|ing\.com|deutsche-bank\.de)[^[:space:]\"\']*(/transfer|/pay|/wire|/sendmoney|/billpay) ]]; then
+        echo "money: bank txn URL (confirm)"
+        return 0
+    fi
+    # Browser navigation to financial domains
+    if [[ "$CMD" =~ (krab_browser|playwright|browser_tool|selenium|chromium|firefox|safari) ]] && \
+       [[ "$CMD" =~ (paypal\.com|venmo\.com|wise\.com|revolut\.com|cash\.app|zellepay\.com|chase\.com|bankofamerica\.com|citibank\.com|wellsfargo\.com|hsbc\.com|barclays\.co\.uk|santander\.com|bbva\.com|caixabank\.es|sabadell\.com|ing\.com|deutsche-bank\.de|binance\.com|coinbase\.com|kraken\.com|bybit\.com|okx\.com) ]]; then
+        echo "money: browser navigation to financial domain (confirm)"
+        return 0
+    fi
+    # Generic banking patterns
+    if [[ "$CMD" =~ (\.bank\.com|/ibank|/e-banking|/online-banking|/wire-transfer|/billpay|/sendmoney|/checkout/pay) ]]; then
+        echo "money: banking pattern (confirm)"
+        return 0
+    fi
+    # Transfer/pay paths in URLs (curl/wget heuristic)
+    if [[ "$CMD" =~ (curl|wget|http)[^|]*[[:space:]\"\']+https?://[^[:space:]\"\']*/(transfer|pay|checkout|wire)([/?\"\'[:space:]]|$) ]]; then
+        echo "money: /transfer or /pay URL (confirm)"
+        return 0
+    fi
+    # Crypto exchange WRITE/order operations
+    if [[ "$CMD" =~ (binance\.com/api/[^[:space:]]*order|coinbase\.com/(buy|sell|send)|kraken\.com/[^[:space:]]*(AddOrder|Withdraw)|bybit\.com/[^[:space:]]*order|ftx\.com|okx\.com/api/v5/trade/order|bitstamp\.net/api/v2/buy|kucoin\.com/api/v[0-9]+/orders) ]]; then
+        echo "money: crypto exchange write op (confirm)"
+        return 0
+    fi
+    # Government/tax payment endpoints
+    if [[ "$CMD" =~ (irs\.gov/[^[:space:]]*payment|gov\.uk/pay|agenciatributaria\.es/[^[:space:]]*pago|/tax-return-submit) ]]; then
+        echo "money: gov/tax payment (confirm)"
+        return 0
+    fi
+    # Send-N-currency keyword pattern
+    shopt -s nocasematch
+    if [[ "$CMD" =~ (send|transfer|wire|переведи|отправь|купи|оплати)[[:space:]]+[0-9]+([,.][0-9]+)?[[:space:]]*(usd|eur|gbp|rub|usdt|usdc|btc|eth|sol|\$|€|£|₽) ]]; then
+        shopt -u nocasematch
+        echo "money: send-N-currency keyword (confirm)"
+        return 0
+    fi
+    shopt -u nocasematch
+    # buy / purchase / order / subscribe / checkout (без явной валюты)
+    if [[ "$CMD" =~ (^|[[:space:]\"\'])(buy|purchase|subscribe[[:space:]]+to|order[[:space:]]+now|checkout)([[:space:]\"\']|$) ]]; then
+        echo "money: purchase/subscribe keyword (confirm)"
+        return 0
+    fi
+    # READ-ONLY access к финансовым доменам
     if [[ "$CMD" =~ https?://[^[:space:]\"\']*(paypal\.com|chase\.com|bankofamerica\.com|revolut\.com|wise\.com|stripe\.com) ]]; then
-        echo "money: financial domain read access"
+        echo "money: financial domain read access (confirm)"
         return 0
     fi
     return 1

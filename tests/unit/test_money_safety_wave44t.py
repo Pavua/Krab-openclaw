@@ -34,10 +34,10 @@ class TestBashGuardMoney:
             timeout=10,
         )
 
-    # --- BLOCK: payment processors / banks transactional ---
+    # --- CONFIRM (Wave 44-T-money-safety v2): money rules require owner_token ---
     def test_blocks_paypal_transfer(self) -> None:
         r = self._run("--cmd", "curl https://paypal.com/sendmoney/abc")
-        assert r.returncode == 78, r.stderr
+        assert r.returncode == 79, r.stderr
         assert "money" in r.stderr.lower()
 
     def test_blocks_stripe_charge_api(self) -> None:
@@ -45,48 +45,46 @@ class TestBashGuardMoney:
             "--cmd",
             'curl -X POST https://api.stripe.com/v1/charges -d "amount=100"',
         )
-        assert r.returncode == 78, r.stderr
+        assert r.returncode == 79, r.stderr
 
     def test_blocks_browser_open_chase(self) -> None:
-        # Browser navigation to bank domain — strict block (interactive)
         r = self._run(
             "--cmd",
             "python krab_browser.py open --url https://chase.com",
         )
-        assert r.returncode == 78, r.stderr
+        assert r.returncode == 79, r.stderr
         assert "money" in r.stderr.lower()
 
     def test_blocks_browser_paypal(self) -> None:
         r = self._run("--cmd", "playwright open https://paypal.com/dashboard")
-        assert r.returncode == 78, r.stderr
+        assert r.returncode == 79, r.stderr
 
     def test_blocks_crypto_order(self) -> None:
         r = self._run(
             "--cmd",
             'curl -X POST https://api.binance.com/api/v3/order -d "symbol=BTC"',
         )
-        assert r.returncode == 78, r.stderr
+        assert r.returncode == 79, r.stderr
 
     def test_blocks_coinbase_buy(self) -> None:
         r = self._run("--cmd", "curl https://www.coinbase.com/buy/BTC")
-        assert r.returncode == 78, r.stderr
+        assert r.returncode == 79, r.stderr
 
     def test_blocks_irs_payment(self) -> None:
         r = self._run("--cmd", "curl https://www.irs.gov/payments/online")
-        assert r.returncode == 78, r.stderr
+        assert r.returncode == 79, r.stderr
 
     def test_blocks_send_amount_keyword(self) -> None:
-        # "send 100 USD to ..." semantic guard
         r = self._run("--cmd", 'echo "please send 100 USD to alice@example.com"')
-        assert r.returncode == 78, r.stderr
+        assert r.returncode == 79, r.stderr
 
     def test_blocks_transfer_eth_keyword(self) -> None:
         r = self._run("--cmd", "echo 'transfer 5 ETH to 0xabc'")
-        assert r.returncode == 78, r.stderr
+        assert r.returncode == 79, r.stderr
 
     def test_blocks_russian_perevedi_keyword(self) -> None:
         r = self._run("--cmd", "echo 'переведи 1000 RUB на счёт 12345'")
-        assert r.returncode == 78, r.stderr
+        assert r.returncode == 79, r.stderr
 
     # --- CONFIRM: read-only financial / purchase keywords ---
     def test_confirm_chase_curl_read(self) -> None:
