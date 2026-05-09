@@ -713,6 +713,31 @@ class AccessControlMixin:
         if identity_hint not in base:
             base = f"{base}\n\n{identity_hint}".strip()
 
+        # External MCP tools awareness (Wave 44-Z): известим модель о
+        # дополнительных MCP-серверах, доступных через OpenClaw gateway.
+        # Список держим в коде — runtime list `openclaw mcp list` авторитетен,
+        # но prompt-suffix даёт LLM понять, какие инструменты вообще можно
+        # пробовать. Управляется ``KRAB_EXTERNAL_MCP_HINT_ENABLED`` (default ON).
+        if os.environ.get("KRAB_EXTERNAL_MCP_HINT_ENABLED", "1").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+        ):
+            mcp_hint = (
+                "🌐 Внешние MCP-инструменты (через OpenClaw gateway):\n"
+                "- krab-telegram / krab-telegram-owner — отправка/чтение Telegram"
+                " (yung_nagato + p0lrd identities).\n"
+                "- krab-hammerspoon — управление окнами macOS (focus_app, tile, move).\n"
+                "- krab-tor — анонимный HTTP через SOCKS5: `tor_status`, `tor_fetch(url)`,"
+                " `tor_check_exit_ip`. Только для legal use (region-blocked docs,"
+                " IP-rotation для тестов). Не использовать для запрещённого контента.\n"
+                "Если в задаче нужен внешний инструмент — сначала проверь его наличие"
+                " через function-call (например `tor_status` перед `tor_fetch`),"
+                " не выдумывай результаты."
+            )
+            if mcp_hint not in base:
+                base = f"{base}\n\n{mcp_hint}".strip()
+
         return base
 
     @staticmethod
