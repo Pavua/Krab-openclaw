@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Входящие | Krab</title>
     <link href="/v4/liquid-glass.css" rel="stylesheet">
+    <script src="/v4/i18n.js" defer></script>
     <script src="/v4/theme-toggle.js" defer></script>
     <style>
         /* Minimal page-specific CSS */
@@ -313,16 +314,16 @@
     <nav class="glass-nav">
         <div class="nav-logo">Krab AI</div>
         <div class="nav-links">
-            <a href="/v4/" class="nav-link">Главная</a>
-            <a href="/v4/chat" class="nav-link">Чат</a>
-            <a href="/costs" class="nav-link">Расходы</a>
-            <a href="/inbox" class="nav-link active">Входящие</a>
-            <a href="/swarm" class="nav-link">Свёрм</a>
-            <a href="/translator" class="nav-link">Переводчик</a>
-            <a href="/ops" class="nav-link">Операции</a>
-            <a href="/v4/research" class="nav-link">Поиск</a>
-            <a href="/settings" class="nav-link">Настройки</a>
-            <a href="/commands" class="nav-link">Команды</a>
+            <a href="/v4/" class="nav-link" data-i18n="nav.hub">Главная</a>
+            <a href="/v4/chat" class="nav-link" data-i18n="nav.chat">Чат</a>
+            <a href="/costs" class="nav-link" data-i18n="nav.costs">Расходы</a>
+            <a href="/inbox" class="nav-link active" data-i18n="nav.inbox">Входящие</a>
+            <a href="/swarm" class="nav-link" data-i18n="nav.swarm">Свёрм</a>
+            <a href="/translator" class="nav-link" data-i18n="nav.translator">Переводчик</a>
+            <a href="/ops" class="nav-link" data-i18n="nav.ops">Операции</a>
+            <a href="/v4/research" class="nav-link" data-i18n="nav.research">Поиск</a>
+            <a href="/settings" class="nav-link" data-i18n="nav.settings">Настройки</a>
+            <a href="/commands" class="nav-link" data-i18n="nav.commands">Команды</a>
             <div class="nav-bell-wrapper">
                 <a href="/inbox" class="nav-bell" title="Notifications">
                     <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -339,27 +340,27 @@
     <div class="glass-tab-bar">
         <a href="/v4/" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-            Главная
+            <span data-i18n="nav.hub">Главная</span>
         </a>
         <a href="/v4/chat" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-            Чат
+            <span data-i18n="nav.chat">Чат</span>
         </a>
         <a href="/costs" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-            Расходы
+            <span data-i18n="nav.costs">Расходы</span>
         </a>
         <a href="/inbox" class="tab-item active">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
-            Входящие
+            <span data-i18n="nav.inbox">Входящие</span>
         </a>
         <a href="/swarm" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-            Свёрм
+            <span data-i18n="nav.swarm">Свёрм</span>
         </a>
         <a href="/translator" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6"></path><path d="M4 14l6-6 2-3"></path><path d="M2 5h12"></path><path d="M7 2h1"></path><path d="M22 22l-5-10-5 10"></path><path d="M14 18h6"></path></svg>
-            Перев
+            <span data-i18n="nav.trans_short">Перев</span>
         </a>
     </div>
 
@@ -367,12 +368,16 @@
     <main class="container">
         <header class="page-header">
             <div style="display: flex; align-items: center; gap: 1rem;">
-                <h1>Входящие</h1>
-                <span class="last-updated" id="live-status">Подключение…</span>
+                <h1 data-i18n="inbox.title">Входящие</h1>
+                <span class="last-updated" id="live-status" data-i18n="common.connecting">Подключение…</span>
             </div>
             <div class="actions">
-                <button class="glass-button" id="btn-remediate-stale" title="Запустить авто-чистку устаревших pending событий (старше N дней)">Обработать устаревшие</button>
-                <button class="glass-button glass-button-primary" id="btn-ack-all" title="Подтвердить все открытые события одним кликом (массовая операция)">Подтвердить открытые</button>
+                <button class="glass-button" id="btn-remediate-stale"
+                        data-i18n="inbox.action_remediate_stale"
+                        data-i18n-title="inbox.action_remediate_stale_tip">Обработать устаревшие</button>
+                <button class="glass-button glass-button-primary" id="btn-ack-all"
+                        data-i18n="inbox.action_ack_all"
+                        data-i18n-title="inbox.action_ack_all_tip">Подтвердить открытые</button>
             </div>
         </header>
 
@@ -383,10 +388,14 @@
 
         <!-- Filter Tabs -->
         <section class="filter-tabs" id="filter-tabs">
-            <div class="filter-tab active" data-filter="All" title="Все события (включая принятые и в работе)">Все</div>
-            <div class="filter-tab" data-filter="Open" title="Открытые — ждут реакции владельца">Открытые</div>
-            <div class="filter-tab" data-filter="Acked" title="Принятые — просмотрены, но не закрыты">Принятые</div>
-            <div class="filter-tab" data-filter="Processing" title="В работе — Krab/swarm сейчас обрабатывает">В работе</div>
+            <div class="filter-tab active" data-filter="All"
+                 data-i18n="inbox.tab_all" data-i18n-title="inbox.tab_all_tip">Все</div>
+            <div class="filter-tab" data-filter="Open"
+                 data-i18n="inbox.tab_open" data-i18n-title="inbox.tab_open_tip">Открытые</div>
+            <div class="filter-tab" data-filter="Acked"
+                 data-i18n="inbox.tab_acked" data-i18n-title="inbox.tab_acked_tip">Принятые</div>
+            <div class="filter-tab" data-filter="Processing"
+                 data-i18n="inbox.tab_processing" data-i18n-title="inbox.tab_processing_tip">В работе</div>
         </section>
 
         <!-- Items List -->
@@ -400,51 +409,17 @@
 
     <!-- Vanilla JS Logic -->
     <script>
+        // i18n.js exposes window.krabI18n with formatTimeAgo / formatAbsTime / t / setLang
+        // Use them via wrappers that gracefully fallback if i18n.js failed to load.
         function formatTimeAgo(iso) {
-            if (!iso) return '';
-            const then = new Date(iso);
-            if (isNaN(then)) return '';
-            const diff = (Date.now() - then) / 1000;
-            if (diff < 60) return Math.floor(diff) + ' сек назад';
-            if (diff < 3600) return Math.floor(diff/60) + ' мин назад';
-            if (diff < 86400) {
-                const h = Math.floor(diff/3600);
-                const m = Math.floor((diff % 3600) / 60);
-                return m > 0 ? `${h} ч ${m} мин назад` : `${h} ч назад`;
-            }
-            const d = Math.floor(diff/86400);
-            const h = Math.floor((diff % 86400) / 3600);
-            return h > 0 ? `${d} д ${h} ч назад` : `${d} д назад`;
+            return (window.krabI18n && window.krabI18n.formatTimeAgo) ? window.krabI18n.formatTimeAgo(iso) : '';
         }
-
         function formatAbsTime(iso) {
-            // Точное время в локали для tooltip
-            if (!iso) return '';
-            const d = new Date(iso);
-            if (isNaN(d)) return '';
-            return d.toLocaleString('ru-RU', {
-                year: 'numeric', month: '2-digit', day: '2-digit',
-                hour: '2-digit', minute: '2-digit', second: '2-digit'
-            });
+            return (window.krabI18n && window.krabI18n.formatAbsTime) ? window.krabI18n.formatAbsTime(iso) : '';
         }
-
-        // Tooltip-подсказки для UI элементов
-        const TOOLTIPS = {
-            ack:     'Принять — отметить как просмотренное (не требует действия)',
-            done:    'Готово — задача выполнена / решена',
-            dismiss: 'Отклонить — событие неактуально / ложное',
-            kind:    'Тип события (источник классификации в Krab)',
-            source:  'Откуда пришло событие (cron, telegram, sentry, краб-internal…)',
-            severity_critical: 'Критично — требует немедленного внимания',
-            severity_warning:  'Предупреждение — стоит проверить когда удобно',
-            severity_info:     'Информационное — для контекста',
-            remediate_stale: 'Запустить авто-чистку устаревших pending событий',
-            ack_all_open:    'Подтвердить все открытые — массовая операция',
-            tab_all:        'Все события (включая принятые)',
-            tab_open:       'Открытые — ждут реакции владельца',
-            tab_acked:      'Принятые — просмотрены, но не закрыты',
-            tab_processing: 'В работе — Krab/swarm сейчас обрабатывает'
-        };
+        function tt(key) {
+            return (window.t || ((k) => k))(key);
+        }
 
         document.addEventListener('DOMContentLoaded', () => {
             // State
@@ -571,10 +546,10 @@
                     try {
                         const data = JSON.parse(e.data);
                         console.warn('SSE error event:', data.error);
-                        showToast(data.error || 'Ошибка SSE', 'error');
+                        showToast(data.error || tt('inbox.toast_sse_error'), 'error');
                     } catch(err) {
                         console.warn('SSE disconnected');
-                        showToast('SSE отключён', 'error');
+                        showToast(tt('inbox.toast_sse_disconnected'), 'error');
                     }
                 });
 
@@ -589,24 +564,24 @@
                 if (!data) return;
                 statsContainer.innerHTML = `
                     <div class="glass-card stat-card">
-                        <span class="stat-label">Открытых</span>
+                        <span class="stat-label">${tt('inbox.stat_open')}</span>
                         <span class="stat-value">${data.open || 0}</span>
                     </div>
                     <div class="glass-card stat-card">
-                        <span class="stat-label">Внимание</span>
+                        <span class="stat-label">${tt('inbox.stat_attention')}</span>
                         <span class="stat-value" style="color: #ffa502;">${data.attention || 0}</span>
                     </div>
                     <div class="glass-card stat-card">
-                        <span class="stat-label">Эскалации</span>
+                        <span class="stat-label">${tt('inbox.stat_escalations')}</span>
                         <span class="stat-value" style="color: #ff4757;">${data.escalations || 0}</span>
                     </div>
                     <div class="glass-card stat-card">
-                        <span class="stat-label">Устаревшие</span>
+                        <span class="stat-label">${tt('inbox.stat_stale')}</span>
                         <span class="stat-value" style="color: #1e90ff;">${data.stale || 0}</span>
                     </div>
                 `;
                 const now = new Date();
-                liveStatusEl.innerText = `Обновлено ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+                liveStatusEl.innerText = `${tt('common.updated')} ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
             }
 
             function loadItemsFromData(items) {
@@ -628,7 +603,7 @@
                 if (!filtered || filtered.length === 0) {
                     itemsContainer.innerHTML = `
                         <div class="glass-card" style="text-align:center; padding: 3rem; color: var(--text-muted);">
-                            Ничего не найдено в категории «${currentFilter}».
+                            ${tt('inbox.empty_for')} «${currentFilter}».
                         </div>
                     `;
                     return;
@@ -638,28 +613,28 @@
                     <div class="glass-card inbox-item" data-id="${item.item_id || item.id}">
                         <div class="inbox-item-header">
                             <div class="inbox-item-main">
-                                <span class="severity-icon" title="${item.severity === 'critical' ? 'Критично — требует немедленного внимания' : item.severity === 'warning' ? 'Предупреждение — стоит проверить когда удобно' : 'Информационное — для контекста'}">
+                                <span class="severity-icon" title="${item.severity === 'critical' ? tt('inbox.sev_critical') : item.severity === 'warning' ? tt('inbox.sev_warning') : tt('inbox.sev_info')}">
                                     ${item.severity === 'critical' ? '🔴' : item.severity === 'warning' ? '🟠' : '🔵'}
                                 </span>
                                 <span class="item-title" title="${item.title}">${item.title}</span>
                                 <div class="badges">
-                                    ${item.kind ? `<span class="badge ${item.severity}" title="Тип события: ${item.kind}">${item.kind}</span>` : ''}
-                                    ${item.source ? `<span class="badge ${item.severity}" title="Источник: ${item.source}">${item.source}</span>` : ''}
+                                    ${item.kind ? `<span class="badge ${item.severity}" title="${tt('inbox.kind_tip')}: ${item.kind}">${item.kind}</span>` : ''}
+                                    ${item.source ? `<span class="badge ${item.severity}" title="${tt('inbox.source_tip')}: ${item.source}">${item.source}</span>` : ''}
                                 </div>
                             </div>
                             <div class="inbox-item-actions">
                                 <span class="time-ago" title="${formatAbsTime(item.created_at_utc || item.created_at)}">${formatTimeAgo(item.created_at_utc || item.created_at)}</span>
                                 ${item.status !== 'acked'
                                     ? `<div class="inbox-actions">
-                                           <button class="glass-button btn-ack" data-id="${item.item_id || item.id}" data-action="ack" title="Принять — отметить как просмотренное (не требует действия)">Принять</button>
-                                           <button class="glass-button btn-done" data-id="${item.item_id || item.id}" data-action="done" title="Готово — задача выполнена / решена">Готово</button>
-                                           <button class="glass-button btn-dismiss" data-id="${item.item_id || item.id}" data-action="dismiss" title="Отклонить — событие неактуально / ложное">Отклонить</button>
+                                           <button class="glass-button btn-ack" data-id="${item.item_id || item.id}" data-action="ack" title="${tt('inbox.btn_ack_tip')}">${tt('inbox.btn_ack')}</button>
+                                           <button class="glass-button btn-done" data-id="${item.item_id || item.id}" data-action="done" title="${tt('inbox.btn_done_tip')}">${tt('inbox.btn_done')}</button>
+                                           <button class="glass-button btn-dismiss" data-id="${item.item_id || item.id}" data-action="dismiss" title="${tt('inbox.btn_dismiss_tip')}">${tt('inbox.btn_dismiss')}</button>
                                        </div>`
-                                    : `<span class="badge" title="Событие подтверждено владельцем">Принято</span>`}
+                                    : `<span class="badge" title="${tt('inbox.badge_acked_tip')}">${tt('inbox.badge_acked')}</span>`}
                             </div>
                         </div>
                         <div class="inbox-item-body">
-                            ${item.body || 'Дополнительной информации нет.'}
+                            ${item.body || tt('inbox.body_no_details')}
                         </div>
                     </div>
                 `).join('');
@@ -680,15 +655,15 @@
                 if (action === 'remediate_stale' || action === 'ack_all_open') {
                     try {
                         await apiCall('/api/inbox/update', 'POST', { action, ...payload });
-                        showToast(`Выполнено: ${action.replace(/_/g, ' ')}`);
+                        showToast(`${tt('inbox.toast_executed')}: ${action.replace(/_/g, ' ')}`);
                     } catch (error) {
-                        showToast(`Ошибка выполнения ${action}`, 'error');
+                        showToast(`${tt('inbox.toast_error_executing')} ${action}`, 'error');
                     }
                     return;
                 }
 
                 if (!itemId) {
-                    showToast(`Не указан ID для действия: ${action}`, 'error');
+                    showToast(`${tt('inbox.toast_no_id')}: ${action}`, 'error');
                     return;
                 }
 
@@ -699,9 +674,9 @@
                         actor: 'owner-ui',
                         note: '',
                     });
-                    showToast(`✓ ${action}: успешно`);
+                    showToast(`✓ ${action}: ${tt('inbox.toast_action_success')}`);
                 } catch (error) {
-                    showToast(`Ошибка: ${action}`, 'error');
+                    showToast(`${tt('inbox.toast_action_error')}: ${action}`, 'error');
                 }
             }
 
@@ -753,6 +728,17 @@
                 }
                 return {};
             }
+
+            // i18n: re-render dynamic content on language switch.
+            // Static [data-i18n] elements уже обновлены i18n.js.applyTranslations,
+            // но JS-rendered cards (stats + items) надо пересобрать вручную.
+            window.addEventListener('krab-lang-changed', () => {
+                if (typeof lastItems !== 'undefined' && lastItems) renderCurrentItems();
+                // refetch stats так как updateBellCount подтягивает свежие
+                fetch('/api/inbox/status').then(r => r.json()).then(d => {
+                    if (d) loadStatsFromData(d);
+                }).catch(() => {});
+            });
         });
 
         async function updateBellCount() {

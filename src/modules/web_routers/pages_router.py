@@ -261,4 +261,14 @@ def build_pages_router(ctx: RouterContext) -> APIRouter:
             )
         return HTMLResponse("// not found", media_type="application/javascript")
 
+    @router.get("/v4/i18n.js")
+    async def v4_i18n():
+        """Wave 44-D-i18n: bilingual EN/RU runtime translations + lang toggle."""
+        js = _v4_path("i18n.js")
+        if js.exists():
+            return FileResponse(
+                js, media_type="application/javascript", headers=_no_store_headers()
+            )
+        return HTMLResponse("// not found", media_type="application/javascript")
+
     return router
