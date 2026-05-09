@@ -2318,7 +2318,21 @@ class OpenClawClient:
 
         if response.status_code != 200:
             body_str = response.text
-            logger.error("openclaw_api_error", status=response.status_code, body=body_str)
+            # 5xx — transient (retryable=True, fallback-loop поймает). Логируем как
+            # warning чтобы не генерировать Sentry-события за каждый transient 500.
+            # 4xx и прочие — ошибки конфигурации/авторизации → logger.error (в Sentry).
+            if response.status_code >= 500:
+                logger.warning(
+                    "openclaw_api_error",
+                    status=response.status_code,
+                    body=body_str[:300],
+                )
+            else:
+                logger.error(
+                    "openclaw_api_error",
+                    status=response.status_code,
+                    body=body_str[:300],
+                )
             metrics.inc("llm_error")
             if response.status_code in (401, 403):
                 if allow_auth_retry and self._refresh_gateway_token_from_runtime():
