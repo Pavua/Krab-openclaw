@@ -835,27 +835,66 @@ class NetworkWatchdogMixin:
                 try:
                     await self._force_pyrofork_session_reinit()
                 except Exception as exc:  # noqa: BLE001
-                    logger.error(
+                    # Wave 50-A + 41-O hygiene: WARNING (не ERROR) для
+                    # ожидаемых post-sleep transient failures. Network
+                    # offline monitor / zombie escalation подхватит если
+                    # реально zombie session.
+                    logger.warning(
                         "macos_post_sleep_reinit_failed",
                         error=str(exc)[:200],
                     )
+
+    @staticmethod
+    async def _safe_client_disconnect(client: "Client | None") -> bool:
+        """Wave 50-A: idempotent client teardown для post-sleep reinit.
+
+        Pyrogram raises `ConnectionError("Client is already disconnected")`
+        когда client.stop() вызывается на уже отключённом клиенте — это
+        ожидаемое состояние после macOS sleep, когда система сама порвала
+        socket. Глотаем ConnectionError + проверяем `is_connected` чтобы
+        не дёргать stop() впустую.
+
+        Returns: True если stop отработал или клиент уже отключён (no-op
+        success), False если stop поднял неожиданную ошибку.
+        """
+        if client is None:
+            return True
+        # Defensive: getattr — pyrofork может изменить API stability
+        is_conn = getattr(client, "is_connected", False)
+        if not is_conn:
+            logger.debug("safe_disconnect_skip_not_connected")
+            return True
+        if not hasattr(client, "stop"):
+            return True
+        try:
+            await client.stop(block=True)
+            return True
+        except ConnectionError as exc:
+            # Pyrofork: "Client is already disconnected" — ok после sleep
+            logger.debug("safe_disconnect_already_disconnected", error=str(exc)[:120])
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("safe_disconnect_unexpected_error", error=str(exc)[:200])
+            return False
 
     async def _force_pyrofork_session_reinit(self) -> None:
         """Wave 36-D: принудительный reinit pyrofork session после macOS sleep.
 
         Стратегия:
-        1. client.stop(block=True) — ждёт graceful disconnect (TTL freeze закончен)
+        1. _safe_client_disconnect — idempotent stop (Wave 50-A: глотает
+           "Client is already disconnected" ConnectionError, которая
+           возникает когда macOS sleep уже разорвал socket до wake).
         2. await asyncio.sleep(2) — даём сети устояться после пробуждения
         3. client.start() — re-handshake, fresh MTProto session
 
-        При failure → логируем и поднимаем исключение (caller решает что делать).
+        Wave 50-A: failure → log WARNING (не ERROR, Wave 41-O hygiene),
+        исключение поднимаем для caller-loop телеметрии.
         Fall-through на Wave 36-A escalation logic происходит автоматически
         через _network_offline_monitor_loop / heartbeat.
         """
         logger.info("forced_pyrofork_reinit_starting")
         try:
-            if self.client and hasattr(self.client, "stop"):
-                await self.client.stop(block=True)
+            await self._safe_client_disconnect(self.client)
             await asyncio.sleep(2)
             if self.client:
                 await self.client.start()
