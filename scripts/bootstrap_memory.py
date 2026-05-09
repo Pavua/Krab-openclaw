@@ -113,14 +113,13 @@ _CHAT_TYPE_MAP = {
 }
 
 #: Дефолтный путь экспорта (согласно Phase 1 plan).
-_DEFAULT_EXPORT = Path(
-    "~/Downloads/tg_export_for_krab/p0lrd_whitelist/result.json"
-).expanduser()
+_DEFAULT_EXPORT = Path("~/Downloads/tg_export_for_krab/p0lrd_whitelist/result.json").expanduser()
 
 
 # ---------------------------------------------------------------------------
 # Модели результатов.
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class BootstrapStats:
@@ -169,6 +168,7 @@ class BootstrapStats:
 # Текстовая нормализация.
 # ---------------------------------------------------------------------------
 
+
 def extract_text(msg: dict[str, Any]) -> str:
     """
     Нормализует поле ``text`` Telegram-сообщения в плоскую строку.
@@ -215,6 +215,7 @@ def extract_text(msg: dict[str, Any]) -> str:
 # Парсинг экспорта.
 # ---------------------------------------------------------------------------
 
+
 def detect_export_format(data: dict[str, Any]) -> str:
     """
     Возвращает "multi" | "single" | "unknown".
@@ -223,9 +224,7 @@ def detect_export_format(data: dict[str, Any]) -> str:
       * multi: есть ключ ``chats`` с вложенным ``list``;
       * single: есть ``messages`` на top-level.
     """
-    if isinstance(data.get("chats"), dict) and isinstance(
-        data["chats"].get("list"), list
-    ):
+    if isinstance(data.get("chats"), dict) and isinstance(data["chats"].get("list"), list):
         return "multi"
     if isinstance(data.get("messages"), list):
         return "single"
@@ -352,6 +351,7 @@ def _build_message(
 # Chunk hashing.
 # ---------------------------------------------------------------------------
 
+
 def _chunk_hash(chat_id: str, start_message_id: str) -> str:
     """
     Детерминированный id chunk'а: sha256(chat_id + "\\x00" + start_msg_id)[:16].
@@ -367,9 +367,8 @@ def _chunk_hash(chat_id: str, start_message_id: str) -> str:
 # БД-уровень.
 # ---------------------------------------------------------------------------
 
-def _ensure_chat_row(
-    conn: sqlite3.Connection, chat_id: str, title: str, chat_type: str
-) -> None:
+
+def _ensure_chat_row(conn: sqlite3.Connection, chat_id: str, title: str, chat_type: str) -> None:
     """INSERT OR IGNORE строка чата (имя/тип обновим только при первом insert'е)."""
     conn.execute(
         "INSERT OR IGNORE INTO chats (chat_id, title, chat_type, message_count) "
@@ -404,9 +403,7 @@ def _purge_chunks_for_chat(conn: sqlite3.Connection, chat_id: str) -> None:
     (в schema есть FK). Для явности делаем DELETE FROM messages_fts по rowid.
     """
     # Сначала узнаём rowid chunks этого чата, чтобы почистить FTS.
-    rows = conn.execute(
-        "SELECT id FROM chunks WHERE chat_id = ?;", (chat_id,)
-    ).fetchall()
+    rows = conn.execute("SELECT id FROM chunks WHERE chat_id = ?;", (chat_id,)).fetchall()
     if rows:
         placeholders = ",".join("?" for _ in rows)
         ids = [r[0] for r in rows]
@@ -422,9 +419,7 @@ def _purge_chunks_for_chat(conn: sqlite3.Connection, chat_id: str) -> None:
     conn.execute("DELETE FROM chunk_messages WHERE chat_id = ?;", (chat_id,))
 
 
-def _insert_chunk(
-    conn: sqlite3.Connection, chunk: Chunk, chunk_id: str
-) -> int:
+def _insert_chunk(conn: sqlite3.Connection, chunk: Chunk, chunk_id: str) -> int:
     """
     Вставляет chunk + возвращает rowid. Далее по rowid синкаем FTS5.
     """
@@ -450,14 +445,11 @@ def _insert_chunk(
     return rowid
 
 
-def _insert_chunk_messages(
-    conn: sqlite3.Connection, chunk: Chunk, chunk_id: str
-) -> None:
+def _insert_chunk_messages(conn: sqlite3.Connection, chunk: Chunk, chunk_id: str) -> None:
     """Many-to-many: chunk → messages."""
     rows = [(chunk_id, m.message_id, chunk.chat_id) for m in chunk.messages]
     conn.executemany(
-        "INSERT OR IGNORE INTO chunk_messages (chunk_id, message_id, chat_id) "
-        "VALUES (?, ?, ?);",
+        "INSERT OR IGNORE INTO chunk_messages (chunk_id, message_id, chat_id) VALUES (?, ?, ?);",
         rows,
     )
 
@@ -493,6 +485,7 @@ def _update_chat_counters(conn: sqlite3.Connection, chat_id: str) -> None:
 # ---------------------------------------------------------------------------
 # Основной pipeline.
 # ---------------------------------------------------------------------------
+
 
 def _process_chat(
     chat: dict[str, Any],
@@ -668,9 +661,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     create_schema(conn)
 
 
-def _flush_batch(
-    conn: sqlite3.Connection, batch: list[tuple[Chunk, str]]
-) -> None:
+def _flush_batch(conn: sqlite3.Connection, batch: list[tuple[Chunk, str]]) -> None:
     """
     Транзакционный insert batch'а chunks + chunk_messages + FTS.
 
@@ -692,6 +683,7 @@ def _flush_batch(
 # ---------------------------------------------------------------------------
 # Публичный entry-point.
 # ---------------------------------------------------------------------------
+
 
 def run_bootstrap(
     *,
@@ -810,6 +802,7 @@ def run_bootstrap(
 # CLI.
 # ---------------------------------------------------------------------------
 
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bootstrap_memory",
@@ -873,16 +866,12 @@ def _print_report(stats: BootstrapStats, dry_run: bool) -> None:
 
     if stats.messages_skipped:
         print("\nMessages skipped (by reason):")
-        for reason, count in sorted(
-            stats.messages_skipped.items(), key=lambda x: -x[1]
-        ):
+        for reason, count in sorted(stats.messages_skipped.items(), key=lambda x: -x[1]):
             print(f"  {reason:<24} {count}")
 
     if stats.pii_stats.counts:
         print("\nPII redactions (by category):")
-        for cat, count in sorted(
-            stats.pii_stats.counts.items(), key=lambda x: -x[1]
-        ):
+        for cat, count in sorted(stats.pii_stats.counts.items(), key=lambda x: -x[1]):
             print(f"  {cat:<24} {count}")
 
     if dry_run and stats.preview_chunks:

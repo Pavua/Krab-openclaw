@@ -33,10 +33,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib import parse
 from urllib import error as urlerror
-from urllib import request
-
+from urllib import parse, request
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS_DIR = ROOT / "artifacts" / "ops"
@@ -329,7 +327,9 @@ def scan_env_risks(env_path: Path) -> dict[str, Any]:
     return result
 
 
-def write_env_template(env_path: Path, template_path: Path, *, dry_run: bool = True) -> dict[str, Any]:
+def write_env_template(
+    env_path: Path, template_path: Path, *, dry_run: bool = True
+) -> dict[str, Any]:
     """
     Создаёт `.env.template` без значений секретов.
 
@@ -439,7 +439,11 @@ def scan_logs(log_dir: Path, *, large_mb: int = 50, tail_bytes: int = 512_000) -
         report["total_bytes"] += stat.st_size
         if stat.st_size >= threshold:
             report["large_logs"].append(
-                {"path": str(path), "size_bytes": stat.st_size, "size_mb": round(stat.st_size / 1024 / 1024, 1)}
+                {
+                    "path": str(path),
+                    "size_bytes": stat.st_size,
+                    "size_mb": round(stat.st_size / 1024 / 1024, 1),
+                }
             )
 
         tail = _read_tail(path, tail_bytes=tail_bytes)
@@ -656,7 +660,9 @@ async def run_remediation_plan(
         max_age_days=session_max_age_days,
         dry_run=dry_run,
     )
-    env_template, log_rotation, session_cleanup = await asyncio.gather(env_task, logs_task, sessions_task)
+    env_template, log_rotation, session_cleanup = await asyncio.gather(
+        env_task, logs_task, sessions_task
+    )
 
     errors: list[str] = []
     if env_template.get("error"):
@@ -689,7 +695,9 @@ def build_risks(
     risks: list[RuntimeRisk] = []
 
     down_endpoints = [probe for probe in endpoints if not probe.up]
-    blocked_endpoints = [probe for probe in down_endpoints if _looks_like_sandbox_block(probe.error)]
+    blocked_endpoints = [
+        probe for probe in down_endpoints if _looks_like_sandbox_block(probe.error)
+    ]
     real_down_endpoints = [probe for probe in down_endpoints if probe not in blocked_endpoints]
     if real_down_endpoints:
         risks.append(
@@ -698,7 +706,9 @@ def build_risks(
                 severity="high",
                 title="HTTP health endpoint недоступен",
                 detail="Один или несколько runtime endpoint не ответили успешным 2xx статусом.",
-                evidence={"endpoints": [_endpoint_probe_to_report(probe) for probe in real_down_endpoints]},
+                evidence={
+                    "endpoints": [_endpoint_probe_to_report(probe) for probe in real_down_endpoints]
+                },
                 recommendation="Разделить алерт по panel/gateway и проверять ближайший к пользовательскому симптому endpoint.",
             )
         )
@@ -709,7 +719,9 @@ def build_risks(
                 severity="medium",
                 title="HTTP probe заблокирован sandbox",
                 detail="localhost endpoint не удалось проверить из текущего runtime, но это не доказывает падение сервиса.",
-                evidence={"endpoints": [_endpoint_probe_to_report(probe) for probe in blocked_endpoints]},
+                evidence={
+                    "endpoints": [_endpoint_probe_to_report(probe) for probe in blocked_endpoints]
+                },
                 recommendation="Показывать blocked_by_sandbox отдельно и сверять с логами launchd или внешним smoke.",
             )
         )

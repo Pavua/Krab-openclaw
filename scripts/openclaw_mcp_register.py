@@ -63,6 +63,7 @@ def resolve_env_placeholders(
     (OpenClaw сам резолвит через shellEnv). Если False — поднимает RegisterError.
     """
     if isinstance(value, str):
+
         def _sub(match: re.Match[str]) -> str:
             name = match.group(1)
             if name in env and env[name]:
@@ -330,9 +331,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.remove:
         return cmd_remove(args.remove, dry_run=args.dry_run, openclaw_bin=bin_path)
     if args.add_all_with_tokens:
-        return cmd_add_all_with_tokens(
-            inv, env, dry_run=args.dry_run, openclaw_bin=bin_path
-        )
+        return cmd_add_all_with_tokens(inv, env, dry_run=args.dry_run, openclaw_bin=bin_path)
     return 0
 
 

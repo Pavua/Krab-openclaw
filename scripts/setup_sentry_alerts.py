@@ -96,9 +96,7 @@ def _request(
     headers["Content-Type"] = "application/json"
     resp = client.request(method, path, headers=headers, **kwargs)
     if resp.status_code >= 400:
-        sys.stderr.write(
-            f"ERR {method} {path} → {resp.status_code}: {resp.text[:400]}\n"
-        )
+        sys.stderr.write(f"ERR {method} {path} → {resp.status_code}: {resp.text[:400]}\n")
         resp.raise_for_status()
     if resp.content:
         return resp.json()
@@ -200,9 +198,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--webhook-url",
-        default=os.getenv(
-            "WEBHOOK_URL", "http://127.0.0.1:8080/api/hooks/sentry"
-        ),
+        default=os.getenv("WEBHOOK_URL", "http://127.0.0.1:8080/api/hooks/sentry"),
     )
     parser.add_argument(
         "--secret",
@@ -233,9 +229,7 @@ def main() -> int:
         )
         return 2
 
-    projects = args.project or (
-        os.getenv("SENTRY_PROJECTS", "krab-main,krab-ear").split(",")
-    )
+    projects = args.project or (os.getenv("SENTRY_PROJECTS", "krab-main,krab-ear").split(","))
     projects = [p.strip() for p in projects if p.strip()]
 
     print(f"Sentry setup: org={org}, projects={projects}, webhook={args.webhook_url}")
@@ -257,7 +251,12 @@ def main() -> int:
             for rule in DEFAULT_RULES:
                 try:
                     create_alert_rule(
-                        client, token, org, project, rule, integration_slug,
+                        client,
+                        token,
+                        org,
+                        project,
+                        rule,
+                        integration_slug,
                         args.webhook_url,
                     )
                 except httpx.HTTPStatusError as exc:

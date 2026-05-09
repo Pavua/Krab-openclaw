@@ -19,6 +19,7 @@ Smoke-тест per-team tool allowlist (commit 8d58c5d).
 Запуск:
     venv/bin/python scripts/swarm_tool_scope_smoke.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,8 +34,8 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("KRAB_SMOKE_MODE", "1")
 
 from src.core.swarm_tool_allowlist import (  # noqa: E402
-    TEAM_TOOL_ALLOWLIST,
     _BASE_ALLOWLIST,
+    TEAM_TOOL_ALLOWLIST,
     filter_tools_for_team,
     get_current_team,
     reset_current_team,
@@ -63,7 +64,10 @@ def _synthetic_manifest() -> list[dict]:
         "telegram_transcribe_voice",
     ):
         tools.append(
-            {"type": "function", "function": {"name": f"yung-nagato__{t}", "description": t, "parameters": {}}}
+            {
+                "type": "function",
+                "function": {"name": f"yung-nagato__{t}", "description": t, "parameters": {}},
+            }
         )
 
     # p0lrd MCP (второй owner)
@@ -74,19 +78,28 @@ def _synthetic_manifest() -> list[dict]:
         "telegram_send_message",
     ):
         tools.append(
-            {"type": "function", "function": {"name": f"p0lrd__{t}", "description": t, "parameters": {}}}
+            {
+                "type": "function",
+                "function": {"name": f"p0lrd__{t}", "description": t, "parameters": {}},
+            }
         )
 
     # filesystem MCP
     for t in ("read_file", "write_file", "list_directory", "search_files"):
         tools.append(
-            {"type": "function", "function": {"name": f"filesystem__{t}", "description": t, "parameters": {}}}
+            {
+                "type": "function",
+                "function": {"name": f"filesystem__{t}", "description": t, "parameters": {}},
+            }
         )
 
     # git MCP
     for t in ("status", "diff", "log", "add", "commit"):
         tools.append(
-            {"type": "function", "function": {"name": f"git__{t}", "description": t, "parameters": {}}}
+            {
+                "type": "function",
+                "function": {"name": f"git__{t}", "description": t, "parameters": {}},
+            }
         )
 
     # Нативные (добавляются в mcp_client.get_tool_manifest напрямую)
@@ -159,44 +172,51 @@ def _run_report(manifest: list[dict]) -> None:
     t_traders = _names(filter_tools_for_team(manifest, "traders"))
     checks.append(("traders sees web_search", any(n == "web_search" for n in t_traders)))
     checks.append(
-        ("traders sees krab_memory_search (any server prefix)",
-         any(n.endswith("__krab_memory_search") or n == "krab_memory_search" for n in t_traders)),
+        (
+            "traders sees krab_memory_search (any server prefix)",
+            any(n.endswith("__krab_memory_search") or n == "krab_memory_search" for n in t_traders),
+        ),
     )
     checks.append(
-        ("traders does NOT see krab_run_tests",
-         not any(n.endswith("__krab_run_tests") for n in t_traders)),
+        (
+            "traders does NOT see krab_run_tests",
+            not any(n.endswith("__krab_run_tests") for n in t_traders),
+        ),
     )
     checks.append(
-        ("traders does NOT see filesystem__read_file",
-         "filesystem__read_file" not in t_traders),
+        ("traders does NOT see filesystem__read_file", "filesystem__read_file" not in t_traders),
     )
 
     t_coders = _names(filter_tools_for_team(manifest, "coders"))
     checks.append(
-        ("coders sees krab_run_tests (some server)",
-         any(n.endswith("__krab_run_tests") for n in t_coders)),
+        (
+            "coders sees krab_run_tests (some server)",
+            any(n.endswith("__krab_run_tests") for n in t_coders),
+        ),
     )
     checks.append(
-        ("coders does NOT see telegram_send_message",
-         not any(n.endswith("__telegram_send_message") for n in t_coders)),
+        (
+            "coders does NOT see telegram_send_message",
+            not any(n.endswith("__telegram_send_message") for n in t_coders),
+        ),
     )
 
     t_analysts = _names(filter_tools_for_team(manifest, "analysts"))
     checks.append(
-        ("analysts sees telegram_search",
-         any(n.endswith("__telegram_search") for n in t_analysts)),
+        ("analysts sees telegram_search", any(n.endswith("__telegram_search") for n in t_analysts)),
     )
 
     t_creative = _names(filter_tools_for_team(manifest, "creative"))
     checks.append(
-        ("creative sees telegram_send_message",
-         any(n.endswith("__telegram_send_message") for n in t_creative)),
+        (
+            "creative sees telegram_send_message",
+            any(n.endswith("__telegram_send_message") for n in t_creative),
+        ),
     )
 
     t_unknown = _names(filter_tools_for_team(manifest, "unknown_team"))
     checks.append(
-        ("unknown_team passthrough (full manifest)",
-         len(t_unknown) == len(manifest)),
+        ("unknown_team passthrough (full manifest)", len(t_unknown) == len(manifest)),
     )
 
     all_ok = True
@@ -207,7 +227,9 @@ def _run_report(manifest: list[dict]) -> None:
         print(f"- {mark} {label}")
 
     print()
-    print(f"**Overall:** {'PASS — allowlist filter works on real manifest shape' if all_ok else 'FAIL — see above'}")
+    print(
+        f"**Overall:** {'PASS — allowlist filter works on real manifest shape' if all_ok else 'FAIL — see above'}"
+    )
 
 
 async def main() -> None:

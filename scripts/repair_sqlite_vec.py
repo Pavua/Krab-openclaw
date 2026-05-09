@@ -25,6 +25,7 @@ Flags:
     --skip-fts  Пропустить FTS5 rebuild (только vec_chunks rebuild)
     --no-backup Не создавать backup (осторожно!)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -46,6 +47,7 @@ BACKUP_SUFFIX_FMT = "pre-repair-%Y%m%d_%H%M%S"
 # ---------------------------------------------------------------------------
 # Диагностика.
 # ---------------------------------------------------------------------------
+
 
 def _load_vec_ext(conn: sqlite3.Connection) -> bool:
     """Загрузить sqlite-vec extension. True если успешно."""
@@ -73,7 +75,9 @@ def diagnose(conn: sqlite3.Connection) -> dict:
 
     # --- FTS5 ---
     result["fts_doc_count"] = conn.execute("SELECT COUNT(*) FROM messages_fts").fetchone()[0]
-    result["fts_docsize_count"] = conn.execute("SELECT COUNT(*) FROM messages_fts_docsize").fetchone()[0]
+    result["fts_docsize_count"] = conn.execute(
+        "SELECT COUNT(*) FROM messages_fts_docsize"
+    ).fetchone()[0]
 
     # Проверяем десинхронизацию через JOIN: FTS MATCH должен видеть только
     # строки из chunks. Любая строка в FTS5 без соответствующего chunks.id
@@ -120,9 +124,7 @@ def print_diagnosis(d: dict) -> None:
     print(f"  chunks: {d['chunks_count']} строк, id range {d['chunks_id_range']}")
     print(f"  messages_fts: {d['fts_doc_count']} (docsize: {d['fts_docsize_count']})")
     orphan_pct = (
-        100 * d["fts_orphaned_in_sample"] / d["fts_docsize_count"]
-        if d["fts_docsize_count"]
-        else 0
+        100 * d["fts_orphaned_in_sample"] / d["fts_docsize_count"] if d["fts_docsize_count"] else 0
     )
     print(
         f"  FTS десинхронизация: {d['fts_orphaned_in_sample']}/{d['fts_docsize_count']} "
@@ -143,6 +145,7 @@ def print_diagnosis(d: dict) -> None:
 # Repair: FTS5.
 # ---------------------------------------------------------------------------
 
+
 def repair_fts(conn: sqlite3.Connection) -> None:
     """
     Пересобрать FTS5 через INSERT INTO messages_fts(messages_fts) VALUES('rebuild').
@@ -161,6 +164,7 @@ def repair_fts(conn: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 # Repair: vec_chunks.
 # ---------------------------------------------------------------------------
+
 
 def repair_vec(conn: sqlite3.Connection, batch_size: int = 512) -> None:
     """
@@ -181,9 +185,7 @@ def repair_vec(conn: sqlite3.Connection, batch_size: int = 512) -> None:
     create_vec_table(conn, dim=DEFAULT_DIM)
     print("  [VEC] таблица пересоздана")
 
-    rows = conn.execute(
-        "SELECT id, text_redacted FROM chunks ORDER BY id"
-    ).fetchall()
+    rows = conn.execute("SELECT id, text_redacted FROM chunks ORDER BY id").fetchall()
     print(f"  [VEC] загружаю Model2Vec модель для {len(rows)} chunks...")
     model = get_embedding_model()
     print("  [VEC] модель загружена, начинаю encode...")
@@ -195,9 +197,7 @@ def repair_vec(conn: sqlite3.Connection, batch_size: int = 512) -> None:
         texts = [r[1] or "" for r in batch]
         vecs = model.encode(texts)
         payload = [(batch[i][0], serialize_f32(vecs[i])) for i in range(len(batch))]
-        conn.executemany(
-            "INSERT INTO vec_chunks(rowid, vector) VALUES (?, ?)", payload
-        )
+        conn.executemany("INSERT INTO vec_chunks(rowid, vector) VALUES (?, ?)", payload)
         conn.commit()
         processed += len(batch)
         if processed % 1000 == 0 or processed == len(rows):
@@ -212,6 +212,7 @@ def repair_vec(conn: sqlite3.Connection, batch_size: int = 512) -> None:
 # ---------------------------------------------------------------------------
 # Backup.
 # ---------------------------------------------------------------------------
+
 
 def make_backup(db_path: Path) -> Path:
     """Скопировать db_path → db_path.pre-repair-YYYYMMDD_HHMMSS."""
@@ -232,17 +233,14 @@ def make_backup(db_path: Path) -> Path:
 # Main.
 # ---------------------------------------------------------------------------
 
+
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Safe repair of FTS5 + vec_chunks in archive.db"
-    )
+    parser = argparse.ArgumentParser(description="Safe repair of FTS5 + vec_chunks in archive.db")
     parser.add_argument("--dry-run", action="store_true", help="только диагностика")
     parser.add_argument("--skip-vec", action="store_true", help="пропустить vec_chunks rebuild")
     parser.add_argument("--skip-fts", action="store_true", help="пропустить FTS5 rebuild")
     parser.add_argument("--no-backup", action="store_true", help="не делать backup")
-    parser.add_argument(
-        "--batch-size", type=int, default=512, help="batch size для vec encode"
-    )
+    parser.add_argument("--batch-size", type=int, default=512, help="batch size для vec encode")
     args = parser.parse_args()
 
     if not DB_PATH.exists():

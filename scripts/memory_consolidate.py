@@ -187,9 +187,7 @@ def _noop_summarizer(texts: list[str]) -> str:
     return f"[noop-summary] {joined[:200]}"
 
 
-def summarize_group(
-    texts: list[str], llm_call: Callable[[list[str]], str] | None = None
-) -> str:
+def summarize_group(texts: list[str], llm_call: Callable[[list[str]], str] | None = None) -> str:
     """Вызывает LLM (или noop) для summarize группы текстов."""
     if llm_call is None:
         return _noop_summarizer(texts)
@@ -201,9 +199,7 @@ def _new_chunk_id(group: ConsolidationGroup) -> str:
     return f"consolidated:{group.chat_id}:{group.start_ts}:{group.size}"
 
 
-def apply_consolidation(
-    conn: sqlite3.Connection, group: ConsolidationGroup, summary: str
-) -> str:
+def apply_consolidation(conn: sqlite3.Connection, group: ConsolidationGroup, summary: str) -> str:
     """Пишет new condensed chunk + помечает оригиналы. Транзакционно.
 
     Возвращает chunk_id нового chunk'а.

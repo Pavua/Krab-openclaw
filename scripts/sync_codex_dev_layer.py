@@ -30,7 +30,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE_CODEX = Path("/Users/pablito/.codex")
 DEFAULT_SOURCE_CLAUDE_MARKETPLACE = Path(
@@ -216,12 +215,12 @@ def _render_mcp(profile: str) -> list[str]:
         lines += [
             "[mcp_servers.krab-telegram]",
             f"command = {_q(PRIMARY_REPO_PATH / 'venv/bin/python')}",
-            f"args = [{_q(PRIMARY_REPO_PATH / 'scripts/run_telegram_mcp_account.py')}, \"--session-name\", \"kraab\"]",
+            f'args = [{_q(PRIMARY_REPO_PATH / "scripts/run_telegram_mcp_account.py")}, "--session-name", "kraab"]',
             "startup_timeout_sec = 20.0",
             "",
             "[mcp_servers.krab-telegram-test]",
             f"command = {_q(PRIMARY_REPO_PATH / 'venv/bin/python')}",
-            f"args = [{_q(PRIMARY_REPO_PATH / 'scripts/run_telegram_mcp_account.py')}, \"--session-name\", \"p0lrd_cc\"]",
+            f'args = [{_q(PRIMARY_REPO_PATH / "scripts/run_telegram_mcp_account.py")}, "--session-name", "p0lrd_cc"]',
             "startup_timeout_sec = 20.0",
             "",
             "[mcp_servers.krab-telegram-test.tools.krab_restart_gateway]",
@@ -266,7 +265,11 @@ def _render_config(home: Path, profile: str, source_claude_marketplace: Path) ->
             "",
         ]
 
-    for project_path in (PRIMARY_REPO_PATH, SHARED_REPO_PATH, home / ".openclaw/workspace-main-messaging"):
+    for project_path in (
+        PRIMARY_REPO_PATH,
+        SHARED_REPO_PATH,
+        home / ".openclaw/workspace-main-messaging",
+    ):
         lines += [
             f"[projects.{_q(project_path)}]",
             'trust_level = "trusted"',
@@ -285,7 +288,9 @@ def _render_config(home: Path, profile: str, source_claude_marketplace: Path) ->
     return "\n".join(lines)
 
 
-def _write_config(home: Path, profile: str, source_claude_marketplace: Path, dry_run: bool) -> dict[str, object]:
+def _write_config(
+    home: Path, profile: str, source_claude_marketplace: Path, dry_run: bool
+) -> dict[str, object]:
     """Пишет переносимый Codex config и проверяет TOML-синтаксис."""
     config_path = home / ".codex" / "config.toml"
     config_text = _render_config(home, profile, source_claude_marketplace)
@@ -377,7 +382,9 @@ def sync_dev_layer(
 
 def main() -> int:
     """CLI entrypoint для `.command`-лаунчеров."""
-    parser = argparse.ArgumentParser(description="Sync safe Codex dev-layer for Krab helper accounts")
+    parser = argparse.ArgumentParser(
+        description="Sync safe Codex dev-layer for Krab helper accounts"
+    )
     parser.add_argument("--profile", choices=("dev-tools", "full"), default="dev-tools")
     parser.add_argument("--source-codex", type=Path, default=DEFAULT_SOURCE_CODEX)
     parser.add_argument(

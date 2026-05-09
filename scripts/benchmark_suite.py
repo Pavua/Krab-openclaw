@@ -34,6 +34,7 @@ sys.path.insert(0, str(ROOT))
 # Core bench harness
 # ---------------------------------------------------------------------------
 
+
 def bench(name: str, func, iterations: int = 100) -> dict | None:
     """Run func N times, return {p50, p95, p99, mean, max} in ms."""
     timings: list[float] = []
@@ -78,6 +79,7 @@ def _print_row(result: dict | None, label: str) -> None:
 # Individual benchmarks
 # ---------------------------------------------------------------------------
 
+
 def bench_fts(iterations: int) -> dict | None:
     """FTS5 BM25 search via messages_fts → chunks join."""
     import sqlite3
@@ -114,7 +116,7 @@ def bench_fts_escape(iterations: int) -> dict | None:
         return None
 
     def op() -> None:
-        _escape_fts5("hello \"world\" OR test AND foo*")
+        _escape_fts5('hello "world" OR test AND foo*')
 
     return bench("FTS5 escape helper (pure)", op, iterations)
 
@@ -251,14 +253,19 @@ BENCHMARKS: list[tuple[str, object]] = [
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Krab Performance Benchmark Suite")
     parser.add_argument(
-        "--iterations", type=int, default=100,
+        "--iterations",
+        type=int,
+        default=100,
         help="Number of iterations per benchmark (default: 100)",
     )
     parser.add_argument(
-        "--module", type=str, default=None,
+        "--module",
+        type=str,
+        default=None,
         help="Filter benchmarks by name substring (e.g. 'fts', 'pii')",
     )
     args = parser.parse_args()
@@ -267,7 +274,9 @@ def main() -> None:
     if args.module:
         targets = [(n, f) for n, f in BENCHMARKS if args.module in n]
         if not targets:
-            print(f"No benchmarks match filter '{args.module}'. Available: {[n for n, _ in BENCHMARKS]}")
+            print(
+                f"No benchmarks match filter '{args.module}'. Available: {[n for n, _ in BENCHMARKS]}"
+            )
             sys.exit(1)
 
     header = f"{'Benchmark':<42} {'p50':>9} {'p95':>9} {'p99':>9} {'mean':>9} {'max':>9}"
@@ -286,10 +295,14 @@ def main() -> None:
 
     print(sep)
     if results:
-        print(f"\n  Fastest: {min(results, key=lambda r: r['p50'])['name']}  "
-              f"(p50={min(results, key=lambda r: r['p50'])['p50']:.3f}ms)")
-        print(f"  Slowest: {max(results, key=lambda r: r['p50'])['name']}  "
-              f"(p50={max(results, key=lambda r: r['p50'])['p50']:.3f}ms)")
+        print(
+            f"\n  Fastest: {min(results, key=lambda r: r['p50'])['name']}  "
+            f"(p50={min(results, key=lambda r: r['p50'])['p50']:.3f}ms)"
+        )
+        print(
+            f"  Slowest: {max(results, key=lambda r: r['p50'])['name']}  "
+            f"(p50={max(results, key=lambda r: r['p50'])['p50']:.3f}ms)"
+        )
     print()
 
 

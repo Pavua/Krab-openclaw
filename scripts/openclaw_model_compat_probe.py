@@ -27,7 +27,6 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 
-
 DEFAULT_TARGET_PRIMARY_MODEL = "openai-codex/gpt-5.4"
 DEFAULT_GATEWAY_BASE_URL = "http://127.0.0.1:18789"
 
@@ -53,7 +52,9 @@ def _unique_non_empty(items: list[str]) -> list[str]:
     return out
 
 
-def _normalize_model_key(provider: str, model_id: str, known_providers: set[str] | None = None) -> str:
+def _normalize_model_key(
+    provider: str, model_id: str, known_providers: set[str] | None = None
+) -> str:
     provider_raw = str(provider or "").strip().lower()
     model_raw = str(model_id or "").strip()
     if not model_raw:
@@ -81,12 +82,18 @@ def _model_matches(model_key: str, candidate: str) -> bool:
     return left_tail == right_tail
 
 
-def _runtime_registry_models(runtime_models_payload: dict[str, Any]) -> tuple[list[str], dict[str, dict[str, Any]]]:
-    providers = runtime_models_payload.get("providers") if isinstance(runtime_models_payload, dict) else {}
+def _runtime_registry_models(
+    runtime_models_payload: dict[str, Any],
+) -> tuple[list[str], dict[str, dict[str, Any]]]:
+    providers = (
+        runtime_models_payload.get("providers") if isinstance(runtime_models_payload, dict) else {}
+    )
     if not isinstance(providers, dict):
         return [], {}
 
-    known_providers = set(str(key or "").strip().lower() for key in providers.keys() if str(key or "").strip())
+    known_providers = set(
+        str(key or "").strip().lower() for key in providers.keys() if str(key or "").strip()
+    )
     models: list[str] = []
     meta: dict[str, dict[str, Any]] = {}
     for provider_name, provider_cfg in providers.items():
@@ -96,7 +103,9 @@ def _runtime_registry_models(runtime_models_payload: dict[str, Any]) -> tuple[li
         for item in model_items:
             if not isinstance(item, dict):
                 continue
-            normalized = _normalize_model_key(str(provider_name or ""), str(item.get("id") or ""), known_providers)
+            normalized = _normalize_model_key(
+                str(provider_name or ""), str(item.get("id") or ""), known_providers
+            )
             if not normalized:
                 continue
             models.append(normalized)
@@ -104,17 +113,25 @@ def _runtime_registry_models(runtime_models_payload: dict[str, Any]) -> tuple[li
     return _unique_non_empty(models), meta
 
 
-def _matching_auth_entries(auth_payload: dict[str, Any], provider: str) -> tuple[list[tuple[str, dict[str, Any]]], list[tuple[str, dict[str, Any]]]]:
+def _matching_auth_entries(
+    auth_payload: dict[str, Any], provider: str
+) -> tuple[list[tuple[str, dict[str, Any]]], list[tuple[str, dict[str, Any]]]]:
     provider_raw = str(provider or "").strip().lower()
-    profiles_raw = auth_payload.get("profiles") if isinstance(auth_payload.get("profiles"), dict) else {}
-    usage_raw = auth_payload.get("usageStats") if isinstance(auth_payload.get("usageStats"), dict) else {}
+    profiles_raw = (
+        auth_payload.get("profiles") if isinstance(auth_payload.get("profiles"), dict) else {}
+    )
+    usage_raw = (
+        auth_payload.get("usageStats") if isinstance(auth_payload.get("usageStats"), dict) else {}
+    )
 
     matching_profiles: list[tuple[str, dict[str, Any]]] = []
     for profile_key, profile_value in profiles_raw.items():
         if not isinstance(profile_value, dict):
             continue
         profile_provider = str(profile_value.get("provider") or "").strip().lower()
-        if profile_provider == provider_raw or str(profile_key).strip().lower().startswith(f"{provider_raw}:"):
+        if profile_provider == provider_raw or str(profile_key).strip().lower().startswith(
+            f"{provider_raw}:"
+        ):
             matching_profiles.append((str(profile_key), profile_value))
 
     matching_usage: list[tuple[str, dict[str, Any]]] = []
@@ -207,23 +224,45 @@ async def _probe_gateway_non_invasive(base_url: str, token: str, model: str) -> 
     }
     try:
         async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
-            response = await client.post(f"{base_url.rstrip('/')}/v1/chat/completions", json=payload)
+            response = await client.post(
+                f"{base_url.rstrip('/')}/v1/chat/completions", json=payload
+            )
         body = response.text[:1200]
         content_type = str(response.headers.get("content-type", "") or "").lower()
         if response.status_code in {401, 403}:
-            return {"ok": False, "status": response.status_code, "error": "auth_error", "body": body}
+            return {
+                "ok": False,
+                "status": response.status_code,
+                "error": "auth_error",
+                "body": body,
+            }
         if "application/json" not in content_type:
-            return {"ok": False, "status": response.status_code, "error": "non_json_endpoint", "body": body}
+            return {
+                "ok": False,
+                "status": response.status_code,
+                "error": "non_json_endpoint",
+                "body": body,
+            }
         try:
             data = response.json()
         except Exception as exc:
-            return {"ok": False, "status": response.status_code, "error": f"json_decode_error:{exc}", "body": body}
+            return {
+                "ok": False,
+                "status": response.status_code,
+                "error": f"json_decode_error:{exc}",
+                "body": body,
+            }
         err = data.get("error") if isinstance(data, dict) else {}
         err_type = str(err.get("type") or "").strip()
         err_msg = str(err.get("message") or "").strip()
         if response.status_code == 400 and err_type == "invalid_request_error":
             return {"ok": True, "status": 400, "error": "ok_controlled_400", "body": err_msg[:500]}
-        return {"ok": False, "status": response.status_code, "error": f"unexpected_response:{err_type or 'unknown'}", "body": body}
+        return {
+            "ok": False,
+            "status": response.status_code,
+            "error": f"unexpected_response:{err_type or 'unknown'}",
+            "body": body,
+        }
     except Exception as exc:
         return {"ok": False, "status": 0, "error": "network_error", "body": str(exc)}
 
@@ -253,14 +292,26 @@ async def _probe_gateway_chat(
     }
     try:
         async with httpx.AsyncClient(timeout=25.0, headers=headers) as client:
-            response = await client.post(f"{base_url.rstrip('/')}/v1/chat/completions", json=payload)
+            response = await client.post(
+                f"{base_url.rstrip('/')}/v1/chat/completions", json=payload
+            )
         body = response.text[:1200]
         if response.status_code != 200:
-            return {"ok": False, "status": response.status_code, "error": "http_error", "body": body}
+            return {
+                "ok": False,
+                "status": response.status_code,
+                "error": "http_error",
+                "body": body,
+            }
         try:
             data = response.json()
         except Exception as exc:
-            return {"ok": False, "status": response.status_code, "error": f"json_decode_error:{exc}", "body": body}
+            return {
+                "ok": False,
+                "status": response.status_code,
+                "error": f"json_decode_error:{exc}",
+                "body": body,
+            }
         choices = data.get("choices") if isinstance(data, dict) else []
         message = (choices[0].get("message") or {}) if isinstance(choices, list) and choices else {}
         text = str(message.get("content") or "").strip()
@@ -298,7 +349,9 @@ async def main_async(
     target_model = str(model or DEFAULT_TARGET_PRIMARY_MODEL).strip()
     target_provider = target_model.split("/", 1)[0].strip().lower() if "/" in target_model else ""
     provider_health = _provider_health(auth_profiles, target_provider) if target_provider else {}
-    registry_entry_key = next((item for item in registry_models if _model_matches(target_model, item)), "")
+    registry_entry_key = next(
+        (item for item in registry_models if _model_matches(target_model, item)), ""
+    )
     registry_entry = registry_meta.get(registry_entry_key, {})
 
     blocked_reason = ""
@@ -309,10 +362,21 @@ async def main_async(
     elif any(_model_matches(target_model, item) for item in broken_models):
         blocked_reason = "target_model_marked_broken"
 
-    token = _read_runtime_gateway_token(runtime_config) or str(
-        os.getenv("OPENCLAW_GATEWAY_TOKEN", os.getenv("OPENCLAW_TOKEN", os.getenv("OPENCLAW_API_KEY", ""))) or ""
+    token = (
+        _read_runtime_gateway_token(runtime_config)
+        or str(
+            os.getenv(
+                "OPENCLAW_GATEWAY_TOKEN",
+                os.getenv("OPENCLAW_TOKEN", os.getenv("OPENCLAW_API_KEY", "")),
+            )
+            or ""
+        ).strip()
+    )
+    base = str(
+        base_url
+        or os.getenv("OPENCLAW_BASE_URL", DEFAULT_GATEWAY_BASE_URL)
+        or DEFAULT_GATEWAY_BASE_URL
     ).strip()
-    base = str(base_url or os.getenv("OPENCLAW_BASE_URL", DEFAULT_GATEWAY_BASE_URL) or DEFAULT_GATEWAY_BASE_URL).strip()
 
     result: dict[str, Any] = {
         "status": "BLOCKED" if blocked_reason else "DEGRADED",
@@ -334,9 +398,17 @@ async def main_async(
                 "ok": False,
                 "status": "BLOCKED",
                 "reason": blocked_reason,
-                "non_invasive_probe": {"ok": None, "status": "skipped", "error": "blocked_before_probe"},
+                "non_invasive_probe": {
+                    "ok": None,
+                    "status": "skipped",
+                    "error": "blocked_before_probe",
+                },
                 "chat_probe": {"ok": None, "status": "skipped", "error": "blocked_before_probe"},
-                "reasoning_probe": {"ok": None, "status": "skipped", "error": "blocked_before_probe"},
+                "reasoning_probe": {
+                    "ok": None,
+                    "status": "skipped",
+                    "error": "blocked_before_probe",
+                },
                 "promotion_ready": False,
             }
         )
@@ -382,15 +454,42 @@ async def main_async(
 def main() -> int:
     load_dotenv()
 
-    parser = argparse.ArgumentParser(description="Read-only compatibility probe для target-модели OpenClaw")
-    parser.add_argument("--model", default=str(os.getenv("OPENCLAW_TARGET_PRIMARY_MODEL", DEFAULT_TARGET_PRIMARY_MODEL) or DEFAULT_TARGET_PRIMARY_MODEL))
-    parser.add_argument("--reasoning", default="high", help="Какой reasoning-режим проверять на втором шаге.")
-    parser.add_argument("--skip-reasoning", action="store_true", help="Пропустить reasoning probe и проверить только базовый chat.")
+    parser = argparse.ArgumentParser(
+        description="Read-only compatibility probe для target-модели OpenClaw"
+    )
+    parser.add_argument(
+        "--model",
+        default=str(
+            os.getenv("OPENCLAW_TARGET_PRIMARY_MODEL", DEFAULT_TARGET_PRIMARY_MODEL)
+            or DEFAULT_TARGET_PRIMARY_MODEL
+        ),
+    )
+    parser.add_argument(
+        "--reasoning", default="high", help="Какой reasoning-режим проверять на втором шаге."
+    )
+    parser.add_argument(
+        "--skip-reasoning",
+        action="store_true",
+        help="Пропустить reasoning probe и проверить только базовый chat.",
+    )
     parser.add_argument("--openclaw-json", default=str(Path.home() / ".openclaw" / "openclaw.json"))
-    parser.add_argument("--models-json", default=str(Path.home() / ".openclaw" / "agents" / "main" / "agent" / "models.json"))
-    parser.add_argument("--auth-profiles-json", default=str(Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"))
-    parser.add_argument("--gateway-log", default=str(Path.home() / ".openclaw" / "logs" / "gateway.err.log"))
-    parser.add_argument("--base-url", default=str(os.getenv("OPENCLAW_BASE_URL", DEFAULT_GATEWAY_BASE_URL) or DEFAULT_GATEWAY_BASE_URL))
+    parser.add_argument(
+        "--models-json",
+        default=str(Path.home() / ".openclaw" / "agents" / "main" / "agent" / "models.json"),
+    )
+    parser.add_argument(
+        "--auth-profiles-json",
+        default=str(Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"),
+    )
+    parser.add_argument(
+        "--gateway-log", default=str(Path.home() / ".openclaw" / "logs" / "gateway.err.log")
+    )
+    parser.add_argument(
+        "--base-url",
+        default=str(
+            os.getenv("OPENCLAW_BASE_URL", DEFAULT_GATEWAY_BASE_URL) or DEFAULT_GATEWAY_BASE_URL
+        ),
+    )
     args = parser.parse_args()
 
     result = asyncio.run(

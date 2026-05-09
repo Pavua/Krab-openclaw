@@ -14,6 +14,7 @@ Benchmark: adaptive rerank overhead vs baseline (Wave 29-AA).
 
 Результаты: stdout + .remember/benchmarks_adaptive_rerank_19_04_2026.md
 """
+
 from __future__ import annotations
 
 import os
@@ -69,7 +70,9 @@ def jaccard(set_a: set, set_b: set) -> float:
     return len(set_a & set_b) / len(union)
 
 
-def bench_query(retriever: HybridRetriever, query: str, runs: int) -> tuple[list[float], list[str], str | None]:
+def bench_query(
+    retriever: HybridRetriever, query: str, runs: int
+) -> tuple[list[float], list[str], str | None]:
     """
     Прогоняет query N раз, возвращает (latencies_ms, top_ids_last_run, error_msg).
     error_msg — None если всё ОК, иначе описание ошибки.
@@ -162,22 +165,26 @@ def run_benchmark() -> str:
         a = _stats(adap_lats)
 
         # Overhead (delta mean)
-        delta_mean = (a["mean"] - b["mean"]) if (a["mean"] is not None and b["mean"] is not None) else None
+        delta_mean = (
+            (a["mean"] - b["mean"]) if (a["mean"] is not None and b["mean"] is not None) else None
+        )
 
-        rows.append({
-            "query": query,
-            "status": status,
-            "base_mean": b["mean"],
-            "base_p50": b["p50"],
-            "base_p95": b["p95"],
-            "base_p99": b["p99"],
-            "adap_mean": a["mean"],
-            "adap_p50": a["p50"],
-            "adap_p95": a["p95"],
-            "adap_p99": a["p99"],
-            "delta_mean_ms": delta_mean,
-            "jaccard": jac,
-        })
+        rows.append(
+            {
+                "query": query,
+                "status": status,
+                "base_mean": b["mean"],
+                "base_p50": b["p50"],
+                "base_p95": b["p95"],
+                "base_p99": b["p99"],
+                "adap_mean": a["mean"],
+                "adap_p50": a["p50"],
+                "adap_p95": a["p95"],
+                "adap_p99": a["p99"],
+                "delta_mean_ms": delta_mean,
+                "jaccard": jac,
+            }
+        )
 
         # Краткий print на stdout
         if base_err:
@@ -217,8 +224,12 @@ def _build_markdown(rows: list[dict]) -> str:
     lines.append("")
     lines.append("## Latency (ms)")
     lines.append("")
-    lines.append("| Query | Status | Base mean | Base p50 | Base p95 | Adap mean | Adap p50 | Adap p95 | Overhead (ms) |")
-    lines.append("|-------|--------|-----------|----------|----------|-----------|----------|----------|---------------|")
+    lines.append(
+        "| Query | Status | Base mean | Base p50 | Base p95 | Adap mean | Adap p50 | Adap p95 | Overhead (ms) |"
+    )
+    lines.append(
+        "|-------|--------|-----------|----------|----------|-----------|----------|----------|---------------|"
+    )
 
     for r in rows:
         q = r["query"][:30]
@@ -230,7 +241,9 @@ def _build_markdown(rows: list[dict]) -> str:
         ap50 = _fmt(r["adap_p50"])
         ap95 = _fmt(r["adap_p95"])
         delta = _fmt(r["delta_mean_ms"], "+.1f") if r["delta_mean_ms"] is not None else "N/A"
-        lines.append(f"| {q} | {status} | {bm} | {bp50} | {bp95} | {am} | {ap50} | {ap95} | {delta} |")
+        lines.append(
+            f"| {q} | {status} | {bm} | {bp50} | {bp95} | {am} | {ap50} | {ap95} | {delta} |"
+        )
 
     lines.append("")
     lines.append("## Quality (Jaccard top-10 overlap)")

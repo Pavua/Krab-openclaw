@@ -39,7 +39,6 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 from src.core.inbox_service import InboxService  # noqa: E402
 
-
 _DEFAULT_KIND = "owner_request"
 _DEFAULT_STATUS = "open"
 _DEFAULT_OLDER_THAN_DAYS = 3
@@ -50,7 +49,9 @@ _DEFAULT_ACTOR = "system-cleanup"
 def build_cutoff_iso(*, older_than_days: int, now: datetime | None = None) -> str:
     """Возвращает ISO cutoff для фильтрации stale items."""
     effective_now = now or datetime.now(timezone.utc)
-    return (effective_now - timedelta(days=max(0, int(older_than_days)))).isoformat(timespec="seconds")
+    return (effective_now - timedelta(days=max(0, int(older_than_days)))).isoformat(
+        timespec="seconds"
+    )
 
 
 def _normalize_set(values: Iterable[str] | None) -> set[str]:
@@ -205,10 +206,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {detail}")
         return 1
 
-    print(
-        f"\n✅ Архивировано: {result['success_count']} items "
-        f"(ошибок: {result['error_count']})"
-    )
+    print(f"\n✅ Архивировано: {result['success_count']} items (ошибок: {result['error_count']})")
 
     remaining = select_stale_items(
         service,

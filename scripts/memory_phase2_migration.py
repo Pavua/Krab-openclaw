@@ -11,6 +11,7 @@ Phase 2 migration: гарантируем наличие ``vec_chunks`` sqlite-v
 Usage:
     venv/bin/python scripts/memory_phase2_migration.py
 """
+
 from __future__ import annotations
 
 import sqlite3

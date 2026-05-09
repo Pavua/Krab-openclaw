@@ -51,9 +51,7 @@ _DEFAULT_AUDIT_LOG = _DEFAULT_RUNTIME_DIR / "forget_me_audit.log"
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     """Проверка наличия таблицы или virtual table в БД."""
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE name = ? LIMIT 1;", (name,)
-    ).fetchone()
+    row = conn.execute("SELECT 1 FROM sqlite_master WHERE name = ? LIMIT 1;", (name,)).fetchone()
     return row is not None
 
 
@@ -286,11 +284,7 @@ def apply_plan(
     try:
         with conn:  # transaction
             # 1) vec_chunks по rowid (если есть таблица и флаг).
-            if (
-                also_vec_chunks
-                and plan.chunk_rowids
-                and _table_exists(conn, "vec_chunks")
-            ):
+            if also_vec_chunks and plan.chunk_rowids and _table_exists(conn, "vec_chunks"):
                 batch = 500
                 for i in range(0, len(plan.chunk_rowids), batch):
                     slc = plan.chunk_rowids[i : i + batch]
@@ -329,13 +323,9 @@ def apply_plan(
             # 4) messages (CASCADE удалит chunk_messages, message_media_summaries
             # уже отдельная таблица — её чистим явно ниже).
             if user_id is not None:
-                conn.execute(
-                    "DELETE FROM messages WHERE sender_id = ?;", (user_id,)
-                )
+                conn.execute("DELETE FROM messages WHERE sender_id = ?;", (user_id,))
             elif chat_id is not None:
-                conn.execute(
-                    "DELETE FROM messages WHERE chat_id = ?;", (chat_id,)
-                )
+                conn.execute("DELETE FROM messages WHERE chat_id = ?;", (chat_id,))
 
             # 5) message_media_summaries — нет FK на messages, чистим явно.
             if _table_exists(conn, "message_media_summaries"):

@@ -78,9 +78,11 @@ def _send_via_mcp_shell(text: str) -> bool:
     if not mcp_script.exists():
         return False
     import subprocess
+
     result = subprocess.run(
         [sys.executable, str(mcp_script), "--send", TELEGRAM_CHAT_ID, "--text", text],
-        capture_output=True, timeout=15,
+        capture_output=True,
+        timeout=15,
     )
     return result.returncode == 0
 
@@ -100,17 +102,9 @@ def _notify_krab(file_path: Path) -> None:
             pass
 
     if text_content:
-        msg = (
-            f"📥 Krab_Inbox: новый файл\n"
-            f"📄 {file_path.name} ({size_str})\n\n"
-            f"{text_content}"
-        )
+        msg = f"📥 Krab_Inbox: новый файл\n📄 {file_path.name} ({size_str})\n\n{text_content}"
     else:
-        msg = (
-            f"📥 Krab_Inbox: новый файл\n"
-            f"📄 {file_path.name} ({size_str})\n"
-            f"📁 {file_path}"
-        )
+        msg = f"📥 Krab_Inbox: новый файл\n📄 {file_path.name} ({size_str})\n📁 {file_path}"
 
     # Обрезаем до Telegram лимита
     if len(msg) > 4000:

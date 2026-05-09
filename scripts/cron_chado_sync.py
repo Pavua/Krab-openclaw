@@ -10,7 +10,6 @@ import subprocess
 import textwrap
 from datetime import datetime
 
-
 MAX_DIGEST_CHARS = 3500
 
 DIGEST_TEMPLATE = """\
@@ -40,7 +39,7 @@ def get_git_log_7d(repo_path: str = "/Users/pablito/Antigravity_AGENTS/Краб"
         text=True,
         timeout=10,
     )
-    lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     return lines
 
 
@@ -56,7 +55,9 @@ def format_digest(
     ecosystem_summary: str = "N/A (panel offline or dry-run)",
 ) -> str:
     """Форматирует дайджест и обрезает до MAX_DIGEST_CHARS."""
-    numbered = "\n".join(f"{i+1}. {c}" for i, c in enumerate(top_features)) or "No commits this week."
+    numbered = (
+        "\n".join(f"{i + 1}. {c}" for i, c in enumerate(top_features)) or "No commits this week."
+    )
     digest = DIGEST_TEMPLATE.format(
         date=datetime.now().strftime("%Y-%m-%d"),
         top_features=numbered,

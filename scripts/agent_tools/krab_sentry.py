@@ -118,7 +118,13 @@ def cmd_issues(args: argparse.Namespace, token: str) -> dict:
         }
         for i in (issues if isinstance(issues, list) else [])
     ]
-    return {"ok": True, "org": org, "project": args.project, "count": len(summary), "issues": summary}
+    return {
+        "ok": True,
+        "org": org,
+        "project": args.project,
+        "count": len(summary),
+        "issues": summary,
+    }
 
 
 def cmd_events(args: argparse.Namespace, token: str) -> dict:
@@ -140,9 +146,7 @@ def cmd_events(args: argparse.Namespace, token: str) -> dict:
 
 
 def cmd_resolve(args: argparse.Namespace, token: str) -> dict:
-    res = _api_request(
-        token, "PUT", f"/issues/{args.issue}/", json_body={"status": "resolved"}
-    )
+    res = _api_request(token, "PUT", f"/issues/{args.issue}/", json_body={"status": "resolved"})
     if not res["ok"]:
         return res
     return {"ok": True, "issue": args.issue, "status": "resolved", "data": res["data"]}

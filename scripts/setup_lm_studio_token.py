@@ -15,6 +15,7 @@ Usage:
 
 Session 33: Wave 8-C — фиксит `!uptime` LM Studio Status 401.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -93,7 +94,10 @@ def probe_lm_studio(
     try:
         resp = httpx.get(url, headers=headers, timeout=timeout)
     except httpx.ConnectError as exc:
-        return False, f"connection error: {exc}. Hint: проверь что LM Studio запущена и Network доступен."
+        return (
+            False,
+            f"connection error: {exc}. Hint: проверь что LM Studio запущена и Network доступен.",
+        )
     except httpx.TimeoutException:
         return False, f"timeout {timeout}s. Hint: LM Studio не отвечает по {base_url}."
     except Exception as exc:

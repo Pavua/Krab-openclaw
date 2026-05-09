@@ -83,7 +83,12 @@ def cmd_issue_list(args: argparse.Namespace) -> dict:
     if rc != 0:
         return {"ok": False, "error": err or "gh issue list failed"}
     issues = _parse_json(out) or []
-    return {"ok": True, "repo": repo, "count": len(issues) if isinstance(issues, list) else 0, "issues": issues}
+    return {
+        "ok": True,
+        "repo": repo,
+        "count": len(issues) if isinstance(issues, list) else 0,
+        "issues": issues,
+    }
 
 
 def cmd_issue_get(args: argparse.Namespace) -> dict:
@@ -180,9 +185,7 @@ def cmd_pr_create(args: argparse.Namespace) -> dict:
 
 def cmd_pr_comment(args: argparse.Namespace) -> dict:
     repo = f"{args.owner}/{args.name}"
-    rc, out, err = _run_gh(
-        ["pr", "comment", str(args.number), "--repo", repo, "--body", args.body]
-    )
+    rc, out, err = _run_gh(["pr", "comment", str(args.number), "--repo", repo, "--body", args.body])
     if rc != 0:
         return {"ok": False, "error": err or "gh pr comment failed"}
     return {"ok": True, "url": out.strip()}
@@ -205,7 +208,12 @@ def cmd_actions_runs(args: argparse.Namespace) -> dict:
     if rc != 0:
         return {"ok": False, "error": err or "gh run list failed"}
     runs = _parse_json(out) or []
-    return {"ok": True, "repo": repo, "count": len(runs) if isinstance(runs, list) else 0, "runs": runs}
+    return {
+        "ok": True,
+        "repo": repo,
+        "count": len(runs) if isinstance(runs, list) else 0,
+        "runs": runs,
+    }
 
 
 def cmd_release_latest(args: argparse.Namespace) -> dict:

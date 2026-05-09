@@ -18,10 +18,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
-import sys
 import os
+import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +29,6 @@ from typing import Any
 from urllib import error as urlerror
 from urllib import request
 from urllib.parse import urlparse
-
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS_DIR = ROOT / "artifacts" / "ops"
@@ -65,7 +64,9 @@ def _normalize_lm_base_url(raw: str) -> str:
     return base
 
 
-def _http_json(method: str, url: str, body: dict[str, Any] | None = None, timeout: float = 6.0) -> HttpResult:
+def _http_json(
+    method: str, url: str, body: dict[str, Any] | None = None, timeout: float = 6.0
+) -> HttpResult:
     raw_data = None
     headers = {"Accept": "application/json"}
     if body is not None:
@@ -83,9 +84,13 @@ def _http_json(method: str, url: str, body: dict[str, Any] | None = None, timeou
             text = exc.read().decode("utf-8", errors="replace")
         except Exception:
             pass
-        return HttpResult(ok=False, status=int(exc.code or 0), payload=text[:320], error=f"http_{exc.code}")
+        return HttpResult(
+            ok=False, status=int(exc.code or 0), payload=text[:320], error=f"http_{exc.code}"
+        )
     except Exception as exc:  # noqa: BLE001
-        return HttpResult(ok=False, status=0, payload=None, error=str(exc) or exc.__class__.__name__)
+        return HttpResult(
+            ok=False, status=0, payload=None, error=str(exc) or exc.__class__.__name__
+        )
 
     try:
         payload = json.loads(text) if text.strip() else {}
@@ -137,7 +142,14 @@ def _extract_instance_ids(entry: dict[str, Any]) -> list[str]:
 
     for item in candidates:
         if isinstance(item, dict):
-            for key in ("instance_id", "instanceId", "id", "instanceReference", "instance_reference", "identifier"):
+            for key in (
+                "instance_id",
+                "instanceId",
+                "id",
+                "instanceReference",
+                "instance_reference",
+                "identifier",
+            ):
                 raw = item.get(key)
                 if raw is None:
                     continue
@@ -199,7 +211,9 @@ def _is_unload_success(res: HttpResult) -> bool:
     return True
 
 
-def _run_http_unload(base: str, loaded_models: list[dict[str, Any]]) -> tuple[bool, str, list[UnloadAttempt]]:
+def _run_http_unload(
+    base: str, loaded_models: list[dict[str, Any]]
+) -> tuple[bool, str, list[UnloadAttempt]]:
     attempts_report: list[UnloadAttempt] = []
     attempts = _build_unload_attempts(loaded_models)
     endpoint = f"{base}/api/v1/models/unload"
@@ -213,7 +227,11 @@ def _run_http_unload(base: str, loaded_models: list[dict[str, Any]]) -> tuple[bo
             return True, "", attempts_report
     if attempts_report:
         last = attempts_report[-1]
-        return False, f"{last.route}:{last.error or ('status=' + str(last.status))}", attempts_report
+        return (
+            False,
+            f"{last.route}:{last.error or ('status=' + str(last.status))}",
+            attempts_report,
+        )
     return False, "no_unload_attempts", attempts_report
 
 
@@ -294,11 +312,24 @@ def _minutes_between(a: datetime, b: datetime) -> float:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Страховочный idle-unload guard для LM Studio.")
-    parser.add_argument("--lm-url", default="", help="LM Studio URL (по умолчанию LM_STUDIO_URL или http://127.0.0.1:1234).")
-    parser.add_argument("--logs-dir", default=str(DEFAULT_LOGS_DIR), help="Папка server-логов LM Studio.")
-    parser.add_argument("--max-idle-minutes", type=float, default=45.0, help="Порог idle для принудительной выгрузки.")
+    parser.add_argument(
+        "--lm-url",
+        default="",
+        help="LM Studio URL (по умолчанию LM_STUDIO_URL или http://127.0.0.1:1234).",
+    )
+    parser.add_argument(
+        "--logs-dir", default=str(DEFAULT_LOGS_DIR), help="Папка server-логов LM Studio."
+    )
+    parser.add_argument(
+        "--max-idle-minutes",
+        type=float,
+        default=45.0,
+        help="Порог idle для принудительной выгрузки.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Только диагностика, без выгрузки.")
-    parser.add_argument("--force", action="store_true", help="Выгрузить сразу, если есть загруженные модели.")
+    parser.add_argument(
+        "--force", action="store_true", help="Выгрузить сразу, если есть загруженные модели."
+    )
     args = parser.parse_args()
 
     lm_raw = (args.lm_url or "").strip() or str(os.getenv("LM_STUDIO_URL", "http://127.0.0.1:1234"))

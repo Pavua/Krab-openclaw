@@ -24,7 +24,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_PRIMARY_MODEL = "google/gemini-2.5-flash"
 DEFAULT_OPENAI_FALLBACK = "openai/gpt-4o-mini"
 GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
@@ -194,11 +193,19 @@ def _seed_runtime_config(config_path: Path, models_path: Path) -> dict[str, Any]
         model_defaults["primary"] = runtime_primary
 
     lmstudio_models = (
-        (((models_root.get("providers") or {}) if isinstance(models_root.get("providers"), dict) else {}).get("lmstudio"))
+        (
+            (
+                (models_root.get("providers") or {})
+                if isinstance(models_root.get("providers"), dict)
+                else {}
+            ).get("lmstudio")
+        )
         if isinstance(models_root, dict)
         else {}
     )
-    lmstudio_model_items = (lmstudio_models.get("models") or []) if isinstance(lmstudio_models, dict) else []
+    lmstudio_model_items = (
+        (lmstudio_models.get("models") or []) if isinstance(lmstudio_models, dict) else []
+    )
     first_lmstudio_id = ""
     if isinstance(lmstudio_model_items, list):
         for item in lmstudio_model_items:
@@ -277,10 +284,30 @@ def bootstrap_openclaw_account(openclaw_bin: str) -> dict[str, Any]:
 
     config_payload = _seed_runtime_config(config_path, models_path)
     primary_model = str(
-        (((((config_payload.get("agents") or {}) if isinstance(config_payload.get("agents"), dict) else {}).get("defaults") or {})
-          if isinstance((((config_payload.get("agents") or {}) if isinstance(config_payload.get("agents"), dict) else {}).get("defaults")), dict)
-          else {}).get("model") or {}
-         ).get("primary")
+        (
+            (
+                (
+                    (
+                        (config_payload.get("agents") or {})
+                        if isinstance(config_payload.get("agents"), dict)
+                        else {}
+                    ).get("defaults")
+                    or {}
+                )
+                if isinstance(
+                    (
+                        (
+                            (config_payload.get("agents") or {})
+                            if isinstance(config_payload.get("agents"), dict)
+                            else {}
+                        ).get("defaults")
+                    ),
+                    dict,
+                )
+                else {}
+            ).get("model")
+            or {}
+        ).get("primary")
         or DEFAULT_PRIMARY_MODEL
     ).strip()
 
@@ -293,18 +320,47 @@ def bootstrap_openclaw_account(openclaw_bin: str) -> dict[str, Any]:
         agent_payload.setdefault("model", primary_model)
     _write_json(agent_config_path, agent_payload)
 
-    google_provider = (((config_payload.get("models") or {}) if isinstance(config_payload.get("models"), dict) else {}).get("providers") or {})
-    google_provider = (google_provider if isinstance(google_provider, dict) else {}).get("google") or {}
-    lmstudio_provider = (((config_payload.get("models") or {}) if isinstance(config_payload.get("models"), dict) else {}).get("providers") or {})
-    lmstudio_provider = (lmstudio_provider if isinstance(lmstudio_provider, dict) else {}).get("lmstudio") or {}
+    google_provider = (
+        (config_payload.get("models") or {})
+        if isinstance(config_payload.get("models"), dict)
+        else {}
+    ).get("providers") or {}
+    google_provider = (google_provider if isinstance(google_provider, dict) else {}).get(
+        "google"
+    ) or {}
+    lmstudio_provider = (
+        (config_payload.get("models") or {})
+        if isinstance(config_payload.get("models"), dict)
+        else {}
+    ).get("providers") or {}
+    lmstudio_provider = (lmstudio_provider if isinstance(lmstudio_provider, dict) else {}).get(
+        "lmstudio"
+    ) or {}
 
     fallbacks = (
-        (((((config_payload.get("agents") or {}) if isinstance(config_payload.get("agents"), dict) else {}).get("defaults") or {})
-          if isinstance((((config_payload.get("agents") or {}) if isinstance(config_payload.get("agents"), dict) else {}).get("defaults")), dict)
-          else {}).get("model") or {}
-         ).get("fallbacks")
-        or []
-    )
+        (
+            (
+                (
+                    (config_payload.get("agents") or {})
+                    if isinstance(config_payload.get("agents"), dict)
+                    else {}
+                ).get("defaults")
+                or {}
+            )
+            if isinstance(
+                (
+                    (
+                        (config_payload.get("agents") or {})
+                        if isinstance(config_payload.get("agents"), dict)
+                        else {}
+                    ).get("defaults")
+                ),
+                dict,
+            )
+            else {}
+        ).get("model")
+        or {}
+    ).get("fallbacks") or []
     if not isinstance(fallbacks, list):
         fallbacks = []
 
@@ -319,15 +375,46 @@ def bootstrap_openclaw_account(openclaw_bin: str) -> dict[str, Any]:
         "onboard": onboard_report,
         "config": {
             "path": str(config_path),
-            "google_base_url": str((google_provider if isinstance(google_provider, dict) else {}).get("baseUrl") or ""),
-            "google_models_count": len((google_provider if isinstance(google_provider, dict) else {}).get("models") or []),
-            "lmstudio_base_url": str((lmstudio_provider if isinstance(lmstudio_provider, dict) else {}).get("baseUrl") or ""),
-            "lmstudio_models_count": len((lmstudio_provider if isinstance(lmstudio_provider, dict) else {}).get("models") or []),
+            "google_base_url": str(
+                (google_provider if isinstance(google_provider, dict) else {}).get("baseUrl") or ""
+            ),
+            "google_models_count": len(
+                (google_provider if isinstance(google_provider, dict) else {}).get("models") or []
+            ),
+            "lmstudio_base_url": str(
+                (lmstudio_provider if isinstance(lmstudio_provider, dict) else {}).get("baseUrl")
+                or ""
+            ),
+            "lmstudio_models_count": len(
+                (lmstudio_provider if isinstance(lmstudio_provider, dict) else {}).get("models")
+                or []
+            ),
             "chat_completions_enabled": bool(
-                (((((config_payload.get("gateway") or {}) if isinstance(config_payload.get("gateway"), dict) else {}).get("http") or {})
-                   if isinstance((((config_payload.get("gateway") or {}) if isinstance(config_payload.get("gateway"), dict) else {}).get("http")), dict)
-                   else {}).get("endpoints") or {}
-                 ).get("chatCompletions", {})
+                (
+                    (
+                        (
+                            (
+                                (config_payload.get("gateway") or {})
+                                if isinstance(config_payload.get("gateway"), dict)
+                                else {}
+                            ).get("http")
+                            or {}
+                        )
+                        if isinstance(
+                            (
+                                (
+                                    (config_payload.get("gateway") or {})
+                                    if isinstance(config_payload.get("gateway"), dict)
+                                    else {}
+                                ).get("http")
+                            ),
+                            dict,
+                        )
+                        else {}
+                    ).get("endpoints")
+                    or {}
+                )
+                .get("chatCompletions", {})
                 .get("enabled", False)
             ),
             "primary_model": primary_model,

@@ -14,6 +14,7 @@
 По умолчанию работает в dry-run режиме — безопасно.
 Для реального resolve: передать --no-dry-run явно.
 """
+
 from __future__ import annotations
 
 import json
@@ -67,9 +68,7 @@ STALE_DAYS: int = int(os.environ.get("SENTRY_STALE_DAYS", "7"))
 # Порог «одиночный»: count <= 2 AND last_seen > N дней
 ONE_OFF_DAYS: int = int(os.environ.get("SENTRY_ONE_OFF_DAYS", "3"))
 
-LOG_FILE: Path = (
-    Path.home() / ".openclaw" / "krab_runtime_state" / "sentry_resolver.log"
-)
+LOG_FILE: Path = Path.home() / ".openclaw" / "krab_runtime_state" / "sentry_resolver.log"
 
 # Известные исправленные паттерны: (строка для поиска в title/metadata, wave-ссылка)
 KNOWN_FIXED_PATTERNS: list[tuple[str, str]] = [
@@ -224,10 +223,7 @@ def main(dry_run: bool = True) -> int:
 
             if should_resolve:
                 if dry_run:
-                    log(
-                        f"[DRY] would resolve id={issue_id} "
-                        f'title="{title_short}" reason={reason}'
-                    )
+                    log(f'[DRY] would resolve id={issue_id} title="{title_short}" reason={reason}')
                     total_resolved += 1
                 else:
                     ok = resolve_issue(issue_id, reason)

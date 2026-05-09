@@ -9,6 +9,7 @@ chunks с cosine similarity. Используется как финальный 
 Usage:
     venv/bin/python scripts/smoke_test_memory_semantic.py
 """
+
 from __future__ import annotations
 
 import sqlite3

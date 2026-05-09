@@ -32,12 +32,12 @@ def auth_team(team: str, acct: dict[str, str]) -> bool:
     phone = acct.get("phone", "")
     workdir = str(_ROOT / "data" / "sessions")
 
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print(f"🐝 Авторизация: {team} → сессия {session_name}")
     if phone:
         print(f"📱 Телефон: {phone}")
     print(f"📂 Каталог: {workdir}")
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
 
     Path(workdir).mkdir(parents=True, exist_ok=True)
 
@@ -89,7 +89,7 @@ def main() -> int:
     for team, acct in accounts.items():
         results[team] = auth_team(team, acct)
 
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print("📊 Итого:")
     for team, ok in results.items():
         icon = "✅" if ok else "❌"

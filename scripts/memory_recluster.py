@@ -51,10 +51,7 @@ def _load_embeddings_from_archive(limit: int | None) -> dict[str, list[float]]:
                 return {}
             # JOIN с chunks: rowid (vec) ↔ id (chunks) → stable chunk_id (TEXT).
             # vec0 возвращает vector как float32-LE bytes; декодим в _decode_embedding_blob.
-            sql = (
-                "SELECT c.chunk_id, v.vector "
-                "FROM vec_chunks v JOIN chunks c ON c.id = v.rowid"
-            )
+            sql = "SELECT c.chunk_id, v.vector FROM vec_chunks v JOIN chunks c ON c.id = v.rowid"
             if limit:
                 sql += f" LIMIT {int(limit)}"
             rows = cur.execute(sql).fetchall()

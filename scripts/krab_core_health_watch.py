@@ -14,13 +14,12 @@ import argparse
 import json
 import subprocess
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib import error as urlerror
 from urllib import request
-
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS_DIR = ROOT / "artifacts" / "ops"
@@ -119,9 +118,15 @@ def main() -> int:
         default="http://127.0.0.1:8080/api/health/lite",
         help="URL health endpoint (по умолчанию быстрый liveness endpoint).",
     )
-    parser.add_argument("--duration-sec", type=int, default=120, help="Общая длительность наблюдения (сек).")
-    parser.add_argument("--interval-sec", type=float, default=2.0, help="Интервал между probe (сек).")
-    parser.add_argument("--probe-timeout-sec", type=float, default=4.0, help="Таймаут одного HTTP probe (сек).")
+    parser.add_argument(
+        "--duration-sec", type=int, default=120, help="Общая длительность наблюдения (сек)."
+    )
+    parser.add_argument(
+        "--interval-sec", type=float, default=2.0, help="Интервал между probe (сек)."
+    )
+    parser.add_argument(
+        "--probe-timeout-sec", type=float, default=4.0, help="Таймаут одного HTTP probe (сек)."
+    )
     args = parser.parse_args()
 
     duration = max(5, int(args.duration_sec))

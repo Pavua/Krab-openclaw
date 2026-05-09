@@ -44,8 +44,7 @@ def main() -> int:
         launch = resolve_managed_server_launch(args.server_name)
     except KeyError:
         print(
-            f"❌ Неизвестный MCP сервер: {args.server_name}\n"
-            f"Доступно: {', '.join(known)}",
+            f"❌ Неизвестный MCP сервер: {args.server_name}\nДоступно: {', '.join(known)}",
             file=sys.stderr,
         )
         return 2

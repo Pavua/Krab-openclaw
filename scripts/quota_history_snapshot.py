@@ -1,4 +1,5 @@
 """Wave 34-A: quota history snapshot — записывает текущий quota state каждый час."""
+
 from __future__ import annotations
 
 import json

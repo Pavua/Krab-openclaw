@@ -35,7 +35,9 @@ from pathlib import Path
 # --- Configuration ---
 LEAK_THRESHOLD_CRITICAL = int(os.getenv("KRAB_LEAK_THRESHOLD_CRITICAL", "25"))
 LEAK_THRESHOLD_WARNING = int(os.getenv("KRAB_LEAK_THRESHOLD_WARNING", "18"))
-STATE_DIR = Path(os.getenv("KRAB_RUNTIME_STATE_DIR", str(Path.home() / ".openclaw" / "krab_runtime_state")))
+STATE_DIR = Path(
+    os.getenv("KRAB_RUNTIME_STATE_DIR", str(Path.home() / ".openclaw" / "krab_runtime_state"))
+)
 LOG_FILE = STATE_DIR / "leak_monitor.log"
 STATS_FILE = STATE_DIR / "leak_monitor_stats.json"
 KRAB_PANEL_URL = os.getenv("KRAB_PANEL_URL", "http://127.0.0.1:8080")

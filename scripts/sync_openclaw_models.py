@@ -47,7 +47,12 @@ def main() -> int:
 
     path = _models_path()
     if not path.exists():
-        print(json.dumps({"ok": False, "error": "models_json_not_found", "path": str(path)}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {"ok": False, "error": "models_json_not_found", "path": str(path)},
+                ensure_ascii=False,
+            )
+        )
         return 1
 
     data = json.loads(path.read_text(encoding="utf-8"))

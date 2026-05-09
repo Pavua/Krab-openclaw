@@ -59,7 +59,9 @@ async def _probe_openclaw_chat(base_url: str, token: str) -> dict[str, Any]:
     }
     try:
         async with httpx.AsyncClient(timeout=25.0, headers=headers) as client:
-            response = await client.post(f"{base_url.rstrip('/')}/v1/chat/completions", json=payload)
+            response = await client.post(
+                f"{base_url.rstrip('/')}/v1/chat/completions", json=payload
+            )
         body = response.text[:1200]
         if response.status_code != 200:
             return {
@@ -73,7 +75,9 @@ async def _probe_openclaw_chat(base_url: str, token: str) -> dict[str, Any]:
         content = ""
         try:
             data = response.json()
-            content = str(((data.get("choices") or [{}])[0].get("message") or {}).get("content", ""))
+            content = str(
+                ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+            )
             semantic = _semantic_error(content)
         except Exception as exc:  # noqa: BLE001
             semantic = f"invalid_json:{exc}"
@@ -98,8 +102,12 @@ async def main_async() -> dict[str, Any]:
 
     free_key = str(os.getenv("GEMINI_API_KEY_FREE", "") or "").strip()
     paid_key = str(os.getenv("GEMINI_API_KEY_PAID", "") or "").strip()
-    openclaw_base = str(os.getenv("OPENCLAW_BASE_URL", os.getenv("OPENCLAW_URL", "http://127.0.0.1:18789")) or "").strip()
-    openclaw_token = str(os.getenv("OPENCLAW_API_KEY", os.getenv("OPENCLAW_TOKEN", "")) or "").strip()
+    openclaw_base = str(
+        os.getenv("OPENCLAW_BASE_URL", os.getenv("OPENCLAW_URL", "http://127.0.0.1:18789")) or ""
+    ).strip()
+    openclaw_token = str(
+        os.getenv("OPENCLAW_API_KEY", os.getenv("OPENCLAW_TOKEN", "")) or ""
+    ).strip()
 
     free_probe = await probe_gemini_key(
         free_key,

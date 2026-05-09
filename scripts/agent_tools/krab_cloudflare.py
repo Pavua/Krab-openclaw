@@ -90,10 +90,7 @@ def cmd_zones_list(args: argparse.Namespace, token: str) -> dict:
     if not res["ok"]:
         return res
     zones = res["data"] or []
-    summary = [
-        {"id": z.get("id"), "name": z.get("name"), "status": z.get("status")}
-        for z in zones
-    ]
+    summary = [{"id": z.get("id"), "name": z.get("name"), "status": z.get("status")} for z in zones]
     return {"ok": True, "count": len(summary), "zones": summary}
 
 

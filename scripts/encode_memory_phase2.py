@@ -14,6 +14,7 @@ Flags:
     --dry-run    Не писать в БД, только вывести сколько chunks на очереди.
     --force      Полностью пересоздать vec_chunks (DROP + CREATE + encode all).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -99,9 +100,7 @@ def _encode_limited(limit: int, batch_size: int) -> tuple[int, float]:
         texts = [r[2] or "" for r in batch]
         vecs = model.encode(texts)
         payload = [(batch[i][0], serialize_f32(vecs[i])) for i in range(len(batch))]
-        conn.executemany(
-            "INSERT INTO vec_chunks(rowid, vector) VALUES (?, ?)", payload
-        )
+        conn.executemany("INSERT INTO vec_chunks(rowid, vector) VALUES (?, ?)", payload)
         conn.commit()
         processed += len(batch)
         elapsed = time.perf_counter() - t0

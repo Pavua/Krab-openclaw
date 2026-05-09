@@ -161,9 +161,7 @@ def write_endpoints_doc(endpoints: list[dict], session_tag: str) -> int:
         f"Обновлено: {session_tag}. Live проверить: `GET /api/endpoints`\n"
         "\n"
         "| Endpoint | Метод |\n"
-        "|----------|-------|\n"
-        + "\n".join(rows)
-        + "\n"
+        "|----------|-------|\n" + "\n".join(rows) + "\n"
     )
 
     target = DOCS_DIR / "CLAUDE_AUTO_ENDPOINTS.md"
@@ -198,12 +196,10 @@ def write_handlers_doc(handlers: list[str], session_tag: str) -> int:
         "\n"
         f"Обновлено: {session_tag}. Актуальный счётчик:\n"
         "```bash\n"
-        "grep -hE \"^async def handle_\" src/handlers/commands/*.py"
+        'grep -hE "^async def handle_" src/handlers/commands/*.py'
         " src/handlers/command_handlers.py | sort -u | wc -l\n"
         "```\n"
-        "\n"
-        + items
-        + "\n"
+        "\n" + items + "\n"
     )
 
     target = DOCS_DIR / "CLAUDE_AUTO_HANDLERS.md"
@@ -232,13 +228,9 @@ def write_prometheus_doc(alerts: list[str], metrics: list[str], session_tag: str
         f"Обновлено: {session_tag}. Конфиг: `scripts/prometheus/`\n"
         "\n"
         f"## Alerts ({n_alerts})\n"
-        "\n"
-        + alerts_line
-        + "\n\n"
+        "\n" + alerts_line + "\n\n"
         f"## Metrics ({n_metrics})\n"
-        "\n"
-        + metrics_lines
-        + "\n"
+        "\n" + metrics_lines + "\n"
     )
 
     target = DOCS_DIR / "CLAUDE_AUTO_PROMETHEUS.md"

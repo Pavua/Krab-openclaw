@@ -23,7 +23,6 @@ from typing import Any
 from urllib import error as urlerror
 from urllib import request
 
-
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts" / "ops"
 
@@ -68,7 +67,9 @@ def _run_cmd(name: str, cmd: list[str], required: bool = True, timeout: int = 24
         ok = False
         detail = str(exc) or exc.__class__.__name__
     duration_ms = int((time.monotonic() - started) * 1000)
-    return CheckResult(name=name, required=required, ok=ok, duration_ms=duration_ms, detail=detail[:1600])
+    return CheckResult(
+        name=name, required=required, ok=ok, duration_ms=duration_ms, detail=detail[:1600]
+    )
 
 
 def _http_probe(name: str, url: str, required: bool, timeout: float = 3.0) -> CheckResult:
@@ -86,7 +87,9 @@ def _http_probe(name: str, url: str, required: bool, timeout: float = 3.0) -> Ch
         ok = False
         detail = str(exc) or exc.__class__.__name__
     duration_ms = int((time.monotonic() - started) * 1000)
-    return CheckResult(name=name, required=required, ok=ok, duration_ms=duration_ms, detail=detail[:600])
+    return CheckResult(
+        name=name, required=required, ok=ok, duration_ms=duration_ms, detail=detail[:600]
+    )
 
 
 def main() -> int:
@@ -102,7 +105,14 @@ def main() -> int:
     checks.append(
         _run_cmd(
             name="pytest_targeted_r20",
-            cmd=[py, "-m", "pytest", "-q", "tests/test_web_app.py", "tests/test_ecosystem_health.py"],
+            cmd=[
+                py,
+                "-m",
+                "pytest",
+                "-q",
+                "tests/test_web_app.py",
+                "tests/test_ecosystem_health.py",
+            ],
             required=True,
             timeout=420,
         )
@@ -158,7 +168,9 @@ def main() -> int:
     for item in checks:
         status = "OK" if item.ok else "FAIL"
         req = "required" if item.required else "advisory"
-        print(f"  - [{status}] {item.name} ({req}, {item.duration_ms}ms) :: {item.detail.splitlines()[0] if item.detail else ''}")
+        print(
+            f"  - [{status}] {item.name} ({req}, {item.duration_ms}ms) :: {item.detail.splitlines()[0] if item.detail else ''}"
+        )
 
     return 0 if ok else 1
 

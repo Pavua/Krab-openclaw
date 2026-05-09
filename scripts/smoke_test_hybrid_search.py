@@ -9,6 +9,7 @@ Smoke test для hybrid re-ranker против реального archive.db.
 Измеряет время end-to-end и печатает top-10 результатов с rrf_score,
 fts_rank, semantic_score, sources.
 """
+
 from __future__ import annotations
 
 import sys

@@ -44,11 +44,11 @@ jobs:
             'sentry-sdk>=2.0.0' \
             'psutil>=6.0.0'
 
-      - name: Ruff lint (src/)
-        run: ruff check src/
+      - name: Ruff lint (src/ scripts/)
+        run: ruff check src/ scripts/
 
-      - name: Ruff format check (src/)
-        run: ruff format --check src/
+      - name: Ruff format check (src/ scripts/)
+        run: ruff format --check src/ scripts/
 
       - name: Pytest unit subset (Wave 44-Z + 45-* tests)
         run: |

@@ -59,14 +59,20 @@ def _release_stale_session_lock(session_name: str, session_dir: str) -> None:
     import subprocess
 
     base = str(session_name or "krab_test").strip() or "krab_test"
-    sdir = Path(str(session_dir or "").strip()) if str(session_dir or "").strip() else Path.home() / ".krab_mcp_sessions"
+    sdir = (
+        Path(str(session_dir or "").strip())
+        if str(session_dir or "").strip()
+        else Path.home() / ".krab_mcp_sessions"
+    )
     session_path = sdir / f"{base}_mcp.session"
     if not session_path.exists():
         return
     try:
         result = subprocess.run(
             ["lsof", "-t", str(session_path)],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True,
+            text=True,
+            timeout=3,
         )
         pids = [int(p) for p in result.stdout.split() if p.strip().isdigit()]
         own_pid = os.getpid()
@@ -86,7 +92,9 @@ def main() -> int:
     if ENV_PATH.exists():
         load_dotenv(ENV_PATH, override=False)
 
-    os.environ["TELEGRAM_SESSION_NAME"] = str(args.session_name or "krab_test").strip() or "krab_test"
+    os.environ["TELEGRAM_SESSION_NAME"] = (
+        str(args.session_name or "krab_test").strip() or "krab_test"
+    )
     if str(args.session_dir or "").strip():
         os.environ["MCP_TELEGRAM_SESSION_DIR"] = str(args.session_dir).strip()
 

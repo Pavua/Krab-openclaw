@@ -143,10 +143,7 @@ def main() -> int:
         return 1
 
     exp_val = new_expiry or 0
-    log(
-        f"synced — gcli_key={gcli_key} "
-        f"expiry_in_min={_expiry_in_min(exp_val):.1f}"
-    )
+    log(f"synced — gcli_key={gcli_key} expiry_in_min={_expiry_in_min(exp_val):.1f}")
     return 0
 
 

@@ -207,9 +207,7 @@ def check_single_db(entry: KnownDb, *, timeout_sec: float = 3.0) -> DbReport:
         or rep.integrity.lower() != "ok"
         or rep.quick_check.lower() != "ok"
     )
-    rep.ok = (
-        rep.integrity.lower() == "ok" and rep.quick_check.lower() == "ok"
-    )
+    rep.ok = rep.integrity.lower() == "ok" and rep.quick_check.lower() == "ok"
     return rep
 
 
@@ -291,9 +289,7 @@ def check_indexer_state(c: sqlite3.Cursor) -> dict:
     """indexer_state coverage — для каждого chat_id должны быть chunks."""
     rows = c.execute("SELECT chat_id, last_message_id FROM indexer_state").fetchall()
     chat_ids = {r[0] for r in rows}
-    chats_with_chunks = {
-        r[0] for r in c.execute("SELECT DISTINCT chat_id FROM chunks").fetchall()
-    }
+    chats_with_chunks = {r[0] for r in c.execute("SELECT DISTINCT chat_id FROM chunks").fetchall()}
     missing = chat_ids - chats_with_chunks
     return {
         "indexer_state_chats": len(chat_ids),
@@ -326,8 +322,7 @@ def check_fts(c: sqlite3.Cursor) -> dict:
     n_fts = c.execute("SELECT COUNT(*) FROM messages_fts").fetchone()[0]
     # Chunks без FTS строки (rowid mismatch)
     fts_orphans = c.execute(
-        "SELECT COUNT(*) FROM chunks "
-        "WHERE id NOT IN (SELECT rowid FROM messages_fts)"
+        "SELECT COUNT(*) FROM chunks WHERE id NOT IN (SELECT rowid FROM messages_fts)"
     ).fetchone()[0]
     delta = n_chunks - n_fts
     return {
@@ -343,8 +338,7 @@ def fix_chunk_message_orphans(c: sqlite3.Cursor) -> int:
     """Удаляет orphan rows. Возвращает кол-во удалённых."""
     deleted = 0
     n = c.execute(
-        "DELETE FROM chunk_messages "
-        "WHERE chunk_id NOT IN (SELECT chunk_id FROM chunks)"
+        "DELETE FROM chunk_messages WHERE chunk_id NOT IN (SELECT chunk_id FROM chunks)"
     ).rowcount
     deleted += n or 0
     n = c.execute(
@@ -383,7 +377,7 @@ def _print_all_db_summary(summary: dict[str, Any]) -> None:
         else:
             note = (
                 f"ic={r['integrity']} qc={r['quick_check']} "
-                f"jm={r['journal_mode']} {r['size_bytes']//1024}KB"
+                f"jm={r['journal_mode']} {r['size_bytes'] // 1024}KB"
             )
             mark = "✅"
         print(f"  {mark} [{r['kind']}/{r['owner']}] {r['path']}\n     {note}")
@@ -446,7 +440,8 @@ def main() -> int:
         results["all_databases"] = check_all_databases()
 
     archive_ok = all(
-        v["ok"] for k, v in results.items()
+        v["ok"]
+        for k, v in results.items()
         if isinstance(v, dict) and "ok" in v and k != "all_databases"
     )
     sweep_ok = results.get("all_databases", {}).get("all_ok", True)

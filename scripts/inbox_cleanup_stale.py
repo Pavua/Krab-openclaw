@@ -45,6 +45,7 @@ def run_direct() -> dict:
     repo_root = Path(__file__).parent.parent
     sys.path.insert(0, str(repo_root))
     from src.core.inbox_service import inbox_service  # noqa: PLC0415
+
     return inbox_service.cleanup_stale_open_items(max_age_days=MAX_AGE_DAYS, dry_run=DRY_RUN)
 
 

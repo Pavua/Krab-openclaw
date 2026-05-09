@@ -107,9 +107,13 @@ def _print_diff(label: str, added: list[str], removed: list[str]) -> bool:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--write", action="store_true", help="overwrite baseline fixtures from live runtime")
+    group.add_argument(
+        "--write", action="store_true", help="overwrite baseline fixtures from live runtime"
+    )
     group.add_argument("--diff", action="store_true", help="exit 1 if live differs from baseline")
-    parser.add_argument("--session", default=DEFAULT_SESSION, help="session label stored in baseline")
+    parser.add_argument(
+        "--session", default=DEFAULT_SESSION, help="session label stored in baseline"
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -122,8 +126,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Live: {len(live_endpoints)} endpoints, {len(live_commands)} commands")
 
     if args.write:
-        _write_baseline(ENDPOINTS_BASELINE, key="endpoints", items=live_endpoints, session=args.session)
-        _write_baseline(COMMANDS_BASELINE, key="commands", items=live_commands, session=args.session)
+        _write_baseline(
+            ENDPOINTS_BASELINE, key="endpoints", items=live_endpoints, session=args.session
+        )
+        _write_baseline(
+            COMMANDS_BASELINE, key="commands", items=live_commands, session=args.session
+        )
         print(f"Wrote {ENDPOINTS_BASELINE}")
         print(f"Wrote {COMMANDS_BASELINE}")
         return 0
@@ -135,8 +143,12 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: baseline fixtures missing — run with --write first", file=sys.stderr)
         return 2
 
-    print(f"Baseline endpoints: {base_ep['count']} (snapshot_at={base_ep['snapshot_at']}, session={base_ep['session']})")
-    print(f"Baseline commands:  {base_cmd['count']} (snapshot_at={base_cmd['snapshot_at']}, session={base_cmd['session']})")
+    print(
+        f"Baseline endpoints: {base_ep['count']} (snapshot_at={base_ep['snapshot_at']}, session={base_ep['session']})"
+    )
+    print(
+        f"Baseline commands:  {base_cmd['count']} (snapshot_at={base_cmd['snapshot_at']}, session={base_cmd['session']})"
+    )
 
     ep_added, ep_removed = _diff(base_ep["endpoints"], live_endpoints)
     cmd_added, cmd_removed = _diff(base_cmd["commands"], live_commands)

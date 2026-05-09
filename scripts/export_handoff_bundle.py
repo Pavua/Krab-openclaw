@@ -28,7 +28,6 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -268,10 +267,18 @@ class IssueRule:
 def _build_known_issues_matrix(log_text: str) -> tuple[list[dict[str, Any]], str]:
     rules = [
         IssueRule("telegram_auth_key", "Telegram auth key протухла", "auth key not found"),
-        IssueRule("telegram_sqlite_io", "Telegram sqlite disk I/O", "sqlite3.operationalerror: disk i/o error"),
+        IssueRule(
+            "telegram_sqlite_io",
+            "Telegram sqlite disk I/O",
+            "sqlite3.operationalerror: disk i/o error",
+        ),
         IssueRule("no_models_loaded", "LM Studio: No models loaded", "no models loaded"),
         IssueRule("lm_empty_message", "LM Studio: EMPTY MESSAGE", "empty message"),
-        IssueRule("lm_model_crash", "LM Studio: model crashed", "model has crashed without additional information"),
+        IssueRule(
+            "lm_model_crash",
+            "LM Studio: model crashed",
+            "model has crashed without additional information",
+        ),
         IssueRule("cloud_unauthorized", "Cloud auth 401", "unauthorized"),
         IssueRule("tg_message_id_invalid", "Telegram MESSAGE_ID_INVALID", "message_id_invalid"),
         IssueRule("tg_message_empty", "Telegram MESSAGE_EMPTY", "message_empty"),
@@ -352,7 +359,11 @@ def _acceptance_summary(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(warnings, list):
         summary["warnings_count"] = len(warnings)
 
-    channels_summary = (payload.get("channels") or {}).get("summary") if isinstance(payload.get("channels"), dict) else None
+    channels_summary = (
+        (payload.get("channels") or {}).get("summary")
+        if isinstance(payload.get("channels"), dict)
+        else None
+    )
     if isinstance(channels_summary, dict) and channels_summary.get("success_rate") is not None:
         summary["channels_success_rate"] = channels_summary.get("success_rate")
 
@@ -440,8 +451,14 @@ def _ops_artifact_summary(payload: dict[str, Any], *, artifact_name: str) -> dic
         summary["advisory_failed"] = int(payload.get("advisory_failed") or 0)
         summary["checks_total"] = len(payload.get("checks") or [])
     elif artifact_name == "shared_repo_switchover_latest":
-        recommendation = payload.get("recommendation") if isinstance(payload.get("recommendation"), dict) else {}
-        overlap_counts = ((payload.get("overlap_analysis") or {}).get("counts") or {}) if isinstance(payload.get("overlap_analysis"), dict) else {}
+        recommendation = (
+            payload.get("recommendation") if isinstance(payload.get("recommendation"), dict) else {}
+        )
+        overlap_counts = (
+            ((payload.get("overlap_analysis") or {}).get("counts") or {})
+            if isinstance(payload.get("overlap_analysis"), dict)
+            else {}
+        )
         summary["strategy_code"] = str(recommendation.get("strategy_code") or "")
         summary["readiness"] = str(recommendation.get("readiness") or "")
         summary["overlap_count"] = int(recommendation.get("overlap_count") or 0)
@@ -457,14 +474,16 @@ def _ops_artifact_summary(payload: dict[str, Any], *, artifact_name: str) -> dic
     return summary
 
 
-def _resolve_project_readiness(*, runtime_snapshot: dict[str, Any], ops_evidence: dict[str, Any]) -> str:
+def _resolve_project_readiness(
+    *, runtime_snapshot: dict[str, Any], ops_evidence: dict[str, Any]
+) -> str:
     """
     Возвращает truthful readiness для handoff bundle.
 
     Старый baseline `~31%` годился только как историческая точка отсчёта roadmap.
     Для нового окна важнее свежий operational verdict по release-gate и runtime.
     """
-    health_lite = ((((runtime_snapshot.get("health") or {}).get("web_lite") or {}).get("json")) or {})
+    health_lite = (((runtime_snapshot.get("health") or {}).get("web_lite") or {}).get("json")) or {}
     health_lite = health_lite if isinstance(health_lite, dict) else {}
     workflow = runtime_snapshot.get("operator_workflow") or {}
     workflow = workflow if isinstance(workflow, dict) else {}
@@ -476,13 +495,25 @@ def _resolve_project_readiness(*, runtime_snapshot: dict[str, Any], ops_evidence
     merge_gate = merge_gate if isinstance(merge_gate, dict) else {}
 
     health_ok = bool(health_lite.get("ok"))
-    userbot_running = str(health_lite.get("telegram_userbot_state") or "").strip().lower() == "running"
+    userbot_running = (
+        str(health_lite.get("telegram_userbot_state") or "").strip().lower() == "running"
+    )
     session_ready = str(health_lite.get("telegram_session_state") or "").strip().lower() == "ready"
-    inbox_clean = int(workflow_summary.get("open_items") or 0) == 0 and int(workflow_summary.get("acked_items") or 0) == 0
+    inbox_clean = (
+        int(workflow_summary.get("open_items") or 0) == 0
+        and int(workflow_summary.get("acked_items") or 0) == 0
+    )
     pre_release_ok = bool(pre_release.get("ok")) and not bool(pre_release.get("blocked"))
     merge_gate_ok = bool(merge_gate.get("ok")) and int(merge_gate.get("required_failed") or 0) == 0
 
-    if health_ok and userbot_running and session_ready and inbox_clean and pre_release_ok and merge_gate_ok:
+    if (
+        health_ok
+        and userbot_running
+        and session_ready
+        and inbox_clean
+        and pre_release_ok
+        and merge_gate_ok
+    ):
         return "~99% (стабилизационный срез: 100%)"
     if health_ok and pre_release_ok and merge_gate_ok:
         return "~95% (release-candidate)"
@@ -501,16 +532,43 @@ def _collect_ops_evidence(bundle_dir: Path) -> dict[str, Any]:
     files = {
         "pre_release_smoke_latest": ROOT / "artifacts" / "ops" / "pre_release_smoke_latest.json",
         "r20_merge_gate_latest": ROOT / "artifacts" / "ops" / "r20_merge_gate_latest.json",
-        "shared_repo_switchover_latest": ROOT / "artifacts" / "ops" / "shared_repo_switchover_latest.json",
-        "shared_repo_switchover_latest_md": ROOT / "artifacts" / "ops" / "shared_repo_switchover_latest.md",
-        "shared_repo_merge_order_latest_md": ROOT / "artifacts" / "ops" / "shared_repo_merge_order_latest.md",
+        "shared_repo_switchover_latest": ROOT
+        / "artifacts"
+        / "ops"
+        / "shared_repo_switchover_latest.json",
+        "shared_repo_switchover_latest_md": ROOT
+        / "artifacts"
+        / "ops"
+        / "shared_repo_switchover_latest.md",
+        "shared_repo_merge_order_latest_md": ROOT
+        / "artifacts"
+        / "ops"
+        / "shared_repo_merge_order_latest.md",
         "pablito_wip_latest_patch": ROOT / "artifacts" / "ops" / "pablito_wip_latest.patch",
-        "active_shared_worktree_latest": ROOT / "artifacts" / "ops" / "active_shared_worktree_latest.json",
-        "active_shared_worktree_latest_md": ROOT / "artifacts" / "ops" / "active_shared_worktree_latest.md",
-        "runtime_switch_assistant_latest": ROOT / "artifacts" / "ops" / "runtime_switch_assistant_latest.json",
-        "runtime_switch_assistant_latest_md": ROOT / "artifacts" / "ops" / "runtime_switch_assistant_latest.md",
-        "prepare_next_account_session_latest": ROOT / "artifacts" / "ops" / "prepare_next_account_session_latest.json",
-        "prepare_next_account_session_latest_md": ROOT / "artifacts" / "ops" / "prepare_next_account_session_latest.md",
+        "active_shared_worktree_latest": ROOT
+        / "artifacts"
+        / "ops"
+        / "active_shared_worktree_latest.json",
+        "active_shared_worktree_latest_md": ROOT
+        / "artifacts"
+        / "ops"
+        / "active_shared_worktree_latest.md",
+        "runtime_switch_assistant_latest": ROOT
+        / "artifacts"
+        / "ops"
+        / "runtime_switch_assistant_latest.json",
+        "runtime_switch_assistant_latest_md": ROOT
+        / "artifacts"
+        / "ops"
+        / "runtime_switch_assistant_latest.md",
+        "prepare_next_account_session_latest": ROOT
+        / "artifacts"
+        / "ops"
+        / "prepare_next_account_session_latest.json",
+        "prepare_next_account_session_latest_md": ROOT
+        / "artifacts"
+        / "ops"
+        / "prepare_next_account_session_latest.md",
         "release_gate_report_latest": _latest_file_by_glob("output/reports/RELEASE_GATE_*.md"),
         "latest_browser_snapshot": _latest_file_by_glob(".playwright-cli/page-*.yml"),
         "latest_browser_screenshot": _latest_file_by_glob(".playwright-cli/page-*.png"),
@@ -594,11 +652,16 @@ def _build_attach_summary_md(
     head = str((git or {}).get("head") or "").strip() or "unknown"
     shared_repo = runtime_snapshot.get("shared_repo") if isinstance(runtime_snapshot, dict) else {}
     shared_repo = shared_repo if isinstance(shared_repo, dict) else {}
-    active_shared = runtime_snapshot.get("active_shared_worktree") if isinstance(runtime_snapshot, dict) else {}
+    active_shared = (
+        runtime_snapshot.get("active_shared_worktree") if isinstance(runtime_snapshot, dict) else {}
+    )
     active_shared = active_shared if isinstance(active_shared, dict) else {}
     shared_branch = str(shared_repo.get("branch") or "").strip()
     shared_head = str(shared_repo.get("head") or "").strip()
-    active_shared_root = str(active_shared.get("path") or "").strip() or "/Users/Shared/Antigravity_AGENTS/Краб-active"
+    active_shared_root = (
+        str(active_shared.get("path") or "").strip()
+        or "/Users/Shared/Antigravity_AGENTS/Краб-active"
+    )
     active_shared_branch = str(active_shared.get("branch") or "").strip()
     active_shared_head = str(active_shared.get("head") or "").strip()
     active_shared_match = bool(active_shared.get("matches_current_repo"))
@@ -608,16 +671,38 @@ def _build_attach_summary_md(
         else {}
     )
     health_lite = health_lite if isinstance(health_lite, dict) else {}
-    route = health_lite.get("last_runtime_route") if isinstance(health_lite.get("last_runtime_route"), dict) else {}
+    route = (
+        health_lite.get("last_runtime_route")
+        if isinstance(health_lite.get("last_runtime_route"), dict)
+        else {}
+    )
     pre_release = (ops_evidence.get("pre_release_smoke_latest") or {}).get("summary") or {}
     merge_gate = (ops_evidence.get("r20_merge_gate_latest") or {}).get("summary") or {}
-    operator_workflow = runtime_snapshot.get("operator_workflow") if isinstance(runtime_snapshot, dict) else {}
+    operator_workflow = (
+        runtime_snapshot.get("operator_workflow") if isinstance(runtime_snapshot, dict) else {}
+    )
     operator_workflow = operator_workflow if isinstance(operator_workflow, dict) else {}
-    workflow_summary = operator_workflow.get("summary") if isinstance(operator_workflow.get("summary"), dict) else {}
-    recent_replies = operator_workflow.get("recent_replied_requests") if isinstance(operator_workflow.get("recent_replied_requests"), list) else []
-    recent_activity = operator_workflow.get("recent_activity") if isinstance(operator_workflow.get("recent_activity"), list) else []
+    workflow_summary = (
+        operator_workflow.get("summary")
+        if isinstance(operator_workflow.get("summary"), dict)
+        else {}
+    )
+    recent_replies = (
+        operator_workflow.get("recent_replied_requests")
+        if isinstance(operator_workflow.get("recent_replied_requests"), list)
+        else []
+    )
+    recent_activity = (
+        operator_workflow.get("recent_activity")
+        if isinstance(operator_workflow.get("recent_activity"), list)
+        else []
+    )
     last_reply = recent_replies[0] if recent_replies else {}
-    last_reply_meta = last_reply.get("metadata") if isinstance(last_reply, dict) and isinstance(last_reply.get("metadata"), dict) else {}
+    last_reply_meta = (
+        last_reply.get("metadata")
+        if isinstance(last_reply, dict) and isinstance(last_reply.get("metadata"), dict)
+        else {}
+    )
     last_activity = recent_activity[0] if recent_activity else {}
     active_issues = [
         row.get("code")
@@ -757,7 +842,9 @@ def _build_attach_summary_md(
     return "\n".join(lines) + "\n"
 
 
-def _build_pablito_return_checklist_md(*, runtime_snapshot: dict[str, Any], project_readiness: str) -> str:
+def _build_pablito_return_checklist_md(
+    *, runtime_snapshot: dict[str, Any], project_readiness: str
+) -> str:
     """
     Формирует короткий runbook возврата на основную учётку `pablito`.
 
@@ -819,7 +906,9 @@ def _build_pablito_return_checklist_md(*, runtime_snapshot: dict[str, Any], proj
     return "\n".join(lines) + "\n"
 
 
-def _build_third_account_bootstrap_md(*, runtime_snapshot: dict[str, Any], project_readiness: str) -> str:
+def _build_third_account_bootstrap_md(
+    *, runtime_snapshot: dict[str, Any], project_readiness: str
+) -> str:
     """
     Формирует короткий практический runbook для новой macOS-учётки.
 
@@ -898,11 +987,7 @@ def _build_handoff_manifest(
     project_readiness: str,
 ) -> dict[str, Any]:
     """Собирает machine-readable manifest attach-папки."""
-    bundle_files = {
-        path.name
-        for path in BUNDLE_DIR.iterdir()
-        if path.is_file()
-    }
+    bundle_files = {path.name for path in BUNDLE_DIR.iterdir() if path.is_file()}
     bundle_files.add("HANDOFF_MANIFEST.json")
     entrypoints = {
         "start_next_chat": str(BUNDLE_DIR / "START_NEXT_CHAT.md"),
@@ -957,7 +1042,9 @@ def _build_handoff_manifest(
             "preferred_branch": str((runtime_snapshot.get("git") or {}).get("branch") or "").strip()
             or "codex/translator-finish-gate-user3",
             "helper_command": str(CANONICAL_SHARED_ROOT / "Release Gate.command"),
-            "live_truth_artifact": str(CANONICAL_SHARED_ROOT / "artifacts" / "ops" / "pre_release_smoke_latest.json"),
+            "live_truth_artifact": str(
+                CANONICAL_SHARED_ROOT / "artifacts" / "ops" / "pre_release_smoke_latest.json"
+            ),
         },
         "other_account_transition": {
             "strategy": "shared_repo_docs_artifacts__split_runtime_auth_secrets_browser_state_per_account",
@@ -1088,16 +1175,22 @@ def main() -> int:
     git_branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
     git_status = _run(["git", "status", "--short", "--branch"])
     git_head = _run(["git", "rev-parse", "HEAD"])
-    shared_git_branch = _run(["git", "-C", str(CANONICAL_SHARED_ROOT), "rev-parse", "--abbrev-ref", "HEAD"])
+    shared_git_branch = _run(
+        ["git", "-C", str(CANONICAL_SHARED_ROOT), "rev-parse", "--abbrev-ref", "HEAD"]
+    )
     shared_git_head = _run(["git", "-C", str(CANONICAL_SHARED_ROOT), "rev-parse", "HEAD"])
-    shared_git_status = _run(["git", "-C", str(CANONICAL_SHARED_ROOT), "status", "--short", "--branch"])
+    shared_git_status = _run(
+        ["git", "-C", str(CANONICAL_SHARED_ROOT), "status", "--short", "--branch"]
+    )
 
     web_lite = _http_json("http://127.0.0.1:8080/api/health/lite")
     web_full = _http_json("http://127.0.0.1:8080/api/health")
     runtime_handoff = _http_json("http://127.0.0.1:8080/api/runtime/handoff")
     channels_probe = _http_json("http://127.0.0.1:8080/api/openclaw/channels/status")
     openclaw_health = _http_json("http://127.0.0.1:18789/health")
-    lm_models = _http_json(f"{os.getenv('LM_STUDIO_URL', 'http://127.0.0.1:1234').rstrip('/')}/api/v1/models")
+    lm_models = _http_json(
+        f"{os.getenv('LM_STUDIO_URL', 'http://127.0.0.1:1234').rstrip('/')}/api/v1/models"
+    )
 
     krab_log_tail = _slice_since_last_marker(
         _tail_recent(ROOT / "krab.log", max_lines=2000, max_age_hours=6),
@@ -1131,7 +1224,9 @@ def main() -> int:
             "head": shared_git_head.get("stdout", ""),
             "status_short": shared_git_status.get("stdout", ""),
         },
-        "active_shared_worktree": _read_json_file(ROOT / "artifacts" / "ops" / "active_shared_worktree_latest.json"),
+        "active_shared_worktree": _read_json_file(
+            ROOT / "artifacts" / "ops" / "active_shared_worktree_latest.json"
+        ),
         "health": {
             "web_lite": web_lite,
             "web_full": web_full,
@@ -1151,9 +1246,17 @@ def main() -> int:
         },
         "channels": _openclaw_channels_snapshot(),
         "telegram_session": _session_state(),
-        "operator_profile": ((runtime_handoff.get("json") or {}).get("operator_profile") or {}) if isinstance(runtime_handoff.get("json"), dict) else {},
-        "translator_readiness": ((runtime_handoff.get("json") or {}).get("translator_readiness") or {}) if isinstance(runtime_handoff.get("json"), dict) else {},
-        "operator_workflow": ((runtime_handoff.get("json") or {}).get("operator_workflow") or {}) if isinstance(runtime_handoff.get("json"), dict) else {},
+        "operator_profile": ((runtime_handoff.get("json") or {}).get("operator_profile") or {})
+        if isinstance(runtime_handoff.get("json"), dict)
+        else {},
+        "translator_readiness": (
+            (runtime_handoff.get("json") or {}).get("translator_readiness") or {}
+        )
+        if isinstance(runtime_handoff.get("json"), dict)
+        else {},
+        "operator_workflow": ((runtime_handoff.get("json") or {}).get("operator_workflow") or {})
+        if isinstance(runtime_handoff.get("json"), dict)
+        else {},
         "secrets_masked": {
             "openclaw_token": _mask_secret(os.getenv("OPENCLAW_TOKEN", "")),
             "gemini_free": _mask_secret(os.getenv("GEMINI_API_KEY_FREE", "")),
@@ -1195,17 +1298,36 @@ def main() -> int:
     (BUNDLE_DIR / "krab_log_tail.log").write_text(krab_log_tail, encoding="utf-8")
     (BUNDLE_DIR / "openclaw_log_tail.log").write_text(openclaw_log_tail, encoding="utf-8")
 
-    _copy_if_exists(DOCS_DIR / "NEXT_CHAT_CHECKPOINT_RU.md", BUNDLE_DIR / "NEXT_CHAT_CHECKPOINT_RU.md")
+    _copy_if_exists(
+        DOCS_DIR / "NEXT_CHAT_CHECKPOINT_RU.md", BUNDLE_DIR / "NEXT_CHAT_CHECKPOINT_RU.md"
+    )
     _copy_if_exists(DOCS_DIR / "OPENCLAW_KRAB_ROADMAP.md", BUNDLE_DIR / "OPENCLAW_KRAB_ROADMAP.md")
-    _copy_if_exists(DOCS_DIR / "NEW_CHAT_BOOTSTRAP_PROMPT.md", BUNDLE_DIR / "NEW_CHAT_BOOTSTRAP_PROMPT.md")
+    _copy_if_exists(
+        DOCS_DIR / "NEW_CHAT_BOOTSTRAP_PROMPT.md", BUNDLE_DIR / "NEW_CHAT_BOOTSTRAP_PROMPT.md"
+    )
     _copy_if_exists(DOCS_DIR / "MASTER_PLAN_VNEXT_RU.md", BUNDLE_DIR / "MASTER_PLAN_VNEXT_RU.md")
-    _copy_if_exists(DOCS_DIR / "CALL_TRANSLATOR_AUDIT_RU.md", BUNDLE_DIR / "CALL_TRANSLATOR_AUDIT_RU.md")
-    _copy_if_exists(DOCS_DIR / "MULTI_ACCOUNT_SWITCHOVER_RU.md", BUNDLE_DIR / "MULTI_ACCOUNT_SWITCHOVER_RU.md")
-    _copy_if_exists(DOCS_DIR / "THIRD_ACCOUNT_BOOTSTRAP_RU.md", BUNDLE_DIR / "THIRD_ACCOUNT_BOOTSTRAP_RU.md")
-    _copy_if_exists(DOCS_DIR / "KRAB_SKILLS_REGISTRY_RU.md", BUNDLE_DIR / "KRAB_SKILLS_REGISTRY_RU.md")
-    _copy_if_exists(DOCS_DIR / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md", BUNDLE_DIR / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md")
-    _copy_if_exists(DOCS_DIR / "PARALLEL_DIALOG_PROTOCOL_RU.md", BUNDLE_DIR / "PARALLEL_DIALOG_PROTOCOL_RU.md")
-    _copy_if_exists(DOCS_DIR / "SHARED_REPO_STRATEGY_RU.md", BUNDLE_DIR / "SHARED_REPO_STRATEGY_RU.md")
+    _copy_if_exists(
+        DOCS_DIR / "CALL_TRANSLATOR_AUDIT_RU.md", BUNDLE_DIR / "CALL_TRANSLATOR_AUDIT_RU.md"
+    )
+    _copy_if_exists(
+        DOCS_DIR / "MULTI_ACCOUNT_SWITCHOVER_RU.md", BUNDLE_DIR / "MULTI_ACCOUNT_SWITCHOVER_RU.md"
+    )
+    _copy_if_exists(
+        DOCS_DIR / "THIRD_ACCOUNT_BOOTSTRAP_RU.md", BUNDLE_DIR / "THIRD_ACCOUNT_BOOTSTRAP_RU.md"
+    )
+    _copy_if_exists(
+        DOCS_DIR / "KRAB_SKILLS_REGISTRY_RU.md", BUNDLE_DIR / "KRAB_SKILLS_REGISTRY_RU.md"
+    )
+    _copy_if_exists(
+        DOCS_DIR / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md",
+        BUNDLE_DIR / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md",
+    )
+    _copy_if_exists(
+        DOCS_DIR / "PARALLEL_DIALOG_PROTOCOL_RU.md", BUNDLE_DIR / "PARALLEL_DIALOG_PROTOCOL_RU.md"
+    )
+    _copy_if_exists(
+        DOCS_DIR / "SHARED_REPO_STRATEGY_RU.md", BUNDLE_DIR / "SHARED_REPO_STRATEGY_RU.md"
+    )
     _copy_if_exists(DOWNLOADS_MASTER_PLAN, BUNDLE_DIR / DOWNLOADS_MASTER_PLAN.name)
     for repo_doc in REPO_LEVEL_DOCS:
         _copy_if_exists(repo_doc, BUNDLE_DIR / repo_doc.name)

@@ -21,7 +21,6 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
 
-
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "artifacts" / "telegram_avatar"
 FRAMES_DIR = OUT_DIR / "frames"
@@ -73,7 +72,13 @@ def ellipse_gradient(
     layer.paste(grad, (x1, y1), mask)
 
 
-def glow(layer: Image.Image, center: tuple[float, float], radius: float, color: tuple[int, int, int], alpha: int) -> None:
+def glow(
+    layer: Image.Image,
+    center: tuple[float, float],
+    radius: float,
+    color: tuple[int, int, int],
+    alpha: int,
+) -> None:
     """Добавляет мягкое свечение вокруг ядра и орбит."""
     cx, cy = center
     glow_layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
@@ -101,7 +106,9 @@ def draw_capsule(
     local = Image.new("RGBA", (int(length + width * 2), int(width * 3)), (0, 0, 0, 0))
     ld = ImageDraw.Draw(local)
     pad = width
-    ld.rounded_rectangle((pad, width, pad + length, width * 2), radius=width / 2, fill=fill, outline=outline, width=2)
+    ld.rounded_rectangle(
+        (pad, width, pad + length, width * 2), radius=width / 2, fill=fill, outline=outline, width=2
+    )
     rotated = local.rotate(math.degrees(angle), resample=Image.Resampling.BICUBIC, expand=True)
     layer.alpha_composite(rotated, (int(cx - rotated.width / 2), int(cy - rotated.height / 2)))
 
@@ -120,17 +127,41 @@ def draw_claw(
     open_amount = math.sin(phase * math.tau) * 0.08
     arm_angle = side * (0.48 + open_amount)
     arm_center = (px + side * 118, py - 22 + body_shift * 0.25)
-    draw_capsule(claw_layer, arm_center, 150, 34, arm_angle, (177, 47, 36, 255), (255, 136, 116, 120))
+    draw_capsule(
+        claw_layer, arm_center, 150, 34, arm_angle, (177, 47, 36, 255), (255, 136, 116, 120)
+    )
 
     cx = px + side * 204
     cy = py - 70 + body_shift * 0.3
-    ellipse_gradient(claw_layer, (int(cx - 58), int(cy - 54), int(cx + 54), int(cy + 64)), (255, 103, 83), (119, 27, 22), 255)
+    ellipse_gradient(
+        claw_layer,
+        (int(cx - 58), int(cy - 54), int(cx + 54), int(cy + 64)),
+        (255, 103, 83),
+        (119, 27, 22),
+        255,
+    )
     draw.ellipse((cx - 58, cy - 54, cx + 54, cy + 64), outline=(255, 181, 150, 145), width=3)
 
     # Два "пальца" клешни специально крупные: Telegram обрежет аватар кругом.
     finger_angle = side * (0.36 + open_amount * 1.4)
-    draw_capsule(claw_layer, (cx + side * 44, cy - 42), 76, 30, finger_angle, (224, 68, 53, 255), (255, 197, 166, 120))
-    draw_capsule(claw_layer, (cx + side * 43, cy + 38), 72, 28, -finger_angle * 0.8, (157, 35, 28, 255), (255, 197, 166, 100))
+    draw_capsule(
+        claw_layer,
+        (cx + side * 44, cy - 42),
+        76,
+        30,
+        finger_angle,
+        (224, 68, 53, 255),
+        (255, 197, 166, 120),
+    )
+    draw_capsule(
+        claw_layer,
+        (cx + side * 43, cy + 38),
+        72,
+        28,
+        -finger_angle * 0.8,
+        (157, 35, 28, 255),
+        (255, 197, 166, 100),
+    )
     base.alpha_composite(claw_layer)
 
 
@@ -138,7 +169,6 @@ def draw_frame(index: int) -> Image.Image:
     """Создаёт один кадр зацикленной 4-секундной анимации."""
     phase = index / FRAME_COUNT
     pulse = (math.sin(phase * math.tau) + 1) / 2
-    breath = math.sin(phase * math.tau * 2)
     body_shift = math.sin(phase * math.tau) * 8
     turn = math.sin(phase * math.tau) * 10
 
@@ -146,7 +176,11 @@ def draw_frame(index: int) -> Image.Image:
     bg = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     draw = ImageDraw.Draw(bg)
 
-    for radius, alpha, color in ((360, 90, (47, 236, 255)), (250, 70, (255, 210, 107)), (150, 42, (98, 255, 155))):
+    for radius, alpha, color in (
+        (360, 90, (47, 236, 255)),
+        (250, 70, (255, 210, 107)),
+        (150, 42, (98, 255, 155)),
+    ):
         glow(bg, (SIZE / 2, SIZE / 2 - 36), radius * (0.85 + pulse * 0.08), color, alpha)
 
     # Звёзды фиксированы математически, чтобы видео было стабильным между сборками.
@@ -181,7 +215,9 @@ def draw_frame(index: int) -> Image.Image:
             leg_phase = math.sin(phase * math.tau * 2 + i * 0.85 + (side > 0) * 0.45) * 0.08
             angle = side * (0.45 + i * 0.12 + leg_phase)
             center = (360 + side * (166 + i * 22), y + body_shift * 0.22)
-            draw_capsule(creature, center, 122 - i * 8, 20, angle, (126, 31, 29, 245), (255, 115, 92, 90))
+            draw_capsule(
+                creature, center, 122 - i * 8, 20, angle, (126, 31, 29, 245), (255, 115, 92, 90)
+            )
 
     body_layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     bx1 = int(186 - turn * 0.9)
@@ -191,7 +227,9 @@ def draw_frame(index: int) -> Image.Image:
     ellipse_gradient(body_layer, (bx1, by1, bx2, by2), (255, 118, 92), (87, 18, 17), 255)
     bdraw = ImageDraw.Draw(body_layer)
     bdraw.ellipse((bx1, by1, bx2, by2), outline=(255, 190, 157, 136), width=4)
-    bdraw.arc((bx1 + 52, by1 + 36, bx2 - 52, by2 - 58), 184, 356, fill=(255, 221, 197, 110), width=5)
+    bdraw.arc(
+        (bx1 + 52, by1 + 36, bx2 - 52, by2 - 58), 184, 356, fill=(255, 221, 197, 110), width=5
+    )
     bdraw.arc((bx1 + 80, by1 + 96, bx2 - 80, by2 - 28), 20, 160, fill=(31, 5, 7, 115), width=5)
 
     for i in range(5):
@@ -204,7 +242,12 @@ def draw_frame(index: int) -> Image.Image:
     core_center = (360, 374 + body_shift)
     glow(body_layer, core_center, 118 + pulse * 18, (88, 246, 255), 210)
     bdraw.ellipse(
-        (core_center[0] - core_r, core_center[1] - core_r, core_center[0] + core_r, core_center[1] + core_r),
+        (
+            core_center[0] - core_r,
+            core_center[1] - core_r,
+            core_center[0] + core_r,
+            core_center[1] + core_r,
+        ),
         fill=(45, 230, 245, 235),
         outline=(235, 255, 255, 210),
         width=4,
@@ -226,10 +269,21 @@ def draw_frame(index: int) -> Image.Image:
     for side in (-1, 1):
         ex = 302 + side * 58 + math.sin(phase * math.tau + side) * 2
         ey = 246 + body_shift * 0.65
-        cdraw.rounded_rectangle((ex - 16, ey - 52, ex + 16, ey + 12), radius=15, fill=(119, 31, 28, 255))
-        cdraw.ellipse((ex - 26, ey - 73, ex + 26, ey - 21), fill=(236, 250, 242, 255), outline=(32, 44, 46, 190), width=3)
-        cdraw.ellipse((ex - 9 + side * 3, ey - 57, ex + 10 + side * 3, ey - 35), fill=(6, 19, 22, 255))
-        cdraw.ellipse((ex - 2 + side * 3, ey - 54, ex + 4 + side * 3, ey - 48), fill=(255, 255, 255, 210))
+        cdraw.rounded_rectangle(
+            (ex - 16, ey - 52, ex + 16, ey + 12), radius=15, fill=(119, 31, 28, 255)
+        )
+        cdraw.ellipse(
+            (ex - 26, ey - 73, ex + 26, ey - 21),
+            fill=(236, 250, 242, 255),
+            outline=(32, 44, 46, 190),
+            width=3,
+        )
+        cdraw.ellipse(
+            (ex - 9 + side * 3, ey - 57, ex + 10 + side * 3, ey - 35), fill=(6, 19, 22, 255)
+        )
+        cdraw.ellipse(
+            (ex - 2 + side * 3, ey - 54, ex + 4 + side * 3, ey - 48), fill=(255, 255, 255, 210)
+        )
 
     creature.alpha_composite(body_layer)
     creature = creature.filter(ImageFilter.UnsharpMask(radius=1.2, percent=130, threshold=3))

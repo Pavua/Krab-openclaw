@@ -20,6 +20,7 @@ Alert triggers:
 - SIGTERM loop detected → Sentry warning
 - Repeated same error > 20x → escalation (may indicate infinite loop)
 """
+
 from __future__ import annotations
 
 import collections
@@ -30,10 +31,14 @@ import re
 import sys
 from pathlib import Path
 
-STATE_DIR = Path(os.getenv("KRAB_RUNTIME_STATE_DIR", str(Path.home() / ".openclaw" / "krab_runtime_state")))
+STATE_DIR = Path(
+    os.getenv("KRAB_RUNTIME_STATE_DIR", str(Path.home() / ".openclaw" / "krab_runtime_state"))
+)
 STATS_FILE = STATE_DIR / "backend_scan.json"
 LOG_FILE = STATE_DIR / "backend_scan.log"
-OPENCLAW_LOG = Path(os.getenv("OPENCLAW_LOG", "/Users/pablito/Antigravity_AGENTS/Краб/openclaw.log"))
+OPENCLAW_LOG = Path(
+    os.getenv("OPENCLAW_LOG", "/Users/pablito/Antigravity_AGENTS/Краб/openclaw.log")
+)
 
 # Patterns (pre-compiled, case-insensitive)
 _PATTERNS = {
@@ -41,8 +46,12 @@ _PATTERNS = {
     "timeout": re.compile(r"\b(timeout|deadline|freeze|stuck|hang)\b", re.IGNORECASE),
     "leak_signature": re.compile(r"(PPID=1|orphan|zombie|defunct)", re.IGNORECASE),
     "sigterm": re.compile(r"SIGTERM", re.IGNORECASE),
-    "floodwait": re.compile(r"\b(FloodWait|flood_wait|USER_BANNED|ChatWriteForbidden)\b", re.IGNORECASE),
-    "llm_timeout": re.compile(r"(LLM.*timeout|openclaw.*120|llm_provider.*timeout|provider not responding)", re.IGNORECASE),
+    "floodwait": re.compile(
+        r"\b(FloodWait|flood_wait|USER_BANNED|ChatWriteForbidden)\b", re.IGNORECASE
+    ),
+    "llm_timeout": re.compile(
+        r"(LLM.*timeout|openclaw.*120|llm_provider.*timeout|provider not responding)", re.IGNORECASE
+    ),
     "gateway_down": re.compile(r"(gateway.*closed|connection refused|ECONNREFUSED)", re.IGNORECASE),
     "pong_timeout": re.compile(r"pong.*timeout|ping.*timeout", re.IGNORECASE),
 }

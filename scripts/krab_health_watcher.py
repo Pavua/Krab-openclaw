@@ -17,6 +17,7 @@ Actions — ТОЛЬКО мягкие:
 - НЕ рестартует Krab (это destructive)
 - Перезапускает OpenClaw gateway launchctl (idempotent)
 """
+
 from __future__ import annotations
 
 import datetime as _dt
@@ -30,7 +31,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-STATE_DIR = Path(os.getenv("KRAB_RUNTIME_STATE_DIR", str(Path.home() / ".openclaw" / "krab_runtime_state")))
+STATE_DIR = Path(
+    os.getenv("KRAB_RUNTIME_STATE_DIR", str(Path.home() / ".openclaw" / "krab_runtime_state"))
+)
 LOG_FILE = STATE_DIR / "health_watcher.log"
 STATE_FILE = STATE_DIR / "health_watcher.json"
 KRAB_PANEL_URL = os.getenv("KRAB_PANEL_URL", "http://127.0.0.1:8080")

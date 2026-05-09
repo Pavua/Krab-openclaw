@@ -49,8 +49,8 @@ def make_shortcut_plist() -> bytes:
                     "WFShellScriptActionScript": (
                         f'INPUT="$1"\n'
                         f'[ -z "$INPUT" ] && exit 0\n'
-                        f'PAYLOAD=$(python3 -c "import json,sys; print(json.dumps({{\'text\':\'💬 \'+sys.argv[1], \'chat_id\':\'@p0lrd\'}}))"\
- "$INPUT")\n'
+                        f"PAYLOAD=$(python3 -c \"import json,sys; print(json.dumps({{'text':'💬 '+sys.argv[1], 'chat_id':'@p0lrd'}}))\"\
+ \"$INPUT\")\n"
                         f'curl -s -X POST http://127.0.0.1:8080/api/notify -H "Content-Type: application/json" -d "$PAYLOAD"\n'
                     ),
                     "WFShellType": "/bin/bash",
@@ -62,7 +62,7 @@ def make_shortcut_plist() -> bytes:
                                     "Type": "ActionOutput",
                                 }
                             ],
-                            "string": "{\uFFFC}",
+                            "string": "{\ufffc}",
                         },
                         "WFSerializationType": "WFTextTokenString",
                     },
@@ -93,9 +93,18 @@ def main() -> None:
     # Подписываем (требуется macOS 15+)
     signed_file = OUTPUT_FILE.with_stem(OUTPUT_FILE.stem + "_signed")
     sign_result = subprocess.run(
-        ["shortcuts", "sign", "--mode", "people-who-know-me",
-         "--input", str(OUTPUT_FILE), "--output", str(signed_file)],
-        capture_output=True, text=True,
+        [
+            "shortcuts",
+            "sign",
+            "--mode",
+            "people-who-know-me",
+            "--input",
+            str(OUTPUT_FILE),
+            "--output",
+            str(signed_file),
+        ],
+        capture_output=True,
+        text=True,
     )
 
     import_target = signed_file if sign_result.returncode == 0 else OUTPUT_FILE

@@ -19,6 +19,7 @@ Actions:
 
 Это MONITOR ONLY — не aggressive restart, т.к. Ear интерактивный.
 """
+
 from __future__ import annotations
 
 import datetime as _dt
@@ -31,7 +32,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-STATE_DIR = Path(os.getenv("KRAB_RUNTIME_STATE_DIR", str(Path.home() / ".openclaw" / "krab_runtime_state")))
+STATE_DIR = Path(
+    os.getenv("KRAB_RUNTIME_STATE_DIR", str(Path.home() / ".openclaw" / "krab_runtime_state"))
+)
 LOG_FILE = STATE_DIR / "krab_ear" / "ear_watcher.log"
 STATE_FILE = STATE_DIR / "krab_ear" / "ear_watcher.json"
 EAR_SOCKET_PATH = Path(
@@ -244,9 +247,7 @@ def main() -> int:
         if not swift_ok and _should_alert(
             state["swift_agent_down_count"], prev_state.get("swift_agent_down_count_last_alert", -1)
         ):
-            alert_text_parts.append(
-                f"Swift agent down {state['swift_agent_down_count']}×"
-            )
+            alert_text_parts.append(f"Swift agent down {state['swift_agent_down_count']}×")
             alert_needed = True
             state["swift_agent_down_count_last_alert"] = state["swift_agent_down_count"]
         if not python_ok and _should_alert(

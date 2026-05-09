@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Auto-generate docs/README.md from docs/*.md files."""
+
 import re
 from pathlib import Path
 
@@ -61,15 +62,17 @@ def main():
             lines.append(f"- **`{d.name}/`** — {md_count} markdown files")
 
     # Related files
-    lines.extend([
-        "",
-        "## Related files (project root)",
-        "",
-        "- [`CLAUDE.md`](../CLAUDE.md) — Project conventions & architecture for Claude Code",
-        "- [`CHANGELOG.md`](../CHANGELOG.md) — Release notes (Keep-a-Changelog format)",
-        "- [`IMPROVEMENTS.md`](../IMPROVEMENTS.md) — Architecture backlog & vision",
-        "- [`.remember/`](../.remember/) — Session scratch workspace (gitignored)",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Related files (project root)",
+            "",
+            "- [`CLAUDE.md`](../CLAUDE.md) — Project conventions & architecture for Claude Code",
+            "- [`CHANGELOG.md`](../CHANGELOG.md) — Release notes (Keep-a-Changelog format)",
+            "- [`IMPROVEMENTS.md`](../IMPROVEMENTS.md) — Architecture backlog & vision",
+            "- [`.remember/`](../.remember/) — Session scratch workspace (gitignored)",
+        ]
+    )
 
     # Write output
     content = "\n".join(lines) + "\n"

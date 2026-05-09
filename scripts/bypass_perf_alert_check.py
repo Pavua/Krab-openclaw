@@ -32,9 +32,7 @@ MIN_SAMPLES = 3
 ALERT_DEBOUNCE_SEC = 3600
 
 # Файл для хранения метки последнего алерта
-LAST_ALERT_FILE = (
-    Path.home() / ".openclaw/krab_runtime_state/bypass_perf_alert_last.json"
-)
+LAST_ALERT_FILE = Path.home() / ".openclaw/krab_runtime_state/bypass_perf_alert_last.json"
 
 # Owner panel endpoint
 PANEL_BASE = "http://127.0.0.1:8080"
@@ -68,9 +66,7 @@ def _load_last_alert() -> dict:
 def _save_last_alert(alerts: list[str]) -> None:
     """Сохраняет метку последнего алерта."""
     LAST_ALERT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    LAST_ALERT_FILE.write_text(
-        json.dumps({"last_alert_ts": time.time(), "alerts": alerts})
-    )
+    LAST_ALERT_FILE.write_text(json.dumps({"last_alert_ts": time.time(), "alerts": alerts}))
 
 
 def _send_notify(text: str) -> None:
@@ -105,14 +101,10 @@ def _check_thresholds(by_kind: dict) -> list[str]:
         fail_rate = stats.get("fail_rate", 0.0)
 
         if p95 > threshold["p95_sec"]:
-            violations.append(
-                f"{kind}: p95={p95:.1f}s > {threshold['p95_sec']}s"
-                f" (count={count})"
-            )
+            violations.append(f"{kind}: p95={p95:.1f}s > {threshold['p95_sec']}s (count={count})")
         if fail_rate > threshold["fail_rate"]:
             violations.append(
-                f"{kind}: fail_rate={fail_rate:.1%} > {threshold['fail_rate']:.0%}"
-                f" (count={count})"
+                f"{kind}: fail_rate={fail_rate:.1%} > {threshold['fail_rate']:.0%} (count={count})"
             )
 
     return violations
@@ -146,11 +138,7 @@ def main() -> int:
     # Формируем текст алерта
     total_calls = data.get("total_calls", 0)
     lines = "\n".join(f"  {v}" for v in violations)
-    text = (
-        "⚠️ *Bypass perf degradation*\n"
-        f"{lines}\n\n"
-        f"Total calls (1h): {total_calls}"
-    )
+    text = f"⚠️ *Bypass perf degradation*\n{lines}\n\nTotal calls (1h): {total_calls}"
 
     # Отправляем уведомление
     _send_notify(text)

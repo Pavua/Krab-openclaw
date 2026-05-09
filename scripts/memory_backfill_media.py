@@ -50,7 +50,9 @@ _MEDIA_MARKERS = (
 )
 
 
-def find_candidates(conn: sqlite3.Connection, limit: int | None = None) -> list[tuple[str, str, str]]:
+def find_candidates(
+    conn: sqlite3.Connection, limit: int | None = None
+) -> list[tuple[str, str, str]]:
     """Возвращает [(chat_id, message_id, text_redacted), ...] media-кандидатов
     у которых ещё нет summary в `message_media_summaries`.
 
@@ -127,7 +129,9 @@ def main() -> int:
         if not args.apply:
             for chat_id, msg_id, text in candidates[:10]:
                 preview = text[:60].replace("\n", " ")
-                print(f"  dry-run: chat={chat_id} msg={msg_id} type={_detect_media_type(text)} text={preview!r}")
+                print(
+                    f"  dry-run: chat={chat_id} msg={msg_id} type={_detect_media_type(text)} text={preview!r}"
+                )
             print("[backfill] dry-run завершён. Используй --apply для реальной записи.")
             return 0
 
@@ -137,7 +141,9 @@ def main() -> int:
         written = 0
         for chat_id, msg_id, text in candidates:
             media_type = _detect_media_type(text)
-            placeholder = f"[backfill: vision provider not configured for {media_type} {chat_id}/{msg_id}]"
+            placeholder = (
+                f"[backfill: vision provider not configured for {media_type} {chat_id}/{msg_id}]"
+            )
             if record_media_summary(
                 conn,
                 chat_id,
@@ -147,7 +153,9 @@ def main() -> int:
                 model_name="backfill-placeholder",
             ):
                 written += 1
-        print(f"[backfill] записано placeholder-summary: {written} (подключи vision-провайдер для реальных описаний)")
+        print(
+            f"[backfill] записано placeholder-summary: {written} (подключи vision-провайдер для реальных описаний)"
+        )
         return 0
     finally:
         conn.close()

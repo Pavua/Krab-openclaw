@@ -347,9 +347,7 @@ async def run_biweekly_ab_and_apply() -> None:
         if AUTO_AB:
             try:
                 pending = [
-                    p
-                    for p in curator.list_proposals(team=team)
-                    if p.get("status") == "pending"
+                    p for p in curator.list_proposals(team=team) if p.get("status") == "pending"
                 ]
                 for proposal in pending[:1]:  # по одному A/B за цикл
                     pid = proposal.get("proposal_id") or ""

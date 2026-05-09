@@ -20,8 +20,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -58,7 +58,7 @@ GATEWAY_HEALTH_URL = "http://127.0.0.1:18789/health"
 CHECK_INTERVAL_SEC = 60
 MAX_CONSECUTIVE_FAILURES = 3
 GATEWAY_RESTART_COOLDOWN_SEC = 180  # не перезапускать шлюз чаще чем раз в 3 минуты
-GATEWAY_STARTUP_WAIT_SEC = 8       # ждать старта шлюза (с ретраями)
+GATEWAY_STARTUP_WAIT_SEC = 8  # ждать старта шлюза (с ретраями)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GATEWAY_LOG_PATH = PROJECT_ROOT / "openclaw.log"
 
@@ -243,7 +243,8 @@ def _try_restart_gateway() -> bool:
             if _is_gateway_ok(payload):
                 log.info(
                     "restart_gateway_ok attempt=%d payload=%r",
-                    attempt, payload,
+                    attempt,
+                    payload,
                 )
                 return True
         except Exception as exc:  # noqa: BLE001
@@ -316,7 +317,9 @@ def run_watchdog() -> None:
                 err = payload.get("telegram_userbot_error_code")
                 log.warning(
                     "userbot_not_ok consecutive=%d state=%r error_code=%r",
-                    consecutive_failures, state, err,
+                    consecutive_failures,
+                    state,
+                    err,
                 )
 
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
@@ -330,7 +333,9 @@ def run_watchdog() -> None:
 
         except urllib.error.URLError as exc:
             consecutive_failures += 1
-            log.warning("health_check_unreachable consecutive=%d error=%s", consecutive_failures, exc)
+            log.warning(
+                "health_check_unreachable consecutive=%d error=%s", consecutive_failures, exc
+            )
         except Exception as exc:
             consecutive_failures += 1
             log.warning("health_check_error consecutive=%d error=%s", consecutive_failures, exc)

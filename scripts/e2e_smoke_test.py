@@ -42,7 +42,7 @@ RESULTS_PATH = pathlib.Path(__file__).parent.parent / "docs" / "E2E_RESULTS_LATE
 # Chat ID owner'а подтягивается автоматически через MCP get_dialogs.
 OWNER_CHAT_ID_ENV = "KRAB_OWNER_CHAT_ID"
 
-POLL_INTERVAL = 2.0   # секунды между опросами
+POLL_INTERVAL = 2.0  # секунды между опросами
 DEFAULT_TIMEOUT = 60  # секунд ожидания ответа
 
 
@@ -50,14 +50,16 @@ DEFAULT_TIMEOUT = 60  # секунд ожидания ответа
 # Структуры данных
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class TestCase:
     """Один E2E тест-кейс."""
+
     name: str
     message: str
-    must_contain: list[str] = field(default_factory=list)     # хотя бы одно
-    must_not_contain: list[str] = field(default_factory=list) # ни одно
-    min_length: int = 1       # минимальная длина ответа
+    must_contain: list[str] = field(default_factory=list)  # хотя бы одно
+    must_not_contain: list[str] = field(default_factory=list)  # ни одно
+    min_length: int = 1  # минимальная длина ответа
     max_length: int | None = None  # максимальная (None = без ограничения)
     description: str = ""
 
@@ -65,6 +67,7 @@ class TestCase:
 @dataclass
 class TestResult:
     """Результат выполнения одного теста."""
+
     case: TestCase
     passed: bool
     actual_text: str
@@ -80,7 +83,7 @@ TEST_CASES: list[TestCase] = [
     TestCase(
         name="identity_basic",
         message="тест, как дела?",
-        must_contain=[],   # любой непустой ответ
+        must_contain=[],  # любой непустой ответ
         must_not_contain=["Мой Господин", "My Lord", "My Master"],
         min_length=5,
         description="Базовый ответ без запрещённого обращения",
@@ -148,6 +151,7 @@ TEST_CASES: list[TestCase] = [
 # ---------------------------------------------------------------------------
 # MCP Telegram клиент (HTTP/SSE)
 # ---------------------------------------------------------------------------
+
 
 class MCPTelegramClient:
     """Минимальный клиент к MCP krab-yung-nagato через HTTP JSON-RPC."""
@@ -232,6 +236,7 @@ class MCPTelegramClient:
 # Panel API helper
 # ---------------------------------------------------------------------------
 
+
 async def get_owner_chat_id_from_panel() -> int | None:
     """Попытаться получить owner chat_id через Owner Panel API."""
     try:
@@ -250,6 +255,7 @@ async def get_owner_chat_id_from_panel() -> int | None:
 # ---------------------------------------------------------------------------
 # Ядро раннера
 # ---------------------------------------------------------------------------
+
 
 class E2ESmokeRunner:
     """Запускает тест-кейсы и возвращает результаты."""
@@ -343,9 +349,7 @@ class E2ESmokeRunner:
     # Запуск всего набора
     # ------------------------------------------------------------------
 
-    async def run_all(
-        self, cases: list[TestCase] | None = None
-    ) -> list[TestResult]:
+    async def run_all(self, cases: list[TestCase] | None = None) -> list[TestResult]:
         """Запустить все (или выбранные) тест-кейсы последовательно."""
         targets = cases or TEST_CASES
         results: list[TestResult] = []
@@ -353,8 +357,14 @@ class E2ESmokeRunner:
             result = await self.run_one(case)
             results.append(result)
             status = "PASS" if result.passed else "FAIL"
-            snippet = (result.actual_text[:80] + "…") if len(result.actual_text) > 80 else result.actual_text
-            print(f"  [{status}] {case.name} ({result.elapsed:.1f}s) — {snippet or result.failure_reason}")
+            snippet = (
+                (result.actual_text[:80] + "…")
+                if len(result.actual_text) > 80
+                else result.actual_text
+            )
+            print(
+                f"  [{status}] {case.name} ({result.elapsed:.1f}s) — {snippet or result.failure_reason}"
+            )
             # Небольшая пауза между тестами чтобы не перегружать Краба
             await asyncio.sleep(1.5)
         return results
@@ -363,6 +373,7 @@ class E2ESmokeRunner:
 # ---------------------------------------------------------------------------
 # Проверка ответа
 # ---------------------------------------------------------------------------
+
 
 def _assert_response(case: TestCase, actual: str) -> str | None:
     """Проверить ответ по правилам кейса. Вернуть None если OK, иначе текст ошибки."""
@@ -386,6 +397,7 @@ def _assert_response(case: TestCase, actual: str) -> str | None:
 # Отчёт
 # ---------------------------------------------------------------------------
 
+
 def _render_report(results: list[TestResult], elapsed_total: float) -> str:
     """Сгенерировать markdown-отчёт."""
     passed = sum(1 for r in results if r.passed)
@@ -408,9 +420,7 @@ def _render_report(results: list[TestResult], elapsed_total: float) -> str:
         snippet = (r.actual_text[:60] + "…") if len(r.actual_text) > 60 else r.actual_text
         snippet = snippet.replace("|", "\\|").replace("\n", " ")
         reason = r.failure_reason.replace("|", "\\|")
-        lines.append(
-            f"| `{r.case.name}` | {status} | {r.elapsed:.1f}s | {snippet} | {reason} |"
-        )
+        lines.append(f"| `{r.case.name}` | {status} | {r.elapsed:.1f}s | {snippet} | {reason} |")
 
     lines += [
         f"",
@@ -445,6 +455,7 @@ def save_report(report: str) -> None:
 # ---------------------------------------------------------------------------
 # Получение chat_id
 # ---------------------------------------------------------------------------
+
 
 async def resolve_owner_chat_id(mcp: MCPTelegramClient) -> int | None:
     """Получить chat_id владельца — из env, panel API, или dialogs."""
@@ -482,6 +493,7 @@ async def resolve_owner_chat_id(mcp: MCPTelegramClient) -> int | None:
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
+
 
 async def async_main(args: argparse.Namespace) -> int:
     print("=== Krab E2E Smoke Test Runner ===")
@@ -533,9 +545,9 @@ async def async_main(args: argparse.Namespace) -> int:
     # Итоговая сводка
     passed = sum(1 for r in results if r.passed)
     total = len(results)
-    print(f"\n{'='*40}")
+    print(f"\n{'=' * 40}")
     print(f"Итого: {passed}/{total} passed ({elapsed_total:.1f}s)")
-    print(f"{'='*40}")
+    print(f"{'=' * 40}")
 
     if args.verbose:
         for r in results:
@@ -558,8 +570,10 @@ def main() -> None:
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Подробный вывод")
     parser.add_argument(
-        "--timeout", type=float, default=DEFAULT_TIMEOUT,
-        help=f"Таймаут ожидания ответа в секундах (default: {DEFAULT_TIMEOUT})"
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"Таймаут ожидания ответа в секундах (default: {DEFAULT_TIMEOUT})",
     )
     parser.add_argument("--chat-id", type=int, dest="chat_id", help="Owner chat_id в Telegram")
     parser.add_argument("--test", help="Запустить только один тест по имени")

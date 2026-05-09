@@ -162,9 +162,7 @@ def rotate_logs(dry_run: bool = False) -> list[dict]:
     return results
 
 
-def build_report(
-    *, dry_run: bool, skip_vacuum: bool, skip_logs: bool
-) -> dict:
+def build_report(*, dry_run: bool, skip_vacuum: bool, skip_logs: bool) -> dict:
     """Сформировать итоговый JSON-отчёт."""
     report: dict = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),

@@ -8,6 +8,7 @@ Usage:
     python scripts/ci_health_report.py --output report.md # to file
     python scripts/ci_health_report.py --quick            # skip slow checks (coverage)
 """
+
 import argparse
 import re
 import subprocess

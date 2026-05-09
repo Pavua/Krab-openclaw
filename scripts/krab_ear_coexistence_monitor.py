@@ -10,6 +10,7 @@
 
 Логирует в ~/.openclaw/krab_runtime_state/coexistence_monitor.log JSONL.
 """
+
 import json
 import os
 import sys
@@ -37,9 +38,7 @@ ALERT_COOLDOWN_SEC = int(os.environ.get("KRAB_COEXIST_ALERT_COOLDOWN_SEC", "900"
 KRAB_NOTIFY_URL = os.environ.get("KRAB_NOTIFY_URL", "http://127.0.0.1:8080/api/notify")
 
 LOG_FILE = Path.home() / ".openclaw/krab_runtime_state/coexistence_monitor.log"
-ALERT_STATE_FILE = (
-    Path.home() / ".openclaw/krab_runtime_state/coexistence_alert_state.json"
-)
+ALERT_STATE_FILE = Path.home() / ".openclaw/krab_runtime_state/coexistence_alert_state.json"
 
 # Паттерны командной строки для определения процессов Krab и Krab Ear
 # Wave (08.05.2026): добавлены `src.main` + `-m src.main` — реальный launch использует
