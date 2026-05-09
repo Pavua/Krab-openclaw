@@ -384,6 +384,8 @@
         alert: 'Alert',
         notification: 'Notification',
         open_all: 'Open all',
+        already_added: 'already in chain',
+        is_primary: 'primary model',
       },
       ops: {
         title: 'Operations Center',
@@ -913,6 +915,8 @@
         alert: 'Алерт',
         notification: 'Уведомление',
         open_all: 'Открыть все',
+        already_added: 'уже в цепочке',
+        is_primary: 'основная модель',
       },
       ops: {
         title: 'Центр операций',

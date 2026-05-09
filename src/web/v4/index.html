@@ -978,9 +978,11 @@
                 defaultOpt.textContent = tt('hub.select_model');
                 select.appendChild(defaultOpt);
 
+                // Wave 44-D-UI-3: показываем ВСЕ модели, но disabled+suffix
+                // для уже добавленных в fallback chain. Раньше фильтровали целиком —
+                // создавало впечатление "моделей мало" (если chain покрывал большинство).
                 const groups = new Map();
                 catalogData.forEach(m => {
-                    if (fallbackChain.includes(m.id)) return;
                     const p = m.provider || 'other';
                     if (!groups.has(p)) groups.set(p, { label: m.provider_label || p, models: [] });
                     groups.get(p).models.push(m);
@@ -992,7 +994,19 @@
                     g.models.forEach(m => {
                         const opt = document.createElement('option');
                         opt.value = m.id;
-                        opt.textContent = m.id;
+                        const alreadyInChain = fallbackChain.includes(m.id);
+                        const isPrimary = m.id === pendingPrimary;
+                        if (alreadyInChain) {
+                            opt.textContent = m.id + ' — ' + tt('hub.already_added');
+                            opt.disabled = true;
+                            opt.style.color = 'var(--text-muted, #888)';
+                        } else if (isPrimary) {
+                            opt.textContent = m.id + ' — ' + tt('hub.is_primary');
+                            opt.disabled = true;
+                            opt.style.color = 'var(--text-muted, #888)';
+                        } else {
+                            opt.textContent = m.id;
+                        }
                         optgroup.appendChild(opt);
                     });
                     select.appendChild(optgroup);
