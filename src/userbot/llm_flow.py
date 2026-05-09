@@ -2194,6 +2194,30 @@ class LLMFlowMixin:
                         await self.client.send_voice(message.chat.id, _mpath)
                         _agent_sent_voice = True
                     elif _ext in _image_exts:
+                        # Wave 44-Q: validate before send — block blank/corrupt screenshots.
+                        try:
+                            from ..core.image_validator import is_blank_image  # noqa: PLC0415
+
+                            _is_blank, _blank_reason = is_blank_image(_mpath)
+                        except Exception as _val_exc:  # noqa: BLE001
+                            logger.warning(
+                                "screenshot_validation_error",
+                                path=_mpath,
+                                error=str(_val_exc),
+                            )
+                            _is_blank, _blank_reason = False, "ok"
+                        if _is_blank:
+                            logger.warning(
+                                "screenshot_validation_failed",
+                                reason=_blank_reason,
+                                path=_mpath,
+                            )
+                            await self.client.send_message(
+                                message.chat.id,
+                                f"⚠️ Не могу прикрепить screenshot — файл "
+                                f"blank/corrupted (path: {_mpath})",
+                            )
+                            continue
                         await self._send_delivery_chat_action(
                             self.client,
                             message.chat.id,

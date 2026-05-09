@@ -666,6 +666,32 @@ async def telegram_send_photo(params: _SendPhotoInput) -> str:
         return json.dumps(
             {"ok": False, "error": "Укажи photo_path или photo_url"}, ensure_ascii=False
         )
+    # Wave 44-Q: validate local files (skip URLs — only path-based files validated)
+    if params.photo_path.strip():
+        try:
+            from src.core.image_validator import is_blank_image  # noqa: PLC0415
+        except Exception:  # noqa: BLE001 — module may not be importable in test env
+            is_blank_image = None  # type: ignore[assignment]
+        if is_blank_image is not None:
+            blank, reason = is_blank_image(params.photo_path.strip())
+            if blank:
+                _dev_logger.warning(
+                    "screenshot_validation_failed reason=%s path=%s",
+                    reason,
+                    params.photo_path.strip(),
+                )
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "error": (
+                            f"⚠️ Не могу прикрепить screenshot — файл blank/corrupted "
+                            f"(reason={reason}, path={params.photo_path.strip()})"
+                        ),
+                        "validation_failed": True,
+                        "reason": reason,
+                    },
+                    ensure_ascii=False,
+                )
     try:
         cid: int | str = int(params.chat_id)
     except ValueError:
@@ -2959,6 +2985,8 @@ def _coerce_stats_period(raw: str) -> str:
         sorted(_SENTRY_VALID_PERIODS),
     )
     return coerced
+
+
 _KRAB_LAUNCHD_LOG = _PROJECT_ROOT / "logs" / "krab_launchd.out.log"
 _E2E_SMOKE_SCRIPT = _PROJECT_ROOT / "scripts" / "e2e_mcp_smoke.py"
 _START_LAUNCHER = Path("/Users/pablito/Antigravity_AGENTS/new start_krab.command")
