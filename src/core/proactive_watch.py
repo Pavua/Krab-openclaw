@@ -75,6 +75,22 @@ logger = get_logger(__name__)
 _FRONTMOST_MEMORY_DEDUP_SEC = 900  # 15 min
 _NOTIFY_EXCLUDED_REASONS: set[str] = {"frontmost_app_changed"}
 
+# Wave 44-N-watch: dreaming health monitor.
+# Если diary не обновлялся > N секунд, но events.jsonl продолжает расти,
+# считаем ingestion stuck (consolidation pipeline зависла).
+_DREAMING_DIARY_STALE_SEC: int = 24 * 3600  # 24h
+_DREAMING_EVENTS_PATH = (
+    Path.home() / ".openclaw" / "workspace-main-messaging" / "memory" / ".dreams" / "events.jsonl"
+)
+_DREAMING_RECALL_PATH = (
+    Path.home()
+    / ".openclaw"
+    / "workspace-main-messaging"
+    / "memory"
+    / ".dreams"
+    / "short-term-recall.json"
+)
+
 
 def _now_utc_iso() -> str:
     """Возвращает timezone-aware UTC timestamp для snapshot/state."""
@@ -155,10 +171,13 @@ class ProactiveWatchSnapshot:
     reminder_lists_count: int
     note_folders_count: int
     calendars_count: int
+    # Wave 44-N-watch: snapshot health Dreaming layer (опционально).
+    dreaming_status: dict[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "ProactiveWatchSnapshot":
         """Восстанавливает snapshot из persisted state."""
+        ds = payload.get("dreaming_status")
         return cls(
             ts_utc=str(payload.get("ts_utc") or ""),
             gateway_ok=bool(payload.get("gateway_ok")),
@@ -179,6 +198,7 @@ class ProactiveWatchSnapshot:
             reminder_lists_count=int(payload.get("reminder_lists_count") or 0),
             note_folders_count=int(payload.get("note_folders_count") or 0),
             calendars_count=int(payload.get("calendars_count") or 0),
+            dreaming_status=ds if isinstance(ds, dict) else None,
         )
 
 
@@ -213,6 +233,88 @@ class ProactiveWatchService:
             ),
         )
 
+    async def _read_dreaming_status(self) -> dict[str, Any] | None:
+        """
+        Возвращает текущий health-статус OpenClaw Dreaming layer.
+
+        Стратегия:
+        1) Пробуем gateway RPC `doctor.memory.status` через openclaw_client
+           (если метод существует). Возвращает dict с полем `dreaming`.
+        2) Fallback — читаем файлы напрямую:
+           events.jsonl (line count + mtime) + short-term-recall.json
+           (parse, count entries). Это не требует gateway.
+
+        Возвращаемый формат:
+            {
+              "enabled": bool,
+              "events_count": int,
+              "recall_entries": int,
+              "last_event_mtime": float | None,
+              "error": str | None,
+            }
+
+        При полной неудаче чтения возвращает None.
+        """
+        # 1) Gateway RPC, если openclaw_client его поддерживает.
+        rpc = getattr(openclaw_client, "doctor_memory_status", None)
+        if callable(rpc):
+            try:
+                payload = await rpc()
+                if isinstance(payload, dict):
+                    dreaming = payload.get("dreaming")
+                    if isinstance(dreaming, dict):
+                        return {
+                            "enabled": bool(dreaming.get("enabled", True)),
+                            "events_count": int(dreaming.get("eventsCount") or 0),
+                            "recall_entries": int(dreaming.get("recallEntries") or 0),
+                            "last_event_mtime": dreaming.get("lastDiaryUpdate"),
+                            "error": (
+                                str(dreaming.get("error")) if dreaming.get("error") else None
+                            ),
+                        }
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("dreaming_rpc_failed", error=str(exc))
+
+        # 2) Fallback: filesystem inspection.
+        events_path = _DREAMING_EVENTS_PATH
+        recall_path = _DREAMING_RECALL_PATH
+        if not events_path.exists() and not recall_path.exists():
+            return None
+
+        events_count = 0
+        last_event_mtime: float | None = None
+        recall_entries = 0
+        error: str | None = None
+
+        try:
+            if events_path.exists():
+                last_event_mtime = events_path.stat().st_mtime
+                with events_path.open("r", encoding="utf-8", errors="replace") as fh:
+                    events_count = sum(1 for _ in fh)
+        except OSError as exc:
+            error = f"events_read_failed:{exc}"
+
+        try:
+            if recall_path.exists():
+                raw = recall_path.read_text(encoding="utf-8", errors="replace")
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    entries = data.get("entries") or data.get("items") or []
+                    recall_entries = len(entries) if isinstance(entries, list) else 0
+                elif isinstance(data, list):
+                    recall_entries = len(data)
+        except (OSError, ValueError) as exc:
+            # Corrupt JSON — это сам по себе error-сигнал.
+            error = (error + ";" if error else "") + f"recall_corrupt:{exc.__class__.__name__}"
+
+        return {
+            "enabled": True,
+            "events_count": events_count,
+            "recall_entries": recall_entries,
+            "last_event_mtime": last_event_mtime,
+            "error": error,
+        }
+
     async def collect_snapshot(self) -> ProactiveWatchSnapshot:
         """Собирает живой snapshot из runtime, scheduler, памяти и macOS."""
         route = {}
@@ -235,6 +337,11 @@ class ProactiveWatchService:
                 macos_status = {}
 
         gateway_ok = await openclaw_client.health_check()
+        try:
+            dreaming_status = await self._read_dreaming_status()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("dreaming_status_read_failed", error=str(exc))
+            dreaming_status = None
         return ProactiveWatchSnapshot(
             ts_utc=_now_utc_iso(),
             gateway_ok=bool(gateway_ok),
@@ -255,6 +362,7 @@ class ProactiveWatchService:
             reminder_lists_count=len(macos_status.get("reminder_lists") or []),
             note_folders_count=len(macos_status.get("note_folders") or []),
             calendars_count=len(macos_status.get("calendars") or []),
+            dreaming_status=dreaming_status,
         )
 
     def _load_state(self) -> dict[str, Any]:
@@ -306,6 +414,28 @@ class ProactiveWatchService:
             and current.macos_frontmost_app
         ):
             return "frontmost_app_changed"
+        # Wave 44-N-watch: dreaming health detection.
+        # Триггер 1: error в текущем статусе, которого не было в предыдущем
+        # (или само поле появилось / изменилось).
+        # Триггер 2: events.jsonl продолжает расти, но last_event_mtime
+        # старше N секунд — ingestion stuck.
+        cur = current.dreaming_status
+        prev = previous.dreaming_status
+        if isinstance(cur, dict):
+            cur_error = cur.get("error")
+            prev_error = (prev or {}).get("error") if isinstance(prev, dict) else None
+            if cur_error and cur_error != prev_error:
+                return "dreaming_error"
+            # Stale diary: events grow, mtime > 24h.
+            cur_events = int(cur.get("events_count") or 0)
+            prev_events = (
+                int((prev or {}).get("events_count") or 0) if isinstance(prev, dict) else 0
+            )
+            cur_mtime = cur.get("last_event_mtime")
+            if cur_events > prev_events and isinstance(cur_mtime, (int, float)):
+                age = time.time() - float(cur_mtime)
+                if age > _DREAMING_DIARY_STALE_SEC:
+                    return "dreaming_error"
         return ""
 
     @staticmethod
@@ -318,6 +448,10 @@ class ProactiveWatchService:
         scheduler_line = f"{snapshot.scheduler_pending} pending" + (
             f", next `{snapshot.scheduler_next_due_at}`" if snapshot.scheduler_next_due_at else ""
         )
+        dreaming_line = ""
+        if reason == "dreaming_error" and isinstance(snapshot.dreaming_status, dict):
+            err_desc = snapshot.dreaming_status.get("error") or "diary stale (>24h)"
+            dreaming_line = f"\n🧠 OpenClaw Dreaming health alert: {err_desc}"
         return (
             "🦀 **Proactive Watch Digest**\n"
             f"- Причина: `{label}`\n"
@@ -330,6 +464,7 @@ class ProactiveWatchService:
             + (f" / `{snapshot.macos_frontmost_window}`" if snapshot.macos_frontmost_window else "")
             + "\n"
             f"- Sources: reminders `{snapshot.reminder_lists_count}`, notes `{snapshot.note_folders_count}`, calendars `{snapshot.calendars_count}`"
+            + dreaming_line
         )
 
     @staticmethod
