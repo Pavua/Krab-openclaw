@@ -115,3 +115,44 @@ class TestAgenticPreservesExistingPolicy:
     def test_owner_prompt_starts_with_base(self):
         out = _build(is_allowed_sender=True)
         assert out.startswith("BASE OWNER PROMPT")
+
+
+class TestAgenticStanceV2Strengthened:
+    """Wave 44-O-prompt-v2: stronger imperative stance.
+
+    GPT-5.5 ignored the hint-style v1 prompt and continued describing
+    !swarm commands instead of executing tool calls. v2 replaces the
+    soft hint with imperative language + concrete examples + anti-pattern.
+    """
+
+    def test_owner_prompt_uses_imperative_kritichno(self):
+        out = _build(is_allowed_sender=True)
+        assert "КРИТИЧНО" in out
+
+    def test_owner_prompt_uses_vyzovi_tool_directive(self):
+        out = _build(is_allowed_sender=True)
+        assert "ВЫЗОВИ tool" in out
+
+    def test_owner_prompt_calls_out_nevypolnenie(self):
+        out = _build(is_allowed_sender=True)
+        assert "НЕВЫПОЛНЕНИЕ" in out
+
+    def test_owner_prompt_has_concrete_chat_id_example(self):
+        out = _build(is_allowed_sender=True)
+        # chat_id="-1003703978531" должен фигурировать в конкретном
+        # вызове telegram_send_message в примере (не только справочно).
+        assert 'chat_id="-1003703978531"' in out
+
+    def test_owner_prompt_includes_anti_pattern_example(self):
+        out = _build(is_allowed_sender=True)
+        # ❌ маркер anti-pattern (description-only mode = ошибка)
+        assert "❌" in out
+        assert "ЭТО ОШИБКА" in out
+
+    def test_owner_prompt_has_positive_example_marker(self):
+        out = _build(is_allowed_sender=True)
+        assert "✅" in out
+
+    def test_owner_prompt_explicit_silent_fallback_warning(self):
+        out = _build(is_allowed_sender=True)
+        assert "silent fallback" in out
