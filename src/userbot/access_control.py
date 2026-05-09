@@ -325,6 +325,62 @@ class AccessControlMixin:
                 "/Users/pablito/Antigravity_AGENTS/Краб/scripts/agent_tools/"
                 'krab_send_dm.py --chat-id 312322764 --text "..."\n'
                 "\n"
+                "💬 МНОГОКАНАЛЬНЫЕ MESSAGING (Wave 44-T-multi-channel):\n"
+                "\n"
+                "# Discord (требует KRAB_DISCORD_WEBHOOK_URL env или\n"
+                "# KRAB_DISCORD_WEBHOOK_<SERVER>_<CHANNEL>):\n"
+                "venv/bin/python "
+                "/Users/pablito/Antigravity_AGENTS/Краб/scripts/agent_tools/"
+                'krab_send_discord.py --server <name> --channel <name> --text "..."\n'
+                "\n"
+                "# iMessage (через Messages.app):\n"
+                "venv/bin/python "
+                "/Users/pablito/Antigravity_AGENTS/Краб/scripts/agent_tools/"
+                'krab_send_imessage.py --to "+1..." --text "..."\n'
+                "\n"
+                "# Email (default = DRAFT, --send для отправки):\n"
+                "venv/bin/python "
+                "/Users/pablito/Antigravity_AGENTS/Краб/scripts/agent_tools/"
+                'krab_send_email.py --to "x@y.com" --subject "..." --body "..." --send\n'
+                "\n"
+                "Все мульти-канальные скрипты first-time-to-recipient требуют "
+                "--first-time-confirm флаг (это защита от случайной первой "
+                "отправки незнакомому контакту по hallucinated адресу). "
+                "Owner token позволяет skip confirm — --owner-token <token>. "
+                "Email default = DRAFT, только --send actually sends. "
+                'ВСЕГДА показывай user preview "Я напишу [...] для [...]" '
+                "перед --send. Hard-blocked recipients: банки, юристы, "
+                "налоговая, полиция — даже с confirm не отправятся.\n"
+                "\n"
+                "🍎 APPLE APPS (Wave 44-T-apple-apps):\n"
+                "\n"
+                "# Notes:\n"
+                "venv/bin/python scripts/agent_tools/krab_notes.py list\n"
+                'venv/bin/python scripts/agent_tools/krab_notes.py search --query "..."\n'
+                'venv/bin/python scripts/agent_tools/krab_notes.py create --title "..." --body "..."\n'
+                "\n"
+                "# Calendar:\n"
+                "venv/bin/python scripts/agent_tools/krab_calendar.py events "
+                "--start 2026-05-09T00:00 --end 2026-05-10\n"
+                'venv/bin/python scripts/agent_tools/krab_calendar.py create --title "..." '
+                "--start 2026-05-10T14:00 --duration 60\n"
+                "\n"
+                "# Reminders:\n"
+                "venv/bin/python scripts/agent_tools/krab_reminders.py list\n"
+                'venv/bin/python scripts/agent_tools/krab_reminders.py create --title "..." '
+                "--due 2026-05-10T18:00\n"
+                "\n"
+                "# Music:\n"
+                'venv/bin/python scripts/agent_tools/krab_music.py play --playlist "Focus"\n'
+                "venv/bin/python scripts/agent_tools/krab_music.py current\n"
+                "\n"
+                "# Spotlight:\n"
+                'venv/bin/python scripts/agent_tools/krab_spotlight.py search --query "..."\n'
+                "\n"
+                "Все Apple-скрипты возвращают JSON. Calendar/Reminders create — "
+                "irreversible (нужно delete для отмены), но не destructive — "
+                "confirm НЕ нужен. Music — totally safe.\n"
+                "\n"
                 'ВАЖНО: если ok=false — НЕ говори "отправил". Вместо '
                 "этого сообщи real error из JSON.\n"
                 "\n"
