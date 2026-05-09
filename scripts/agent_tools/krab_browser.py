@@ -33,9 +33,17 @@ from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import os  # noqa: E402
+
+from _browser_humanize import human_click, human_type  # noqa: E402
+from _browser_stealth import apply_stealth  # noqa: E402
+from _captcha_solver import solve_if_captcha  # noqa: E402
 from _common import emit_error, emit_json  # noqa: E402
 
 SCRIPT = "krab_browser.py"
+
+HUMANIZE_DEFAULT = os.environ.get("KRAB_BROWSER_HUMANIZE_DEFAULT", "1") not in ("0", "false", "")
+STEALTH_DEFAULT = os.environ.get("KRAB_BROWSER_STEALTH_DEFAULT", "1") not in ("0", "false", "")
 
 USER_CHROME_PROFILE = Path("/Users/pablito/Library/Application Support/Google/Chrome/Default")
 USER_CHROME_USER_DATA_DIR = USER_CHROME_PROFILE.parent
@@ -147,7 +155,9 @@ def _is_cdp_alive() -> bool:
         return False
 
 
-async def _get_context(playwright_obj: Any, *, prefer_cdp: bool) -> tuple[Any, Any, bool]:
+async def _get_context(
+    playwright_obj: Any, *, prefer_cdp: bool, stealth: bool = True
+) -> tuple[Any, Any, bool]:
     """Returns (holder, page, used_cdp). holder is browser (CDP) or context (launched)."""
     if prefer_cdp and _is_cdp_alive():
         browser = await playwright_obj.chromium.connect_over_cdp(CDP_URL)
@@ -156,6 +166,11 @@ async def _get_context(playwright_obj: Any, *, prefer_cdp: bool) -> tuple[Any, A
             context = contexts[0]
         else:
             context = await browser.new_context()
+        if stealth:
+            try:
+                await apply_stealth(context)
+            except Exception:  # noqa: BLE001
+                pass
         page = await context.new_page()
         return browser, page, True
 
@@ -167,6 +182,11 @@ async def _get_context(playwright_obj: Any, *, prefer_cdp: bool) -> tuple[Any, A
         viewport=DEFAULT_VIEWPORT,
         args=["--no-first-run", "--no-default-browser-check"],
     )
+    if stealth:
+        try:
+            await apply_stealth(context)
+        except Exception:  # noqa: BLE001
+            pass
     page = await context.new_page()
     return context, page, False
 
@@ -183,16 +203,25 @@ async def _op_open(args: argparse.Namespace) -> dict[str, Any]:
 
     started = time.time()
     async with async_playwright() as p:
-        holder, page, used_cdp = await _get_context(p, prefer_cdp=not args.no_cdp)
+        holder, page, used_cdp = await _get_context(
+            p, prefer_cdp=not args.no_cdp, stealth=not getattr(args, "no_stealth", False)
+        )
         try:
             await page.goto(args.url, timeout=DEFAULT_TIMEOUT_MS, wait_until="domcontentloaded")
             title = await page.title()
+            captcha_result: dict[str, Any] | None = None
+            if not getattr(args, "skip_captcha", False):
+                try:
+                    captcha_result = await solve_if_captcha(page)
+                except Exception as exc:  # noqa: BLE001
+                    captcha_result = {"ok": False, "error": f"captcha_detect_fail: {exc}"}
             return {
                 "ok": True,
                 "url": args.url,
                 "final_url": page.url,
                 "title": title,
                 "used_cdp": used_cdp,
+                "captcha": captcha_result,
                 "elapsed_sec": round(time.time() - started, 2),
             }
         finally:
@@ -215,7 +244,9 @@ async def _op_screenshot(args: argparse.Namespace) -> dict[str, Any]:
 
     started = time.time()
     async with async_playwright() as p:
-        holder, page, used_cdp = await _get_context(p, prefer_cdp=not args.no_cdp)
+        holder, page, used_cdp = await _get_context(
+            p, prefer_cdp=not args.no_cdp, stealth=not getattr(args, "no_stealth", False)
+        )
         try:
             await page.goto(args.url, timeout=DEFAULT_TIMEOUT_MS, wait_until="domcontentloaded")
             await page.screenshot(path=str(output), full_page=bool(args.full_page))
@@ -263,7 +294,9 @@ async def _op_extract(args: argparse.Namespace) -> dict[str, Any]:
 
     started = time.time()
     async with async_playwright() as p:
-        holder, page, used_cdp = await _get_context(p, prefer_cdp=not args.no_cdp)
+        holder, page, used_cdp = await _get_context(
+            p, prefer_cdp=not args.no_cdp, stealth=not getattr(args, "no_stealth", False)
+        )
         try:
             await page.goto(args.url, timeout=DEFAULT_TIMEOUT_MS, wait_until="domcontentloaded")
             if args.selector:
@@ -301,10 +334,18 @@ async def _op_click(args: argparse.Namespace) -> dict[str, Any]:
 
     started = time.time()
     async with async_playwright() as p:
-        holder, page, used_cdp = await _get_context(p, prefer_cdp=not args.no_cdp)
+        holder, page, used_cdp = await _get_context(
+            p, prefer_cdp=not args.no_cdp, stealth=not getattr(args, "no_stealth", False)
+        )
         try:
             await page.goto(args.url, timeout=DEFAULT_TIMEOUT_MS, wait_until="domcontentloaded")
-            await page.click(args.selector, timeout=DEFAULT_TIMEOUT_MS)
+            humanize = HUMANIZE_DEFAULT and not getattr(args, "no_humanize", False)
+            click_meta: dict[str, Any]
+            if humanize:
+                click_meta = await human_click(page, args.selector, timeout_ms=DEFAULT_TIMEOUT_MS)
+            else:
+                await page.click(args.selector, timeout=DEFAULT_TIMEOUT_MS)
+                click_meta = {"ok": True, "selector": args.selector, "humanized": False}
             await page.wait_for_load_state("domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
             return {
                 "ok": True,
@@ -313,6 +354,8 @@ async def _op_click(args: argparse.Namespace) -> dict[str, Any]:
                 "title": await page.title(),
                 "selector": args.selector,
                 "used_cdp": used_cdp,
+                "humanized": humanize,
+                "click_meta": click_meta,
                 "elapsed_sec": round(time.time() - started, 2),
             }
         finally:
@@ -328,10 +371,20 @@ async def _op_type(args: argparse.Namespace) -> dict[str, Any]:
 
     started = time.time()
     async with async_playwright() as p:
-        holder, page, used_cdp = await _get_context(p, prefer_cdp=not args.no_cdp)
+        holder, page, used_cdp = await _get_context(
+            p, prefer_cdp=not args.no_cdp, stealth=not getattr(args, "no_stealth", False)
+        )
         try:
             await page.goto(args.url, timeout=DEFAULT_TIMEOUT_MS, wait_until="domcontentloaded")
-            await page.fill(args.selector, args.text, timeout=DEFAULT_TIMEOUT_MS)
+            humanize = HUMANIZE_DEFAULT and not getattr(args, "no_humanize", False)
+            type_meta: dict[str, Any]
+            if humanize:
+                type_meta = await human_type(
+                    page, args.selector, args.text, timeout_ms=DEFAULT_TIMEOUT_MS
+                )
+            else:
+                await page.fill(args.selector, args.text, timeout=DEFAULT_TIMEOUT_MS)
+                type_meta = {"ok": True, "selector": args.selector, "humanized": False}
             if args.submit:
                 await page.press(args.selector, "Enter")
                 await page.wait_for_load_state("domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
@@ -342,6 +395,8 @@ async def _op_type(args: argparse.Namespace) -> dict[str, Any]:
                 "selector": args.selector,
                 "submitted": bool(args.submit),
                 "used_cdp": used_cdp,
+                "humanized": humanize,
+                "type_meta": type_meta,
                 "elapsed_sec": round(time.time() - started, 2),
             }
         finally:
@@ -357,7 +412,9 @@ async def _op_js_run(args: argparse.Namespace) -> dict[str, Any]:
 
     started = time.time()
     async with async_playwright() as p:
-        holder, page, used_cdp = await _get_context(p, prefer_cdp=not args.no_cdp)
+        holder, page, used_cdp = await _get_context(
+            p, prefer_cdp=not args.no_cdp, stealth=not getattr(args, "no_stealth", False)
+        )
         try:
             await page.goto(args.url, timeout=DEFAULT_TIMEOUT_MS, wait_until="domcontentloaded")
             result = await page.evaluate(args.js)
@@ -372,6 +429,41 @@ async def _op_js_run(args: argparse.Namespace) -> dict[str, Any]:
                 "ok": True,
                 "url": args.url,
                 "result": serialized,
+                "used_cdp": used_cdp,
+                "elapsed_sec": round(time.time() - started, 2),
+            }
+        finally:
+            try:
+                await page.close()
+            except Exception:  # noqa: BLE001
+                pass
+            await _close_context(holder, used_cdp)
+
+
+async def _op_solve_captcha(args: argparse.Namespace) -> dict[str, Any]:
+    from playwright.async_api import async_playwright  # noqa: PLC0415
+
+    started = time.time()
+    async with async_playwright() as p:
+        holder, page, used_cdp = await _get_context(
+            p, prefer_cdp=not args.no_cdp, stealth=not getattr(args, "no_stealth", False)
+        )
+        try:
+            await page.goto(args.url, timeout=DEFAULT_TIMEOUT_MS, wait_until="domcontentloaded")
+            result = await solve_if_captcha(page)
+            if result is None:
+                return {
+                    "ok": True,
+                    "url": args.url,
+                    "captcha_detected": False,
+                    "used_cdp": used_cdp,
+                    "elapsed_sec": round(time.time() - started, 2),
+                }
+            return {
+                "ok": bool(result.get("ok")),
+                "url": args.url,
+                "captcha_detected": True,
+                "captcha": result,
                 "used_cdp": used_cdp,
                 "elapsed_sec": round(time.time() - started, 2),
             }
@@ -400,9 +492,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="override financial/gov blocklist (requires --owner-token)",
     )
     common.add_argument("--owner-token", default=None)
+    common.add_argument(
+        "--no-stealth",
+        action="store_true",
+        help="disable stealth fingerprint patches (debug only)",
+    )
+    common.add_argument(
+        "--no-humanize",
+        action="store_true",
+        help="disable human-like delays/bezier mouse (faster, more bot-like)",
+    )
 
     p_open = sub.add_parser("open", parents=[common])
+    p_open.add_argument(
+        "--skip-captcha", action="store_true", help="skip captcha auto-detect on open"
+    )
     p_open.set_defaults(func=_op_open)
+
+    p_solve = sub.add_parser("solve_captcha", parents=[common])
+    p_solve.set_defaults(func=_op_solve_captcha)
 
     p_shot = sub.add_parser("screenshot", parents=[common])
     p_shot.add_argument("--output", default=None)
