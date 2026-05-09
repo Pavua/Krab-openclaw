@@ -313,8 +313,21 @@ def _try_memory_recall(text: str) -> CommandIntent | None:
 
 def _try_cron(text: str) -> CommandIntent | None:
     lower = text.lower()
-    if re.search(r"\bcron\b|\bрасписан|по расписан|каждый день|каждое утро", lower):
-        # Coarse extraction — caller may refine via LLM.
+    triggers = (
+        r"\bcron\b",
+        r"\bрасписан",
+        r"по расписан",
+        r"каждый день",
+        r"каждое утро",
+        r"каждый час",
+        r"\bежедневно\b",
+        r"\bзапланируй\b",
+        r"\bнапомни мне\b",
+        r"\bнапоминай\b",
+        r"\bschedule\b",
+        r"\breminder\b",
+    )
+    if any(re.search(p, lower) for p in triggers):
         return CommandIntent(
             command="!cron",
             subcommand="schedule",
@@ -326,12 +339,240 @@ def _try_cron(text: str) -> CommandIntent | None:
     return None
 
 
+def _try_memory_save(text: str) -> CommandIntent | None:
+    """!memory save / запомни / сохрани."""
+    lower = text.lower()
+    m = re.match(
+        r"^(?:запомни(?:\s+что)?|сохрани(?:\s+заметку)?|запиши|remember|save\s+note)[:\s,]+(.+)$",
+        lower,
+    )
+    if m:
+        body = m.group(1).strip()
+        # Re-extract the body case-preserving.
+        # Use the position of body in original text by lowercase index.
+        idx = lower.rfind(body)
+        body_orig = text[idx:].strip() if idx >= 0 else body
+        return CommandIntent(
+            command="!memory",
+            subcommand="save",
+            args={"text": body_orig},
+            confidence=0.8,
+            original_text=text,
+            rendered=f"!memory save {body_orig}",
+        )
+    return None
+
+
+def _try_inbox(text: str) -> CommandIntent | None:
+    lower = text.lower()
+    pats = (
+        r"\bпокажи\s+(?:входящ|inbox)",
+        r"\bчто\s+в\s+inbox\b",
+        r"\bсписок\s+задач\b",
+        r"\bвходящи\w*\b",
+        r"\binbox\b",
+        r"\bмои\s+задачи\b",
+    )
+    for p in pats:
+        if re.search(p, lower):
+            return CommandIntent(
+                command="!inbox",
+                args={},
+                confidence=0.85,
+                original_text=text,
+                rendered="!inbox",
+            )
+    return None
+
+
+def _try_cost(text: str) -> CommandIntent | None:
+    lower = text.lower()
+    pats = (
+        r"\bсколько\s+(?:я\s+)?(?:потратил|истратил)",
+        r"\bрасход(?:ы|а)?\s+(?:за|на|сегодня|вчера|неделю|месяц)",
+        r"\bцена\s+(?:сегодня|вчера|за)",
+        r"\bcost\b|\bspending\b|\bbilling\b",
+        r"\bстоимость\s+(?:моделей|api)",
+        r"\bпокажи\s+(?:расходы|траты|cost)",
+    )
+    for p in pats:
+        if re.search(p, lower):
+            return CommandIntent(
+                command="!costs",
+                args={},
+                confidence=0.85,
+                original_text=text,
+                rendered="!costs",
+            )
+    return None
+
+
+def _try_restart(text: str) -> CommandIntent | None:
+    lower = text.lower()
+    pats = (
+        r"\bперезапусти(?:\s+(?:краб|crab|бот|себя))?\b",
+        r"\bрестарт\b",
+        r"\brestart\b",
+        r"\breboot\b",
+        r"\breload\b\s+(?:bot|krab|себя)",
+    )
+    for p in pats:
+        if re.search(p, lower):
+            return CommandIntent(
+                command="!restart",
+                args={},
+                confidence=0.85,
+                original_text=text,
+                rendered="!restart",
+            )
+    return None
+
+
+def _try_models(text: str) -> CommandIntent | None:
+    lower = text.lower()
+    pats = (
+        r"\bкакие\s+модели\b",
+        r"\bсписок\s+моделей\b",
+        r"\bпокажи\s+модели\b",
+        r"\blist\s+models\b",
+        r"\bavailable\s+models\b",
+        r"^!?models?$",
+    )
+    for p in pats:
+        if re.search(p, lower):
+            return CommandIntent(
+                command="!models",
+                args={},
+                confidence=0.85,
+                original_text=text,
+                rendered="!models",
+            )
+    return None
+
+
+def _try_dreaming(text: str) -> CommandIntent | None:
+    lower = text.lower()
+    pats = (
+        r"\bdream\s+diary\b",
+        r"\bdreaming\b",
+        r"\bсны\b",
+        r"\bдневник\s+снов\b",
+        r"\bчто\s+ты\s+видел(?:\s+во\s+сне)?\b",
+        r"\bпокажи\s+(?:сны|dream)",
+    )
+    for p in pats:
+        if re.search(p, lower):
+            return CommandIntent(
+                command="!dreaming",
+                args={},
+                confidence=0.8,
+                original_text=text,
+                rendered="!dreaming",
+            )
+    return None
+
+
+def _try_proactive_media(text: str) -> CommandIntent | None:
+    """!proactive media on/off — включи/отключи реакции на медиа."""
+    lower = text.lower()
+    media_kw = re.search(r"\b(?:реакции\s+на\s+медиа|медиа|фото|картинки|media)\b", lower)
+    if not media_kw:
+        return None
+    if not re.search(r"\bproactive|проактивн", lower) and not re.search(
+        r"\b(?:включи|отключи|выключи|enable|disable)\b", lower
+    ):
+        return None
+    state = None
+    if re.search(r"\b(?:включи|enable|on|вкл)\b", lower):
+        state = "on"
+    elif re.search(r"\b(?:выключи|отключи|disable|off|выкл|откл)\b", lower):
+        state = "off"
+    if not state:
+        return None
+    return CommandIntent(
+        command="!proactive",
+        subcommand="media",
+        args={"state": state, "kind": "media"},
+        confidence=0.8,
+        original_text=text,
+        rendered=f"!proactive media {state}",
+    )
+
+
+def _try_swarm_subcommands(text: str) -> CommandIntent | None:
+    """Swarm meta-commands: task board / artifacts / summary / setup."""
+    lower = text.lower()
+    if (
+        "swarm" not in lower
+        and "свёрм" not in lower
+        and "сверм" not in lower
+        and "команд" not in lower
+    ):
+        # Loose check — but allow phrases without "swarm" if they reference team artefacts.
+        if not re.search(r"\b(?:артефакт|задач\w*\s+команд|сводка)", lower):
+            return None
+    # task board
+    if re.search(
+        r"(?:покажи\s+задачи|что\s+в\s+работе(?:\s+у\s+команд)?|task\s+board|статус\s+задач|канбан)",
+        lower,
+    ):
+        return CommandIntent(
+            command="!swarm",
+            subcommand="task",
+            args={"sub": "board"},
+            confidence=0.85,
+            original_text=text,
+            rendered="!swarm task board",
+        )
+    # artifacts
+    if re.search(r"(?:артефакт|artifacts|что\s+команды\s+сделали)", lower):
+        return CommandIntent(
+            command="!swarm",
+            subcommand="artifacts",
+            args={},
+            confidence=0.85,
+            original_text=text,
+            rendered="!swarm artifacts",
+        )
+    # summary
+    if re.search(
+        r"(?:сводк[аи]\s+swarm|сводк[аи]\s+по\s+команд|summary\s+swarm|что\s+у\s+команд)", lower
+    ):
+        return CommandIntent(
+            command="!swarm",
+            subcommand="summary",
+            args={},
+            confidence=0.85,
+            original_text=text,
+            rendered="!swarm summary",
+        )
+    # setup
+    if re.search(r"(?:настрой\s+swarm|настрой\s+команды|запусти\s+команды|setup\s+swarm)", lower):
+        return CommandIntent(
+            command="!swarm",
+            subcommand="setup",
+            args={},
+            confidence=0.85,
+            original_text=text,
+            rendered="!swarm setup",
+        )
+    return None
+
+
 _TEMPLATE_FUNCS = (
+    _try_swarm_subcommands,  # before _try_swarm — more specific
+    _try_proactive_media,  # before _try_proactive
     _try_swarm,
     _try_status,
     _try_quota,
     _try_proactive,
+    _try_memory_save,  # before _try_memory_recall — "запомни" vs "вспомни"
     _try_memory_recall,
+    _try_inbox,
+    _try_cost,
+    _try_restart,
+    _try_models,
+    _try_dreaming,
     _try_cron,
 )
 

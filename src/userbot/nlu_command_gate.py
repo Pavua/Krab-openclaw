@@ -163,6 +163,26 @@ async def _dispatch_handler(bot: Any, message: "Message", intent: CommandIntent)
             from ..handlers.commands.scheduler_commands import handle_cron
 
             handler = handle_cron
+        elif cmd == "inbox":
+            from ..handlers.commands.observability_commands import handle_inbox
+
+            handler = handle_inbox
+        elif cmd == "costs":
+            from ..handlers.commands.admin_commands import handle_costs
+
+            handler = handle_costs
+        elif cmd == "restart":
+            from ..handlers.commands.system_commands import handle_restart
+
+            handler = handle_restart
+        elif cmd == "models":
+            from ..handlers.commands.admin_commands import handle_models
+
+            handler = handle_models
+        elif cmd == "dreaming":
+            from ..handlers.commands.dreaming import handle_dreaming
+
+            handler = handle_dreaming
     except Exception as exc:  # noqa: BLE001
         logger.warning("nlu_dispatch_import_failed", cmd=cmd, error=str(exc))
         return False
@@ -319,6 +339,15 @@ async def try_nlu_command_dispatch(
             rendered=intent.rendered,
             confidence=round(intent.confidence, 2),
         )
+        # Translation hint: показать пользователю как мы поняли его фразу.
+        # Skip когда rendered == bare command (нет извлечённых аргументов —
+        # подсказка не информативна).
+        rendered = (intent.rendered or "").strip()
+        if rendered and rendered != intent.command:
+            try:
+                await message.reply(f"🤖 Понял как: `{rendered}` — выполняю...")
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("nlu_translation_hint_failed", error=str(exc))
         ok = await _dispatch_handler(bot, message, intent)
         if not ok:
             # dispatch failed (unknown handler) → fall through to LLM

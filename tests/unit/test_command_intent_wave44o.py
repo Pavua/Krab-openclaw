@@ -144,6 +144,173 @@ async def test_llm_fallback_mocked():
     assert intent.confidence == 0.82
 
 
+# ---------------------------------------------------------------------------
+# Wave 44-O-nlu-v2: extended pattern coverage
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cron_zaplaniruy():
+    intent = await extract_command_intent("запланируй мне отчёт каждый день", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!cron"
+
+
+@pytest.mark.asyncio
+async def test_cron_napomni_mne():
+    intent = await extract_command_intent("напомни мне про митинг завтра", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!cron"
+
+
+@pytest.mark.asyncio
+async def test_memory_save_zapomni():
+    intent = await extract_command_intent("запомни что Pavel любит свежий хлеб", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!memory"
+    assert intent.subcommand == "save"
+    assert "pavel" in (intent.args.get("text") or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_memory_save_sохрани():
+    intent = await extract_command_intent(
+        "сохрани заметку: Sentry token в 1Password", is_owner=True
+    )
+    assert intent is not None
+    assert intent.command == "!memory"
+    assert intent.subcommand == "save"
+
+
+@pytest.mark.asyncio
+async def test_memory_recall_chto_pomnish():
+    intent = await extract_command_intent("вспомни про настройку DNS", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!memory"
+    assert intent.subcommand == "recall"
+
+
+@pytest.mark.asyncio
+async def test_inbox_pokazhi_vhodyaschie():
+    intent = await extract_command_intent("покажи входящие", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!inbox"
+    assert intent.confidence >= 0.8
+
+
+@pytest.mark.asyncio
+async def test_inbox_chto_v_inbox():
+    intent = await extract_command_intent("что в inbox", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!inbox"
+
+
+@pytest.mark.asyncio
+async def test_cost_skolko_potratil():
+    intent = await extract_command_intent("сколько потратил за неделю", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!costs"
+
+
+@pytest.mark.asyncio
+async def test_cost_rashody_segodnya():
+    intent = await extract_command_intent("расходы за сегодня", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!costs"
+
+
+@pytest.mark.asyncio
+async def test_restart_perezapusti():
+    intent = await extract_command_intent("перезапусти краба", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!restart"
+
+
+@pytest.mark.asyncio
+async def test_restart_restart_word():
+    intent = await extract_command_intent("restart please", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!restart"
+
+
+@pytest.mark.asyncio
+async def test_models_kakie_modeli():
+    intent = await extract_command_intent("какие модели сейчас активны", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!models"
+
+
+@pytest.mark.asyncio
+async def test_models_spisok():
+    intent = await extract_command_intent("список моделей", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!models"
+
+
+@pytest.mark.asyncio
+async def test_dreaming_sny():
+    intent = await extract_command_intent("покажи сны", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!dreaming"
+
+
+@pytest.mark.asyncio
+async def test_dreaming_dream_diary():
+    intent = await extract_command_intent("dream diary", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!dreaming"
+
+
+@pytest.mark.asyncio
+async def test_proactive_media_on():
+    intent = await extract_command_intent("включи реакции на медиа", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!proactive"
+    assert intent.subcommand == "media"
+    assert intent.args.get("state") == "on"
+    assert "media on" in intent.rendered.lower()
+
+
+@pytest.mark.asyncio
+async def test_proactive_media_off():
+    intent = await extract_command_intent("отключи фото в proactive", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!proactive"
+    assert intent.args.get("state") == "off"
+
+
+@pytest.mark.asyncio
+async def test_swarm_task_board():
+    intent = await extract_command_intent("покажи задачи команд", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!swarm"
+    assert "task" in (intent.rendered or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_swarm_artifacts():
+    intent = await extract_command_intent("покажи артефакты swarm", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!swarm"
+    assert "artifacts" in (intent.rendered or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_swarm_summary():
+    intent = await extract_command_intent("сводка swarm за день", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!swarm"
+    assert "summary" in (intent.rendered or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_swarm_setup():
+    intent = await extract_command_intent("настрой swarm с нуля", is_owner=True)
+    assert intent is not None
+    assert intent.command == "!swarm"
+    assert "setup" in (intent.rendered or "").lower()
+
+
 @pytest.mark.asyncio
 async def test_llm_disabled_by_default():
     """Without use_llm=True, no HTTP call is made (network-free tests)."""

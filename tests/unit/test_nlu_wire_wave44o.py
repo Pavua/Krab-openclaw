@@ -302,6 +302,53 @@ async def test_explicit_command_skipped(_enable_flag):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Wave 44-O-nlu-v2: translation hint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_translation_hint_shown_for_high_conf_with_args(_enable_flag):
+    """High-confidence dispatch with args → reply hint 'Понял как: ...' before exec."""
+    msg = _make_owner_dm_message("запусти аналитиков на тему BTC за 2 раунда")
+    bot = MagicMock()
+    fake_handler = AsyncMock()
+    with patch(
+        "src.handlers.commands.swarm_commands.handle_swarm",
+        fake_handler,
+    ):
+        handled = await gate.try_nlu_command_dispatch(
+            bot, msg, query=msg.text, chat_id="12345", is_self=True
+        )
+    assert handled is True
+    fake_handler.assert_awaited_once()
+    # Translation hint sent before dispatch.
+    msg.reply.assert_awaited()
+    hint_text = msg.reply.await_args.args[0]
+    assert "Понял как" in hint_text
+    assert "!swarm" in hint_text
+    assert "выполн" in hint_text.lower()
+
+
+@pytest.mark.asyncio
+async def test_translation_hint_skipped_for_bare_command(_enable_flag):
+    """When rendered == bare command (no args), skip translation hint."""
+    msg = _make_owner_dm_message("проверь статус")
+    bot = MagicMock()
+    fake_handler = AsyncMock()
+    with patch(
+        "src.handlers.commands.system_commands.handle_status",
+        fake_handler,
+    ):
+        handled = await gate.try_nlu_command_dispatch(
+            bot, msg, query=msg.text, chat_id="12345", is_self=True
+        )
+    assert handled is True
+    fake_handler.assert_awaited_once()
+    # bare !status has rendered == command → no hint.
+    msg.reply.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_empty_query_falls_through(_enable_flag):
     msg = _make_owner_dm_message("")
