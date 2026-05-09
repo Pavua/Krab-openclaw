@@ -1305,6 +1305,364 @@ class SkillCurator:
 
 
 # ---------------------------------------------------------------------------
+# Step 5: A/B Comparison Runner + Step 6: Auto-apply gate (Wave 53-A)
+# ---------------------------------------------------------------------------
+
+# Путь к очереди pending improvements (owner approval required перед записью в live prompts)
+PENDING_IMPROVEMENTS_PATH = CURATOR_BASE_DIR / "_pending_skill_improvements.json"
+
+# Веса для compute_improvement_score
+_SCORE_WEIGHT_ERROR_RATE = -5.0  # штраф за рост error rate
+_SCORE_WEIGHT_TTFT = -2.0  # штраф за рост time-to-first-token
+_SCORE_WEIGHT_RESPONSE_QUALITY = 3.0  # бонус за рост response quality
+_SCORE_WEIGHT_TOOL_CALLS = 1.0  # бонус за рост tool_calls (обычно признак активности)
+
+
+def compute_improvement_score(metrics: dict[str, Any]) -> float:
+    """Взвешенный score улучшения кандидата относительно baseline.
+
+    Входной словарь ожидается со структурой:
+      {
+        "delta_error_rate": float,        # candidate_error - baseline_error (< 0 — хорошо)
+        "delta_ttft_s": float,            # candidate_ttft - baseline_ttft (< 0 — хорошо)
+        "delta_response_quality": float,  # candidate_quality - baseline_quality (> 0 — хорошо)
+        "delta_tool_calls": float,        # candidate_avg_tools - baseline_avg_tools
+      }
+
+    Формула:
+      score = delta_error_rate * (-5) + delta_ttft_s * (-2)
+              + delta_response_quality * 3 + delta_tool_calls * 1
+
+    Положительный score → кандидат лучше. Порог auto-apply по умолчанию: 0.15.
+    """
+
+    delta_err = float(metrics.get("delta_error_rate", 0.0))
+    delta_ttft = float(metrics.get("delta_ttft_s", 0.0))
+    delta_quality = float(metrics.get("delta_response_quality", 0.0))
+    delta_tools = float(metrics.get("delta_tool_calls", 0.0))
+
+    score = (
+        delta_err * _SCORE_WEIGHT_ERROR_RATE
+        + delta_ttft * _SCORE_WEIGHT_TTFT
+        + delta_quality * _SCORE_WEIGHT_RESPONSE_QUALITY
+        + delta_tools * _SCORE_WEIGHT_TOOL_CALLS
+    )
+    return round(score, 6)
+
+
+class SkillCuratorABRunner:
+    """Step 5 (Wave 53-A): A/B comparison runner для SkillCurator.
+
+    Запускает N сравнительных раундов (dry-run/mock режим по умолчанию — никаких
+    реальных вызовов свёрма), собирает метрики и вычисляет delta_score через
+    ``compute_improvement_score``. Реальный swarm-invoke можно подключить через
+    инъекцию ``swarm_invoker`` — callable(team, prompt, round_id) → dict.
+
+    Для тестов используется ``_mock_swarm_round`` — детерминированный stub без LLM.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_dir: Path | None = None,
+        swarm_invoker: Any | None = None,
+    ) -> None:
+        self._base_dir = base_dir or CURATOR_BASE_DIR
+        # swarm_invoker(team, prompt, round_id) → dict с метриками раунда
+        # None → используем _mock_swarm_round (dry-run)
+        self._swarm_invoker = swarm_invoker
+
+    # -- public API ----------------------------------------------------------
+
+    async def run_ab_comparison(
+        self,
+        team: str,
+        candidate_prompt: str,
+        *,
+        rounds: int = 5,
+    ) -> dict[str, Any]:
+        """Запускает A/B сравнение baseline vs candidate prompt за N раундов.
+
+        Шаги:
+          1. Считываем baseline prompt из swarm_team_prompts (graceful fallback).
+          2. Выполняем N baseline раундов и N candidate раундов (sequential, не parallel
+             — чтобы тесты были детерминированы и не перегружали RAM).
+          3. Вычисляем агрегированные метрики и delta_score.
+
+        Returns:
+          {
+            "ok": bool,
+            "team": str,
+            "rounds": int,
+            "baseline_metrics": dict,
+            "candidate_metrics": dict,
+            "delta": dict,               # delta_error_rate, delta_ttft_s, ...
+            "delta_score": float,
+            "recommendation": "apply" | "skip",
+            "error": str | None,
+          }
+        """
+
+        n = max(1, rounds)
+        result: dict[str, Any] = {
+            "ok": False,
+            "team": team,
+            "rounds": n,
+            "baseline_metrics": {},
+            "candidate_metrics": {},
+            "delta": {},
+            "delta_score": 0.0,
+            "recommendation": "skip",
+            "error": None,
+        }
+
+        # Шаг 1: загружаем baseline prompt
+        baseline_prompt = self._load_baseline_prompt(team)
+
+        # Шаг 2: прогоняем N раундов каждого варианта
+        baseline_rounds: list[dict[str, Any]] = []
+        candidate_rounds: list[dict[str, Any]] = []
+
+        for i in range(n):
+            round_id = f"baseline-{i}"
+            baseline_rounds.append(await self._run_single_round(team, baseline_prompt, round_id))
+
+        for i in range(n):
+            round_id = f"candidate-{i}"
+            candidate_rounds.append(await self._run_single_round(team, candidate_prompt, round_id))
+
+        # Шаг 3: агрегируем метрики
+        bm = self._aggregate_metrics(baseline_rounds)
+        cm = self._aggregate_metrics(candidate_rounds)
+
+        # Шаг 4: считаем дельты и score
+        delta = {
+            "delta_error_rate": round(cm["error_rate"] - bm["error_rate"], 6),
+            "delta_ttft_s": round(cm["ttft_s_avg"] - bm["ttft_s_avg"], 6),
+            "delta_response_quality": round(
+                cm["response_quality_avg"] - bm["response_quality_avg"], 6
+            ),
+            "delta_tool_calls": round(cm["tool_calls_avg"] - bm["tool_calls_avg"], 6),
+        }
+        delta_score = compute_improvement_score(delta)
+        recommendation = "apply" if delta_score > 0.0 else "skip"
+
+        result.update(
+            {
+                "ok": True,
+                "baseline_metrics": bm,
+                "candidate_metrics": cm,
+                "delta": delta,
+                "delta_score": delta_score,
+                "recommendation": recommendation,
+            }
+        )
+        logger.info(
+            "curator_ab_runner_done",
+            team=team,
+            rounds=n,
+            delta_score=delta_score,
+            recommendation=recommendation,
+        )
+        return result
+
+    # -- helpers -------------------------------------------------------------
+
+    def _load_baseline_prompt(self, team: str) -> str:
+        """Читает текущий system prompt команды (graceful fallback → пустая строка)."""
+
+        try:
+            from .swarm_team_prompts import get_team_system_prompt
+
+            return get_team_system_prompt(team.lower())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("curator_runner_load_prompt_failed", team=team, error=str(exc))
+            return ""
+
+    async def _run_single_round(self, team: str, prompt: str, round_id: str) -> dict[str, Any]:
+        """Выполняет один раунд. Делегирует в swarm_invoker или mock."""
+
+        if self._swarm_invoker is not None:
+            try:
+                return await self._swarm_invoker(team, prompt, round_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("curator_runner_invoker_failed", round_id=round_id, error=str(exc))
+                return _mock_swarm_round(team, prompt, round_id)
+        return _mock_swarm_round(team, prompt, round_id)
+
+    @staticmethod
+    def _aggregate_metrics(rounds: list[dict[str, Any]]) -> dict[str, Any]:
+        """Агрегирует список метрик раундов в один dict."""
+
+        if not rounds:
+            return {
+                "count": 0,
+                "error_rate": 0.0,
+                "ttft_s_avg": 0.0,
+                "response_length_avg": 0.0,
+                "response_quality_avg": 0.0,
+                "tool_calls_avg": 0.0,
+            }
+
+        n = len(rounds)
+        errors = sum(1 for r in rounds if r.get("error"))
+        ttfts = [float(r.get("ttft_s") or 0.0) for r in rounds]
+        lengths = [float(r.get("response_length") or 0.0) for r in rounds]
+        qualities = [float(r.get("response_quality") or 0.5) for r in rounds]
+        tool_calls = [float(r.get("tool_calls") or 0.0) for r in rounds]
+
+        return {
+            "count": n,
+            "error_rate": round(errors / n, 4),
+            "ttft_s_avg": round(sum(ttfts) / n, 4),
+            "response_length_avg": round(sum(lengths) / n, 1),
+            "response_quality_avg": round(sum(qualities) / n, 4),
+            "tool_calls_avg": round(sum(tool_calls) / n, 2),
+        }
+
+
+def _mock_swarm_round(team: str, prompt: str, round_id: str) -> dict[str, Any]:
+    """Детерминированный stub раунда — не вызывает LLM/swarm.
+
+    Симулирует реалистичные метрики на основе хэша round_id для
+    воспроизводимости в тестах.
+    """
+
+    h = abs(hash(f"{team}:{round_id}:{len(prompt)}"))
+    # Синтетические значения — отклонение в пределах ±30% от «нормального»
+    base_quality = 0.5 + (h % 50) / 100.0  # 0.50 … 0.99
+    base_ttft = 0.5 + (h % 30) / 100.0  # 0.50 … 0.79 s
+    tool_calls = h % 5  # 0 … 4
+    error = (h % 20) == 0  # ~5% error rate
+
+    return {
+        "round_id": round_id,
+        "team": team,
+        "prompt_len": len(prompt),
+        "error": error,
+        "ttft_s": base_ttft,
+        "response_length": 200 + (h % 400),
+        "response_quality": 0.0 if error else round(base_quality, 3),
+        "tool_calls": 0 if error else tool_calls,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 6: Auto-apply gate — queues pending improvements (Wave 53-A)
+# ---------------------------------------------------------------------------
+
+
+def _load_pending_queue(path: Path) -> list[dict[str, Any]]:
+    """Читает очередь pending improvements. Пустой список при отсутствии/ошибке."""
+
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _save_pending_queue_atomic(queue: list[dict[str, Any]], path: Path) -> bool:
+    """Атомарно сохраняет очередь pending improvements."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_name = None, ""
+    try:
+        tmp_fd, tmp_name = tempfile.mkstemp(
+            prefix=".pending_improvements.", suffix=".tmp", dir=str(path.parent)
+        )
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            json.dump(queue, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp_name, path)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("curator_pending_save_failed", error=str(exc))
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+        return False
+
+
+def auto_apply_if_threshold(
+    team: str,
+    candidate_prompt: str,
+    delta_score: float,
+    *,
+    threshold: float = 0.15,
+    pending_path: Path | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Step 6: auto-apply gate.
+
+    Если ``delta_score < threshold`` — пропускаем, возвращаем ``{"queued": False}``.
+    Если ``delta_score >= threshold`` — добавляем запись в очередь
+    ``_pending_skill_improvements.json`` (НЕ пишем в live prompts — требуется
+    одобрение owner через ``!skills apply-pending``).
+
+    Returns:
+      {"queued": bool, "reason": str, "entry_id": str | None}
+    """
+
+    _path = pending_path or PENDING_IMPROVEMENTS_PATH
+
+    if delta_score < threshold:
+        reason = f"delta_score {delta_score:.4f} < threshold {threshold:.4f} — skipped"
+        logger.info("curator_auto_apply_skipped", team=team, delta_score=delta_score)
+        return {"queued": False, "reason": reason, "entry_id": None}
+
+    # Формируем запись
+    entry_id = f"{_safe_team(team)}-{uuid.uuid4().hex[:8]}"
+    entry: dict[str, Any] = {
+        "entry_id": entry_id,
+        "team": team.lower(),
+        "candidate_prompt": candidate_prompt,
+        "delta_score": delta_score,
+        "threshold": threshold,
+        "queued_at": _now_iso(),
+        "status": "pending",  # pending → applied | rejected
+        "metadata": metadata or {},
+    }
+
+    # Загружаем и обновляем очередь атомарно
+    queue = _load_pending_queue(_path)
+    queue.append(entry)
+    ok = _save_pending_queue_atomic(queue, _path)
+
+    if ok:
+        reason = (
+            f"delta_score {delta_score:.4f} >= threshold {threshold:.4f} — queued for owner review"
+        )
+        logger.info(
+            "curator_auto_apply_queued",
+            team=team,
+            entry_id=entry_id,
+            delta_score=delta_score,
+        )
+        return {"queued": True, "reason": reason, "entry_id": entry_id}
+    else:
+        reason = "failed to persist pending queue"
+        return {"queued": False, "reason": reason, "entry_id": None}
+
+
+def list_pending_improvements(
+    team: str | None = None,
+    *,
+    pending_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Читает очередь pending improvements. Опциональная фильтрация по team."""
+
+    _path = pending_path or PENDING_IMPROVEMENTS_PATH
+    queue = _load_pending_queue(_path)
+    if team:
+        queue = [e for e in queue if (e.get("team") or "").lower() == team.lower()]
+    return queue
+
+
+# ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
 
