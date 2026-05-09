@@ -200,6 +200,7 @@ from .userbot.llm_flow import (
 )
 from .userbot.llm_text_processing import LLMTextProcessingMixin
 from .userbot.media_processors import MediaProcessorsMixin
+from .userbot.message_catchup import MessageCatchupMixin  # Wave 46-A
 from .userbot.network_watchdog import NetworkWatchdogMixin
 from .userbot.proactive_watch import ProactiveWatchMixin
 from .userbot.reaction_dispatch import ReactionDispatchMixin
@@ -277,6 +278,7 @@ class KraabUserbot(
     RelayInboxMixin,  # Wave 31-F
     SwarmTeamClientsMixin,  # Wave 31-G
     MediaProcessorsMixin,  # Wave 31-H
+    MessageCatchupMixin,  # Wave 46-A
     BackgroundLoopsMixin,  # Wave 31-I
     VoiceHandlersMixin,  # Wave 31-J
     ProactiveWatchMixin,  # Wave 31-K
@@ -1949,6 +1951,15 @@ class KraabUserbot(
         self.me = await self.client.get_me()
         self._set_startup_state(state="running")
         logger.info("userbot_started", me=self.me.username, id=self.me.id)
+        # Wave 46-A: startup catch-up — fetch missed messages в owner DM.
+        # Production bug Session 43: после restart Pyrogram updates_subscriber
+        # не auto-fetches missed events. Здесь явно poll get_chat_history,
+        # сравниваем с persistent last_seen и replay unseen через
+        # _process_message. Defensive: failure не блокирует startup.
+        try:
+            asyncio.create_task(self._run_startup_catchup_safe(), name="startup_catchup")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("startup_catchup_schedule_failed", error=str(exc))
         # Smart Routing Phase 5: сообщить feedback_tracker owner_id
         try:
             from .core.feedback_tracker import get_tracker  # noqa: PLC0415
@@ -3431,6 +3442,15 @@ class KraabUserbot(
         _uid = getattr(message, "id", 0) or 0
         if _uid > self._last_seen_update_id:
             self._last_seen_update_id = _uid
+        # Wave 46-A: persist per-chat last_seen для startup catchup.
+        # Wrapped в try/except → не блокируем hot path message processing.
+        try:
+            _chat_obj = getattr(message, "chat", None)
+            _chat_id_int = getattr(_chat_obj, "id", None)
+            if _chat_id_int is not None and _uid > 0:
+                self._record_seen_message(_chat_id_int, _uid)
+        except Exception:  # noqa: BLE001
+            pass
         # Correlation ID: короткий UUID (48-bit entropy) для связывания логов
         # одного запроса через весь pipeline (bridge → openclaw_client → swarm → indexer).
         # Наследуется автоматически в asyncio.create_task / asyncio.to_thread
