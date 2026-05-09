@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Wave 49-C-hexstrike: HexStrike-AI Flask server (151 offensive sec tools).
+    Manual-start only — owner gates activation through "Hexstrike Toggle.command".
+    NO RunAtLoad, NO KeepAlive: server lifecycle = explicit owner action.
+  -->
+  <key>Label</key>
+  <string>com.krab.hexstrike-server</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/pablito/Antigravity_AGENTS/hexstrike-ai/hexstrike_env/bin/python</string>
+    <string>/Users/pablito/Antigravity_AGENTS/hexstrike-ai/hexstrike_server.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/pablito/Antigravity_AGENTS/hexstrike-ai</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/krab_hexstrike_server.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/krab_hexstrike_server.err.log</string>
+</dict>
+</plist>

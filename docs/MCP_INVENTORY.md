@@ -37,6 +37,7 @@ python scripts/openclaw_mcp_register.py --remove <name>
 | `sentry` | streamable-http | `https://mcp.sentry.dev/mcp` | Sentry issues + analytics | `${SENTRY_AUTH_TOKEN}` |
 | `tor-full` | stdio | `~/Antigravity_AGENTS/tor-mcp/server.py` | Полноценный Tor MCP — circuit/identity/dark-web (25 tools) | none |
 | `osint-tools` | stdio | `~/Antigravity_AGENTS/osint-tools-mcp-server/src/...` | OSINT свёрстка: sherlock+holehe+maigret+theharvester (7 tools) | none |
+| `hexstrike-ai` | stdio | `hexstrike_env/bin/python hexstrike_mcp.py --server :8888` | 151 offensive security tools (manual server start, Wave 49-C) | none (localhost server) |
 
 LaunchAgents:
 - `scripts/launchagents/com.krab.mcp-yung-nagato.plist`
@@ -139,6 +140,41 @@ openclaw mcp set <name> '{"transport":"sse","url":"http://127.0.0.1:PORT/sse"}'
 
 OpenClaw принимает только три transport-а: `streamable-http` / `sse` / `stdio`.
 Helper маппит canonical `"http"` → `"streamable-http"` автоматически.
+
+## HexStrike-AI MCP (Wave 49-C)
+
+**Repo:** `/Users/pablito/Antigravity_AGENTS/hexstrike-ai/` (внешний, не в Krab tree).
+**Isolated venv:** `/Users/pablito/Antigravity_AGENTS/hexstrike-ai/hexstrike_env/` (Python 3.13).
+**Heavy deps installed in venv (НЕ в Krab venv):** flask, fastmcp, selenium, mitmproxy,
+pwntools, angr, bcrypt==4.0.1, beautifulsoup4, aiohttp.
+
+**Architecture:**
+- Flask server `hexstrike_server.py` слушает `:8888` (manual start only).
+- MCP client `hexstrike_mcp.py` (stdio, FastMCP) проксирует tool calls в server.
+- OpenClaw stdio запись: `command=hexstrike_env/bin/python`, `args=[..., --server, http://127.0.0.1:8888]`.
+
+**Manual start procedure (Hexstrike Toggle.command):**
+1. `scripts/Hexstrike Toggle.command` (osascript dialog: Load / Unload / Cancel).
+2. Скрипт копирует `scripts/launchagents/com.krab.hexstrike-server.plist` в
+   `~/Library/LaunchAgents/`, затем `launchctl load -w`.
+3. Server health: `curl http://127.0.0.1:8888/health`.
+4. **NOT** `RunAtLoad`/`KeepAlive` — лежит unloaded по умолчанию, активация
+   только через явное действие оператора.
+
+**Risk model:**
+- HexStrike orchestrates 151 offensive tools (nmap, sqlmap, hydra, nuclei,
+  hashcat, gobuster, metasploit-aux, и т.д.) — auto-start был бы major safety
+  violation.
+- Из CLI baseline уже via brew: `nmap`, `sqlmap`, `nuclei`, `hydra`, `hashcat`,
+  `gobuster`, `ffuf`, `nikto`, `subfinder` (9 шт).
+- Heavy bin-analysis tools (ghidra, radare2, volatility3, и т.д.) — НЕ
+  устанавливаем (legal/operational risk вне явной authorization).
+- Operator-gated через `Hexstrike Toggle.command` + dialog с предупреждением.
+
+**Files:**
+- `scripts/launchagents/com.krab.hexstrike-server.plist`
+- `scripts/Hexstrike Toggle.command`
+- `tests/unit/test_hexstrike_setup_wave49c.py`
 
 ## codex-cli config
 
