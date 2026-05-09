@@ -529,6 +529,13 @@ class Config:
     # Default 180s (3 мин тишины после activity = зависание post-tool-call).
     # 0 = отключено.
     KRAB_LLM_IDLE_TIMEOUT_SEC: float = float(os.getenv("KRAB_LLM_IDLE_TIMEOUT_SEC", "180"))
+    # Wave 54-B: задержка перед повторной попыткой после полного провала fallback-цепочки.
+    # Google brief-outage (2026-05-10): все 7 Google-моделей вернули 500/timeout одновременно.
+    # После 30s cool-down primary обычно восстанавливается. 0 = отключить smart-retry.
+    # Диапазон: 0-180 секунд.
+    KRAB_CLOUD_RECOVERY_RETRY_DELAY_SEC: float = min(
+        180.0, max(0.0, float(os.getenv("KRAB_CLOUD_RECOVERY_RETRY_DELAY_SEC", "30")))
+    )
     # Wave 44-W: codex agent — soft hard-cap на subprocess (отдельно от
     # KRAB_LLM_WALL_CLOCK_CAP_SEC, который применяется к LLM flow в целом).
     # Streaming output reader использует idle_timeout как primary detector;
@@ -803,6 +810,8 @@ class Config:
                     cls.KRAB_LLM_IDLE_TIMEOUT_SEC = float(value)
                 elif key == "KRAB_CODEX_AGENT_HARD_CAP_SEC":
                     cls.KRAB_CODEX_AGENT_HARD_CAP_SEC = float(value)
+                elif key == "KRAB_CLOUD_RECOVERY_RETRY_DELAY_SEC":
+                    cls.KRAB_CLOUD_RECOVERY_RETRY_DELAY_SEC = min(180.0, max(0.0, float(value)))
                 elif key == "KRAB_LLM_HEARTBEAT_INTERVAL_SEC":
                     cls.KRAB_LLM_HEARTBEAT_INTERVAL_SEC = max(10.0, float(value))
                 elif key == "LM_STUDIO_NATIVE_REASONING_MODE":

@@ -361,6 +361,10 @@ class OpenClawClient:
         # (detect_stagnation) использует её для hard-cancel при зависании codex-cli.
         # None = нет активного запроса.
         self._current_request_task: Optional[asyncio.Task] = None
+        # Wave 54-B: per-process lock для cloud recovery retry.
+        # Только один retry-loop может быть активен одновременно —
+        # параллельные запросы от owner во время retry-window не накапливаются.
+        self._cloud_recovery_retry_lock: asyncio.Lock = asyncio.Lock()
 
     def _sync_token_from_runtime_on_init(self) -> None:
         """При старте синхронизируем токен из ~/.openclaw/openclaw.json.
@@ -3253,6 +3257,9 @@ class OpenClawClient:
             # `_pick_cloud_retry_model` использует это как exclude, чтобы не
             # возвращать ту же сломанную модель на следующей итерации.
             chain_models_tried: set[str] = set()
+            # Wave 54-C: словарь model → краткое описание ошибки для финального сообщения.
+            # Заполняется при каждом semantic error в цепочке.
+            chain_failure_reasons: dict[str, str] = {}
             # Wave 47-A: сколько раз уже advanced по chain после non-quota провайдер
             # ошибок (HTTP 500 / provider_timeout). Не позволяем уйти за длину
             # цепочки, чтобы не зациклить attempts.
@@ -3902,6 +3909,21 @@ class OpenClawClient:
                     message=semantic["message"],
                     model=attempt_model,
                 )
+                # Wave 54-C: записываем причину ошибки для каждой модели.
+                # Используется в финальном сообщении пользователю если вся цепочка упала.
+                _model_key = str(attempt_model or "").strip()
+                if _model_key:
+                    _err_code = semantic["code"]
+                    if _err_code == "provider_timeout":
+                        chain_failure_reasons[_model_key] = "таймаут провайдера"
+                    elif _err_code == "provider_error":
+                        chain_failure_reasons[_model_key] = "HTTP 500 internal error"
+                    elif _err_code == "quota_exceeded":
+                        chain_failure_reasons[_model_key] = "квота исчерпана"
+                    elif _err_code in ("lm_empty_stream", "lm_malformed_response"):
+                        chain_failure_reasons[_model_key] = "пустой/повреждённый ответ"
+                    else:
+                        chain_failure_reasons[_model_key] = _err_code
 
                 # 1) free quota -> paid
                 if semantic["code"] == "quota_exceeded" and not tried_paid:
@@ -4172,19 +4194,110 @@ class OpenClawClient:
                 elif code == "gateway_unknown_error":
                     user_text = "⚠️ OpenClaw вернул неизвестную ошибку. Попробуй повторить запрос."
                 else:
+                    # Wave 54-B: smart retry с cool-down после полного провала chain.
+                    # Только если: все ошибки — transient (timeout/500), retry delay > 0,
+                    # и retry-lock не занят другим concurrent запросом.
+                    _retry_delay = float(
+                        getattr(config, "KRAB_CLOUD_RECOVERY_RETRY_DELAY_SEC", 30.0)
+                    )
+                    _all_transient = bool(chain_failure_reasons) and all(
+                        reason in ("таймаут провайдера", "HTTP 500 internal error")
+                        for reason in chain_failure_reasons.values()
+                    )
+                    _is_all_cloud_failure = chain_advance_count > 0 or (
+                        code in {"provider_timeout", "provider_error"}
+                        and not model_manager.is_local_model(attempt_model)
+                    )
+                    _can_retry = (
+                        _retry_delay > 0
+                        and _all_transient
+                        and _is_all_cloud_failure
+                        and not self._cloud_recovery_retry_lock.locked()
+                    )
+                    if _can_retry:
+                        # Wave 54-B: уведомляем пользователя о recovery wait
+                        _retry_delay_int = int(_retry_delay)
+                        _transient_notice = (
+                            f"⏳ Облако временно недоступно — попробовал "
+                            f"{chain_advance_count + 1} моделей.\n"
+                            f"Жду {_retry_delay_int}с и пробую снова..."
+                        )
+                        yield _transient_notice
+                        # Acquires lock — другие concurrent запросы увидят locked=True
+                        # и уйдут в fast-path error, не накапливая retry loops.
+                        async with self._cloud_recovery_retry_lock:
+                            logger.info(
+                                "cloud_recovery_retry_scheduled",
+                                delay_sec=_retry_delay,
+                                primary_model=attempt_model,
+                                chain_failures=chain_failure_reasons,
+                            )
+                            await asyncio.sleep(_retry_delay)
+                            # Retry primary model once after cool-down
+                            _recovery_model = attempt_model
+                            try:
+                                _retry_response = await self._openclaw_completion_once(
+                                    model_id=_recovery_model,
+                                    messages_to_send=messages_to_send,
+                                    max_output_tokens=max_output_tokens,
+                                    has_photo=has_photo,
+                                )
+                                _retry_semantic = self._detect_semantic_error(_retry_response)
+                            except (ProviderAuthError, ProviderError) as _retry_exc:
+                                _retry_semantic = self._semantic_from_provider_exception(_retry_exc)
+                                _retry_response = ""
+
+                            if not _retry_semantic and _retry_response:
+                                # Recovery success
+                                logger.info(
+                                    "cloud_recovery_retry_success",
+                                    model=_recovery_model,
+                                    delay_sec=_retry_delay,
+                                )
+                                _sanitized_retry = self._sanitize_assistant_response(
+                                    _retry_response
+                                )
+                                if _sanitized_retry:
+                                    _retry_response = _sanitized_retry
+                                # Добавляем footer о recovery
+                                _retry_response = (
+                                    _retry_response.rstrip()
+                                    + f"\n\n_(восстановлено после {_retry_delay_int}с ожидания)_"
+                                )
+                                self._finalize_chat_response(chat_id, _retry_response)
+                                yield _retry_response
+                                return
+                            else:
+                                logger.warning(
+                                    "cloud_recovery_retry_failed",
+                                    model=_recovery_model,
+                                    retry_semantic=_retry_semantic,
+                                )
+                        # Fall through to extended error message after failed retry
+
+                    # Wave 54-C: расширенное сообщение об ошибке с деталями по моделям.
                     # Wave 47-A: если chain advance был активирован — message
-                    # явно сообщает сколько моделей попробовали, чтобы был
-                    # signal что fallback iteration сработала, но цепочка
-                    # целиком down.
-                    if chain_advance_count > 0:
+                    # явно сообщает сколько моделей попробовали.
+                    _top_failures = list(chain_failure_reasons.items())[:3]
+                    if _top_failures:
+                        _failures_text = "\n".join(f"• {m} — {r}" for m, r in _top_failures)
+                        user_text = (
+                            f"❌ Облако недоступно (попробовал {chain_advance_count + 1} моделей).\n\n"
+                            f"Последние ошибки:\n{_failures_text}\n\n"
+                            "⏱ Обычно восстанавливается за 30-90с.\n"
+                            "!routes — детали | !model local — local переключение"
+                        )
+                    elif chain_advance_count > 0:
                         user_text = (
                             "❌ Облачный сервис недоступен — попробовал "
-                            f"{chain_advance_count + 1} моделей в fallback chain. "
-                            "Попробуй позже или !model local."
+                            f"{chain_advance_count + 1} моделей в fallback chain.\n"
+                            "⏱ Обычно восстанавливается за 30-90с.\n"
+                            "!routes — детали | !model local — local переключение"
                         )
                     else:
                         user_text = (
-                            "❌ Облачный сервис временно недоступен. "
+                            "❌ Облачный сервис временно недоступен.\n"
+                            "⏱ Обычно восстанавливается за 30-90с.\n"
                             "Попробуй позже или !model local."
                         )
                 yield user_text
