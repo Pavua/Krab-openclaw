@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -40,6 +41,121 @@ if TYPE_CHECKING:
     from pyrogram.types import Message
 
 logger = structlog.get_logger("Krab.userbot.delivery_helpers")
+
+
+# Wave 37-B: anaphora detection — 3rd-person pronouns RU/EN.
+# Используется для:
+# 1. Reply target redirect (Issue 1): user replies на X + "спроси его" →
+#    Krab отвечает на X, не на trigger.
+# 2. Prompt context hint (Issue 3): подсказать LLM что местоимения
+#    относятся к автору referenced message.
+# Word boundaries предотвращают false positives ("например" не match'ит "ему",
+# "немец" не match'ит "ему", "гей" не match'ит "ей").
+_ANAPHORA_RE = re.compile(
+    r"(?<![а-яёА-ЯЁa-zA-Z])"  # негативный lookbehind: не после буквы
+    r"(его|ему|него|нему|её|ей|неё|ней|ним|него|нею|him|her|his|hers)"
+    r"(?![а-яёА-ЯЁa-zA-Z])",  # негативный lookahead: не перед буквой
+    re.IGNORECASE,
+)
+
+
+def _query_has_anaphora(query: str | None) -> bool:
+    """True если query содержит anaphora-маркеры (3rd-person pronouns RU/EN).
+
+    Используется в delivery (reply target redirect) + prompt build (LLM hint).
+    Word-boundary regex чтобы не ловить substring совпадения.
+    """
+    if not query:
+        return False
+    return bool(_ANAPHORA_RE.search(query))
+
+
+def _resolve_reply_target(source_message: "Message", query: str | None) -> "Message":
+    """Wave 37-B (P1-3): возвращает на какое сообщение Krab должен делать reply.
+
+    Если user написал "Краб, спроси его..." в reply на сообщение от X, то
+    Krab должен направить ответ на X (referenced), а не на trigger user'а.
+    Это исправляет визуальное искажение в Telegram UI: reply attached к
+    автору цитируемого сообщения, как и ожидает пользователь.
+
+    Без anaphora — fallback на source_message (default behavior).
+    Без referenced — fallback на source_message (нечего redirect'ить).
+    """
+    referenced = getattr(source_message, "reply_to_message", None)
+    if referenced and _query_has_anaphora(query):
+        return referenced
+    return source_message
+
+
+# Wave 38: inline mention link для users без @username.
+# Issue: 09.05.2026 в YMB FAMILY FOREVER user "🐶" (без @username) был адресатом
+# Krab'а ответа. Krab правильно ставил "🐶, ..." в начале text, но это plain text,
+# не clickable. Tag должен указывать на user_id чтобы Telegram UI делал mention
+# navigable. Markdown syntax `[name](tg://user?id=N)` рендерится Pyrofork как
+# inline mention.
+def _inject_user_mention_link(text: str | None, user: object) -> str | None:
+    """Wave 38: заменяет первое вхождение display name юзера на markdown
+    inline mention `[name](tg://user?id=N)`.
+
+    Применяется в delivery когда reply target redirect сработал (Wave 37-B):
+    Krab отвечает на referenced message, и хочется чтобы text mention был
+    clickable. Особенно важно для users без @username (emoji nickname,
+    private accounts).
+
+    Behavior:
+    - Replace ТОЛЬКО при name в начале text (избегаем false positives внутри).
+    - Word-boundary check: name должно быть отдельным token (followed by
+      `,`/`:`/` `/конец) — иначе substring-match (`Ан` в `Антон`) ошибочно
+      сработает.
+    - Идемпотентность: если `tg://user?id={user_id}` уже в text — skip.
+    - Priority: `@username` > `first_name`.
+    - Без user.id или без name candidate — text unchanged.
+    """
+    if text is None or not text:
+        return text
+    if user is None:
+        return text
+
+    user_id = getattr(user, "id", None)
+    if not user_id:
+        return text
+
+    # Idempotency: если уже linked — оставляем
+    marker = f"tg://user?id={user_id}"
+    if marker in text:
+        return text
+
+    username = (getattr(user, "username", "") or "").strip()
+    first_name = (getattr(user, "first_name", "") or "").strip()
+
+    # Build candidates в priority order
+    candidates: list[str] = []
+    if username:
+        candidates.append(f"@{username}")
+    if first_name:
+        candidates.append(first_name)
+
+    if not candidates:
+        return text
+
+    # Word boundary chars — после которых считается end of name token
+    _boundary = {",", ":", " ", "!", "?", ".", ";", ")", "—", "-"}
+
+    for cand in candidates:
+        if not text.startswith(cand):
+            continue
+        # Защита от substring match: следующий char должен быть boundary или
+        # конец строки (иначе "Ан" в "Антон" сработает ошибочно).
+        next_pos = len(cand)
+        if next_pos < len(text):
+            next_char = text[next_pos]
+            if next_char not in _boundary:
+                continue
+        # Replace
+        suffix = text[len(cand) :]
+        return f"[{cand}]({marker}){suffix}"
+
+    return text
 
 
 class DeliveryHelpersMixin:
@@ -170,17 +286,29 @@ class DeliveryHelpersMixin:
                 "parts_count": len(parts),
             }
 
+        # Wave 37-B (P1-3): redirect reply target когда user написал
+        # "Краб, спроси его..." в reply на чужое сообщение — Krab должен
+        # отвечать на оригинал, не на trigger.
+        reply_target = _resolve_reply_target(source_message, query)
+
+        # Wave 38: если redirect сработал — inject inline mention к автору
+        # referenced message в text parts (clickable @ для users без username).
+        if reply_target is not source_message:
+            target_user = getattr(reply_target, "from_user", None)
+            if target_user is not None:
+                parts = [_inject_user_mention_link(p, target_user) or p for p in parts]
+
         # Bug 4 guard: тот же случай для основного пути доставки — edit чужого
         # сообщения недопустим, fallback на reply вместо edit.
         if temp_message is source_message:
-            first_msg = await self._safe_reply_or_send_new(source_message, parts[0])
+            first_msg = await self._safe_reply_or_send_new(reply_target, parts[0])
         else:
             first_msg = await self._safe_edit(temp_message, parts[0])
         temp_message = first_msg
         if getattr(temp_message, "id", None):
             delivered_ids.append(str(temp_message.id))
         for part in parts[1:]:
-            sent = await self._safe_reply_or_send_new(source_message, part)
+            sent = await self._safe_reply_or_send_new(reply_target, part)
             if getattr(sent, "id", None):
                 delivered_ids.append(str(sent.id))
         self._maybe_record_smart_trigger_response(

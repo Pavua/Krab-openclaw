@@ -158,6 +158,22 @@ def build_segmented_prompt(
         else:
             parts.append(f"[Текущее сообщение]:\n{current}")
 
+    # Wave 37-B (P1-5): anaphora hint. Если в current text есть местоимения
+    # "его/ему/её/ей" И есть reply target с known author — подсказываем LLM
+    # на кого они ссылаются. Без подсказки модель путалась и иногда
+    # отвечала "не той стороне".
+    if segments.has_reply and segments.reply_to_author and current:
+        from .delivery_helpers import (
+            _query_has_anaphora,
+        )  # local: избегаем circular  # noqa: PLC0415
+
+        if _query_has_anaphora(current):
+            parts.append(
+                f"[Контекст: местоимения 'его/ему/её/ей' в текущем "
+                f"сообщении относятся к @{segments.reply_to_author} "
+                f"(автору цитаты выше), не к отправителю]"
+            )
+
     return "\n\n".join(parts).strip()
 
 

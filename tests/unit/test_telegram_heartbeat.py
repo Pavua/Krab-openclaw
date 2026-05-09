@@ -168,36 +168,13 @@ async def test_heartbeat_disabled_returns_immediately(monkeypatch: pytest.Monkey
         assert _e not in {"1", "true", "yes"}, f"Значение {val!r} должно отключать heartbeat"
 
 
-# ── test 5: success resets _last_telegram_event_ts ───────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_heartbeat_success_updates_last_event_ts(monkeypatch: pytest.MonkeyPatch) -> None:
-    """GetUsers ok → _last_telegram_event_ts обновляется (keepalive side effect)."""
-    stub = _make_userbot_stub()
-
-    # Ставим старый timestamp
-    old_ts = time.time() - 300  # 5 минут назад
-    stub._last_telegram_event_ts = old_ts
-
-    stub.client.invoke = AsyncMock(return_value=[MagicMock()])
-
-    # Симулируем успешный probe
-    try:
-        await asyncio.wait_for(
-            stub.client.invoke(...),
-            timeout=10.0,
-        )
-        stub._last_telegram_event_ts = time.time()
-    except Exception:
-        pass
-
-    assert stub._last_telegram_event_ts > old_ts, (
-        "_last_telegram_event_ts должен обновиться после успешного heartbeat"
-    )
-    assert stub._last_telegram_event_ts > (time.time() - 2), (
-        "_last_telegram_event_ts должен быть свежим (< 2s назад)"
-    )
+# ── test 5: DEPRECATED — Wave 37-A заменил behavior ──────────────────────────
+# Раньше: heartbeat success обновлял _last_telegram_event_ts → маскировал
+# split-brain detection в _network_offline_monitor_loop. Этот side-effect
+# был bug, не фича. Wave 37-A:
+#   - heartbeat success обновляет _last_heartbeat_ok_ts (отдельное поле)
+#   - _last_telegram_event_ts обновляется ТОЛЬКО в _process_message
+# Полное coverage нового behavior — см. test_telegram_heartbeat_wave37.py.
 
 
 # ── дополнительные: unit-проверки настроек ENV ────────────────────────────────

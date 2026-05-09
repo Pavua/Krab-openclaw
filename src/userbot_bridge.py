@@ -401,6 +401,10 @@ class KraabUserbot(
         # Монитор сетевого offline: время последнего входящего TG-события.
         # Обновляется в _process_message; мониторится _network_offline_monitor_loop.
         self._last_telegram_event_ts: float = time.time()
+        # Wave 37-A: отдельный timestamp для heartbeat success (diagnostics).
+        # Раньше heartbeat success обновлял _last_telegram_event_ts → silence
+        # detector обманывался при split-brain pyrogram session.
+        self._last_heartbeat_ok_ts: float = time.time()
         self._network_offline_monitor_task: Optional[asyncio.Task] = None
         # Runtime-состояние старта userbot для health/handoff и контролируемой деградации.
         self._startup_state = "initializing"

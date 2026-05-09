@@ -465,6 +465,10 @@ class NetworkWatchdogMixin:
         )
 
         consecutive_failures = 0
+        # Wave 37-A: флаг "graceful reconnect attempt уже был в текущем
+        # failure window". Сбрасывается на success. Не позволяет спамить
+        # _try_reconnect_pyrofork каждую failed итерацию.
+        heartbeat_restart_attempted = False
 
         while True:
             try:
@@ -487,10 +491,15 @@ class NetworkWatchdogMixin:
                     timeout=_timeout,
                 )
 
-                # Успех: ресетим таймер тишины + счётчик сбоев
-                self._last_telegram_event_ts = time.time()
+                # Успех: ресетим счётчик сбоев + restart-флаг.
+                # Wave 37-A: НЕ обновляем _last_telegram_event_ts — это маскирует
+                # split-brain detection в _network_offline_monitor_loop. Вместо
+                # этого пишем в отдельное поле _last_heartbeat_ok_ts.
+                self._last_heartbeat_ok_ts = time.time()
                 consecutive_failures = 0
+                heartbeat_restart_attempted = False
                 logger.debug("telegram_heartbeat_ok")
+                continue
 
             except asyncio.TimeoutError:
                 consecutive_failures += 1
@@ -509,6 +518,38 @@ class NetworkWatchdogMixin:
                     error=str(exc)[:200],
                     consecutive_failures=consecutive_failures,
                 )
+
+            # Wave 37-A: на первый fail в текущем failure window — попытка
+            # graceful pyrofork reconnect ПЕРЕД ожиданием threshold. Это
+            # быстрее чем ждать N×interval секунд (=12 мин при default).
+            if consecutive_failures == 1 and not heartbeat_restart_attempted:
+                heartbeat_restart_attempted = True
+                logger.warning(
+                    "telegram_heartbeat_attempting_graceful_restart",
+                    consecutive_failures=consecutive_failures,
+                )
+                try:
+                    restart_ok = await self._try_reconnect_pyrofork(self.client)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "telegram_heartbeat_graceful_restart_exception",
+                        error=str(exc)[:200],
+                    )
+                    restart_ok = False
+
+                if restart_ok:
+                    logger.info("telegram_heartbeat_graceful_restart_success")
+                    consecutive_failures = 0
+                    heartbeat_restart_attempted = False
+                    # После reconnect мы знаем session re-handshake'нулась —
+                    # имеет смысл сбросить silence timer (даём recovery период
+                    # на receive первого update).
+                    self._last_telegram_event_ts = time.time()
+                    continue
+                else:
+                    logger.warning("telegram_heartbeat_graceful_restart_failed")
+                    # Не escalate сразу — даём counter дойти до threshold,
+                    # это safety net на случай transient glitch.
 
             if consecutive_failures >= _fail_threshold:
                 # Zombie подтверждён — уведомляем и перезапускаем через launchd
