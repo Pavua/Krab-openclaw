@@ -116,43 +116,120 @@ class ProactiveWatchMixin:
             )
 
     async def _run_codex_quota_recovery_loop(self) -> None:
-        """Wave 44-V: раз в час проверяет, восстановились ли codex accounts.
+        """Wave 44-V + 53-G: per-account probe с jitter + exponential backoff.
 
-        Если ANY account стал available после exhaustion — отправляет debounced
-        recovery alert владельцу и снимает codex_disabled флаг.
+        Улучшения Wave 53-G:
+        - Jitter ±20% предотвращает синхронизированный storm при перезапуске
+        - Exponential backoff per account на failure (base=1h, max=24h)
+        - Telemetry: structured log events quota_probe_attempt/success/failure_backoff
+        - Per-account independence — fail одного не блокирует другие
+        - Timeout 30s на каждую probe попытку (asyncio)
+        - Persisted state в codex_quota_probe_state.json (перекрывает рестарты)
         """
-        interval_sec = 3600  # 1h — соответствует transient cooldown минимуму
-        try:
-            while True:
-                await asyncio.sleep(interval_sec)
-                try:
-                    from ..integrations.codex_account_rotator import list_accounts
-                    from ..integrations.codex_quota_state import (
-                        is_codex_disabled,
-                        mark_codex_recovered,
-                    )
+        from ..integrations.codex_quota_probe_state import (
+            BASE_INTERVAL_SEC,
+            compute_next_interval,
+            is_account_in_cooldown,
+            record_probe_attempt,
+            record_probe_failure,
+            record_probe_success,
+        )
 
-                    if not is_codex_disabled():
-                        continue
-                    accounts = list_accounts()
-                    available = [a for a in accounts if a.get("available") and a.get("logged_in")]
-                    if not available:
-                        continue
-                    # Хотя бы один аккаунт available → recovery transition
-                    if mark_codex_recovered():
-                        try:
-                            await self._send_proactive_watch_alert(
-                                "✅ Codex восстановлен — primary вернулся к codex-cli/* "
-                                f"(доступно accounts: {len(available)})."
-                            )
-                        except Exception as notify_exc:  # noqa: BLE001
-                            logger.debug("codex_recovery_notify_failed", error=str(notify_exc))
+        # Первая итерация стартует с base_interval + jitter
+        initial_sleep = compute_next_interval(failures=0, base_sec=BASE_INTERVAL_SEC)
+        try:
+            await asyncio.sleep(initial_sleep)
+            while True:
+                try:
+                    await self._codex_quota_probe_all_accounts(
+                        is_account_in_cooldown=is_account_in_cooldown,
+                        record_probe_attempt=record_probe_attempt,
+                        record_probe_success=record_probe_success,
+                        record_probe_failure=record_probe_failure,
+                    )
                 except Exception as inner_exc:  # noqa: BLE001
                     logger.debug("codex_quota_recovery_iter_failed", error=str(inner_exc))
+                # Следующий глобальный цикл — base interval + jitter (без backoff)
+                next_sleep = compute_next_interval(failures=0, base_sec=BASE_INTERVAL_SEC)
+                await asyncio.sleep(next_sleep)
         except asyncio.CancelledError:
             logger.info("codex_quota_recovery_task_cancelled")
         except Exception as exc:  # noqa: BLE001
             logger.warning("codex_quota_recovery_loop_failed", error=str(exc), non_fatal=True)
+
+    async def _codex_quota_probe_all_accounts(
+        self,
+        *,
+        is_account_in_cooldown,
+        record_probe_attempt,
+        record_probe_success,
+        record_probe_failure,
+    ) -> None:
+        """Проверяет каждый аккаунт независимо. Wave 53-G."""
+        from ..integrations.codex_account_rotator import list_accounts
+        from ..integrations.codex_quota_state import (
+            is_codex_disabled,
+            mark_codex_recovered,
+        )
+
+        if not is_codex_disabled():
+            # Codex уже включён — probe не нужен
+            return
+
+        accounts = list_accounts()
+        # Только залогиненные аккаунты участвуют в probe
+        eligible = [a for a in accounts if a.get("logged_in")]
+        if not eligible:
+            logger.debug("codex_quota_probe_no_eligible_accounts")
+            return
+
+        any_recovered = False
+        for account in eligible:
+            acct_name = account.get("name", "unknown")
+            # Пропускаем если этот аккаунт ещё в cooldown (Wave 53-G: per-account)
+            if is_account_in_cooldown(acct_name):
+                logger.debug("codex_quota_probe_skipped_cooldown", account=acct_name)
+                continue
+
+            record_probe_attempt(acct_name)
+            try:
+                # Timeout 30s на probe — защита от зависания
+                recovered = await asyncio.wait_for(
+                    self._probe_single_codex_account(account),
+                    timeout=30.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("codex_quota_probe_timeout", account=acct_name, timeout_sec=30)
+                record_probe_failure(acct_name)
+                continue
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("codex_quota_probe_exception", account=acct_name, error=str(exc))
+                record_probe_failure(acct_name)
+                continue
+
+            if recovered:
+                record_probe_success(acct_name)
+                any_recovered = True
+            else:
+                record_probe_failure(acct_name)
+
+        if any_recovered and mark_codex_recovered():
+            available = [a for a in accounts if a.get("available") and a.get("logged_in")]
+            try:
+                await self._send_proactive_watch_alert(
+                    "✅ Codex восстановлен — primary вернулся к codex-cli/* "
+                    f"(доступно accounts: {len(available)})."
+                )
+            except Exception as notify_exc:  # noqa: BLE001
+                logger.debug("codex_recovery_notify_failed", error=str(notify_exc))
+
+    async def _probe_single_codex_account(self, account: dict) -> bool:
+        """Проверяет один аккаунт — available + logged_in.
+
+        Returns:
+            True если аккаунт доступен для восстановления.
+        """
+        return bool(account.get("available") and account.get("logged_in"))
 
     async def _run_proactive_watch_loop(self) -> None:
         """
