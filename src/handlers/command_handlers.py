@@ -388,6 +388,7 @@ from .commands.system_commands import (  # noqa: E402, F401
     handle_log,
     handle_panel,
     handle_ping,
+    handle_replay,
     handle_restart,
     handle_stats,
     handle_status,

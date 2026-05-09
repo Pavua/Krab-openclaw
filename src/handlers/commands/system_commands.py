@@ -2283,3 +2283,159 @@ async def handle_diag(bot: "KraabUserbot", message: Message) -> None:
         text = text[:3990] + "\n…(обрезано)"
     # parse_mode=None — безопаснее для ru-текста со спецсимволами
     await message.reply(text, parse_mode=None)
+
+
+# ---------------------------------------------------------------------------
+# !replay — Wave 49-D: manual on-demand message replay.
+# ---------------------------------------------------------------------------
+#
+# Note: имя ``!catchup`` уже занято в ``ai_commands.py`` как alias для
+# ``!summary 100`` (AI-суммаризация). Здесь предоставляем явное manual
+# replay через имя ``!replay``: реиспользует Wave 48-A
+# ``_catchup_chat_history`` для on-demand recovery messages между
+# restart'ами Krab (split-brain detection windows, Wave 39-D).
+
+
+def _parse_catchup_args(raw: str) -> tuple[str, int | None, int | None]:
+    """Парсит аргументы !replay (бывш. !catchup).
+
+    Поддерживаемые формы:
+      - ``""`` → ("default", None, None) — все default chats.
+      - ``"here"`` → ("here", None, None) — только текущий чат.
+      - ``"50"`` → ("default", None, 50) — defaults с lookback=50.
+      - ``"here 100"`` → ("here", None, 100) — текущий чат, lookback=100.
+      - ``"-1003703978531"`` → ("explicit", -1003..., None) — конкретный chat_id.
+      - ``"-100... 50"`` → ("explicit", chat_id, 50) — chat_id + lookback.
+
+    Returns: ``(mode, chat_id, lookback)``.
+    Raises: ``ValueError`` если аргументы невалидны.
+    """
+    tokens = raw.strip().split()
+    if not tokens:
+        return ("default", None, None)
+
+    first = tokens[0].lower()
+    if first == "here":
+        if len(tokens) == 1:
+            return ("here", None, None)
+        if len(tokens) == 2:
+            lookback = int(tokens[1])  # may raise ValueError
+            if lookback <= 0:
+                raise ValueError("lookback must be positive")
+            return ("here", None, lookback)
+        raise ValueError("too many arguments for 'here'")
+
+    # Numeric → chat_id или lookback
+    try:
+        first_int = int(first)
+    except ValueError as exc:
+        raise ValueError(f"unknown argument: {first!r}") from exc
+
+    # Heuristic: маленькое положительное число (≤500) — это lookback,
+    # большое или отрицательное (chat_id Telegram-чата) — explicit chat.
+    is_chat_id = first_int <= 0 or abs(first_int) > 500
+
+    if is_chat_id:
+        chat_id = first_int
+        lookback: int | None = None
+        if len(tokens) >= 2:
+            lookback = int(tokens[1])
+            if lookback <= 0:
+                raise ValueError("lookback must be positive")
+        return ("explicit", chat_id, lookback)
+
+    # default + lookback override
+    if len(tokens) > 1:
+        raise ValueError("too many arguments")
+    if first_int <= 0:
+        raise ValueError("lookback must be positive")
+    return ("default", None, first_int)
+
+
+_REPLAY_USAGE_HINT = (
+    "📥 **Использование !replay**\n"
+    "`!replay` — replay для всех default chats (owner DM + Krab Swarm).\n"
+    "`!replay here` — только текущий чат.\n"
+    "`!replay 50` — defaults с lookback=50.\n"
+    "`!replay here 100` — текущий чат, lookback=100.\n"
+    "`!replay -1003703978531` — конкретный chat_id.\n"
+    "`!replay -1003703978531 100` — chat_id + lookback."
+)
+
+
+async def handle_replay(bot: "KraabUserbot", message: Message) -> None:
+    """Wave 49-D: !replay — manual on-demand message replay (owner-only).
+
+    Полезно когда между restart'ами Krab могло пропустить сообщения
+    из-за split-brain detection windows (Wave 39-D).
+    Reuses ``bot._catchup_chat_history`` (Wave 48-A generic per-chat catchup).
+    """
+    # Owner-only guard
+    try:
+        access_profile = bot._get_access_profile(message.from_user)
+    except Exception:  # noqa: BLE001
+        access_profile = None
+    if access_profile is None or access_profile.level != AccessLevel.OWNER:
+        await message.reply("🔒 `!replay` доступен только владельцу.")
+        return
+
+    raw = bot._get_command_args(message) or ""
+    try:
+        mode, explicit_chat_id, lookback = _parse_catchup_args(raw)
+    except ValueError as exc:
+        await message.reply(f"⚠️ Неверные аргументы: {exc}\n\n{_REPLAY_USAGE_HINT}")
+        return
+
+    # Resolve target chats
+    if mode == "here":
+        chat = getattr(message, "chat", None)
+        chat_id = getattr(chat, "id", None) if chat is not None else None
+        if not isinstance(chat_id, int):
+            await message.reply("⚠️ Не удалось определить chat.id текущего чата.")
+            return
+        targets = [chat_id]
+    elif mode == "explicit":
+        if explicit_chat_id is None:
+            await message.reply("⚠️ chat_id не определён.")
+            return
+        targets = [explicit_chat_id]
+    else:  # default
+        try:
+            targets = list(bot._resolve_catchup_target_chats() or [])
+        except Exception as exc:  # noqa: BLE001
+            await message.reply(f"⚠️ Ошибка resolve target chats: {exc}")
+            return
+        if not targets:
+            await message.reply("⚠️ Нет default target chats для catchup.")
+            return
+
+    # Iterate targets, accumulate stats
+    lines: list[str] = ["📥 **Replay**"]
+    total_caught = 0
+    total_skipped = 0
+    for cid in targets:
+        try:
+            stats = await bot._catchup_chat_history(cid, max_lookback=lookback)
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"• chat=`{cid}` — ошибка: {type(exc).__name__}: {exc}")
+            logger.warning(
+                "manual_catchup_failed",
+                chat_id=cid,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            continue
+        caught = int(stats.get("caught_up", 0))
+        skipped = int(stats.get("skipped_self", 0))
+        last_seen = int(stats.get("last_seen_after", 0))
+        total_caught += caught
+        total_skipped += skipped
+        lines.append(
+            f"• chat=`{cid}` caught_up={caught} skipped_self={skipped} last_seen={last_seen}"
+        )
+
+    if len(targets) > 1:
+        lines.append("")
+        lines.append(f"**Итого:** caught_up={total_caught} skipped_self={total_skipped}")
+
+    await message.reply("\n".join(lines))

@@ -138,6 +138,7 @@ from .handlers import (
     handle_remember,
     handle_remind,
     handle_reminders,
+    handle_replay,
     handle_report,
     handle_restart,
     handle_rewrite,
@@ -1264,6 +1265,14 @@ class KraabUserbot(
         )
         async def wrap_catchup(c, m):
             await run_cmd(handle_catchup, m)
+
+        # Wave 49-D: !replay — manual on-demand message replay (owner-only).
+        @self.client.on_message(
+            filters.command("replay", prefixes=prefixes) & _make_command_filter("replay"),
+            group=-1,
+        )
+        async def wrap_replay(c, m):
+            await run_cmd(handle_replay, m)
 
         @self.client.on_message(
             filters.command("translate", prefixes=prefixes) & _make_command_filter("translate"),

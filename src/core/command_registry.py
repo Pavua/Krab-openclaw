@@ -821,6 +821,13 @@ _COMMANDS: list[CommandInfo] = [
         owner_only=True,
     ),
     CommandInfo(
+        name="replay",
+        category="system",
+        description="Manual replay messages from chat history (split-brain recovery)",
+        usage="!replay [here|<chat_id>] [lookback_count]",
+        owner_only=True,
+    ),
+    CommandInfo(
         name="qr",
         category="basic",
         description="Генерация QR-кода из текста или URL",
