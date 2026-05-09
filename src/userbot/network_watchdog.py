@@ -134,23 +134,122 @@ async def _probe_telegram_session_alive(client: object, *, timeout_sec: float = 
         return False
 
 
+async def _active_probe_updates_subscriber(
+    client: object,
+    *,
+    timeout_sec: float = 8.0,
+) -> bool:
+    """Wave 44-I: активный probe updates_subscriber через GetDialogs.
+
+    Проблема Wave 44-C: passive `_probe_updates_flow_alive` ждёт движения
+    `_last_seen_update_id`. В genuinely quiet windows (3am-7am, 0 incoming
+    traffic) update_id заморожен → false-failure → exit_78 → respawn loop.
+
+    Решение: `client.invoke(GetDialogs(limit=1))` идёт через Pyrogram
+    dispatcher (НЕ bypass его) — если updates_subscriber реально мёртв,
+    invoke зависнет/упадёт; если жив — вернётся быстро. Никаких видимых
+    side-effects (read-only).
+
+    Returns True если probe прошёл за timeout_sec, False иначе.
+    """
+    try:
+        from pyrogram.raw.functions.messages import GetDialogs  # noqa: PLC0415
+        from pyrogram.raw.types import InputPeerEmpty  # noqa: PLC0415
+
+        await asyncio.wait_for(
+            client.invoke(  # type: ignore[union-attr]
+                GetDialogs(
+                    offset_date=0,
+                    offset_id=0,
+                    offset_peer=InputPeerEmpty(),
+                    limit=1,
+                    hash=0,
+                )
+            ),
+            timeout=timeout_sec,
+        )
+        return True
+    except asyncio.TimeoutError:
+        logger.warning("active_probe_updates_subscriber_timeout", timeout_sec=timeout_sec)
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("active_probe_updates_subscriber_failed", error=str(exc)[:200])
+        return False
+
+
 async def _probe_updates_flow_alive(
     owner: object,
     *,
     settle_sec: float = 30.0,
+    active_probe_on_silence: bool = True,
 ) -> bool:
-    """Wave 39-D: True если update_id двигался за settle_sec.
+    """Wave 39-D + Wave 44-I: True если update_id двигался ИЛИ активный probe жив.
 
     Детектит split-brain: invoke alive + updates_subscriber dead.
     GetUsers работает (heartbeat success), но реальные Telegram updates
     не приходят → _last_seen_update_id заморожен.
 
-    ``owner`` должен иметь атрибут ``_last_seen_update_id`` (int).
-    Вынесено на уровень модуля (не метод класса) для удобства тестирования.
+    Wave 44-I (hybrid): если passive probe (settle_sec/2) не увидел
+    движения update_id, делаем active probe через GetDialogs(limit=1).
+    Это устраняет false-positive в quiet windows (ночь, 0 traffic):
+    - probe OK = "quiet but alive" → return True
+    - probe fail = real split-brain → продолжаем passive ожидание + return False
+
+    ``owner`` должен иметь атрибут ``_last_seen_update_id`` (int) и
+    опционально ``client`` (Pyrogram Client) для active probe.
     """
     baseline = getattr(owner, "_last_seen_update_id", 0)
-    await asyncio.sleep(settle_sec)
+
+    # Hybrid: первая половина пассивного ожидания
+    first_half = settle_sec / 2.0 if active_probe_on_silence else settle_sec
+    await asyncio.sleep(first_half)
     current = getattr(owner, "_last_seen_update_id", 0)
+
+    if current > baseline:
+        logger.debug(
+            "updates_flow_probe",
+            baseline=baseline,
+            current=current,
+            alive=True,
+            settle_sec=settle_sec,
+            phase="passive_first_half",
+        )
+        return True
+
+    # Passive frozen: пробуем active probe (если разрешено и есть client)
+    client = getattr(owner, "client", None)
+    if active_probe_on_silence and client is not None:
+        probe_ok = await _active_probe_updates_subscriber(client)
+        if probe_ok:
+            logger.debug(
+                "updates_flow_probe",
+                baseline=baseline,
+                current=current,
+                alive=True,
+                settle_sec=settle_sec,
+                phase="active_probe_quiet_window",
+            )
+            return True
+        # Active probe failed → продолжаем passive ожидание (вторая половина)
+        await asyncio.sleep(settle_sec - first_half)
+        current = getattr(owner, "_last_seen_update_id", 0)
+        alive = current > baseline
+        logger.debug(
+            "updates_flow_probe",
+            baseline=baseline,
+            current=current,
+            alive=alive,
+            settle_sec=settle_sec,
+            phase="active_probe_failed_passive_second_half",
+        )
+        return alive
+
+    # active_probe_on_silence=False or no client: legacy passive-only behaviour
+    # Досыпаем оставшееся время чтобы соблюсти полный settle_sec contract.
+    remaining = settle_sec - first_half
+    if remaining > 0:
+        await asyncio.sleep(remaining)
+        current = getattr(owner, "_last_seen_update_id", 0)
     alive = current > baseline
     logger.debug(
         "updates_flow_probe",
@@ -158,6 +257,7 @@ async def _probe_updates_flow_alive(
         current=current,
         alive=alive,
         settle_sec=settle_sec,
+        phase="passive_only",
     )
     return alive
 
@@ -457,8 +557,47 @@ class NetworkWatchdogMixin:
                                     reconnected = await self._try_reconnect_pyrofork(self.client)
                                 if reconnected:
                                     self._last_telegram_event_ts = time.time()
-                                    logger.info("split_brain_resolved_via_reconnect")
-                                    _consecutive_zombie_failures = 0
+                                    # Wave 44-C: post-reconnect verification.
+                                    # Wave 39-D обнаруживал split-brain, но
+                                    # `_try_reconnect_pyrofork` мог вернуть True
+                                    # на TCP-уровне, оставив updates_subscriber мёртвым.
+                                    # Production observed twice 2026-05-09 (06:58, 18:46):
+                                    # log "split_brain_resolved_via_reconnect" есть,
+                                    # а incoming messages не обрабатываются.
+                                    # Re-probe update_id за post_reconnect_verify_sec —
+                                    # если всё ещё frozen → false-success → escalate.
+                                    _post_reconnect_verify_sec = max(
+                                        10.0, min(15.0, check_interval * 0.3)
+                                    )
+                                    updates_after_reconnect = await _probe_updates_flow_alive(
+                                        self, settle_sec=_post_reconnect_verify_sec
+                                    )
+                                    if updates_after_reconnect:
+                                        logger.info(
+                                            "split_brain_resolved_via_reconnect",
+                                            verified=True,
+                                            verify_settle_sec=_post_reconnect_verify_sec,
+                                        )
+                                        _consecutive_zombie_failures = 0
+                                    else:
+                                        logger.error(
+                                            "split_brain_reconnect_did_not_restore_updates",
+                                            action="process_exit_for_launchd_respawn",
+                                            verify_settle_sec=_post_reconnect_verify_sec,
+                                            last_seen_update_id=getattr(
+                                                self, "_last_seen_update_id", 0
+                                            ),
+                                        )
+                                        try:
+                                            await self._send_proactive_watch_alert(
+                                                "🧠 **Krab: false-recovery split-brain** — "
+                                                "reconnect succeeded, но updates_subscriber "
+                                                "всё ещё мёртв.\n"
+                                                "→ Эскалация: launchd respawn (Wave 44-C)."
+                                            )
+                                        except Exception:  # noqa: BLE001
+                                            pass
+                                        _launchd_exit_78()
                                 else:
                                     logger.error(
                                         "split_brain_escalation",
