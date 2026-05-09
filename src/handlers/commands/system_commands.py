@@ -1333,6 +1333,21 @@ async def handle_health(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(deep_report)
         return
 
+    # Wave 52-H: comprehensive runtime state report (owner-only).
+    if raw_args in {"detail", "full"}:
+        access_profile = bot._get_access_profile(message.from_user)
+        if access_profile.level != AccessLevel.OWNER:
+            raise UserInputError(user_message="🔒 `!health detail` доступен только владельцу.")
+        from ...core.health_detail_collector import (
+            collect_health_detail,
+            format_health_detail,
+        )
+
+        session_start = getattr(bot, "_session_start_time", None)
+        detail_data = await collect_health_detail(session_start_time=session_start)
+        await message.reply(format_health_detail(detail_data))
+        return
+
     lines: list[str] = ["🏥 **Health Check**", "─────────────────"]
 
     # 1. Telegram: проверяем, что me доступен (userbot подключён)
