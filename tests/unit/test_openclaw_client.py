@@ -157,6 +157,69 @@ async def test_health_check_failure(client: OpenClawClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_health_check_connect_error_empty_message_logs_warning(
+    client: OpenClawClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wave 42: httpx.ConnectError с пустым str() → warning, не error (Sentry PYTHON-FASTAPI-6B)."""
+    import src.openclaw_client as oc_mod
+
+    warning_calls: list[tuple[str, dict]] = []
+    error_calls: list[tuple[str, dict]] = []
+
+    def _cap_warn(event: str, **kwargs: object) -> None:
+        warning_calls.append((event, dict(kwargs)))
+
+    def _cap_err(event: str, **kwargs: object) -> None:
+        error_calls.append((event, dict(kwargs)))
+
+    monkeypatch.setattr(oc_mod.logger, "warning", _cap_warn)
+    monkeypatch.setattr(oc_mod.logger, "error", _cap_err)
+
+    # httpx.ConnectError('') имеет пустой str() — именно это вызывало пустой error= в Sentry
+    client._http_client.get.side_effect = httpx.ConnectError("")
+    result = await client.health_check()
+
+    assert result is False
+    # transient connect error → warning, НЕ error
+    assert any(ev == "openclaw_health_check_failed" for ev, _ in warning_calls), (
+        "ConnectError должен логироваться как warning"
+    )
+    assert not any(ev == "openclaw_health_check_failed" for ev, _ in error_calls), (
+        "ConnectError НЕ должен логироваться как error"
+    )
+    # error= не должен быть пустым
+    warn_kwargs = next(kw for ev, kw in warning_calls if ev == "openclaw_health_check_failed")
+    assert warn_kwargs.get("error"), f"error= не должен быть пустым, получили: {warn_kwargs}"
+
+
+@pytest.mark.asyncio
+async def test_health_check_connect_error_includes_exc_class(
+    client: OpenClawClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wave 42: даже при пустом exc.args логируем exc_class для диагностики."""
+    import src.openclaw_client as oc_mod
+
+    warning_calls: list[tuple[str, dict]] = []
+
+    def _cap_warn(event: str, **kwargs: object) -> None:
+        warning_calls.append((event, dict(kwargs)))
+
+    monkeypatch.setattr(oc_mod.logger, "warning", _cap_warn)
+
+    client._http_client.get.side_effect = httpx.ReadTimeout("")
+    result = await client.health_check()
+
+    assert result is False
+    assert any(ev == "openclaw_health_check_failed" for ev, _ in warning_calls)
+    warn_kwargs = next(kw for ev, kw in warning_calls if ev == "openclaw_health_check_failed")
+    assert warn_kwargs.get("exc_class") == "ReadTimeout", (
+        f"exc_class должен быть 'ReadTimeout', получили: {warn_kwargs}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_warmup_runtime_route_runs_short_probe_and_clears_temp_session(
     client: OpenClawClient,
 ) -> None:

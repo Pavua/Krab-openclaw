@@ -2747,10 +2747,22 @@ class OpenClawClient:
                 response = await self._http_client.get(f"{self.base_url}/health")
             return response.status_code == 200
         except OpenClawSemaphoreTimeoutError as exc:
-            logger.error("openclaw_health_check_failed", error=str(exc))
+            # Семафор перегружен — реальная проблема, оставляем error
+            logger.error(
+                "openclaw_health_check_failed",
+                error=str(exc),
+                exc_class=type(exc).__name__,
+            )
             return False
         except (httpx.RequestError, httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
-            logger.error("openclaw_health_check_failed", error=str(exc))
+            # Wave 42: httpx exceptions часто имеют пустой str() — добавляем exc_class.
+            # Downgrade до warning: gateway временно недоступен — transient, Krab уже
+            # обрабатывает через retry/fallback; error-уровень порождал ложные Sentry alerts.
+            logger.warning(
+                "openclaw_health_check_failed",
+                error=str(exc) or "(no message)",
+                exc_class=type(exc).__name__,
+            )
             return False
 
     async def wait_for_healthy(self, timeout: int = 90) -> bool:
