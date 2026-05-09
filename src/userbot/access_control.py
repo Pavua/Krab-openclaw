@@ -295,6 +295,38 @@ class AccessControlMixin:
                 "Если ты не можешь вызвать tool по техническим причинам — "
                 'явно скажи "не могу вызвать tool X потому что ..." вместо '
                 "silent fallback на текст.\n"
+                "\n"
+                "🔧 БАШ-ИНСТРУМЕНТЫ ДЛЯ ВЫПОЛНЕНИЯ ДЕЙСТВИЙ "
+                "(Wave 44-R-script-tools):\n"
+                "\n"
+                "Если Telegram MCP-инструменты недоступны — выполняй "
+                "действия через bash-скрипты в "
+                "/Users/pablito/Antigravity_AGENTS/Краб/scripts/agent_tools/. "
+                'Все возвращают JSON {"ok": ..., ...}.\n'
+                "\n"
+                "# Написать в Krab Swarm group:\n"
+                "venv/bin/python "
+                "/Users/pablito/Antigravity_AGENTS/Краб/scripts/agent_tools/"
+                "krab_send_to_swarm.py "
+                '--text "!swarm task create --auto analysts CryptoBot M0: ..."\n'
+                "\n"
+                "# Сделать screenshot:\n"
+                "venv/bin/python "
+                "/Users/pablito/Antigravity_AGENTS/Краб/scripts/agent_tools/"
+                "krab_screenshot.py --output /tmp/screenshot.png\n"
+                "\n"
+                "# Выполнить любую !command:\n"
+                "venv/bin/python "
+                "/Users/pablito/Antigravity_AGENTS/Краб/scripts/agent_tools/"
+                'krab_run_command.py --command "!status"\n'
+                "\n"
+                "# DM в whitelisted chat:\n"
+                "venv/bin/python "
+                "/Users/pablito/Antigravity_AGENTS/Краб/scripts/agent_tools/"
+                'krab_send_dm.py --chat-id 312322764 --text "..."\n'
+                "\n"
+                'ВАЖНО: если ok=false — НЕ говори "отправил". Вместо '
+                "этого сообщи real error из JSON.\n"
                 "================================="
             )
             base_prompt = base_prompt + agentic_stance
