@@ -485,6 +485,15 @@ class Config:
         "KRAB_GOOGLE_DIRECT_BYPASS_ENABLED", "1"
     ).strip().lower() in {"1", "true", "yes", "on"}
 
+    # Wave 47-B: per-response model footer — добавляет к каждому ответу
+    # маленький tag вида `📡 _gemini-3-pro-preview_`, чтобы пользователь видел
+    # какая модель ответила. При fallback после quota — также пометка
+    # `(fallback после codex quota)`.
+    # Default ON (opt-out через KRAB_MODEL_FOOTER_ENABLED=0).
+    KRAB_MODEL_FOOTER_ENABLED: bool = os.getenv(
+        "KRAB_MODEL_FOOTER_ENABLED", "1"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
     # Wave 22-A: CLI subprocess bypass для codex-cli/* и google-gemini-cli/*.
     # OpenClaw 2026.5.x regression затронул ВСЕ providers, не только google/*.
     # Прямые CLI вызовы (codex -p / gemini -p) работают независимо от OpenClaw.

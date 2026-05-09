@@ -45,6 +45,83 @@ from ..openclaw_client import openclaw_client
 logger = get_logger("userbot_bridge")
 
 
+# Wave 47-B: маркер footer'а — italic markdown с эмодзи 📡, чтобы было
+# визуально отделено от тела ответа и легко regex-detected при re-apply.
+_MODEL_FOOTER_PREFIX = "📡 _"
+_MODEL_FOOTER_SUFFIX = "_"
+_MODEL_FOOTER_RE = re.compile(r"\n\n📡 _[^\n]+_\s*$")
+
+
+def _shorten_model_id(model_id: str) -> str:
+    """Сокращаем длинные provider-prefix'ы — `google/gemini-3-pro-preview` →
+    `gemini-3-pro-preview`. Codex-cli и vertex оставляем целиком, чтобы было
+    понятно что был bypass-канал."""
+    raw = str(model_id or "").strip()
+    if not raw:
+        return ""
+    # Префиксы, которые скрываем (provider noise)
+    for prefix in ("google/", "openai/"):
+        if raw.startswith(prefix):
+            return raw[len(prefix) :]
+    # codex-cli/, google-vertex/, google-gemini-cli/, anthropic-vertex/ — оставляем
+    return raw
+
+
+def _append_model_footer(
+    text: str,
+    model: str,
+    *,
+    fallback_used: bool = False,
+    fallback_reason: str = "",
+    enabled: bool | None = None,
+) -> str:
+    """Добавляет к ответу tag вида `📡 _gemini-3-pro-preview_` (italic markdown).
+
+    Wave 47-B: пользователь хочет видеть на какой модели Krab ответил, особенно
+    при fallback после quota. Footer:
+    - skip если text пустой / уже содержит footer / выглядит как error message
+      (начинается с `❌` / `⚠️`);
+    - skip если env `KRAB_MODEL_FOOTER_ENABLED=0`;
+    - при `fallback_used=True` добавляет пометку `(fallback после {reason})`.
+
+    Idempotent: повторный вызов не дублирует footer.
+    """
+    raw_text = str(text or "")
+    if not raw_text.strip():
+        return raw_text
+
+    # Env gate
+    if enabled is None:
+        enabled = bool(getattr(config, "KRAB_MODEL_FOOTER_ENABLED", True))
+    if not enabled:
+        return raw_text
+
+    short = _shorten_model_id(model)
+    if not short:
+        return raw_text
+
+    # Не вешаем footer на error messages — они и так короткие/информативные.
+    stripped_lead = raw_text.lstrip()
+    if stripped_lead.startswith(("❌", "⚠️")):
+        return raw_text
+
+    # Idempotency: footer уже на хвосте → не дублируем.
+    if _MODEL_FOOTER_RE.search(raw_text):
+        return raw_text
+
+    if fallback_used:
+        reason = str(fallback_reason or "").strip()
+        if reason:
+            label = f"{short} (fallback после {reason})"
+        else:
+            label = f"{short} (fallback)"
+    else:
+        label = short
+
+    footer = f"\n\n{_MODEL_FOOTER_PREFIX}{label}{_MODEL_FOOTER_SUFFIX}"
+    return raw_text.rstrip() + footer
+
+
 class LLMTextProcessingMixin:
     """
     Mixin `KraabUserbot` с методами обработки текста (reasoning strip,

@@ -36,6 +36,7 @@ import structlog
 from ..config import config
 from ..core.repetition_guard import repetition_guard as _repetition_guard
 from ._send_queue import telegram_send_queue as _telegram_send_queue
+from .llm_text_processing import _append_model_footer
 
 if TYPE_CHECKING:
     from pyrogram import Client
@@ -270,6 +271,64 @@ class DeliveryHelpersMixin:
     client: "Client | None"
     _pending_smart_trigger: dict[str, Any]
 
+    def _apply_model_footer(self, text: str) -> str:
+        """Wave 47-B: добавляет к ответу `📡 _<model>_` footer.
+
+        Берёт текущий route из `openclaw_client.get_last_runtime_route()` и
+        определяет fallback по `_cloud_tier_state.last_recovery_action`.
+        Idempotent + защищён от error/empty responses внутри `_append_model_footer`.
+        """
+        try:
+            from ..openclaw_client import openclaw_client as _oc
+        except ImportError:
+            return text
+        try:
+            route = _oc.get_last_runtime_route() or {}
+        except Exception:  # noqa: BLE001
+            return text
+
+        model = str(route.get("model") or "").strip()
+        if not model:
+            return text
+
+        # Определяем был ли fallback. _cloud_tier_state.last_recovery_action
+        # содержит маркеры типа `switch_to_cloud_quality_retry`,
+        # `switch_to_cloud_retry`, `switch_to_local`, `switch_to_paid` и т.д.
+        # Также Wave 47-A: chain advance via `switch_to_cloud_quality_retry`.
+        fallback_used = False
+        fallback_reason = ""
+        try:
+            tier_state = getattr(_oc, "_cloud_tier_state", {}) or {}
+            recovery = str(tier_state.get("last_recovery_action") or "").strip()
+            last_error = str(tier_state.get("last_error_code") or "").strip()
+        except Exception:  # noqa: BLE001
+            recovery = ""
+            last_error = ""
+
+        if recovery and recovery not in {"none", ""}:
+            if "quality" in recovery:
+                fallback_used = True
+                fallback_reason = "сбоя primary"
+            elif "cloud_retry" in recovery or recovery.startswith("switch_to_cloud"):
+                fallback_used = True
+                if last_error == "quota_exceeded":
+                    fallback_reason = "quota"
+                else:
+                    fallback_reason = "cloud retry"
+            elif recovery.startswith("switch_to_local"):
+                fallback_used = True
+                fallback_reason = "cloud failure"
+            elif recovery.startswith("switch_to_paid"):
+                fallback_used = True
+                fallback_reason = "free quota"
+
+        return _append_model_footer(
+            text,
+            model,
+            fallback_used=fallback_used,
+            fallback_reason=fallback_reason,
+        )
+
     @staticmethod
     def _should_force_cloud_for_photo_route(*, has_images: bool) -> bool:
         """
@@ -351,6 +410,13 @@ class DeliveryHelpersMixin:
                 text_preview=full_response[:80],
             )
             full_response = "🦀 Уже сказал близко по теме чуть выше."
+
+        # Wave 47-B: model footer — добавляем `📡 _<model>_` к ответу, чтобы
+        # пользователь видел какая модель ответила. Особенно важно для
+        # debugging fallback chain (codex quota → gemini → vertex). Skip для
+        # error/repetition/voice-placeholder responses (handled внутри
+        # `_append_model_footer`).
+        full_response = self._apply_model_footer(full_response)
 
         parts = self._split_message(f"🦀 {query}\n\n{full_response}" if is_self else full_response)
         delivered_ids: list[str] = []

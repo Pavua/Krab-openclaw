@@ -2554,13 +2554,20 @@ class OpenClawClient:
         model_manager: Any,
         current_model: str,
         has_photo: bool,
+        exclude: set[str] | None = None,
     ) -> str:
         """Возвращает облачный retry-кандидат (или пустую строку, если кандидата нет).
 
         ФИКС W16: при has_photo=True кандидат ОБЯЗАН поддерживать vision.
         CLI-провайдеры (codex-cli, gemini-cli, opencode) не умеют multimodal —
         возвращать их при photo-запросе значит гарантированно потерять вложение.
+
+        Wave 47-A: `exclude` — множество уже попробованных моделей (включая текущую).
+        Используется при последовательном продвижении по chain после non-quota
+        provider errors (HTTP 500 / provider_timeout / provider_error).
         """
+        excluded = {str(m or "").strip() for m in (exclude or set()) if m}
+        excluded.add(str(current_model or "").strip())
         runtime_chain: list[str] = []
         runtime_primary = str(get_runtime_primary_model() or "").strip()
         if runtime_primary:
@@ -2568,7 +2575,7 @@ class OpenClawClient:
         runtime_chain.extend(get_runtime_fallback_models())
         for candidate in runtime_chain:
             normalized = str(candidate or "").strip()
-            if not normalized or normalized == str(current_model or "").strip():
+            if not normalized or normalized in excluded:
                 continue
             # Если запрос с фото — пропускаем модели без vision-поддержки.
             if has_photo and not _supports_vision(normalized):
@@ -3236,12 +3243,21 @@ class OpenClawClient:
 
             tried_paid = False
             tried_cloud_auth_recovery = False
-            tried_cloud_quality_recovery = False
             tried_local = False
             tried_cloud_after_local = False
             tried_semantic_retry = False
             final_response = ""
             last_semantic: dict[str, str] | None = None
+            # Wave 47-A: накапливаем cloud-модели, которые уже отдали non-quota
+            # provider error (HTTP 500 / provider_timeout / provider_error).
+            # `_pick_cloud_retry_model` использует это как exclude, чтобы не
+            # возвращать ту же сломанную модель на следующей итерации.
+            chain_models_tried: set[str] = set()
+            # Wave 47-A: сколько раз уже advanced по chain после non-quota провайдер
+            # ошибок (HTTP 500 / provider_timeout). Не позволяем уйти за длину
+            # цепочки, чтобы не зациклить attempts.
+            chain_advance_count = 0
+            chain_advance_max = 6
 
             # Wave 22-A: CLI subprocess bypass для codex-cli/* и google-gemini-cli/*.
             # OpenClaw 2026.5.x regression затронул ВСЕ providers (не только google/*).
@@ -3366,7 +3382,11 @@ class OpenClawClient:
                 _av_bypass_enabled = lambda: False  # type: ignore  # noqa: E731
                 _is_av_model = lambda m: False  # type: ignore  # noqa: E731
 
-            for attempt in range(4):
+            # Wave 47-A: max attempts расширены с 4 до 8, чтобы покрыть всю
+            # production-цепочку (codex → gemini → vertex → vertex-flash →
+            # gemini-cli-2.5 → flash-preview → 2.5-flash = 7 моделей) при
+            # последовательных HTTP 500 / provider_timeout по каждой.
+            for attempt in range(8):
                 logger.info("openclaw_attempt", attempt=attempt + 1, model=attempt_model)
 
                 # Wave 18-E: вычисляем _has_photo_bypass явно (раньше был NameError в этом scope)
@@ -3892,6 +3912,12 @@ class OpenClawClient:
                 # 2.25) Cloud quality recovery:
                 # если облачный ответ пустой/битый/таймаутный — пробуем другой cloud-кандидат,
                 # не переключаясь в local.
+                #
+                # Wave 47-A: после первого retry продолжаем продвижение по chain
+                # пока есть свежие cloud-кандидаты (production: chain of 7 моделей).
+                # Раньше `tried_cloud_quality_recovery` был one-shot → после второй
+                # неудачи (gemini → vertex оба HTTP 500) loop срывался в local или
+                # cloud_unavailable, минуя оставшиеся 5 моделей.
                 if (
                     semantic["code"]
                     in {
@@ -3900,21 +3926,36 @@ class OpenClawClient:
                         "provider_timeout",
                         "provider_error",
                     }
-                    and not tried_cloud_quality_recovery
                     and not model_manager.is_local_model(attempt_model)
+                    and chain_advance_count < chain_advance_max
                 ):
-                    tried_cloud_quality_recovery = True
+                    chain_models_tried.add(str(attempt_model or "").strip())
                     cloud_retry = await self._pick_cloud_retry_model(
                         model_manager=model_manager,
                         current_model=attempt_model,
                         has_photo=has_photo,
+                        exclude=chain_models_tried,
                     )
                     if cloud_retry:
+                        chain_advance_count += 1
+                        # Wave 47-A: structured event — видно в логах какие
+                        # переходы делал Krab внутри request.
+                        logger.warning(
+                            "openclaw_chain_advancing",
+                            model_from=attempt_model,
+                            model_to=cloud_retry,
+                            reason=semantic["code"],
+                            attempt=attempt + 1,
+                            advance_count=chain_advance_count,
+                            tried_models=sorted(chain_models_tried),
+                        )
                         attempt_model = cloud_retry
                         self._cloud_tier_state["last_recovery_action"] = (
                             "switch_to_cloud_quality_retry"
                         )
                         continue
+                    # else: все cloud-кандидаты исчерпаны для chain advancement —
+                    # пойдём дальше (local recovery / cloud_unavailable error).
 
                 # 2.5) Фото пришло в локальную модель без vision add-on:
                 # исключаем текущую локальную модель для фото и уходим на альтернативу.
@@ -4114,9 +4155,21 @@ class OpenClawClient:
                 elif code == "gateway_unknown_error":
                     user_text = "⚠️ OpenClaw вернул неизвестную ошибку. Попробуй повторить запрос."
                 else:
-                    user_text = (
-                        "❌ Облачный сервис временно недоступен. Попробуй позже или !model local."
-                    )
+                    # Wave 47-A: если chain advance был активирован — message
+                    # явно сообщает сколько моделей попробовали, чтобы был
+                    # signal что fallback iteration сработала, но цепочка
+                    # целиком down.
+                    if chain_advance_count > 0:
+                        user_text = (
+                            "❌ Облачный сервис недоступен — попробовал "
+                            f"{chain_advance_count + 1} моделей в fallback chain. "
+                            "Попробуй позже или !model local."
+                        )
+                    else:
+                        user_text = (
+                            "❌ Облачный сервис временно недоступен. "
+                            "Попробуй позже или !model local."
+                        )
                 yield user_text
                 return
 
