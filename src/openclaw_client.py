@@ -3483,6 +3483,19 @@ class OpenClawClient:
                                                 "transition": _is_transition,
                                             },
                                         )
+                                        # Wave 51-A: prometheus counter.
+                                        try:
+                                            from .core.prometheus_metrics import (
+                                                record_model_fallback_engaged,
+                                            )
+
+                                            record_model_fallback_engaged(
+                                                from_model=attempt_model,
+                                                to_model=_expected_fb,
+                                                reason="quota",
+                                            )
+                                        except Exception:  # noqa: BLE001
+                                            pass
                                         # Wave 48-B: persist switch для !routes view
                                         try:
                                             from .integrations.route_switch_log import (
@@ -3966,6 +3979,29 @@ class OpenClawClient:
                             advance_count=chain_advance_count,
                             tried_models=sorted(chain_models_tried),
                         )
+                        # Wave 51-A: prometheus counter — chain advance также
+                        # является model_fallback_engaged event'ом.
+                        try:
+                            from .core.prometheus_metrics import (
+                                record_model_fallback_engaged,
+                                record_provider_timeout,
+                            )
+
+                            record_model_fallback_engaged(
+                                from_model=attempt_model,
+                                to_model=cloud_retry,
+                                reason=semantic["code"],
+                            )
+                            # Если причина provider_timeout — отдельный счётчик
+                            # с лейблом provider/model.
+                            if semantic["code"] == "provider_timeout":
+                                _prov = (str(attempt_model or "").split("/", 1) + [""])[0]
+                                record_provider_timeout(
+                                    provider=_prov,
+                                    model=str(attempt_model or "unknown"),
+                                )
+                        except Exception:  # noqa: BLE001
+                            pass
                         attempt_model = cloud_retry
                         self._cloud_tier_state["last_recovery_action"] = (
                             "switch_to_cloud_quality_retry"
@@ -4273,6 +4309,15 @@ class OpenClawClient:
                 error_code="provider_timeout",
                 force_cloud=effective_force_cloud,
             )
+            # Wave 51-A: prometheus counter — transport-level timeout.
+            try:
+                from .core.prometheus_metrics import record_provider_timeout
+
+                _m = str(attempt_model or selected_model or "unknown")
+                _prov = (_m.split("/", 1) + [""])[0]
+                record_provider_timeout(provider=_prov, model=_m)
+            except Exception:  # noqa: BLE001
+                pass
             yield "❌ Провайдер временно недоступен. Попробуй позже или переключись на !model local."
         except (httpx.ConnectError, httpx.RequestError) as exc:
             logger.error("openclaw_stream_connect_error", error=str(exc))

@@ -178,6 +178,13 @@ def mark_codex_disabled(*, fallback_model: str, kind: str = "weekly") -> bool:
         fallback_model=fallback_model,
         kind=kind,
     )
+    # Wave 51-A: prometheus counter — отслеживаем transition events.
+    try:
+        from src.core.prometheus_metrics import record_codex_disabled_transition
+
+        record_codex_disabled_transition(kind=kind)
+    except Exception:  # noqa: BLE001
+        pass
     return True
 
 

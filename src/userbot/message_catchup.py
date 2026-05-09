@@ -508,6 +508,13 @@ class MessageCatchupMixin:
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
+                # Wave 51-A: prometheus counter — alert при > 3/час.
+                try:
+                    from src.core.prometheus_metrics import record_startup_catchup_chat_failed
+
+                    record_startup_catchup_chat_failed(chat_id=chat_id)
+                except Exception:  # noqa: BLE001
+                    pass
                 per_chat_stats.append(
                     {
                         "chat_id": chat_id,

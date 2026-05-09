@@ -8799,7 +8799,7 @@ class WebApp:
                     for _mod in (
                         "src.core.proactive_watch",  # krab_error_digest_fired_total
                         "src.core.swarm_tool_allowlist",  # krab_swarm_tool_blocked_total
-                        "src.core.prometheus_metrics",  # memory retrieval + google bypass
+                        "src.core.prometheus_metrics",  # memory retrieval + google bypass + Wave 51-A
                         "src.core.auto_restart_policy",  # krab_auto_restart_attempts_total
                         "src.core.llm_latency_tracker",  # krab_llm_route_latency_seconds
                         "src.integrations.google_genai_direct",  # krab_google_direct_bypass_*

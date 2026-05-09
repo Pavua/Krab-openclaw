@@ -273,6 +273,136 @@ except Exception:  # noqa: BLE001 - prometheus_client optional
     _handler_invocations_total = None  # type: ignore[assignment]
 
 
+# === Wave 51-A: Prometheus exporters для Wave 44-V/47/48-A/49-F. ===
+# Wave 50-E добавил alert rules ссылающиеся на 5 счётчиков ниже —
+# но сами счётчики не экспортировались. Этот блок landit'ит экспортёры
+# и одновременно wires hot-path inc() в соответствующих модулях
+# (см. record_* helper'ы ниже). Все объекты опциональны: если
+# prometheus_client недоступен → None и helper'ы no-op.
+try:
+    from prometheus_client import Counter as _Counter4  # type: ignore[import-not-found]
+
+    # Wave 48-B: model fallback chain advance event.
+    # Лейблы: from_model, to_model, reason (quota / provider_timeout / lm_empty_stream / ...).
+    krab_model_fallback_engaged_total = _Counter4(
+        "krab_model_fallback_engaged_total",
+        "Number of model fallback events (route switched).",
+        ["from_model", "to_model", "reason"],
+    )
+    # Wave 47 / Wave 44-V: codex-cli quota exhaustion → fallback transition.
+    # kind ∈ {weekly, transient}.
+    krab_codex_disabled_transition_total = _Counter4(
+        "krab_codex_disabled_transition_total",
+        "Codex quota exhausted → switched to fallback model.",
+        ["kind"],
+    )
+    # Wave 48-A: per-chat startup catchup failure.
+    krab_startup_catchup_chat_failed_total = _Counter4(
+        "krab_startup_catchup_chat_failed_total",
+        "Startup catchup failures per chat.",
+        ["chat_id"],
+    )
+    # Wave 49-F: state snapshot copy/write failure.
+    # reason ∈ {copy_failed, list_entry_failed, restore_failed, ...}.
+    krab_state_snapshot_failed_total = _Counter4(
+        "krab_state_snapshot_failed_total",
+        "State snapshot failures (write/copy errors).",
+        ["reason"],
+    )
+    # Wave 47: provider semantic timeout (HTTP 500 / provider_timeout).
+    krab_provider_timeout_total = _Counter4(
+        "krab_provider_timeout_total",
+        "OpenClaw gateway provider timeouts (HTTP 500/timeout).",
+        ["provider", "model"],
+    )
+except Exception:  # noqa: BLE001 - prometheus_client optional
+    krab_model_fallback_engaged_total = None  # type: ignore[assignment]
+    krab_codex_disabled_transition_total = None  # type: ignore[assignment]
+    krab_startup_catchup_chat_failed_total = None  # type: ignore[assignment]
+    krab_state_snapshot_failed_total = None  # type: ignore[assignment]
+    krab_provider_timeout_total = None  # type: ignore[assignment]
+
+
+def record_model_fallback_engaged(*, from_model: str, to_model: str, reason: str) -> None:
+    """Инкремент krab_model_fallback_engaged_total.
+
+    Вызывается из openclaw_client при каждом переключении на fallback.
+    Fail-safe: никогда не бросает.
+    """
+    try:
+        if krab_model_fallback_engaged_total is None:
+            return
+        krab_model_fallback_engaged_total.labels(
+            from_model=(from_model or "unknown")[:80],
+            to_model=(to_model or "unknown")[:80],
+            reason=(reason or "unknown")[:40],
+        ).inc()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def record_codex_disabled_transition(*, kind: str) -> None:
+    """Инкремент krab_codex_disabled_transition_total.
+
+    Вызывается из codex_quota_state.mark_codex_disabled при первом
+    transition (idempotent — caller передаёт is_transition флаг).
+    """
+    try:
+        if krab_codex_disabled_transition_total is None:
+            return
+        krab_codex_disabled_transition_total.labels(
+            kind=(kind or "weekly")[:20],
+        ).inc()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def record_startup_catchup_chat_failed(*, chat_id: int | str) -> None:
+    """Инкремент krab_startup_catchup_chat_failed_total.
+
+    Вызывается из message_catchup при per-chat fail.
+    """
+    try:
+        if krab_startup_catchup_chat_failed_total is None:
+            return
+        krab_startup_catchup_chat_failed_total.labels(
+            chat_id=str(chat_id)[:30],
+        ).inc()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def record_state_snapshot_failed(*, reason: str) -> None:
+    """Инкремент krab_state_snapshot_failed_total.
+
+    Вызывается из state_snapshots при copy/restore failures.
+    """
+    try:
+        if krab_state_snapshot_failed_total is None:
+            return
+        krab_state_snapshot_failed_total.labels(
+            reason=(reason or "unknown")[:40],
+        ).inc()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def record_provider_timeout(*, provider: str, model: str) -> None:
+    """Инкремент krab_provider_timeout_total.
+
+    Вызывается из openclaw_client при semantic_code == 'provider_timeout'.
+    """
+    try:
+        if krab_provider_timeout_total is None:
+            return
+        krab_provider_timeout_total.labels(
+            provider=(provider or "unknown")[:40],
+            model=(model or "unknown")[:80],
+        ).inc()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def observe_handler_latency(
     handler_name: str,
     latency_sec: float,

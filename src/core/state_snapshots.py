@@ -134,6 +134,13 @@ class StateSnapshotManager:
                     error=str(exc),
                 )
                 skipped.append(filename)
+                # Wave 51-A: prometheus counter — critical alert при single failure.
+                try:
+                    from src.core.prometheus_metrics import record_state_snapshot_failed
+
+                    record_state_snapshot_failed(reason="copy_failed")
+                except Exception:  # noqa: BLE001
+                    pass
 
         result = {
             "timestamp": timestamp,
@@ -173,6 +180,13 @@ class StateSnapshotManager:
                     entry=entry.name,
                     error=str(exc),
                 )
+                # Wave 51-A: prometheus counter.
+                try:
+                    from src.core.prometheus_metrics import record_state_snapshot_failed
+
+                    record_state_snapshot_failed(reason="list_entry_failed")
+                except Exception:  # noqa: BLE001
+                    pass
                 continue
             rows.append(
                 {
@@ -241,6 +255,13 @@ class StateSnapshotManager:
                     error=str(exc),
                 )
                 skipped.append(filename)
+                # Wave 51-A: prometheus counter — restore failures critical.
+                try:
+                    from src.core.prometheus_metrics import record_state_snapshot_failed
+
+                    record_state_snapshot_failed(reason="restore_failed")
+                except Exception:  # noqa: BLE001
+                    pass
 
         result = {
             "timestamp": ts,
