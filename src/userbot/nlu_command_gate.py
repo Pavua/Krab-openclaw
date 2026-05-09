@@ -80,15 +80,49 @@ def is_enabled() -> bool:
 
 
 def _is_owner_dm(message: "Message", *, is_self: bool) -> bool:
-    """Owner DM: is_self=True (owner sent it) + private chat."""
-    if not is_self:
-        return False
+    """Owner DM: message от OWNER access-level + private chat.
+
+    Wave 44-O-nlu-fix (2026-05-09): первоначальная проверка `is_self=True`
+    была неверна. is_self=True означает "msg от самого Krab account'а
+    (yung_nagato)" — это случай когда Krab пишет себе/relay. Реальный
+    owner — это p0lrd, у которого AccessLevel.OWNER, а is_self=False.
+    Правильная проверка: from_user.id в OWNER allowlist (через
+    src.core.access_control.OWNER_USER_IDS) AND chat type private.
+    """
     try:
         from pyrogram import enums  # noqa: PLC0415
 
         chat = getattr(message, "chat", None)
         ctype = getattr(chat, "type", None)
-        return ctype in (enums.ChatType.PRIVATE, enums.ChatType.BOT)
+        if ctype not in (enums.ChatType.PRIVATE, enums.ChatType.BOT):
+            return False
+
+        # Owner check — is_self OR from_user is in OWNER allowlist.
+        if is_self:
+            return True
+
+        from_user = getattr(message, "from_user", None)
+        from_user_id = getattr(from_user, "id", None)
+        if from_user_id is None:
+            return False
+
+        # Try config.OWNER_USER_IDS. Fallback: 312322764 (p0lrd).
+        try:
+            from ..config import config as _config  # noqa: PLC0415
+
+            raw = list(getattr(_config, "OWNER_USER_IDS", []) or [])
+            # raw может содержать str/int, плюс username — берём только int IDs.
+            owner_ids: set[int] = set()
+            for item in raw:
+                try:
+                    owner_ids.add(int(item))
+                except (TypeError, ValueError):
+                    pass
+            if not owner_ids:
+                owner_ids = {312322764}
+        except Exception:  # noqa: BLE001
+            owner_ids = {312322764}
+        return int(from_user_id) in owner_ids
     except Exception:  # noqa: BLE001
         return False
 
