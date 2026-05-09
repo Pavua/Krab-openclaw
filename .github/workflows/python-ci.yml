@@ -1,0 +1,61 @@
+name: Python CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: python-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Install minimal deps for lint+unit subset
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            'ruff>=0.3.0' \
+            'pytest>=8.0.0' \
+            'pytest-asyncio>=0.23.5' \
+            'pytest-mock>=3.10.0' \
+            'pytest-timeout>=2.4.0' \
+            'pytest-xdist>=3.8.0' \
+            'pyrofork>=2.3.69' \
+            'httpx[socks]>=0.27.0' \
+            'structlog>=24.1.0' \
+            'python-dotenv>=1.0.0' \
+            'fastapi>=0.115.0' \
+            'mcp>=1.0.0' \
+            'sentry-sdk>=2.0.0' \
+            'psutil>=6.0.0'
+
+      - name: Ruff lint (src/)
+        run: ruff check src/
+
+      - name: Ruff format check (src/)
+        run: ruff format --check src/
+
+      - name: Pytest unit subset (Wave 44-Z + 45-* tests)
+        run: |
+          pytest -q --no-header \
+            tests/unit/test_mcp_tor_server.py \
+            tests/unit/test_openclaw_mcp_register.py \
+            tests/unit/test_agent_tools_wave45c.py \
+            tests/unit/test_inbox_proactive_janitor.py \
+            tests/unit/test_inbox_service.py \
+            tests/unit/test_krab_runtime_risk_audit.py
