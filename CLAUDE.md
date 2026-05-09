@@ -286,6 +286,49 @@ OPENCLAW_REASONING_EFFORT=medium
 
 ## Session highlights (последние)
 
+### Session 41 highlights (09.05.2026 — Waves 37 → 41-O, 6 commits, ~115 new tests)
+
+Branch `main`. Все изменения deployed в production через Stop+Start Krab.command.
+
+**Wave 37 (commit `ab4430f`)** — heartbeat + reply target + tech-metaphors:
+- 37-A: `_telegram_heartbeat_loop` graceful `_try_reconnect_pyrofork` на 1-st
+  fail (раньше threshold=3 / ~12 мин). Разделение `_last_telegram_event_ts`
+  vs новый `_last_heartbeat_ok_ts` — фикс split-brain detection.
+- 37-B: `_query_has_anaphora` (RU+EN) + `_resolve_reply_target` в
+  `delivery_helpers.py`. Plus anaphora hint в `build_segmented_prompt`.
+- 37-C: tech-metaphors restraint (SSH/OAuth/ports) в casual chats.
+
+**Wave 38 (commit `b92ec45`)** — `_inject_user_mention_link` для users без
+@username. Markdown `[name](tg://user?id=N)` rendered Pyrofork как clickable
+mention.
+
+**Wave 39 (commit `6bb5c41`)** — 4 sub-waves в parallel sub-agents:
+- 39-X: `_resolve_reply_target_from_output` парсит начало LLM ответа,
+  matches против referenced.from_user. Regression case 09.05 02:14 в YMB.
+- 39-A: `src/core/repetition_guard.py` — token Jaccard (0.6, 600s window).
+- 39-C: `_AUTO_SWEEP_KINDS` += `"owner_mention"`. **Verified live**:
+  `swept=5` на restart.
+- 39-D: `_last_seen_update_id` + `_probe_updates_flow_alive` — true
+  split-brain detection.
+
+**Wave 40 (commit `7dbfc4e`)**:
+- 40-S: `User-Agent: krab-mcp/1.0` + retry в Sentry MCP. **Verified**:
+  `krab_sentry_status` returns full data.
+- 40-T: ironic + compound mention patterns в `trigger_detector.py`.
+
+**Wave 41 (commit `bd78bcd`)** — LM Studio singleton httpx client lifecycle:
+`is_lm_studio_available` проверяет `client.is_closed` → fallback на per-call.
+
+**Wave 41-O (commit `5faad4d`)** — openclaw 500 → `logger.warning` (Sentry
+hygiene, eliminate ~50 events/день spam). 4xx остаются errors.
+
+**Параллелизация**: 6 sub-agents (sonnet) + 2 haiku (failed "prompt too
+long"). Sonnet 6/6, haiku 0/2 — context window haiku недостаточен.
+Empirical rule: sonnet — 200-300 word с TDD; haiku — < 100 word.
+
+**Tests added: ~115**. **Project separation guide**:
+`docs/PROJECT_SEPARATION_GUIDE.md` (commit `5805465`).
+
 ### Session 38 highlights (05.05.2026 — Waves 23-A/B/C, 24-A/B/C/D/E, 25-A/B/D/E/F, 26-A/B, 27-A, 28-A)
 - Vertex AI direct bypass (Gemini 8 моделей в global, Anthropic Claude pending quota)
 - CLI subprocess bypass для codex-cli/* + google-gemini-cli/* (Wave 22-A finally working после exec fix)
