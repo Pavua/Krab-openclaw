@@ -1,16 +1,23 @@
 # -*- coding: utf-8 -*-
-"""Wave 44-U: observability endpoints.
+"""Wave 44-U + 51-D: observability endpoints.
 
 GET /api/observability/runs?since=...&limit=...&status=...&chat_id=...&model=...
 GET /api/observability/run/<request_id>
+GET /api/observability/snapshots         (Wave 51-D — surfacing Wave 49-F)
+GET /api/observability/route-switches    (Wave 51-D — surfacing Wave 48-B)
 
-Читает `~/.openclaw/krab_runtime_state/runs_history.jsonl` и возвращает
-JSON для Owner panel /observability dashboard.
+Читает:
+- `~/.openclaw/krab_runtime_state/runs_history.jsonl`
+- `~/.openclaw/krab_runtime_state/snapshots/`
+- `~/.openclaw/krab_runtime_state/route_switches.jsonl`
+
+Все endpoints — read-only. Возвращают JSON для Owner panel /observability dashboard.
 """
 
 from __future__ import annotations
 
-from typing import Annotated
+import json
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -52,5 +59,77 @@ def build_observability_router(ctx: RouterContext) -> APIRouter:  # noqa: ARG001
         if not rec:
             raise HTTPException(status_code=404, detail="run_not_found")
         return {"ok": True, "run": rec}
+
+    # ── Wave 51-D: snapshots tab ─────────────────────────────────────────────
+    @router.get("/snapshots")
+    async def list_snapshots(
+        limit: Annotated[int, Query(ge=1, le=200)] = 24,
+    ) -> dict:
+        """Список последних snapshots (Wave 49-F).
+
+        Сортировка — reverse chronological (новые первыми). Каждая запись
+        содержит ``timestamp``, ``files_count``, ``total_size_kb``,
+        ``created_at`` (mtime), ``files`` (список .bak файлов).
+
+        Read-only: НЕ создаёт и НЕ удаляет snapshots — только показывает.
+        """
+        try:
+            from src.core.state_snapshots import StateSnapshotManager
+
+            manager = StateSnapshotManager()
+            rows = manager.list_snapshots()
+        except FileNotFoundError:
+            rows = []
+        except Exception:
+            # Если directory нет или I/O ошибка — пустой список (graceful).
+            rows = []
+
+        result: list[dict[str, Any]] = []
+        for row in rows[:limit]:
+            total_bytes = int(row.get("total_bytes", 0) or 0)
+            result.append(
+                {
+                    "timestamp": row.get("timestamp", ""),
+                    "path": row.get("path", ""),
+                    "files": row.get("files", []),
+                    "files_count": int(row.get("file_count", 0) or 0),
+                    "total_size_kb": round(total_bytes / 1024.0, 2),
+                    "total_bytes": total_bytes,
+                    "created_at": row.get("mtime", 0),
+                }
+            )
+        return {"ok": True, "count": len(result), "snapshots": result}
+
+    @router.get("/route-switches")
+    async def list_route_switches(
+        limit: Annotated[int, Query(ge=1, le=500)] = 50,
+    ) -> dict:
+        """Список последних route-switches (Wave 48-B).
+
+        Tail последние ``limit`` строк JSONL ring-buffer'а, malformed
+        строки тихо пропускаются.
+        """
+        from src.integrations.route_switch_log import LOG_FILE
+
+        entries: list[dict[str, Any]] = []
+        if LOG_FILE.exists():
+            try:
+                lines = LOG_FILE.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                lines = []
+            # Берём хвост и парсим, malformed пропускаем (graceful).
+            for raw in lines[-limit:]:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    parsed = json.loads(line)
+                    if isinstance(parsed, dict):
+                        entries.append(parsed)
+                except (ValueError, TypeError):
+                    continue
+        # Reverse chronological: новые первыми.
+        entries.reverse()
+        return {"ok": True, "count": len(entries), "switches": entries}
 
     return router
