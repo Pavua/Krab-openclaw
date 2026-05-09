@@ -148,11 +148,28 @@ def _is_gateway_ok(payload: dict) -> bool:
 
 
 def _resolve_openclaw_bin() -> str:
-    """Ищет бинарник OpenClaw в стандартном месте или в PATH."""
-    preferred = "/opt/homebrew/bin/openclaw"
-    if Path(preferred).exists():
-        return preferred
-    return str(shutil.which("openclaw") or "")
+    """Ищет бинарник OpenClaw в стандартных местах и только потом в PATH.
+
+    Почему не полагаемся только на PATH:
+    - LaunchAgent часто стартует с минимальным `/usr/bin:/bin:/usr/sbin:/sbin`;
+    - из-за этого watchdog видел `openclaw_bin_missing`, хотя CLI был установлен;
+    - список ниже оставляет поведение переносимым между Homebrew/Node/npm/pnpm установками.
+    """
+    candidates = [
+        os.getenv("OPENCLAW_BIN", ""),
+        "/opt/homebrew/bin/openclaw",
+        "/usr/local/bin/openclaw",
+        str(Path.home() / ".local" / "bin" / "openclaw"),
+    ]
+    path_candidate = shutil.which("openclaw")
+    if path_candidate:
+        candidates.append(path_candidate)
+
+    for candidate in candidates:
+        candidate = str(candidate or "").strip()
+        if candidate and Path(candidate).exists():
+            return candidate
+    return ""
 
 
 _last_gateway_restart_at: float = 0.0
@@ -194,41 +211,26 @@ def _try_restart_gateway() -> bool:
     except Exception:  # noqa: BLE001
         pass  # Шлюз реально мёртв, продолжаем рестарт
 
-    # Мягкая остановка
+    # Мягкий штатный рестарт через поддерживаемый OpenClaw CLI.
+    # Не используем `stop && start`: это хуже для доступа и запрещено как суррогат restart.
     try:
-        subprocess.run(
-            [openclaw_bin, "gateway", "stop"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=8,
+        result = subprocess.run(
+            [openclaw_bin, "gateway", "restart"],
+            cwd=str(PROJECT_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=30,
             check=False,
+            text=True,
+        )
+        log.info(
+            "restart_gateway_cli exit=%s output=%r",
+            result.returncode,
+            (result.stdout or "")[-500:],
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
-        log.warning("restart_gateway_stop_failed error=%s", exc)
-
-    # Жёсткая остановка оставшихся процессов
-    try:
-        subprocess.run(
-            ["pkill", "-f", "openclaw( |$).*gateway( |$)|openclaw-gateway"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-    except OSError as exc:
-        log.warning("restart_gateway_pkill_failed error=%s", exc)
-
-    time.sleep(1.0)  # Дать процессам умереть
-
-    # Запуск нового шлюза
-    with GATEWAY_LOG_PATH.open("ab") as stream:
-        proc = subprocess.Popen(  # noqa: S603
-            [openclaw_bin, "gateway", "run", "--port", "18789"],
-            cwd=str(PROJECT_ROOT),
-            stdout=stream,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-    log.info("restart_gateway_spawned pid=%s", proc.pid)
+        log.warning("restart_gateway_cli_failed error=%s", exc)
+        return False
 
     # Retry loop: ждём до GATEWAY_STARTUP_WAIT_SEC с ретраями каждые 2с
     deadline = time.time() + GATEWAY_STARTUP_WAIT_SEC
@@ -240,14 +242,14 @@ def _try_restart_gateway() -> bool:
             payload = _http_get(GATEWAY_HEALTH_URL, timeout=3.0)
             if _is_gateway_ok(payload):
                 log.info(
-                    "restart_gateway_ok pid=%s attempt=%d payload=%r",
-                    proc.pid, attempt, payload,
+                    "restart_gateway_ok attempt=%d payload=%r",
+                    attempt, payload,
                 )
                 return True
         except Exception as exc:  # noqa: BLE001
             log.debug("restart_gateway_probe attempt=%d error=%s", attempt, exc)
 
-    log.warning("restart_gateway_failed pid=%s attempts=%d", proc.pid, attempt)
+    log.warning("restart_gateway_failed attempts=%d", attempt)
     return False
 
 
