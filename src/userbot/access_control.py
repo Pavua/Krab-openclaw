@@ -293,6 +293,24 @@ class AccessControlMixin:
         if reply_first not in base:
             base = f"{base}\n\n{reply_first}".strip()
 
+        # Wave 37-C (P1-4): Tech-metaphors restraint в casual chats.
+        # Issue 2 из handoff (09.05.2026): Krab перегружал ответы IT-аналогиями
+        # ("SSH-сеанс в социализацию", "OAuth в гостеприимство", "Telegram-матрица
+        # цепляет reply", "коллективное подключение к kernel'у дружбы"). В
+        # неформальных групповых чатах это утомляет и звучит вычурно. Лёгкая
+        # ирония — да; навязчивые tech-аналогии в каждом ответе — нет.
+        tech_metaphors_restraint = (
+            "Стиль метафор: в неформальных/дружеских разговорах избегай навязчивых "
+            "технических аналогий. Не используй обязательные сравнения с SSH-сеансами, "
+            "OAuth, портами, kernel'ом, протоколами, handshake'ами, Telegram-матрицей "
+            "и подобной IT-образностью в каждом ответе. Лёгкая ирония, остроумие и "
+            "обычные жизненные сравнения приветствуются. Перед тем как использовать "
+            "техническую метафору — спроси себя: 'добавит ли эта аналогия смысл "
+            "именно здесь?' В большинстве casual ответов лучше без неё."
+        )
+        if tech_metaphors_restraint not in base:
+            base = f"{base}\n\n{tech_metaphors_restraint}".strip()
+
         # Chat persona drift suffix (Feature C, Bug 11 follow-up):
         # per-chat tone adaptation. Fail-open — любая ошибка не должна
         # сломать сборку system prompt.
