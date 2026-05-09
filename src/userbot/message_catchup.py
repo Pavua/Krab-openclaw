@@ -289,10 +289,36 @@ class MessageCatchupMixin:
         unseen = [m for m in history if (getattr(m, "id", 0) or 0) > last_seen_id]
         unseen.sort(key=lambda m: getattr(m, "id", 0) or 0)
 
+        # Wave 46-C: track max_id даже для self-messages, чтобы state не
+        # отставал и каждый restart не пытался reprocess их. Skip только
+        # фактический dispatch (_process_message).
         replayed = 0
+        skipped_self = 0
         max_id = last_seen_id
         for msg in unseen:
             mid = getattr(msg, "id", 0) or 0
+            # Wave 46-C: skip own outgoing — Krab's own send.
+            # Это критично: production bug 09.05 — catchup поднял Krab's own
+            # inbox listing message, NLU classifier сматчил "команд" substring
+            # и dispatched !swarm на самого себя.
+            # Strict ``is True`` check — Pyrogram Message.outgoing всегда bool.
+            # Это защищает от ложно-truthy значений (e.g. MagicMock в tests
+            # без явной установки атрибута).
+            outgoing_attr = getattr(msg, "outgoing", False)
+            is_outgoing = outgoing_attr is True
+            from_user = getattr(msg, "from_user", None)
+            is_self = False
+            if from_user is not None:
+                self_attr = getattr(from_user, "is_self", False)
+                is_self = self_attr is True
+            if is_outgoing or is_self:
+                # Track max_id даже для self — иначе persistent state
+                # никогда не отметит self-messages как seen и каждый restart
+                # будет re-iterate их в history.
+                if mid > max_id:
+                    max_id = mid
+                skipped_self += 1
+                continue
             try:
                 await self._process_message(msg)
                 replayed += 1
@@ -314,6 +340,7 @@ class MessageCatchupMixin:
             "startup_catchup_complete",
             chat_id=chat_id,
             caught_up=replayed,
+            skipped_self=skipped_self,
             history_size=len(history),
             last_seen_before=last_seen_id,
             last_seen_after=max_id,
