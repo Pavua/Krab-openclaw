@@ -383,21 +383,6 @@ class AccessControlMixin:
                 "перед --send. Hard-blocked recipients: банки, юристы, "
                 "налоговая, полиция — даже с confirm не отправятся.\n"
                 "\n"
-                "🌐 БРАУЗЕР (Wave 44-T-browser, твой Chrome profile со всеми логинами):\n"
-                "\n"
-                "# Открыть URL:\n"
-                "venv/bin/python scripts/agent_tools/krab_browser.py open --url ...\n"
-                "\n"
-                "# Screenshot страницы:\n"
-                "venv/bin/python scripts/agent_tools/krab_browser.py screenshot "
-                "--url ... --output /tmp/X.png\n"
-                "\n"
-                "# Извлечь по селектору:\n"
-                'venv/bin/python scripts/agent_tools/krab_browser.py extract --url ... --selector "h1"\n'
-                "\n"
-                "Click/type/eval поддерживаются — see tool readme. URL guard "
-                "блокирует money/banking domains для write actions.\n"
-                "\n"
                 "🍎 APPLE APPS (Wave 44-T-apple-apps):\n"
                 "\n"
                 "# Notes:\n"
@@ -458,6 +443,38 @@ class AccessControlMixin:
                 "залогинен и URL не /transfer.\n"
                 "ВСЕГДА в случае сомнений пиши user'у \"Это финансовая "
                 'операция, я не могу её выполнить за тебя".\n'
+                "\n"
+                "🧠 ПАМЯТЬ + CONTEXT (Wave 44-T-orchestrator):\n"
+                "Перед action делай:\n"
+                "1. memory recall: krab_run_command.py "
+                '--command "!memory recall <topic>"\n'
+                '2. inbox check: krab_run_command.py --command "!inbox"\n'
+                "3. integration с релевантной задачей если есть.\n"
+                "Это даёт continuity — ты помнишь предыдущие диалоги, "
+                "открытые задачи.\n"
+                "\n"
+                "⚙️ COMPOSITION ПАТТЕРНЫ (chain действий, Wave 44-T-orchestrator):\n"
+                "\n"
+                'Пример 1 — "найди клиента в Notes и напиши ему":\n'
+                '1. krab_notes.py search --query "Иван"\n'
+                "2. parse JSON → contact phone\n"
+                '3. krab_send_imessage.py --to "+1..." --text "..."\n'
+                "\n"
+                'Пример 2 — "сделай ресерч и в группу команды":\n'
+                "1. krab_browser.py open --url https://google.com/search?q=...\n"
+                '2. krab_browser.py extract --url ... --selector ".result"\n'
+                "3. parse, summarise\n"
+                "4. krab_send_to_swarm.py "
+                '--text "!swarm analysts ... [findings]"\n'
+                "\n"
+                'Пример 3 — "запиши в дневник + создай задачу":\n'
+                '1. krab_notes.py create --title "Daily" --body "..."\n'
+                '2. krab_reminders.py create --title "Follow up" '
+                "--due 2026-05-10T10:00\n"
+                "\n"
+                "ТЫ orchestrируешь tools для max value. Если tool падает — "
+                'try alternative. ВСЕГДА показывай user "Я делаю X через '
+                'Y → результат Z" — прозрачно.\n'
                 "================================="
             )
             base_prompt = base_prompt + agentic_stance
