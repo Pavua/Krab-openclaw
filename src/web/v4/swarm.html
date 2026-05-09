@@ -6,6 +6,7 @@
     <title>Swarm Control | Krab AI</title>
     <link rel="stylesheet" href="/v4/liquid-glass.css">
     <script src="/v4/theme-toggle.js" defer></script>
+    <script src="/v4/i18n.js" defer></script>
     <style>
         .page-content {
             max-width: 1200px;
@@ -209,16 +210,16 @@
     <nav class="glass-nav">
         <div class="nav-logo">Krab AI</div>
         <div class="nav-links">
-            <a href="/v4/" class="nav-link">Hub</a>
-            <a href="/v4/chat" class="nav-link">Chat</a>
-            <a href="/costs" class="nav-link">Costs</a>
-            <a href="/inbox" class="nav-link">Inbox</a>
-            <a href="/swarm" class="nav-link active">Swarm</a>
-            <a href="/translator" class="nav-link">Translator</a>
-            <a href="/ops" class="nav-link">Ops</a>
-            <a href="/v4/research" class="nav-link">Research</a>
-            <a href="/settings" class="nav-link">Settings</a>
-            <a href="/commands" class="nav-link">Commands</a>
+            <a href="/v4/" class="nav-link" data-i18n="nav.hub">Hub</a>
+            <a href="/v4/chat" class="nav-link" data-i18n="nav.chat">Chat</a>
+            <a href="/costs" class="nav-link" data-i18n="nav.costs">Costs</a>
+            <a href="/inbox" class="nav-link" data-i18n="nav.inbox">Inbox</a>
+            <a href="/swarm" class="nav-link active" data-i18n="nav.swarm">Swarm</a>
+            <a href="/translator" class="nav-link" data-i18n="nav.translator">Translator</a>
+            <a href="/ops" class="nav-link" data-i18n="nav.ops">Ops</a>
+            <a href="/v4/research" class="nav-link" data-i18n="nav.research">Research</a>
+            <a href="/settings" class="nav-link" data-i18n="nav.settings">Settings</a>
+            <a href="/commands" class="nav-link" data-i18n="nav.commands">Commands</a>
             <div class="nav-bell-wrapper">
                 <a href="/inbox" class="nav-bell" title="Notifications">
                     <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -234,23 +235,23 @@
     <div class="glass-tab-bar">
         <a href="/v4/" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-            Hub
+            <span data-i18n="nav.hub">Hub</span>
         </a>
         <a href="/v4/chat" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            Chat
+            <span data-i18n="nav.chat">Chat</span>
         </a>
         <a href="/costs" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-            Costs
+            <span data-i18n="nav.costs">Costs</span>
         </a>
         <a href="/swarm" class="tab-item active">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-            Swarm
+            <span data-i18n="nav.swarm">Swarm</span>
         </a>
         <a href="/translator" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>
-            Trans
+            <span data-i18n="nav.trans_short">Trans</span>
         </a>
     </div>
 
@@ -259,8 +260,8 @@
     <div class="page-content">
 
         <div class="page-header">
-            <h1>Swarm Control <span id="status-dot" class="status-dot warning"></span></h1>
-            <span class="last-updated" id="last-updated">Loading...</span>
+            <h1><span data-i18n="swarm.title">Swarm Control</span> <span id="status-dot" class="status-dot warning"></span></h1>
+            <span class="last-updated" id="last-updated" data-i18n="common.loading">Loading...</span>
         </div>
 
         <div class="stats-grid">
@@ -268,75 +269,75 @@
                 <div class="stat-value" style="color:var(--accent-yellow);" id="stat-pending">
                     <div class="skeleton" style="width:3rem;height:2rem;margin:0 auto;"></div>
                 </div>
-                <div class="stat-label">Pending</div>
+                <div class="stat-label" data-i18n="swarm.stat_pending">Pending</div>
                 <svg class="sparkline-container sparkline" id="spark-pending" viewBox="0 0 60 20"></svg>
             </div>
             <div class="glass-card stat-card">
                 <div class="stat-value" style="color:var(--accent-purple);" id="stat-in_progress">
                     <div class="skeleton" style="width:3rem;height:2rem;margin:0 auto;"></div>
                 </div>
-                <div class="stat-label">In Progress</div>
+                <div class="stat-label" data-i18n="swarm.stat_in_progress">In Progress</div>
                 <svg class="sparkline-container sparkline" id="spark-in_progress" viewBox="0 0 60 20"></svg>
             </div>
             <div class="glass-card stat-card">
                 <div class="stat-value text-success" id="stat-done">
                     <div class="skeleton" style="width:3rem;height:2rem;margin:0 auto;"></div>
                 </div>
-                <div class="stat-label">Done</div>
+                <div class="stat-label" data-i18n="swarm.stat_done">Done</div>
                 <svg class="sparkline-container sparkline" id="spark-done" viewBox="0 0 60 20"></svg>
             </div>
             <div class="glass-card stat-card">
                 <div class="stat-value text-error" id="stat-failed">
                     <div class="skeleton" style="width:3rem;height:2rem;margin:0 auto;"></div>
                 </div>
-                <div class="stat-label">Failed</div>
+                <div class="stat-label" data-i18n="swarm.stat_failed">Failed</div>
                 <svg class="sparkline-container sparkline" id="spark-failed" viewBox="0 0 60 20"></svg>
             </div>
         </div>
 
         <div class="team-row">
-            <span class="text-xs text-muted">By team:</span>
-            <span class="team-badge" id="badge-traders" data-tooltip="Loading...">Traders <span class="team-count" id="team-traders">-</span></span>
-            <span class="team-badge" id="badge-coders" data-tooltip="Loading...">Coders <span class="team-count" id="team-coders">-</span></span>
-            <span class="team-badge" id="badge-analysts" data-tooltip="Loading...">Analysts <span class="team-count" id="team-analysts">-</span></span>
-            <span class="team-badge" id="badge-creative" data-tooltip="Loading...">Creative <span class="team-count" id="team-creative">-</span></span>
+            <span class="text-xs text-muted" data-i18n="swarm.by_team">By team:</span>
+            <span class="team-badge" id="badge-traders" data-tooltip="Loading..."><span data-i18n="swarm.team_traders_label">Traders</span> <span class="team-count" id="team-traders">-</span></span>
+            <span class="team-badge" id="badge-coders" data-tooltip="Loading..."><span data-i18n="swarm.team_coders_label">Coders</span> <span class="team-count" id="team-coders">-</span></span>
+            <span class="team-badge" id="badge-analysts" data-tooltip="Loading..."><span data-i18n="swarm.team_analysts_label">Analysts</span> <span class="team-count" id="team-analysts">-</span></span>
+            <span class="team-badge" id="badge-creative" data-tooltip="Loading..."><span data-i18n="swarm.team_creative_label">Creative</span> <span class="team-count" id="team-creative">-</span></span>
         </div>
 
         <div class="tabs-header">
-            <button class="tab-btn active" onclick="switchTab('tasks',this)">Tasks</button>
-            <button class="tab-btn" onclick="switchTab('create',this)">Create</button>
-            <button class="tab-btn" onclick="switchTab('artifacts',this)">Artifacts</button>
-            <button class="tab-btn" onclick="switchTab('listeners',this)">Listeners</button>
+            <button class="tab-btn active" onclick="switchTab('tasks',this)" data-i18n="swarm.tab_tasks">Tasks</button>
+            <button class="tab-btn" onclick="switchTab('create',this)" data-i18n="swarm.tab_create">Create</button>
+            <button class="tab-btn" onclick="switchTab('artifacts',this)" data-i18n="swarm.tab_artifacts">Artifacts</button>
+            <button class="tab-btn" onclick="switchTab('listeners',this)" data-i18n="swarm.tab_listeners">Listeners</button>
         </div>
 
         <div id="pane-tasks" class="tab-pane active">
             <div class="filter-row">
                 <div class="filter-group-wrap">
-                    <label for="team-filter">Team:</label>
+                    <label for="team-filter" data-i18n="swarm.filter_team">Team:</label>
                     <select id="team-filter" class="glass-input" style="max-width:180px; padding: 0.3rem 0.8rem; font-size: 0.8rem;" onchange="filterTasks()">
-                        <option value="">All Teams</option>
-                        <option value="traders">Traders</option>
-                        <option value="coders">Coders</option>
-                        <option value="analysts">Analysts</option>
-                        <option value="creative">Creative</option>
+                        <option value="" data-i18n="swarm.filter_all_teams">All Teams</option>
+                        <option value="traders" data-i18n="swarm.team_traders_label">Traders</option>
+                        <option value="coders" data-i18n="swarm.team_coders_label">Coders</option>
+                        <option value="analysts" data-i18n="swarm.team_analysts_label">Analysts</option>
+                        <option value="creative" data-i18n="swarm.team_creative_label">Creative</option>
                     </select>
                 </div>
                 <div class="filter-group-wrap">
-                    <label>Priority:</label>
+                    <label data-i18n="swarm.filter_priority">Priority:</label>
                     <div class="filter-group">
-                        <button class="filter-pill p-pill active" onclick="setFilter('priority', 'all', this)">All</button>
-                        <button class="filter-pill p-pill" onclick="setFilter('priority', 'critical', this)">Critical</button>
-                        <button class="filter-pill p-pill" onclick="setFilter('priority', 'high', this)">High</button>
-                        <button class="filter-pill p-pill" onclick="setFilter('priority', 'medium', this)">Medium</button>
-                        <button class="filter-pill p-pill" onclick="setFilter('priority', 'low', this)">Low</button>
+                        <button class="filter-pill p-pill active" onclick="setFilter('priority', 'all', this)" data-i18n="swarm.filter_all">All</button>
+                        <button class="filter-pill p-pill" onclick="setFilter('priority', 'critical', this)" data-i18n="swarm.priority_critical">Critical</button>
+                        <button class="filter-pill p-pill" onclick="setFilter('priority', 'high', this)" data-i18n="swarm.priority_high">High</button>
+                        <button class="filter-pill p-pill" onclick="setFilter('priority', 'medium', this)" data-i18n="swarm.priority_medium">Medium</button>
+                        <button class="filter-pill p-pill" onclick="setFilter('priority', 'low', this)" data-i18n="swarm.priority_low">Low</button>
                     </div>
                 </div>
                 <div class="filter-group-wrap">
-                    <label>Date:</label>
+                    <label data-i18n="swarm.filter_date">Date:</label>
                     <div class="filter-group">
-                        <button class="filter-pill d-pill active" onclick="setFilter('date', 'all', this)">All</button>
-                        <button class="filter-pill d-pill" onclick="setFilter('date', 'today', this)">Today</button>
-                        <button class="filter-pill d-pill" onclick="setFilter('date', 'week', this)">This week</button>
+                        <button class="filter-pill d-pill active" onclick="setFilter('date', 'all', this)" data-i18n="swarm.filter_all">All</button>
+                        <button class="filter-pill d-pill" onclick="setFilter('date', 'today', this)" data-i18n="swarm.filter_today">Today</button>
+                        <button class="filter-pill d-pill" onclick="setFilter('date', 'week', this)" data-i18n="swarm.filter_week">This week</button>
                     </div>
                 </div>
             </div>
@@ -345,16 +346,16 @@
                     <table class="task-table">
                         <thead>
                             <tr>
-                                <th>Team</th>
-                                <th>Title</th>
-                                <th>Status</th>
-                                <th>Priority</th>
-                                <th>Time</th>
-                                <th style="text-align: right;">Actions</th>
+                                <th data-i18n="swarm.col_team">Team</th>
+                                <th data-i18n="swarm.col_title">Title</th>
+                                <th data-i18n="swarm.col_status">Status</th>
+                                <th data-i18n="swarm.col_priority">Priority</th>
+                                <th data-i18n="swarm.col_time">Time</th>
+                                <th style="text-align: right;" data-i18n="swarm.col_actions">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="task-tbody">
-                            <tr><td colspan="6" class="empty-state">Loading tasks...</td></tr>
+                            <tr><td colspan="6" class="empty-state" data-i18n="swarm.loading_tasks">Loading tasks...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -363,32 +364,32 @@
 
         <div id="pane-create" class="tab-pane">
             <div class="glass-card create-form">
-                <h2 style="margin-bottom:1.5rem;">Deploy New Task</h2>
+                <h2 style="margin-bottom:1.5rem;" data-i18n="swarm.deploy_new_task">Deploy New Task</h2>
                 <div id="c-msg" class="form-message"></div>
                 <form id="create-form" onsubmit="submitCreateTask(event, 'c-')">
                     <div class="form-group">
-                        <label>Team</label>
+                        <label data-i18n="swarm.form_team">Team</label>
                         <select id="c-team" class="glass-input">
-                            <option value="traders">Traders</option>
-                            <option value="coders">Coders</option>
-                            <option value="analysts">Analysts</option>
-                            <option value="creative">Creative</option>
+                            <option value="traders" data-i18n="swarm.team_traders_label">Traders</option>
+                            <option value="coders" data-i18n="swarm.team_coders_label">Coders</option>
+                            <option value="analysts" data-i18n="swarm.team_analysts_label">Analysts</option>
+                            <option value="creative" data-i18n="swarm.team_creative_label">Creative</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Title</label>
-                        <input type="text" id="c-title" class="glass-input" placeholder="Task description..." required>
+                        <label data-i18n="swarm.form_title">Title</label>
+                        <input type="text" id="c-title" class="glass-input" placeholder="Task description..." data-i18n-placeholder="swarm.form_title_placeholder" required>
                     </div>
                     <div class="form-group">
-                        <label>Priority</label>
+                        <label data-i18n="swarm.form_priority">Priority</label>
                         <select id="c-priority" class="glass-input">
-                            <option value="low">Low</option>
-                            <option value="medium" selected>Medium</option>
-                            <option value="high">High</option>
-                            <option value="critical">Critical</option>
+                            <option value="low" data-i18n="swarm.priority_low">Low</option>
+                            <option value="medium" selected data-i18n="swarm.priority_medium">Medium</option>
+                            <option value="high" data-i18n="swarm.priority_high">High</option>
+                            <option value="critical" data-i18n="swarm.priority_critical">Critical</option>
                         </select>
                     </div>
-                    <button type="submit" class="glass-button glass-button-primary" id="c-submit" style="width:100%;">Deploy Task</button>
+                    <button type="submit" class="glass-button glass-button-primary" id="c-submit" style="width:100%;" data-i18n="swarm.btn_deploy">Deploy Task</button>
                 </form>
             </div>
         </div>
@@ -403,18 +404,18 @@
 
         <div id="pane-listeners" class="tab-pane">
             <div class="glass-card listeners-card" style="margin:0 auto;">
-                <div class="text-muted text-sm">Agent Listener Network</div>
+                <div class="text-muted text-sm" data-i18n="swarm.listeners_title">Agent Listener Network</div>
                 <div class="listener-state off" id="listener-state-text">-</div>
-                <p class="listener-desc" id="listener-desc">Loading current state...</p>
+                <p class="listener-desc" id="listener-desc" data-i18n="swarm.listeners_loading">Loading current state...</p>
                 <button class="glass-button glass-button-primary" id="btn-toggle-listeners"
-                    onclick="toggleListeners()" style="min-width:160px;">Toggle</button>
+                    onclick="toggleListeners()" style="min-width:160px;" data-i18n="swarm.btn_toggle">Toggle</button>
             </div>
         </div>
 
     </div>
 
     <!-- FAB -->
-    <button id="task-fab" class="fab-button" onclick="openModal()" title="Quick Create Task">
+    <button id="task-fab" class="fab-button" onclick="openModal()" title="Quick Create Task" data-i18n-title="swarm.fab_tip">
         <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path>
         </svg>
@@ -426,36 +427,39 @@
             <button class="modal-close" onclick="closeModal()">
                 <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path></svg>
             </button>
-            <h3 style="margin-top:0; margin-bottom:1.5rem;">Quick Task</h3>
+            <h3 style="margin-top:0; margin-bottom:1.5rem;" data-i18n="swarm.quick_task">Quick Task</h3>
             <form id="modal-form" onsubmit="submitCreateTask(event, 'm-')">
                 <div class="form-group">
-                    <label>Team</label>
+                    <label data-i18n="swarm.form_team">Team</label>
                     <select id="m-team" class="glass-input">
-                        <option value="traders">Traders</option>
-                        <option value="coders">Coders</option>
-                        <option value="analysts">Analysts</option>
-                        <option value="creative">Creative</option>
+                        <option value="traders" data-i18n="swarm.team_traders_label">Traders</option>
+                        <option value="coders" data-i18n="swarm.team_coders_label">Coders</option>
+                        <option value="analysts" data-i18n="swarm.team_analysts_label">Analysts</option>
+                        <option value="creative" data-i18n="swarm.team_creative_label">Creative</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Title</label>
-                    <input type="text" id="m-title" class="glass-input" placeholder="Task description..." required>
+                    <label data-i18n="swarm.form_title">Title</label>
+                    <input type="text" id="m-title" class="glass-input" placeholder="Task description..." data-i18n-placeholder="swarm.form_title_placeholder" required>
                 </div>
                 <div class="form-group">
-                    <label>Priority</label>
+                    <label data-i18n="swarm.form_priority">Priority</label>
                     <select id="m-priority" class="glass-input">
-                        <option value="low">Low</option>
-                        <option value="medium" selected>Medium</option>
-                        <option value="high">High</option>
-                        <option value="critical">Critical</option>
+                        <option value="low" data-i18n="swarm.priority_low">Low</option>
+                        <option value="medium" selected data-i18n="swarm.priority_medium">Medium</option>
+                        <option value="high" data-i18n="swarm.priority_high">High</option>
+                        <option value="critical" data-i18n="swarm.priority_critical">Critical</option>
                     </select>
                 </div>
-                <button type="submit" class="glass-button glass-button-primary" id="m-submit" style="width:100%; margin-top:0.5rem;">Deploy Task</button>
+                <button type="submit" class="glass-button glass-button-primary" id="m-submit" style="width:100%; margin-top:0.5rem;" data-i18n="swarm.btn_deploy">Deploy Task</button>
             </form>
         </div>
     </div>
 
     <script>
+        function tt(key) {
+            return (window.t || function(k){ return k; })(key);
+        }
         var allTasks = [];
         var listenersEnabled = false;
         var evtSource = null;
@@ -550,7 +554,7 @@
                     }
                 });
                 var el = document.getElementById('badge-' + team);
-                if(el) el.setAttribute('data-tooltip', 'Pending: '+p+' | In Progress: '+i+' | Done: '+d+' | Failed: '+f);
+                if(el) el.setAttribute('data-tooltip', tt('swarm.stat_pending')+': '+p+' | '+tt('swarm.stat_in_progress')+': '+i+' | '+tt('swarm.stat_done')+': '+d+' | '+tt('swarm.stat_failed')+': '+f);
             });
         }
 
@@ -602,7 +606,12 @@
             } catch(e) {
                 console.error('tasks fetch failed', e);
                 var tbody = document.getElementById('task-tbody');
-                tbody.innerHTML = '<tr><td colspan="6" class="empty-state text-error">Failed to load tasks</td></tr>';
+                tbody.innerHTML = '';
+                var trErr = document.createElement('tr');
+                var tdErr = document.createElement('td');
+                tdErr.colSpan = 6; tdErr.className = 'empty-state text-error';
+                tdErr.textContent = tt('swarm.failed_load_tasks');
+                trErr.appendChild(tdErr); tbody.appendChild(trErr);
             }
         }
 
@@ -629,7 +638,11 @@
             var tbody = document.getElementById('task-tbody');
             tbody.innerHTML = '';
             if (!tasks.length) {
-                tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No tasks found matching criteria</td></tr>';
+                var trEmpty = document.createElement('tr');
+                var tdEmpty = document.createElement('td');
+                tdEmpty.colSpan = 6; tdEmpty.className = 'empty-state';
+                tdEmpty.textContent = tt('swarm.no_tasks_found');
+                trEmpty.appendChild(tdEmpty); tbody.appendChild(trEmpty);
                 return;
             }
             tasks.forEach(function(t) {
@@ -646,13 +659,19 @@
                 var tdStatus = document.createElement('td');
                 var spStatus = document.createElement('span');
                 spStatus.className = 'pill pill-' + (t.status || '');
-                spStatus.textContent = (t.status || '').replace('_', ' ');
+                var statusKey = t.status ? ('swarm.status_' + t.status) : '';
+                var statusLabel = statusKey ? tt(statusKey) : '';
+                if (!statusLabel || statusLabel === statusKey) statusLabel = (t.status || '').replace('_', ' ');
+                spStatus.textContent = statusLabel;
                 tdStatus.appendChild(spStatus);
 
                 var tdPriority = document.createElement('td');
                 var spPriority = document.createElement('span');
                 spPriority.className = 'pill pill-' + (t.priority || '');
-                spPriority.textContent = t.priority || '';
+                var prioKey = t.priority ? ('swarm.priority_' + t.priority) : '';
+                var prioLabel = prioKey ? tt(prioKey) : '';
+                if (!prioLabel || prioLabel === prioKey) prioLabel = t.priority || '';
+                spPriority.textContent = prioLabel;
                 tdPriority.appendChild(spPriority);
 
                 var tdTime = document.createElement('td');
@@ -666,10 +685,10 @@
                 var tid = t.id || t.task_id; // fallback
                 if (tid) {
                     if (t.status === 'pending' || t.status === 'in_progress') {
-                        actHtml += '<button class="action-btn action-done" onclick="updateTaskStatus(\''+tid+'\', \'done\')" title="Mark Done"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg></button>';
-                        actHtml += '<button class="action-btn action-fail" onclick="updateTaskStatus(\''+tid+'\', \'failed\')" title="Mark Failed"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>';
+                        actHtml += '<button class="action-btn action-done" onclick="updateTaskStatus(\''+tid+'\', \'done\')" title="'+tt('swarm.action_mark_done')+'"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg></button>';
+                        actHtml += '<button class="action-btn action-fail" onclick="updateTaskStatus(\''+tid+'\', \'failed\')" title="'+tt('swarm.action_mark_failed')+'"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>';
                     }
-                    actHtml += '<button class="action-btn action-del" onclick="deleteTask(\''+tid+'\')" title="Delete"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button>';
+                    actHtml += '<button class="action-btn action-del" onclick="deleteTask(\''+tid+'\')" title="'+tt('swarm.action_delete')+'"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button>';
                 }
                 tdActions.innerHTML = actHtml;
 
@@ -695,7 +714,7 @@
         }
 
         async function deleteTask(id) {
-            if(!confirm('Delete this task?')) return;
+            if(!confirm(tt('swarm.confirm_delete'))) return;
             try {
                 await fetch('/api/swarm/task/' + id, { method: 'DELETE' });
                 fetchAll();
@@ -711,7 +730,11 @@
                 renderArtifacts(data.artifacts || []);
             } catch(e) {
                 var c = document.getElementById('artifacts-container');
-                c.innerHTML = '<div class="empty-state text-error">Failed to load artifacts</div>';
+                c.innerHTML = '';
+                var dErr = document.createElement('div');
+                dErr.className = 'empty-state text-error';
+                dErr.textContent = tt('swarm.failed_load_artifacts');
+                c.appendChild(dErr);
             }
         }
 
@@ -719,7 +742,10 @@
             var container = document.getElementById('artifacts-container');
             container.innerHTML = '';
             if (!artifacts.length) {
-                container.innerHTML = '<div class="empty-state">No artifacts yet</div>';
+                var dEmpty = document.createElement('div');
+                dEmpty.className = 'empty-state';
+                dEmpty.textContent = tt('swarm.no_artifacts');
+                container.appendChild(dEmpty);
                 return;
             }
             artifacts.forEach(function(a, i) {
@@ -736,7 +762,7 @@
                 topicEl.textContent = a.topic || '';
                 var hint = document.createElement('div');
                 hint.className = 'artifact-expand-hint';
-                hint.textContent = 'Click to expand';
+                hint.textContent = tt('swarm.click_to_expand');
                 topicDiv.appendChild(topicEl);
                 topicDiv.appendChild(hint);
 
@@ -766,7 +792,7 @@
                 listenersEnabled = data.listeners_enabled;
                 renderListeners(listenersEnabled);
             } catch(e) {
-                document.getElementById('listener-desc').textContent = 'Failed to load listener state';
+                document.getElementById('listener-desc').textContent = tt('swarm.listeners_failed_load');
             }
         }
 
@@ -775,27 +801,27 @@
             var descEl  = document.getElementById('listener-desc');
             var btnEl   = document.getElementById('btn-toggle-listeners');
             if (enabled) {
-                stateEl.textContent = 'ON';
+                stateEl.textContent = tt('swarm.state_on');
                 stateEl.className   = 'listener-state on';
-                descEl.textContent  = 'All swarm team agents are listening for tasks.';
-                btnEl.textContent   = 'Turn OFF';
+                descEl.textContent  = tt('swarm.listeners_on_desc');
+                btnEl.textContent   = tt('swarm.btn_turn_off');
             } else {
-                stateEl.textContent = 'OFF';
+                stateEl.textContent = tt('swarm.state_off');
                 stateEl.className   = 'listener-state off';
-                descEl.textContent  = 'Swarm agents are paused - no DM commands processed.';
-                btnEl.textContent   = 'Turn ON';
+                descEl.textContent  = tt('swarm.listeners_off_desc');
+                btnEl.textContent   = tt('swarm.btn_turn_on');
             }
         }
 
         async function toggleListeners() {
             var btn = document.getElementById('btn-toggle-listeners');
-            btn.disabled = true; btn.textContent = 'Toggling...';
+            btn.disabled = true; btn.textContent = tt('swarm.btn_toggling');
             try {
                 var r = await fetch('/api/swarm/listeners/toggle', { method: 'POST', body: '{}' });
                 if (!r.ok) throw new Error('toggle failed');
                 await fetchListeners();
             } catch(e) {
-                btn.textContent = 'Error - retry';
+                btn.textContent = tt('swarm.btn_error_retry');
             } finally {
                 btn.disabled = false;
             }
@@ -810,7 +836,7 @@
             var priority = document.getElementById(prefix + 'priority').value;
             if (!title) return;
 
-            btn.disabled = true; btn.textContent = 'Deploying...';
+            btn.disabled = true; btn.textContent = tt('swarm.btn_deploying');
 
             try {
                 var r = await fetch('/api/swarm/tasks/create', {
@@ -822,26 +848,26 @@
                 if (!data.ok) throw new Error(data.error || 'API error');
                 
                 if (prefix === 'm-') {
-                    showToast('Task created: ' + (data.task_id || 'OK'));
+                    showToast(tt('swarm.toast_task_created') + ': ' + (data.task_id || 'OK'));
                     closeModal();
                     document.getElementById('modal-form').reset();
                 } else {
                     var msg = document.getElementById('c-msg');
                     msg.className = 'form-message success';
-                    msg.textContent = 'Task created: ' + (data.task_id || 'OK');
+                    msg.textContent = tt('swarm.toast_task_created') + ': ' + (data.task_id || 'OK');
                     document.getElementById('create-form').reset();
                 }
                 fetchAll();
             } catch(err) {
                 if (prefix === 'm-') {
-                    alert('Failed: ' + err.message);
+                    alert(tt('swarm.toast_failed') + ': ' + err.message);
                 } else {
                     var msg = document.getElementById('c-msg');
                     msg.className = 'form-message error';
-                    msg.textContent = 'Failed: ' + err.message;
+                    msg.textContent = tt('swarm.toast_failed') + ': ' + err.message;
                 }
             } finally {
-                btn.disabled = false; btn.textContent = 'Deploy Task';
+                btn.disabled = false; btn.textContent = tt('swarm.btn_deploy');
             }
         }
 
@@ -853,7 +879,7 @@
                 fetchArtifacts(),
                 fetchListeners()
             ]);
-            document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+            document.getElementById('last-updated').textContent = tt('common.updated') + ' ' + new Date().toLocaleTimeString();
         }
 
         function connectSSE() {
@@ -893,7 +919,7 @@
                         renderListeners(listenersEnabled);
                     }
 
-                    document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+                    document.getElementById('last-updated').textContent = tt('common.updated') + ' ' + new Date().toLocaleTimeString();
                     setStatus('ok');
                 } catch(err) {
                     console.error('Failed to parse SSE update', err);
@@ -913,6 +939,16 @@
 
         fetchAll();
         connectSSE();
+
+        // Re-render dynamic content (tooltips, pills, listener state) on language change.
+        // Static [data-i18n] elements уже обновлены i18n.js.applyTranslations.
+        window.addEventListener('krab-lang-changed', function() {
+            try {
+                filterTasks();
+                updateTeamTooltips();
+                renderListeners(listenersEnabled);
+            } catch(e) { console.error('lang re-render failed', e); }
+        });
 
         window.addEventListener('beforeunload', function() {
             if (evtSource) evtSource.close();

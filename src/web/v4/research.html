@@ -6,6 +6,7 @@
     <title>Krab AI - Swarm Research Pipeline</title>
     <link rel="stylesheet" href="/v4/liquid-glass.css">
     <script src="/v4/theme-toggle.js" defer></script>
+    <script src="/v4/i18n.js" defer></script>
     <style>
         /* Base & Layout */
         :root {
@@ -596,16 +597,16 @@
     <nav class="glass-nav">
         <a href="#" class="nav-brand">KRAB AI</a>
         <div class="nav-links">
-            <a href="/v4/" class="nav-link">Hub</a>
-            <a href="/v4/chat" class="nav-link">Chat</a>
-            <a href="/costs" class="nav-link">Costs</a>
-            <a href="/inbox" class="nav-link">Inbox</a>
-            <a href="/swarm" class="nav-link">Swarm</a>
-            <a href="/translator" class="nav-link">Translator</a>
-            <a href="/ops" class="nav-link">Ops</a>
-            <a href="/v4/research" class="nav-link active">Research</a>
-            <a href="/settings" class="nav-link">Settings</a>
-            <a href="/commands" class="nav-link">Commands</a>
+            <a href="/v4/" class="nav-link" data-i18n="nav.hub">Hub</a>
+            <a href="/v4/chat" class="nav-link" data-i18n="nav.chat">Chat</a>
+            <a href="/costs" class="nav-link" data-i18n="nav.costs">Costs</a>
+            <a href="/inbox" class="nav-link" data-i18n="nav.inbox">Inbox</a>
+            <a href="/swarm" class="nav-link" data-i18n="nav.swarm">Swarm</a>
+            <a href="/translator" class="nav-link" data-i18n="nav.translator">Translator</a>
+            <a href="/ops" class="nav-link" data-i18n="nav.ops">Ops</a>
+            <a href="/v4/research" class="nav-link active" data-i18n="nav.research">Research</a>
+            <a href="/settings" class="nav-link" data-i18n="nav.settings">Settings</a>
+            <a href="/commands" class="nav-link" data-i18n="nav.commands">Commands</a>
         </div>
         <div class="nav-bell-wrapper">
             <button class="bell-icon-btn" id="bellBtn" aria-label="Notifications">
@@ -617,7 +618,7 @@
             </button>
             <div class="bell-dropdown" id="bellDropdown">
                 <div class="bell-dropdown-header">
-                    <span>Alerts</span>
+                    <span data-i18n="research.alerts_title">Alerts</span>
                 </div>
                 <div class="bell-dropdown-body" id="bellDropdownBody">
                     <!-- Populated by JS -->
@@ -630,41 +631,41 @@
     <main class="page-content">
         <div class="page-header">
             <div class="header-titles">
-                <h1>Swarm Research Pipeline</h1>
-                <div class="last-updated" id="lastUpdated">Last updated: --</div>
+                <h1 data-i18n="research.title">Swarm Research Pipeline</h1>
+                <div class="last-updated" id="lastUpdated"><span data-i18n="research.last_updated">Last updated</span>: --</div>
             </div>
             <button class="btn-launch-new" onclick="openResearchModal()">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="12" y1="5" x2="12" y2="19"></line>
                     <line x1="5" y1="12" x2="19" y2="12"></line>
                 </svg>
-                Start New Research
+                <span data-i18n="research.btn_start_new">Start New Research</span>
             </button>
         </div>
 
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-value" id="statTotalRuns">0</div>
-                <div class="stat-label">Total Research Runs</div>
+                <div class="stat-label" data-i18n="research.stat_total_runs">Total Research Runs</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="statRunningNow">0</div>
-                <div class="stat-label">Running Now</div>
+                <div class="stat-label" data-i18n="research.stat_running_now">Running Now</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="statAvgDuration">0s</div>
-                <div class="stat-label">Avg Duration</div>
+                <div class="stat-label" data-i18n="research.stat_avg_duration">Avg Duration</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="statLastTopic" style="font-size: 1.25rem; line-height: 2rem;">--</div>
-                <div class="stat-label">Last Topic</div>
+                <div class="stat-label" data-i18n="research.stat_last_topic">Last Topic</div>
             </div>
         </div>
 
-        <div class="section-title">Research Runs</div>
+        <div class="section-title" data-i18n="research.section_runs">Research Runs</div>
         <div class="runs-list" id="runsList">
             <!-- Populated by JS -->
-            <div class="empty-state">Loading research runs...</div>
+            <div class="empty-state" data-i18n="research.loading_runs">Loading research runs...</div>
         </div>
     </main>
 
@@ -675,20 +676,20 @@
                 <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
                 <polyline points="9 22 9 12 15 12 15 22"></polyline>
             </svg>
-            Hub
+            <span data-i18n="nav.hub">Hub</span>
         </a>
         <a href="/v4/chat" class="tab-item">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
             </svg>
-            Chat
+            <span data-i18n="nav.chat">Chat</span>
         </a>
         <a href="/costs" class="tab-item">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="12" y1="1" x2="12" y2="23"></line>
                 <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
             </svg>
-            Costs
+            <span data-i18n="nav.costs">Costs</span>
         </a>
         <a href="/swarm" class="tab-item">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
@@ -703,25 +704,25 @@
                 <line x1="1" y1="9" x2="4" y2="9"></line>
                 <line x1="1" y1="14" x2="4" y2="14"></line>
             </svg>
-            Swarm
+            <span data-i18n="nav.swarm">Swarm</span>
         </a>
         <a href="/v4/research" class="tab-item active">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="11" cy="11" r="8"></circle>
                 <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
-            Research
+            <span data-i18n="nav.research">Research</span>
         </a>
     </nav>
 
     <!-- Modal -->
     <div class="modal-overlay" id="researchModal" onclick="closeResearchModal(event)">
         <div class="modal-content" onclick="event.stopPropagation()">
-            <h2 class="modal-title">Start New Research</h2>
-            <textarea id="researchTopic" class="modal-textarea" rows="4" placeholder="Enter research topic or specific query..."></textarea>
+            <h2 class="modal-title" data-i18n="research.modal_title">Start New Research</h2>
+            <textarea id="researchTopic" class="modal-textarea" rows="4" placeholder="Enter research topic or specific query..." data-i18n-placeholder="research.modal_placeholder"></textarea>
             <div class="modal-actions">
-                <button class="btn-cancel" onclick="closeResearchModal()">Cancel</button>
-                <button class="btn-launch-new" onclick="launchResearch()">Launch</button>
+                <button class="btn-cancel" onclick="closeResearchModal()" data-i18n="research.btn_cancel">Cancel</button>
+                <button class="btn-launch-new" onclick="launchResearch()" data-i18n="research.btn_launch">Launch</button>
             </div>
         </div>
     </div>
@@ -731,6 +732,11 @@
 
     <script>
         const API_BASE = '';
+
+        // i18n helper — graceful fallback if i18n.js failed to load.
+        function tt(key) {
+            return (window.t || ((k) => k))(key);
+        }
 
         // Helpers
         async function fetchJSON(url, options = {}) {
@@ -811,7 +817,7 @@
         async function launchResearch() {
             const topic = document.getElementById('researchTopic').value.trim();
             if (!topic) {
-                createToast('Please enter a topic', 'error');
+                createToast(tt('research.toast_topic_required'), 'error');
                 return;
             }
 
@@ -825,14 +831,14 @@
                 });
 
                 if (res.ok) {
-                    createToast('Research launched successfully');
+                    createToast(tt('research.toast_launched'));
                     closeResearchModal();
                     refreshAll();
                 } else {
-                    createToast('Failed to launch research', 'error');
+                    createToast(tt('research.toast_launch_failed'), 'error');
                 }
             } catch (err) {
-                createToast('Network error launching research', 'error');
+                createToast(tt('research.toast_network_error'), 'error');
             }
         }
 
@@ -885,7 +891,7 @@
             document.getElementById('statTotalRuns').textContent = runs.length;
             
             if (runs.length > 0) {
-                document.getElementById('statLastTopic').textContent = runs[0].topic || 'Unknown';
+                document.getElementById('statLastTopic').textContent = runs[0].topic || tt('research.unknown_topic');
                 document.getElementById('statLastTopic').title = runs[0].topic || '';
                 
                 const validDurations = runs.filter(r => r.duration_sec != null).map(r => parseInt(r.duration_sec, 10));
@@ -905,7 +911,10 @@
             listEl.innerHTML = '';
 
             if (runs.length === 0) {
-                listEl.innerHTML = `<div class="empty-state">No research runs yet. Click Start to launch your first deep research.</div>`;
+                const emptyEl = document.createElement('div');
+                emptyEl.className = 'empty-state';
+                emptyEl.textContent = tt('research.empty_runs');
+                listEl.appendChild(emptyEl);
                 return;
             }
 
@@ -916,14 +925,14 @@
 
                 const dateStr = formatDate(run.timestamp_iso);
                 const timeStr = formatTime(run.timestamp_iso);
-                const topic = safeText(run.topic || 'Untitled Research');
+                const topic = safeText(run.topic || tt('research.untitled'));
                 const duration = formatDuration(run.duration_sec);
-                const preview = safeText(run.result_preview || 'No preview available.');
+                const preview = safeText(run.result_preview || tt('research.no_preview'));
 
                 // Status pill logic (assuming done if it's in artifacts, but could be failed)
-                let statusHtml = `<span class="pill pill-done">Done</span>`;
+                let statusHtml = `<span class="pill pill-done">${tt('research.status_done')}</span>`;
                 if (run.status && run.status.toLowerCase() === 'failed') {
-                    statusHtml = `<span class="pill pill-failed">Failed</span>`;
+                    statusHtml = `<span class="pill pill-failed">${tt('research.status_failed')}</span>`;
                 }
 
                 row.innerHTML = `
@@ -946,7 +955,7 @@
 
         async function refreshAll() {
             await Promise.all([loadStats(), loadRuns()]);
-            document.getElementById('lastUpdated').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+            document.getElementById('lastUpdated').textContent = `${tt('research.last_updated')}: ${new Date().toLocaleTimeString()}`;
         }
 
         // Bell Dropdown Logic (Identical to ops.html)
@@ -986,12 +995,19 @@
         }
 
         async function loadAlerts() {
-            bellDropdownBody.innerHTML = '<div class="bell-empty">Loading...</div>';
+            bellDropdownBody.innerHTML = '';
+            const loadingEl = document.createElement('div');
+            loadingEl.className = 'bell-empty';
+            loadingEl.textContent = tt('research.alerts_loading');
+            bellDropdownBody.appendChild(loadingEl);
             const alerts = await fetchJSON('/api/ops/alerts');
             bellDropdownBody.innerHTML = '';
 
             if (!alerts || alerts.length === 0) {
-                bellDropdownBody.innerHTML = '<div class="bell-empty">No new alerts</div>';
+                const emptyEl = document.createElement('div');
+                emptyEl.className = 'bell-empty';
+                emptyEl.textContent = tt('research.alerts_empty');
+                bellDropdownBody.appendChild(emptyEl);
                 return;
             }
 
@@ -999,9 +1015,9 @@
                 const a = document.createElement('a');
                 a.href = '#';
                 a.className = 'bell-item';
-                
+
                 const msg = document.createElement('div');
-                msg.textContent = alert.message || 'Unknown alert';
+                msg.textContent = alert.message || tt('research.unknown_alert');
                 
                 const time = document.createElement('div');
                 time.className = 'bell-item-time';
@@ -1041,9 +1057,17 @@
         document.addEventListener('DOMContentLoaded', () => {
             refreshAll();
             updateBellCount();
-            
+
             setInterval(refreshAll, 30000);
             setInterval(updateBellCount, 30000);
+
+            // Re-render JS-built content on language switch.
+            window.addEventListener('krab-lang-changed', () => {
+                refreshAll();
+                if (document.getElementById('bellDropdown').classList.contains('show')) {
+                    loadAlerts();
+                }
+            });
         });
     </script>
 </body>

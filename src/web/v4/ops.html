@@ -6,6 +6,7 @@
 <title>Ops - Krab AI</title>
 <link rel="stylesheet" href="/v4/liquid-glass.css">
     <script src="/v4/theme-toggle.js" defer></script>
+    <script src="/v4/i18n.js" defer></script>
 <style>
     .stats-grid { display:grid; grid-template-columns: repeat(4,1fr); gap:1rem; margin-bottom:1.5rem; }
     .stat-card { text-align:center; padding:1.25rem 1rem; }
@@ -63,18 +64,18 @@
 <nav class="glass-nav">
     <div class="nav-logo">Krab AI</div>
     <div class="nav-links">
-        <a href="/v4/" class="nav-link">Hub</a>
-        <a href="/v4/chat" class="nav-link">Chat</a>
-        <a href="/costs" class="nav-link">Costs</a>
-        <a href="/inbox" class="nav-link">Inbox</a>
-        <a href="/swarm" class="nav-link">Swarm</a>
-        <a href="/translator" class="nav-link">Translator</a>
-        <a href="/ops" class="nav-link active">Ops</a>
-        <a href="/v4/research" class="nav-link">Research</a>
-        <a href="/settings" class="nav-link">Settings</a>
-        <a href="/commands" class="nav-link">Commands</a>
+        <a href="/v4/" class="nav-link" data-i18n="nav.hub">Hub</a>
+        <a href="/v4/chat" class="nav-link" data-i18n="nav.chat">Chat</a>
+        <a href="/costs" class="nav-link" data-i18n="nav.costs">Costs</a>
+        <a href="/inbox" class="nav-link" data-i18n="nav.inbox">Inbox</a>
+        <a href="/swarm" class="nav-link" data-i18n="nav.swarm">Swarm</a>
+        <a href="/translator" class="nav-link" data-i18n="nav.translator">Translator</a>
+        <a href="/ops" class="nav-link active" data-i18n="nav.ops">Ops</a>
+        <a href="/v4/research" class="nav-link" data-i18n="nav.research">Research</a>
+        <a href="/settings" class="nav-link" data-i18n="nav.settings">Settings</a>
+        <a href="/commands" class="nav-link" data-i18n="nav.commands">Commands</a>
             <div class="nav-bell-wrapper">
-                <a href="/inbox" class="nav-bell" title="Notifications">
+                <a href="/inbox" class="nav-bell" data-i18n-title="ops.notifications" title="Notifications">
                     <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
                     </svg>
@@ -87,105 +88,115 @@
 
 <div class="page-content">
     <div class="page-header">
-        <h1 style="font-size:1.5rem; font-weight:600; margin:0;">Operations Center</h1>
-        <div class="last-updated" id="last-updated">Updated —</div>
+        <h1 style="font-size:1.5rem; font-weight:600; margin:0;" data-i18n="ops.title">Operations Center</h1>
+        <div class="last-updated" id="last-updated" data-i18n="ops.updated_dash">Updated —</div>
     </div>
 
     <div class="stats-grid">
         <div class="glass-card stat-card">
             <div class="stat-value" id="stat-alerts">—</div>
-            <div class="stat-label">Active Alerts</div>
+            <div class="stat-label" data-i18n="ops.stat_active_alerts">Active Alerts</div>
         </div>
         <div class="glass-card stat-card">
             <div class="stat-value" id="stat-incidents">—</div>
-            <div class="stat-label">Open Incidents</div>
+            <div class="stat-label" data-i18n="ops.stat_open_incidents">Open Incidents</div>
         </div>
         <div class="glass-card stat-card">
             <div class="stat-value" id="stat-sla">—</div>
-            <div class="stat-label">SLA Uptime 24h</div>
+            <div class="stat-label" data-i18n="ops.stat_sla">SLA Uptime 24h</div>
         </div>
         <div class="glass-card stat-card">
             <div class="stat-value" id="stat-digest" style="font-size:1.2rem; line-height:1.6;">—</div>
-            <div class="stat-label">Last Digest</div>
+            <div class="stat-label" data-i18n="ops.stat_last_digest">Last Digest</div>
         </div>
     </div>
 
     <div class="section">
-        <h2>Active Alerts</h2>
+        <h2 data-i18n="ops.section_alerts">Active Alerts</h2>
         <div id="alerts-container">
-            <div class="glass-card empty-state">Loading alerts...</div>
+            <div class="glass-card empty-state" data-i18n="ops.loading_alerts">Loading alerts...</div>
         </div>
     </div>
 
     <div class="section">
-        <h2>Metrics</h2>
+        <h2 data-i18n="ops.section_metrics">Metrics</h2>
         <div class="metrics-grid" id="metrics-container">
-            <div class="glass-card metric-tile"><div class="metric-value" id="metric-p50">—</div><div class="metric-label">Latency p50</div></div>
-            <div class="glass-card metric-tile"><div class="metric-value" id="metric-p95">—</div><div class="metric-label">Latency p95</div></div>
-            <div class="glass-card metric-tile"><div class="metric-value" id="metric-p99">—</div><div class="metric-label">Latency p99</div></div>
-            <div class="glass-card metric-tile"><div class="metric-value" id="metric-error">—</div><div class="metric-label">Error Rate</div></div>
-            <div class="glass-card metric-tile"><div class="metric-value" id="metric-tps">—</div><div class="metric-label">Throughput</div></div>
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-p50">—</div><div class="metric-label" data-i18n="ops.metric_p50">Latency p50</div></div>
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-p95">—</div><div class="metric-label" data-i18n="ops.metric_p95">Latency p95</div></div>
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-p99">—</div><div class="metric-label" data-i18n="ops.metric_p99">Latency p99</div></div>
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-error">—</div><div class="metric-label" data-i18n="ops.metric_error_rate">Error Rate</div></div>
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-tps">—</div><div class="metric-label" data-i18n="ops.metric_throughput">Throughput</div></div>
         </div>
     </div>
 
     <div class="section">
-        <h2>Runtime Snapshot</h2>
+        <h2 data-i18n="ops.section_snapshot">Runtime Snapshot</h2>
         <div class="snapshot-grid">
             <div class="glass-card snapshot-card">
-                <h3>Providers</h3>
+                <h3 data-i18n="ops.providers">Providers</h3>
                 <div id="providers-list">
-                    <div class="empty-state" style="padding:1rem;">Loading...</div>
+                    <div class="empty-state" style="padding:1rem;" data-i18n="ops.loading">Loading...</div>
                 </div>
             </div>
             <div class="glass-card snapshot-card">
-                <h3>Services</h3>
+                <h3 data-i18n="ops.services">Services</h3>
                 <div id="services-list">
-                    <div class="empty-state" style="padding:1rem;">Loading...</div>
+                    <div class="empty-state" style="padding:1rem;" data-i18n="ops.loading">Loading...</div>
                 </div>
             </div>
         </div>
     </div>
 
     <div class="section">
-        <h2>Event Timeline</h2>
+        <h2 data-i18n="ops.section_timeline">Event Timeline</h2>
         <div class="glass-card" style="padding:1.5rem;">
             <div class="timeline" id="timeline-container">
-                <div class="empty-state" style="padding:1rem;">Loading...</div>
+                <div class="empty-state" style="padding:1rem;" data-i18n="ops.loading">Loading...</div>
             </div>
         </div>
     </div>
 
     <div class="actions-footer">
-        <button class="glass-button" id="btn-report" onclick="generateReport()">Generate Report</button>
-        <button class="glass-button" id="btn-clear-ack" onclick="clearAckedAlerts()">Clear Acked Alerts</button>
+        <button class="glass-button" id="btn-report" onclick="generateReport()" data-i18n="ops.btn_generate_report">Generate Report</button>
+        <button class="glass-button" id="btn-clear-ack" onclick="clearAckedAlerts()" data-i18n="ops.btn_clear_ack">Clear Acked Alerts</button>
     </div>
 </div>
 
 <div class="glass-tab-bar">
     <a href="/v4/" class="tab-item">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-        <span>Hub</span>
+        <span data-i18n="nav.hub">Hub</span>
     </a>
     <a href="/v4/chat" class="tab-item">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-        <span>Chat</span>
+        <span data-i18n="nav.chat">Chat</span>
     </a>
     <a href="/costs" class="tab-item">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-        <span>Costs</span>
+        <span data-i18n="nav.costs">Costs</span>
     </a>
     <a href="/swarm" class="tab-item">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
-        <span>Swarm</span>
+        <span data-i18n="nav.swarm">Swarm</span>
     </a>
     <a href="/ops" class="tab-item active">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-        <span>Ops</span>
+        <span data-i18n="nav.ops">Ops</span>
     </a>
 </div>
 
 <script>
 const API_BASE = '';
+
+function tt(key, fallback) {
+    try {
+        if (window.i18n && typeof window.i18n.t === 'function') {
+            const v = window.i18n.t(key);
+            if (v && v !== key) return v;
+        }
+    } catch (e) {}
+    return fallback !== undefined ? fallback : key;
+}
 
 async function fetchJSON(path) {
     try {
@@ -204,13 +215,13 @@ function safeText(val, fallback = '—') {
 }
 
 function formatDate(ts) {
-    if (!ts) return 'N/A';
+    if (!ts) return tt('ops.na', 'N/A');
     const d = new Date(ts);
     return isNaN(d.getTime()) ? ts : d.toLocaleString();
 }
 
 function formatTime(ts) {
-    if (!ts) return 'N/A';
+    if (!ts) return tt('ops.na', 'N/A');
     const d = new Date(ts);
     return isNaN(d.getTime()) ? ts : d.toLocaleTimeString();
 }
@@ -228,7 +239,7 @@ async function loadSummary() {
             const last = history[history.length - 1];
             document.getElementById('stat-digest').textContent = formatDate(last.timestamp || last.ts);
         } else {
-            document.getElementById('stat-digest').textContent = 'N/A';
+            document.getElementById('stat-digest').textContent = tt('ops.na', 'N/A');
         }
     } else {
         document.getElementById('stat-incidents').textContent = '—';
@@ -253,7 +264,7 @@ async function loadAlerts() {
     if (!alerts) {
         const err = document.createElement('div');
         err.className = 'glass-card empty-state';
-        err.textContent = 'Failed to load alerts';
+        err.textContent = tt('ops.failed_alerts', 'Failed to load alerts');
         container.appendChild(err);
         return;
     }
@@ -261,7 +272,7 @@ async function loadAlerts() {
     if (alerts.length === 0) {
         const ok = document.createElement('div');
         ok.className = 'glass-card status-ok';
-        ok.textContent = '✓ All systems operational';
+        ok.textContent = '✓ ' + tt('ops.all_ok', 'All systems operational');
         container.appendChild(ok);
         return;
     }
@@ -306,10 +317,10 @@ async function loadAlerts() {
         const btn = document.createElement('button');
         btn.className = 'glass-button';
         if (a.ack) {
-            btn.textContent = 'Cancel Ack';
+            btn.textContent = tt('ops.btn_cancel_ack', 'Cancel Ack');
             btn.onclick = () => cancelAck(a.code);
         } else {
-            btn.textContent = 'Ack';
+            btn.textContent = tt('ops.btn_ack', 'Ack');
             btn.onclick = () => ackAlert(a.code);
         }
         actions.appendChild(btn);
@@ -343,15 +354,24 @@ async function loadSnapshot() {
     pList.innerHTML = '';
     sList.innerHTML = '';
 
+    function makeEmpty(txt) {
+        const d = document.createElement('div');
+        d.className = 'empty-state';
+        d.style.padding = '1rem';
+        d.textContent = txt;
+        return d;
+    }
+
     if (!snap) {
-        pList.innerHTML = '<div class="empty-state" style="padding:1rem;">Failed to load</div>';
-        sList.innerHTML = '<div class="empty-state" style="padding:1rem;">Failed to load</div>';
+        const failTxt = tt('ops.failed_load', 'Failed to load');
+        pList.appendChild(makeEmpty(failTxt));
+        sList.appendChild(makeEmpty(failTxt));
         return;
     }
 
     if (snap.providers) {
         const keys = Object.keys(snap.providers);
-        if (keys.length === 0) pList.innerHTML = '<div class="empty-state" style="padding:1rem;">No providers</div>';
+        if (keys.length === 0) pList.appendChild(makeEmpty(tt('ops.no_providers', 'No providers')));
         keys.forEach(k => {
             const row = document.createElement('div');
             row.className = 'snapshot-row';
@@ -361,7 +381,7 @@ async function loadSnapshot() {
             const pill = document.createElement('span');
             const ready = snap.providers[k].ready;
             pill.className = 'pill ' + (ready ? 'pill-done' : 'pill-failed');
-            pill.textContent = ready ? 'READY' : 'NOT READY';
+            pill.textContent = ready ? tt('ops.ready', 'READY') : tt('ops.not_ready', 'NOT READY');
             row.appendChild(name);
             row.appendChild(pill);
             pList.appendChild(row);
@@ -370,7 +390,7 @@ async function loadSnapshot() {
 
     if (snap.services) {
         const keys = Object.keys(snap.services);
-        if (keys.length === 0) sList.innerHTML = '<div class="empty-state" style="padding:1rem;">No services</div>';
+        if (keys.length === 0) sList.appendChild(makeEmpty(tt('ops.no_services', 'No services')));
         keys.forEach(k => {
             const row = document.createElement('div');
             row.className = 'snapshot-row';
@@ -380,7 +400,7 @@ async function loadSnapshot() {
             const pill = document.createElement('span');
             const status = (snap.services[k].status || '').toLowerCase();
             pill.className = 'pill ' + (status === 'ok' ? 'pill-done' : (status === 'warning' ? 'pill-warning' : 'pill-failed'));
-            pill.textContent = status || 'UNKNOWN';
+            pill.textContent = status || tt('ops.unknown', 'UNKNOWN');
             row.appendChild(name);
             row.appendChild(pill);
             sList.appendChild(row);
@@ -394,13 +414,21 @@ async function loadTimeline() {
     
     container.innerHTML = '';
 
+    function tlEmpty(txt) {
+        const d = document.createElement('div');
+        d.className = 'empty-state';
+        d.style.padding = '1rem';
+        d.textContent = txt;
+        return d;
+    }
+
     if (!events) {
-        container.innerHTML = '<div class="empty-state" style="padding:1rem;">Failed to load events</div>';
+        container.appendChild(tlEmpty(tt('ops.failed_events', 'Failed to load events')));
         return;
     }
 
     if (events.length === 0) {
-        container.innerHTML = '<div class="empty-state" style="padding:1rem;">No recent events</div>';
+        container.appendChild(tlEmpty(tt('ops.no_events', 'No recent events')));
         return;
     }
 
@@ -451,7 +479,7 @@ function refreshAll() {
         loadSnapshot(),
         loadTimeline()
     ]).then(() => {
-        document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+        document.getElementById('last-updated').textContent = tt('ops.updated_prefix', 'Updated') + ' ' + new Date().toLocaleTimeString();
     });
 }
 
@@ -479,9 +507,9 @@ async function generateReport() {
     const btn = document.getElementById('btn-report');
     try {
         btn.disabled = true;
-        btn.textContent = 'Generating...';
+        btn.textContent = tt('ops.generating', 'Generating...');
         const r = await window.fetch(API_BASE + '/api/ops/report/export', { method: 'POST' });
-        if (!r.ok) throw new Error('Export failed');
+        if (!r.ok) throw new Error(tt('ops.export_failed', 'Export failed'));
         
         const contentType = r.headers.get('content-type');
         let blob;
@@ -501,10 +529,10 @@ async function generateReport() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
     } catch (e) {
-        alert('Failed to generate report: ' + e.message);
+        alert(tt('ops.alert_report_fail', 'Failed to generate report') + ': ' + e.message);
     } finally {
         btn.disabled = false;
-        btn.textContent = 'Generate Report';
+        btn.textContent = tt('ops.btn_generate_report', 'Generate Report');
     }
 }
 
@@ -512,7 +540,7 @@ async function clearAckedAlerts() {
     const btn = document.getElementById('btn-clear-ack');
     try {
         btn.disabled = true;
-        btn.textContent = 'Clearing...';
+        btn.textContent = tt('ops.clearing', 'Clearing...');
         const alerts = await fetchJSON('/api/ops/alerts');
         if (alerts && Array.isArray(alerts)) {
             const acked = alerts.filter(a => a.ack);
@@ -524,10 +552,10 @@ async function clearAckedAlerts() {
         }
         await refreshAll();
     } catch (e) {
-        alert('Failed to clear alerts: ' + e.message);
+        alert(tt('ops.alert_clear_fail', 'Failed to clear alerts') + ': ' + e.message);
     } finally {
         btn.disabled = false;
-        btn.textContent = 'Clear Acked Alerts';
+        btn.textContent = tt('ops.btn_clear_ack', 'Clear Acked Alerts');
     }
 }
 
@@ -575,13 +603,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (alerts.length === 0 && latestItems.length === 0) {
               const emptyDiv = document.createElement('div');
               emptyDiv.className = 'bell-dropdown-empty';
-              emptyDiv.textContent = 'Нет уведомлений';
+              emptyDiv.textContent = tt('ops.bell_empty', 'Нет уведомлений');
               dropdown.appendChild(emptyDiv);
             } else {
               if (alerts.length > 0) {
                 const header = document.createElement('div');
                 header.className = 'bell-dropdown-header';
-                header.textContent = 'ALERTS';
+                header.textContent = tt('ops.bell_alerts', 'ALERTS');
                 dropdown.appendChild(header);
 
                 alerts.forEach(alert => {
@@ -592,7 +620,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   const dot = document.createElement('span');
                   dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
           
-                  const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+                  const text = document.createTextNode(alert.title || alert.message || alert.code || tt('ops.bell_alert_default', 'Alert'));
           
                   a.appendChild(dot);
                   a.appendChild(text);
@@ -603,7 +631,7 @@ document.addEventListener('DOMContentLoaded', () => {
               if (latestItems.length > 0) {
                 const header = document.createElement('div');
                 header.className = 'bell-dropdown-header';
-                header.textContent = 'INBOX';
+                header.textContent = tt('ops.bell_inbox', 'INBOX');
                 dropdown.appendChild(header);
 
                 latestItems.forEach(item => {
@@ -614,7 +642,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   const dot = document.createElement('span');
                   dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
           
-                  const text = document.createTextNode(item.title || 'Notification');
+                  const text = document.createTextNode(item.title || tt('ops.bell_notification_default', 'Notification'));
           
                   a.appendChild(dot);
                   a.appendChild(text);
@@ -626,7 +654,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const footer = document.createElement('a');
             footer.className = 'bell-dropdown-footer';
             footer.href = '/v4/inbox';
-            footer.textContent = 'Открыть все →';
+            footer.textContent = tt('ops.bell_open_all', 'Открыть все →');
             footer.style.display = 'block';
             footer.style.textDecoration = 'none';
             dropdown.appendChild(footer);

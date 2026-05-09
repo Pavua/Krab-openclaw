@@ -6,6 +6,7 @@
 <title>Settings - Krab AI</title>
 <link rel="stylesheet" href="/v4/liquid-glass.css">
 <script src="/v4/theme-toggle.js" defer></script>
+<script src="/v4/i18n.js" defer></script>
 <style>
     .page-content { max-width:1100px; margin:0 auto; padding:2rem; padding-bottom:6rem; }
     .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.75rem; gap:1rem; flex-wrap:wrap; }
@@ -88,18 +89,18 @@
 <nav class="glass-nav">
     <div class="nav-logo">Krab AI</div>
     <div class="nav-links">
-        <a href="/v4/" class="nav-link">Hub</a>
-        <a href="/v4/chat" class="nav-link">Chat</a>
-        <a href="/costs" class="nav-link">Costs</a>
-        <a href="/inbox" class="nav-link">Inbox</a>
-        <a href="/swarm" class="nav-link">Swarm</a>
-        <a href="/translator" class="nav-link">Translator</a>
-        <a href="/ops" class="nav-link">Ops</a>
-        <a href="/v4/research" class="nav-link">Research</a>
-        <a href="/settings" class="nav-link active">Settings</a>
-        <a href="/commands" class="nav-link">Commands</a>
+        <a href="/v4/" class="nav-link" data-i18n="nav.hub">Hub</a>
+        <a href="/v4/chat" class="nav-link" data-i18n="nav.chat">Chat</a>
+        <a href="/costs" class="nav-link" data-i18n="nav.costs">Costs</a>
+        <a href="/inbox" class="nav-link" data-i18n="nav.inbox">Inbox</a>
+        <a href="/swarm" class="nav-link" data-i18n="nav.swarm">Swarm</a>
+        <a href="/translator" class="nav-link" data-i18n="nav.translator">Translator</a>
+        <a href="/ops" class="nav-link" data-i18n="nav.ops">Ops</a>
+        <a href="/v4/research" class="nav-link" data-i18n="nav.research">Research</a>
+        <a href="/settings" class="nav-link active" data-i18n="nav.settings">Settings</a>
+        <a href="/commands" class="nav-link" data-i18n="nav.commands">Commands</a>
         <div class="nav-bell-wrapper">
-            <a href="/inbox" class="nav-bell" title="Notifications">
+            <a href="/inbox" class="nav-bell" data-i18n-title="nav.notifications_title" title="Notifications">
                 <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
                 </svg>
@@ -112,8 +113,8 @@
 
 <div class="page-content">
     <div class="page-header">
-        <h1>Settings</h1>
-        <div class="last-saved" id="last-saved">Loaded —</div>
+        <h1 data-i18n="settings.title">Settings</h1>
+        <div class="last-saved" id="last-saved">—</div>
     </div>
 
     <div class="section">
@@ -123,14 +124,14 @@
                     <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
                     <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
                 </svg>
-                Notifications &amp; Silence
+                <span data-i18n="settings.sec_notifications">Notifications &amp; Silence</span>
             </h2>
-            <p class="section-desc">Контроль уведомлений, звуков и режима тишины (silence mode).</p>
+            <p class="section-desc" data-i18n="settings.sec_notifications_desc">Контроль уведомлений, звуков и режима тишины (silence mode).</p>
 
             <div class="setting-row">
                 <div class="setting-info">
-                    <div class="setting-label">Silence Mode</div>
-                    <div class="setting-sub">Краб не отвечает в чатах, но продолжает собирать сообщения для catchup.</div>
+                    <div class="setting-label" data-i18n="settings.silence_mode">Silence Mode</div>
+                    <div class="setting-sub" data-i18n="settings.silence_mode_sub">Краб не отвечает в чатах, но продолжает собирать сообщения для catchup.</div>
                 </div>
                 <div class="setting-control">
                     <label class="switch" id="switch-silence">
@@ -142,8 +143,8 @@
 
             <div class="setting-row">
                 <div class="setting-info">
-                    <div class="setting-label">Notifications</div>
-                    <div class="setting-sub">Отправлять proactive push-уведомления об алертах, digest и задачах свёрма.</div>
+                    <div class="setting-label" data-i18n="settings.notifications">Notifications</div>
+                    <div class="setting-sub" data-i18n="settings.notifications_sub">Отправлять proactive push-уведомления об алертах, digest и задачах свёрма.</div>
                 </div>
                 <div class="setting-control">
                     <label class="switch" id="switch-notify">
@@ -164,14 +165,14 @@
                     <line x1="12" y1="19" x2="12" y2="23"></line>
                     <line x1="8" y1="23" x2="16" y2="23"></line>
                 </svg>
-                Voice
+                <span data-i18n="settings.sec_voice">Voice</span>
             </h2>
-            <p class="section-desc">Озвучивание ответов через TTS. Настройки голоса, скорости и режима доставки.</p>
+            <p class="section-desc" data-i18n="settings.sec_voice_desc">Озвучивание ответов через TTS. Настройки голоса, скорости и режима доставки.</p>
 
             <div class="setting-row">
                 <div class="setting-info">
-                    <div class="setting-label">Voice Mode</div>
-                    <div class="setting-sub">Краб автоматически озвучивает ответы в Telegram голосовыми сообщениями.</div>
+                    <div class="setting-label" data-i18n="settings.voice_mode">Voice Mode</div>
+                    <div class="setting-sub" data-i18n="settings.voice_mode_sub">Краб автоматически озвучивает ответы в Telegram голосовыми сообщениями.</div>
                 </div>
                 <div class="setting-control">
                     <label class="switch" id="switch-voice">
@@ -183,8 +184,8 @@
 
             <div class="setting-row">
                 <div class="setting-info">
-                    <div class="setting-label">Current Voice</div>
-                    <div class="setting-sub">Edge-TTS ID. Настраивается командой <code>!voice voice &lt;id&gt;</code>.</div>
+                    <div class="setting-label" data-i18n="settings.current_voice">Current Voice</div>
+                    <div class="setting-sub"><span data-i18n="settings.current_voice_sub_pre">Edge-TTS ID. Настраивается командой</span> <code>!voice voice &lt;id&gt;</code><span data-i18n="settings.current_voice_sub_post">.</span></div>
                 </div>
                 <div class="setting-control">
                     <span class="setting-value" id="voice-id">—</span>
@@ -193,8 +194,8 @@
 
             <div class="setting-row">
                 <div class="setting-info">
-                    <div class="setting-label">Speed</div>
-                    <div class="setting-sub">Скорость речи (множитель 0.75–2.5).</div>
+                    <div class="setting-label" data-i18n="settings.speed">Speed</div>
+                    <div class="setting-sub" data-i18n="settings.speed_sub">Скорость речи (множитель 0.75–2.5).</div>
                 </div>
                 <div class="setting-control">
                     <span class="setting-value" id="voice-speed">—</span>
@@ -203,8 +204,8 @@
 
             <div class="setting-row">
                 <div class="setting-info">
-                    <div class="setting-label">Delivery</div>
-                    <div class="setting-sub">Как доставляется ответ: только голос или текст+голос.</div>
+                    <div class="setting-label" data-i18n="settings.delivery">Delivery</div>
+                    <div class="setting-sub" data-i18n="settings.delivery_sub">Как доставляется ответ: только голос или текст+голос.</div>
                 </div>
                 <div class="setting-control">
                     <span class="setting-value" id="voice-delivery">—</span>
@@ -220,18 +221,18 @@
                     <line x1="12" y1="1" x2="12" y2="23"></line>
                     <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
                 </svg>
-                Budget &amp; Costs
+                <span data-i18n="settings.sec_budget">Budget &amp; Costs</span>
             </h2>
-            <p class="section-desc">Месячный бюджет на провайдеры AI. Алерты включаются при превышении 80% и 100%.</p>
+            <p class="section-desc" data-i18n="settings.sec_budget_desc">Месячный бюджет на провайдеры AI. Алерты включаются при превышении 80% и 100%.</p>
 
             <div class="setting-row">
                 <div class="setting-info">
-                    <div class="setting-label">Monthly Budget (USD)</div>
-                    <div class="setting-sub">Максимальные расходы за календарный месяц (все cloud-провайдеры).</div>
+                    <div class="setting-label" data-i18n="settings.monthly_budget">Monthly Budget (USD)</div>
+                    <div class="setting-sub" data-i18n="settings.monthly_budget_sub">Максимальные расходы за календарный месяц (все cloud-провайдеры).</div>
                 </div>
                 <div class="setting-control" style="display:flex; gap:.5rem; align-items:center;">
-                    <input type="number" id="budget-input" class="budget-input" placeholder="0.00" min="0" step="0.01">
-                    <button class="glass-button primary" id="btn-save-budget" onclick="saveBudget()">Save</button>
+                    <input type="number" id="budget-input" class="budget-input" placeholder="0.00" data-i18n-placeholder="settings.budget_input_placeholder" min="0" step="0.01">
+                    <button class="glass-button primary" id="btn-save-budget" onclick="saveBudget()" data-i18n="common.save">Save</button>
                 </div>
             </div>
 
@@ -240,17 +241,17 @@
                     <div class="budget-bar" id="budget-bar" style="width:0%;"></div>
                 </div>
                 <div class="budget-stats">
-                    <span id="budget-spent">$0.00 spent</span>
+                    <span id="budget-spent">$0.00</span>
                     <span id="budget-pct">0%</span>
-                    <span id="budget-limit">of $0.00</span>
+                    <span id="budget-limit">$0.00</span>
                 </div>
-                <div class="warning-banner" id="budget-warning">
+                <div class="warning-banner" id="budget-warning" data-i18n="settings.warning_80">
                     You have used more than 80% of your monthly budget.
                 </div>
             </div>
 
             <a href="/costs" class="link-row">
-                <span>Full cost breakdown by provider &amp; model</span>
+                <span data-i18n="settings.full_breakdown">Full cost breakdown by provider &amp; model</span>
                 <span class="link-arrow">→</span>
             </a>
         </div>
@@ -267,24 +268,24 @@
                     <path d="M22 22l-5-10-5 10"></path>
                     <path d="M14 18h6"></path>
                 </svg>
-                Translator
+                <span data-i18n="settings.sec_translator">Translator</span>
             </h2>
-            <p class="section-desc">Режим live-перевода голосовых и субтитров. Управление парой языков и стратегией.</p>
+            <p class="section-desc" data-i18n="settings.sec_translator_desc">Режим live-перевода голосовых и субтитров. Управление парой языков и стратегией.</p>
 
             <div class="setting-row">
                 <div class="setting-info">
-                    <div class="setting-label">Status</div>
-                    <div class="setting-sub">Текущее состояние сессии live-перевода.</div>
+                    <div class="setting-label" data-i18n="settings.status">Status</div>
+                    <div class="setting-sub" data-i18n="settings.status_sub">Текущее состояние сессии live-перевода.</div>
                 </div>
                 <div class="setting-control">
-                    <span class="pill pill-off" id="translator-status">OFF</span>
+                    <span class="pill pill-off" id="translator-status" data-i18n="settings.off">OFF</span>
                 </div>
             </div>
 
             <div class="setting-row">
                 <div class="setting-info">
-                    <div class="setting-label">Language Pair</div>
-                    <div class="setting-sub">Направление перевода (исходный → целевой).</div>
+                    <div class="setting-label" data-i18n="settings.language_pair">Language Pair</div>
+                    <div class="setting-sub" data-i18n="settings.language_pair_sub">Направление перевода (исходный → целевой).</div>
                 </div>
                 <div class="setting-control">
                     <span class="setting-value" id="translator-lang">—</span>
@@ -293,8 +294,8 @@
 
             <div class="setting-row">
                 <div class="setting-info">
-                    <div class="setting-label">Mode</div>
-                    <div class="setting-sub">bilingual / auto_to_ru / auto_to_en.</div>
+                    <div class="setting-label" data-i18n="settings.mode">Mode</div>
+                    <div class="setting-sub" data-i18n="settings.mode_sub">bilingual / auto_to_ru / auto_to_en.</div>
                 </div>
                 <div class="setting-control">
                     <span class="setting-value" id="translator-mode">—</span>
@@ -302,7 +303,7 @@
             </div>
 
             <a href="/translator" class="link-row">
-                <span>Go to Translator control panel</span>
+                <span data-i18n="settings.open_translator">Go to Translator control panel</span>
                 <span class="link-arrow">→</span>
             </a>
         </div>
@@ -316,39 +317,39 @@
                     <line x1="3" y1="10" x2="21" y2="10"></line>
                     <line x1="9" y1="4" x2="9" y2="20"></line>
                 </svg>
-                Runtime Info
+                <span data-i18n="settings.sec_runtime">Runtime Info</span>
             </h2>
-            <p class="section-desc">Readonly данные: активная модель, провайдер, uptime. Обновляется каждые 30 секунд.</p>
+            <p class="section-desc" data-i18n="settings.sec_runtime_desc">Readonly данные: активная модель, провайдер, uptime. Обновляется каждые 30 секунд.</p>
 
             <div class="runtime-grid">
                 <div class="runtime-item">
-                    <div class="runtime-label">Primary Model</div>
+                    <div class="runtime-label" data-i18n="settings.primary_model">Primary Model</div>
                     <div class="runtime-value" id="rt-model">—</div>
                 </div>
                 <div class="runtime-item">
-                    <div class="runtime-label">Provider</div>
+                    <div class="runtime-label" data-i18n="settings.provider">Provider</div>
                     <div class="runtime-value" id="rt-provider">—</div>
                 </div>
                 <div class="runtime-item">
-                    <div class="runtime-label">Last Route Time</div>
+                    <div class="runtime-label" data-i18n="settings.last_route_time">Last Route Time</div>
                     <div class="runtime-value" id="rt-route-time">—</div>
                 </div>
                 <div class="runtime-item">
-                    <div class="runtime-label">Krab Version</div>
+                    <div class="runtime-label" data-i18n="settings.krab_version">Krab Version</div>
                     <div class="runtime-value" id="rt-version">—</div>
                 </div>
                 <div class="runtime-item">
-                    <div class="runtime-label">Uptime</div>
+                    <div class="runtime-label" data-i18n="settings.uptime">Uptime</div>
                     <div class="runtime-value" id="rt-uptime">—</div>
                 </div>
                 <div class="runtime-item">
-                    <div class="runtime-label">Status</div>
+                    <div class="runtime-label" data-i18n="settings.rt_status">Status</div>
                     <div class="runtime-value" id="rt-status">—</div>
                 </div>
             </div>
 
             <a href="/ops" class="link-row">
-                <span>Open Operations Center</span>
+                <span data-i18n="settings.open_ops">Open Operations Center</span>
                 <span class="link-arrow">→</span>
             </a>
         </div>
@@ -360,28 +361,33 @@
 <div class="glass-tab-bar">
     <a href="/v4/" class="tab-item">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-        <span>Hub</span>
+        <span data-i18n="nav.hub">Hub</span>
     </a>
     <a href="/v4/chat" class="tab-item">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-        <span>Chat</span>
+        <span data-i18n="nav.chat">Chat</span>
     </a>
     <a href="/costs" class="tab-item">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-        <span>Costs</span>
+        <span data-i18n="nav.costs">Costs</span>
     </a>
     <a href="/ops" class="tab-item">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-        <span>Ops</span>
+        <span data-i18n="nav.ops">Ops</span>
     </a>
     <a href="/settings" class="tab-item active">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-        <span>Settings</span>
+        <span data-i18n="nav.settings">Settings</span>
     </a>
 </div>
 
 <script>
 const API_BASE = '';
+
+// i18n helper — falls back to key path if i18n.js not yet loaded.
+function tt(key) {
+    return (typeof window !== 'undefined' && typeof window.t === 'function') ? window.t(key) : key;
+}
 
 function clearChildren(el) {
     while (el && el.firstChild) el.removeChild(el.firstChild);
@@ -452,7 +458,7 @@ function showToast(msg, type) {
 
 function markSaved(label) {
     const el = document.getElementById('last-saved');
-    if (el) el.textContent = (label || 'Updated') + ' ' + new Date().toLocaleTimeString();
+    if (el) el.textContent = (label || tt('settings.updated')) + ' ' + new Date().toLocaleTimeString();
 }
 
 async function loadSilence() {
@@ -470,11 +476,11 @@ async function toggleSilence(e) {
     wrapper.classList.add('disabled');
     try {
         await postJSON('/api/silence/toggle', { active: desired, enabled: desired });
-        showToast('Silence mode ' + (desired ? 'enabled' : 'disabled'), 'success');
-        markSaved('Saved');
+        showToast(desired ? tt('settings.toast_silence_on') : tt('settings.toast_silence_off'), 'success');
+        markSaved(tt('settings.saved'));
     } catch (err) {
         cb.checked = !desired;
-        showToast('Failed to toggle silence: ' + err.message, 'error');
+        showToast(tt('settings.toast_silence_fail') + ': ' + err.message, 'error');
     } finally {
         wrapper.classList.remove('disabled');
     }
@@ -495,11 +501,11 @@ async function toggleNotify(e) {
     wrapper.classList.add('disabled');
     try {
         await postJSON('/api/notify/toggle', { enabled: desired, active: desired });
-        showToast('Notifications ' + (desired ? 'enabled' : 'disabled'), 'success');
-        markSaved('Saved');
+        showToast(desired ? tt('settings.toast_notify_on') : tt('settings.toast_notify_off'), 'success');
+        markSaved(tt('settings.saved'));
     } catch (err) {
         cb.checked = !desired;
-        showToast('Failed to toggle notifications: ' + err.message, 'error');
+        showToast(tt('settings.toast_notify_fail') + ': ' + err.message, 'error');
     } finally {
         wrapper.classList.remove('disabled');
     }
@@ -527,12 +533,12 @@ async function toggleVoice(e) {
     wrapper.classList.add('disabled');
     try {
         await postJSON('/api/voice/toggle', { enabled: desired, active: desired });
-        showToast('Voice mode ' + (desired ? 'enabled' : 'disabled'), 'success');
-        markSaved('Saved');
+        showToast(desired ? tt('settings.toast_voice_on') : tt('settings.toast_voice_off'), 'success');
+        markSaved(tt('settings.saved'));
         setTimeout(loadVoice, 250);
     } catch (err) {
         cb.checked = !desired;
-        showToast('Failed to toggle voice: ' + err.message, 'error');
+        showToast(tt('settings.toast_voice_fail') + ': ' + err.message, 'error');
     } finally {
         wrapper.classList.remove('disabled');
     }
@@ -550,8 +556,8 @@ async function loadBudget() {
         input.value = limit > 0 ? limit.toFixed(2) : '';
     }
 
-    document.getElementById('budget-spent').textContent = '$' + spent.toFixed(2) + ' spent';
-    document.getElementById('budget-limit').textContent = 'of $' + limit.toFixed(2);
+    document.getElementById('budget-spent').textContent = '$' + spent.toFixed(2) + ' ' + tt('settings.spent_suffix');
+    document.getElementById('budget-limit').textContent = tt('settings.of') + ' $' + limit.toFixed(2);
 
     const pct = limit > 0 ? Math.min(100, (spent / limit) * 100) : 0;
     document.getElementById('budget-pct').textContent = Math.round(pct) + '%';
@@ -564,11 +570,11 @@ async function loadBudget() {
     if (pct >= 100) {
         bar.classList.add('danger');
         warning.classList.add('visible', 'danger');
-        warning.textContent = 'You have exceeded your monthly budget. Cloud AI requests may be throttled.';
+        warning.textContent = tt('settings.warning_100');
     } else if (pct >= 80) {
         bar.classList.add('warn');
         warning.classList.add('visible');
-        warning.textContent = 'You have used more than 80% of your monthly budget.';
+        warning.textContent = tt('settings.warning_80');
     }
 }
 
@@ -577,21 +583,21 @@ async function saveBudget() {
     const input = document.getElementById('budget-input');
     const val = parseFloat(input.value);
     if (!isFinite(val) || val < 0) {
-        showToast('Invalid budget value', 'error');
+        showToast(tt('settings.invalid_budget'), 'error');
         return;
     }
     try {
         btn.disabled = true;
         btn.textContent = '...';
         await postJSON('/api/costs/budget', { limit: val, budget: val, monthly_budget: val, amount: val });
-        showToast('Budget saved: $' + val.toFixed(2), 'success');
-        markSaved('Saved');
+        showToast(tt('settings.budget_saved') + ': $' + val.toFixed(2), 'success');
+        markSaved(tt('settings.saved'));
         await loadBudget();
     } catch (err) {
-        showToast('Failed to save budget: ' + err.message, 'error');
+        showToast(tt('settings.budget_save_failed') + ': ' + err.message, 'error');
     } finally {
         btn.disabled = false;
-        btn.textContent = 'Save';
+        btn.textContent = tt('common.save');
     }
 }
 
@@ -604,10 +610,10 @@ async function loadTranslator() {
 
     const statusEl = document.getElementById('translator-status');
     if (active) {
-        statusEl.textContent = 'ON';
+        statusEl.textContent = tt('settings.on');
         statusEl.className = 'pill pill-ok';
     } else {
-        statusEl.textContent = 'OFF';
+        statusEl.textContent = tt('settings.off');
         statusEl.className = 'pill pill-off';
     }
 
@@ -658,7 +664,7 @@ async function refreshAll() {
         loadRuntime()
     ]);
     const el = document.getElementById('last-saved');
-    if (el) el.textContent = 'Loaded ' + new Date().toLocaleTimeString();
+    if (el) el.textContent = tt('settings.loaded') + ' ' + new Date().toLocaleTimeString();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -673,6 +679,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     refreshAll();
     setInterval(refreshAll, 30000);
+
+    // Re-render dynamic JS-generated text on language switch.
+    window.addEventListener('krab-lang-changed', () => {
+        refreshAll();
+        updateBellCount();
+    });
 });
 
 async function updateBellCount() {
@@ -714,13 +726,13 @@ async function updateBellCount() {
         if (alerts.length === 0 && latestItems.length === 0) {
             const emptyDiv = document.createElement('div');
             emptyDiv.className = 'bell-dropdown-empty';
-            emptyDiv.textContent = 'Нет уведомлений';
+            emptyDiv.textContent = tt('settings.empty_notifications');
             dropdown.appendChild(emptyDiv);
         } else {
             if (alerts.length > 0) {
                 const header = document.createElement('div');
                 header.className = 'bell-dropdown-header';
-                header.textContent = 'ALERTS';
+                header.textContent = tt('settings.bell_alerts');
                 dropdown.appendChild(header);
 
                 alerts.forEach(alert => {
@@ -731,7 +743,7 @@ async function updateBellCount() {
                     const dot = document.createElement('span');
                     dot.className = 'bell-dropdown-severity ' + (alert.severity || 'error');
 
-                    const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+                    const text = document.createTextNode(alert.title || alert.message || alert.code || tt('settings.bell_alert_default'));
 
                     a.appendChild(dot);
                     a.appendChild(text);
@@ -742,7 +754,7 @@ async function updateBellCount() {
             if (latestItems.length > 0) {
                 const header = document.createElement('div');
                 header.className = 'bell-dropdown-header';
-                header.textContent = 'INBOX';
+                header.textContent = tt('settings.bell_inbox');
                 dropdown.appendChild(header);
 
                 latestItems.forEach(item => {
@@ -753,7 +765,7 @@ async function updateBellCount() {
                     const dot = document.createElement('span');
                     dot.className = 'bell-dropdown-severity ' + (item.severity || 'info');
 
-                    const text = document.createTextNode(item.title || 'Notification');
+                    const text = document.createTextNode(item.title || tt('settings.bell_notification_default'));
 
                     a.appendChild(dot);
                     a.appendChild(text);
@@ -765,7 +777,7 @@ async function updateBellCount() {
         const footer = document.createElement('a');
         footer.className = 'bell-dropdown-footer';
         footer.href = '/v4/inbox';
-        footer.textContent = 'Открыть все →';
+        footer.textContent = tt('settings.bell_open_all');
         footer.style.display = 'block';
         footer.style.textDecoration = 'none';
         dropdown.appendChild(footer);

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Costs Dashboard - Krab AI</title>
     <link rel="stylesheet" href="/v4/liquid-glass.css">
+    <script src="/v4/i18n.js" defer></script>
     <style>
         body { margin: 0; background-color: var(--bg-primary); color: #ffffff; font-family: system-ui, -apple-system, sans-serif; padding-bottom: 80px; }
         .container { max-width: 1200px; margin: 0 auto; padding: 2rem 1rem; }
@@ -88,18 +89,18 @@
     <nav class="glass-nav">
         <div class="nav-logo">Krab AI</div>
         <div class="nav-links">
-            <a href="/v4/" class="nav-link">Hub</a>
-            <a href="/v4/chat" class="nav-link">Chat</a>
-            <a href="/v4/costs" class="nav-link active">Costs</a>
-            <a href="/v4/inbox" class="nav-link">Inbox</a>
-            <a href="/v4/swarm" class="nav-link">Swarm</a>
-            <a href="/v4/translator" class="nav-link">Translator</a>
-            <a href="/v4/ops" class="nav-link">Ops</a>
-            <a href="/v4/research" class="nav-link">Research</a>
-            <a href="/v4/settings" class="nav-link">Settings</a>
-            <a href="/v4/commands" class="nav-link">Commands</a>
+            <a href="/v4/" class="nav-link" data-i18n="nav.hub">Hub</a>
+            <a href="/v4/chat" class="nav-link" data-i18n="nav.chat">Chat</a>
+            <a href="/v4/costs" class="nav-link active" data-i18n="nav.costs">Costs</a>
+            <a href="/v4/inbox" class="nav-link" data-i18n="nav.inbox">Inbox</a>
+            <a href="/v4/swarm" class="nav-link" data-i18n="nav.swarm">Swarm</a>
+            <a href="/v4/translator" class="nav-link" data-i18n="nav.translator">Translator</a>
+            <a href="/v4/ops" class="nav-link" data-i18n="nav.ops">Ops</a>
+            <a href="/v4/research" class="nav-link" data-i18n="nav.research">Research</a>
+            <a href="/v4/settings" class="nav-link" data-i18n="nav.settings">Settings</a>
+            <a href="/v4/commands" class="nav-link" data-i18n="nav.commands">Commands</a>
             <div class="nav-bell-wrapper">
-                <a href="/v4/inbox" class="nav-bell" title="Notifications">
+                <a href="/v4/inbox" class="nav-bell" data-i18n-title="nav.notifications" title="Notifications">
                     <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
                     <span class="bell-count hidden" id="nav-bell-count">0</span>
                 </a>
@@ -111,35 +112,35 @@
 
     <main class="container">
         <div class="flex justify-between items-center mb-4">
-            <h1 class="text-3xl">Costs Dashboard</h1>
+            <h1 class="text-3xl" data-i18n="costs.title">Costs Dashboard</h1>
             <span id="api-status" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent-green);"></span>
         </div>
 
         <!-- Hourly Burn Sparkline -->
         <div class="hourly-spark-section">
-            <div class="hourly-spark-label">$/hr &middot; last 24h</div>
+            <div class="hourly-spark-label" data-i18n="costs.hourly_label">$/hr &middot; last 24h</div>
             <div class="hourly-spark-canvas">
                 <svg id="hourly-spark-svg" viewBox="0 0 400 40" preserveAspectRatio="none"></svg>
             </div>
-            <div class="hourly-peak" id="hourly-peak-label">peak: &mdash;</div>
+            <div class="hourly-peak" id="hourly-peak-label" data-i18n="costs.peak_dash">peak: &mdash;</div>
         </div>
 
         <!-- Day Comparison -->
         <div class="glass-card mb-4">
-            <h3 class="text-lg mb-4 text-accent">Period Comparison</h3>
+            <h3 class="text-lg mb-4 text-accent" data-i18n="costs.period_comparison">Period Comparison</h3>
             <div class="day-compare-grid">
                 <div class="day-compare-card">
-                    <div class="period-label">Today</div>
+                    <div class="period-label" data-i18n="costs.today">Today</div>
                     <div class="period-value text-success skeleton" id="compare-today">$0.00</div>
                     <div class="period-delta delta-flat" id="compare-today-delta">&mdash;</div>
                 </div>
                 <div class="day-compare-card">
-                    <div class="period-label">Yesterday</div>
+                    <div class="period-label" data-i18n="costs.yesterday">Yesterday</div>
                     <div class="period-value text-accent skeleton" id="compare-yesterday">$0.00</div>
                     <div class="period-delta delta-flat" id="compare-yesterday-delta">&mdash;</div>
                 </div>
                 <div class="day-compare-card">
-                    <div class="period-label">7-day avg / day</div>
+                    <div class="period-label" data-i18n="costs.week_avg">7-day avg / day</div>
                     <div class="period-value text-purple skeleton" id="compare-week-avg">$0.00</div>
                     <div class="period-delta delta-flat" id="compare-week-delta">&mdash;</div>
                 </div>
@@ -149,17 +150,17 @@
         <!-- Budget -->
         <div class="glass-card mb-4">
             <div class="flex justify-between items-center mb-2">
-                <h3 class="text-lg">Monthly Budget</h3>
-                <button class="glass-button" onclick="openModal()">Set Budget</button>
+                <h3 class="text-lg" data-i18n="costs.monthly_budget">Monthly Budget</h3>
+                <button class="glass-button" onclick="openModal()" data-i18n="costs.set_budget">Set Budget</button>
             </div>
             <div class="progress-track mt-4"><div class="progress-fill" id="budget-fill" style="width:0%;"></div></div>
             <div class="flex justify-between mt-2 text-sm">
                 <div class="flex-col">
-                    <span class="text-muted">Spent</span>
+                    <span class="text-muted" data-i18n="costs.spent">Spent</span>
                     <span class="text-xl skeleton" id="budget-spent">$0.00</span>
                 </div>
                 <div class="flex-col text-right">
-                    <span class="text-muted">Remaining (<span id="budget-limit" class="skeleton">$0</span>)</span>
+                    <span class="text-muted"><span data-i18n="costs.remaining">Remaining</span> (<span id="budget-limit" class="skeleton">$0</span>)</span>
                     <span class="text-xl skeleton" id="budget-remaining">$0.00</span>
                 </div>
             </div>
@@ -168,17 +169,17 @@
         <!-- Summary Cards -->
         <div class="grid-3 mb-4">
             <div class="glass-card stat-card">
-                <div class="flex justify-between items-center w-full mb-1"><span class="text-muted text-sm">Total Cost</span><span id="trend-cost" class="trend-indicator"></span></div>
+                <div class="flex justify-between items-center w-full mb-1"><span class="text-muted text-sm" data-i18n="costs.total_cost">Total Cost</span><span id="trend-cost" class="trend-indicator"></span></div>
                 <div class="text-3xl text-success skeleton my-2" id="total-cost" data-val="0">$0.00</div>
                 <div id="sparkline-cost" class="sparkline-wrapper"></div>
             </div>
             <div class="glass-card stat-card">
-                <div class="flex justify-between items-center w-full mb-1"><span class="text-muted text-sm">Total Calls</span><span id="trend-calls" class="trend-indicator"></span></div>
+                <div class="flex justify-between items-center w-full mb-1"><span class="text-muted text-sm" data-i18n="costs.total_calls">Total Calls</span><span id="trend-calls" class="trend-indicator"></span></div>
                 <div class="text-3xl text-accent skeleton my-2" id="total-calls" data-val="0">0</div>
                 <div id="sparkline-calls" class="sparkline-wrapper"></div>
             </div>
             <div class="glass-card stat-card">
-                <div class="flex justify-between items-center w-full mb-1"><span class="text-muted text-sm">Total Tokens</span><span id="trend-tokens" class="trend-indicator"></span></div>
+                <div class="flex justify-between items-center w-full mb-1"><span class="text-muted text-sm" data-i18n="costs.total_tokens">Total Tokens</span><span id="trend-tokens" class="trend-indicator"></span></div>
                 <div class="text-3xl text-purple skeleton my-2" id="total-tokens" data-val="0">0</div>
                 <div id="sparkline-tokens" class="sparkline-wrapper"></div>
             </div>
@@ -187,21 +188,21 @@
         <!-- FinOps + Model Donut -->
         <div class="grid-2 mb-4">
             <div class="glass-card">
-                <h3 class="text-lg mb-4 text-accent">FinOps Breakdown</h3>
+                <h3 class="text-lg mb-4 text-accent" data-i18n="costs.finops_breakdown">FinOps Breakdown</h3>
                 <div class="grid grid-2x2 gap-3">
-                    <div class="glass-card p-4 text-center"><div class="text-muted text-sm mb-1">Tool Calls</div><div class="text-xl skeleton" id="tool-calls">0</div></div>
-                    <div class="glass-card p-4 text-center"><div class="text-muted text-sm mb-1">Fallbacks</div><div class="text-xl text-warning skeleton" id="fallbacks">0</div></div>
-                    <div class="glass-card p-4 text-center"><div class="text-muted text-sm mb-1">Context Tokens</div><div class="text-xl skeleton" id="context-tokens">0</div></div>
-                    <div class="glass-card p-4 text-center"><div class="text-muted text-sm mb-1">Avg Context</div><div class="text-xl skeleton" id="avg-context">0</div></div>
+                    <div class="glass-card p-4 text-center"><div class="text-muted text-sm mb-1" data-i18n="costs.tool_calls">Tool Calls</div><div class="text-xl skeleton" id="tool-calls">0</div></div>
+                    <div class="glass-card p-4 text-center"><div class="text-muted text-sm mb-1" data-i18n="costs.fallbacks">Fallbacks</div><div class="text-xl text-warning skeleton" id="fallbacks">0</div></div>
+                    <div class="glass-card p-4 text-center"><div class="text-muted text-sm mb-1" data-i18n="costs.context_tokens">Context Tokens</div><div class="text-xl skeleton" id="context-tokens">0</div></div>
+                    <div class="glass-card p-4 text-center"><div class="text-muted text-sm mb-1" data-i18n="costs.avg_context">Avg Context</div><div class="text-xl skeleton" id="avg-context">0</div></div>
                 </div>
             </div>
             <div class="glass-card">
-                <h3 class="text-lg mb-4 text-accent">Cost by Model</h3>
+                <h3 class="text-lg mb-4 text-accent" data-i18n="costs.cost_by_model">Cost by Model</h3>
                 <div class="donut-wrapper">
                     <div class="donut-svg-container">
                         <svg id="donut-svg" width="120" height="120" viewBox="0 0 120 120">
                             <circle cx="60" cy="60" r="46" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="20"/>
-                            <text x="60" y="66" text-anchor="middle" fill="rgba(255,255,255,0.4)" font-size="11">loading</text>
+                            <text x="60" y="66" text-anchor="middle" fill="rgba(255,255,255,0.4)" font-size="11" data-i18n="costs.loading">loading</text>
                         </svg>
                     </div>
                     <div class="donut-legend" id="donut-legend">
@@ -215,16 +216,16 @@
         <!-- Efficiency + Channel -->
         <div class="grid-2 mb-4">
             <div class="glass-card">
-                <h3 class="text-lg mb-2 text-accent">Cost Efficiency</h3>
+                <h3 class="text-lg mb-2 text-accent" data-i18n="costs.cost_efficiency">Cost Efficiency</h3>
                 <div class="flex justify-between items-center mt-4 border-b pb-2" style="border-color:var(--glass-border);">
-                    <span class="text-muted">Cost per Request</span><span class="text-xl skeleton" id="cost-per-req">$0.0000</span>
+                    <span class="text-muted" data-i18n="costs.cost_per_request">Cost per Request</span><span class="text-xl skeleton" id="cost-per-req">$0.0000</span>
                 </div>
                 <div class="flex justify-between items-center mt-4">
-                    <span class="text-muted">Tokens per $1</span><span class="text-xl skeleton" id="tokens-per-dollar">0</span>
+                    <span class="text-muted" data-i18n="costs.tokens_per_dollar">Tokens per $1</span><span class="text-xl skeleton" id="tokens-per-dollar">0</span>
                 </div>
             </div>
             <div class="glass-card">
-                <h3 class="text-lg mb-4 text-accent">By Channel</h3>
+                <h3 class="text-lg mb-4 text-accent" data-i18n="costs.by_channel">By Channel</h3>
                 <div id="channels-container">
                     <div class="bar-row"><div class="skeleton" style="height:1em;width:100%;grid-column:1/-1;"></div></div>
                     <div class="bar-row"><div class="skeleton" style="height:1em;width:100%;grid-column:1/-1;"></div></div>
@@ -235,10 +236,10 @@
 
         <!-- By Model Table -->
         <div class="glass-card mb-4">
-            <h3 class="text-lg mb-4 text-accent">Usage by Model</h3>
+            <h3 class="text-lg mb-4 text-accent" data-i18n="costs.usage_by_model">Usage by Model</h3>
             <div class="table-responsive">
                 <table>
-                    <thead><tr><th>Model</th><th class="text-right">Cost (USD)</th><th class="text-right">Calls</th><th class="text-right">Tokens</th><th class="text-right">Avg/Call</th></tr></thead>
+                    <thead><tr><th data-i18n="costs.col_model">Model</th><th class="text-right" data-i18n="costs.col_cost">Cost (USD)</th><th class="text-right" data-i18n="costs.col_calls">Calls</th><th class="text-right" data-i18n="costs.col_tokens">Tokens</th><th class="text-right" data-i18n="costs.col_avg_call">Avg/Call</th></tr></thead>
                     <tbody id="model-tbody">
                         <tr><td class="skeleton">model</td><td class="skeleton text-right">$0.00</td><td class="skeleton text-right">0</td><td class="skeleton text-right">0</td><td class="skeleton text-right">$0.00</td></tr>
                         <tr><td class="skeleton">model</td><td class="skeleton text-right">$0.00</td><td class="skeleton text-right">0</td><td class="skeleton text-right">0</td><td class="skeleton text-right">$0.00</td></tr>
@@ -249,10 +250,10 @@
 
         <!-- Top Chats -->
         <div class="glass-card mb-4">
-            <h3 class="text-lg mb-4 text-accent">Top Chats by Cost</h3>
+            <h3 class="text-lg mb-4 text-accent" data-i18n="costs.top_chats">Top Chats by Cost</h3>
             <div class="table-responsive">
                 <table>
-                    <thead><tr><th>#</th><th>Chat / Channel</th><th class="text-right">Cost (USD)</th><th class="text-right">Calls</th><th class="text-right">Avg/Call</th></tr></thead>
+                    <thead><tr><th>#</th><th data-i18n="costs.col_chat">Chat / Channel</th><th class="text-right" data-i18n="costs.col_cost">Cost (USD)</th><th class="text-right" data-i18n="costs.col_calls">Calls</th><th class="text-right" data-i18n="costs.col_avg_call">Avg/Call</th></tr></thead>
                     <tbody id="chat-cost-tbody">
                         <tr><td class="skeleton">1</td><td class="skeleton">telegram</td><td class="skeleton text-right">$0.00</td><td class="skeleton text-right">0</td><td class="skeleton text-right">$0.00</td></tr>
                         <tr><td class="skeleton">2</td><td class="skeleton">swarm</td><td class="skeleton text-right">$0.00</td><td class="skeleton text-right">0</td><td class="skeleton text-right">$0.00</td></tr>
@@ -264,23 +265,23 @@
         <!-- Swarm Activity -->
         <div class="glass-card mb-4">
             <div class="flex justify-between items-center">
-                <h3 class="text-lg text-accent">Swarm Activity</h3>
-                <span class="text-muted text-sm" id="swarm-total-sessions">&#8212; artifacts total</span>
+                <h3 class="text-lg text-accent" data-i18n="costs.swarm_activity">Swarm Activity</h3>
+                <span class="text-muted text-sm" id="swarm-total-sessions">&#8212; <span data-i18n="costs.artifacts_total">artifacts total</span></span>
             </div>
             <div class="swarm-deleg-grid">
-                <div class="swarm-deleg-chip"><div class="chip-team">traders</div><div class="chip-count text-warning skeleton" id="deleg-traders">0</div></div>
-                <div class="swarm-deleg-chip"><div class="chip-team">coders</div><div class="chip-count text-accent skeleton" id="deleg-coders">0</div></div>
-                <div class="swarm-deleg-chip"><div class="chip-team">analysts</div><div class="chip-count text-purple skeleton" id="deleg-analysts">0</div></div>
-                <div class="swarm-deleg-chip"><div class="chip-team">creative</div><div class="chip-count text-success skeleton" id="deleg-creative">0</div></div>
-                <div class="swarm-deleg-chip"><div class="chip-team">total tasks</div><div class="chip-count skeleton" id="deleg-total">0</div></div>
+                <div class="swarm-deleg-chip"><div class="chip-team" data-i18n="costs.team_traders">traders</div><div class="chip-count text-warning skeleton" id="deleg-traders">0</div></div>
+                <div class="swarm-deleg-chip"><div class="chip-team" data-i18n="costs.team_coders">coders</div><div class="chip-count text-accent skeleton" id="deleg-coders">0</div></div>
+                <div class="swarm-deleg-chip"><div class="chip-team" data-i18n="costs.team_analysts">analysts</div><div class="chip-count text-purple skeleton" id="deleg-analysts">0</div></div>
+                <div class="swarm-deleg-chip"><div class="chip-team" data-i18n="costs.team_creative">creative</div><div class="chip-count text-success skeleton" id="deleg-creative">0</div></div>
+                <div class="swarm-deleg-chip"><div class="chip-team" data-i18n="costs.total_tasks">total tasks</div><div class="chip-count skeleton" id="deleg-total">0</div></div>
             </div>
         </div>
 
         <!-- Footer -->
         <div class="dash-footer">
-            <div id="last-updated">Updated: &mdash;</div>
+            <div id="last-updated"><span data-i18n="costs.updated">Updated</span>: &mdash;</div>
             <div class="footer-refresh-bar">
-                <span id="footer-timer">Next auto-refresh: 30s</span>
+                <span id="footer-timer"><span data-i18n="costs.next_refresh">Next auto-refresh</span>: 30s</span>
                 <div class="footer-refresh-track"><div class="footer-refresh-fill" id="footer-refresh-fill" style="width:100%;"></div></div>
             </div>
         </div>
@@ -288,32 +289,38 @@
 
     <!-- Mobile Tab Bar -->
     <div class="glass-tab-bar">
-        <a href="/v4/" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Hub</a>
-        <a href="/v4/chat" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Chat</a>
-        <a href="/v4/costs" class="tab-item active"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Costs</a>
-        <a href="/v4/inbox" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>Inbox</a>
-        <a href="/v4/swarm" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Swarm</a>
-        <a href="/v4/translator" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>Trans</a>
+        <a href="/v4/" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span data-i18n="nav.hub">Hub</span></a>
+        <a href="/v4/chat" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span data-i18n="nav.chat">Chat</span></a>
+        <a href="/v4/costs" class="tab-item active"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg><span data-i18n="nav.costs">Costs</span></a>
+        <a href="/v4/inbox" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg><span data-i18n="nav.inbox">Inbox</span></a>
+        <a href="/v4/swarm" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span data-i18n="nav.swarm">Swarm</span></a>
+        <a href="/v4/translator" class="tab-item"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg><span data-i18n="nav.translator_short">Trans</span></a>
     </div>
 
     <!-- Budget Modal -->
     <div class="modal-overlay" id="budget-modal">
         <div class="glass-card modal-content">
-            <h3 class="text-xl mb-4 text-accent">Set Monthly Budget</h3>
+            <h3 class="text-xl mb-4 text-accent" data-i18n="costs.set_monthly_budget">Set Monthly Budget</h3>
             <form id="budget-form" onsubmit="submitBudget(event)">
                 <div class="mb-4">
-                    <label class="text-muted text-sm block mb-2">Monthly Limit (USD)</label>
-                    <input type="number" step="0.01" min="0" id="budget-input" class="glass-input" required placeholder="e.g. 50.00">
+                    <label class="text-muted text-sm block mb-2" data-i18n="costs.monthly_limit">Monthly Limit (USD)</label>
+                    <input type="number" step="0.01" min="0" id="budget-input" class="glass-input" required placeholder="e.g. 50.00" data-i18n-placeholder="costs.budget_placeholder">
                 </div>
                 <div class="flex justify-between gap-2 mt-4">
-                    <button type="button" class="glass-button flex-1" onclick="closeModal()">Cancel</button>
-                    <button type="submit" class="glass-button glass-button-primary flex-1">Save</button>
+                    <button type="button" class="glass-button flex-1" onclick="closeModal()" data-i18n="costs.cancel">Cancel</button>
+                    <button type="submit" class="glass-button glass-button-primary flex-1" data-i18n="costs.save">Save</button>
                 </div>
             </form>
         </div>
     </div>
 
     <script>
+    /* ── i18n helper ── */
+    function tt(key, fallback) {
+        try { return (typeof window.t === 'function') ? window.t(key, fallback) : (fallback || key); }
+        catch (e) { return fallback || key; }
+    }
+
     /* ── Constants ── */
     var REFRESH_SECS = 30;
     var DONUT_COLORS = ['#bae6fd','#c4b5fd','#6ee7b7','#fde68a','#fca5a5','#f0abfc','#a5f3fc','#bbf7d0'];
@@ -460,7 +467,7 @@
             dot.setAttribute('r', '3'); dot.setAttribute('fill', '#fde68a');
             svg.appendChild(dot);
             var peakEl = document.getElementById('hourly-peak-label');
-            if (peakEl) peakEl.textContent = 'peak ' + (labels[peakIdx] || '') + ': ' + fmtUSD4(max) + '/h';
+            if (peakEl) peakEl.textContent = tt('costs.peak', 'peak') + ' ' + (labels[peakIdx] || '') + ': ' + fmtUSD4(max) + '/h';
         }
     }
 
@@ -478,9 +485,9 @@
             el.className = 'period-delta';
             if (!ref) { el.classList.add('delta-flat'); el.textContent = '\u2014'; return; }
             var pct = ((cur - ref) / ref) * 100;
-            if (Math.abs(pct) < 0.5) { el.classList.add('delta-flat'); el.textContent = '\u2248 flat'; }
-            else if (pct > 0) { el.classList.add('delta-up');   el.textContent = '\u2191 ' + pct.toFixed(1) + '% vs prev'; }
-            else              { el.classList.add('delta-down');  el.textContent = '\u2193 ' + Math.abs(pct).toFixed(1) + '% vs prev'; }
+            if (Math.abs(pct) < 0.5) { el.classList.add('delta-flat'); el.textContent = '\u2248 ' + tt('costs.flat', 'flat'); }
+            else if (pct > 0) { el.classList.add('delta-up');   el.textContent = '\u2191 ' + pct.toFixed(1) + '% ' + tt('costs.vs_prev', 'vs prev'); }
+            else              { el.classList.add('delta-down');  el.textContent = '\u2193 ' + Math.abs(pct).toFixed(1) + '% ' + tt('costs.vs_prev', 'vs prev'); }
         }
         setDelta('compare-today-delta',     today, yest);
         setDelta('compare-yesterday-delta', yest,  wavg);
@@ -528,10 +535,10 @@
             var nodata = document.createElementNS(ns, 'text');
             nodata.setAttribute('x','60'); nodata.setAttribute('y','66'); nodata.setAttribute('text-anchor','middle');
             nodata.setAttribute('fill','rgba(255,255,255,0.4)'); nodata.setAttribute('font-size','11');
-            nodata.textContent = 'no data';
+            nodata.textContent = tt('costs.no_data', 'no data');
             svg.appendChild(nodata);
-            legend.innerHTML = '';
-            legend.appendChild(mkEl('span', {cls:'text-muted text-sm', text:'No cost data yet'}));
+            legend.textContent = '';
+            legend.appendChild(mkEl('span', {cls:'text-muted text-sm', text:tt('costs.no_cost_data', 'No cost data yet')}));
             return;
         }
         var total = entries.reduce(function(s, e) { return s + e.cost; }, 0) || 1;
@@ -563,7 +570,7 @@
         var sl = document.createElementNS(ns, 'text');
         sl.setAttribute('x', cx); sl.setAttribute('y', cy + 10); sl.setAttribute('text-anchor', 'middle');
         sl.setAttribute('fill', 'rgba(255,255,255,0.45)'); sl.setAttribute('font-size', '8');
-        sl.textContent = 'total'; svg.appendChild(sl);
+        sl.textContent = tt('costs.total', 'total'); svg.appendChild(sl);
         legend.innerHTML = '';
         entries.forEach(function(e) {
             var item = document.createElement('div'); item.className = 'donut-legend-item';
@@ -583,7 +590,7 @@
         if (!chats.length) {
             var tr = document.createElement('tr');
             var td = document.createElement('td'); td.setAttribute('colspan', '5');
-            td.className = 'text-muted text-center text-sm'; td.textContent = 'No chat cost data yet';
+            td.className = 'text-muted text-center text-sm'; td.textContent = tt('costs.no_chat_data', 'No chat cost data yet');
             tr.appendChild(td); tbody.appendChild(tr);
             return;
         }
@@ -614,7 +621,7 @@
         var dtEl = document.getElementById('deleg-total');
         if (dtEl) { dtEl.classList.remove('skeleton'); dtEl.textContent = fmtNum(total); }
         var sessEl = document.getElementById('swarm-total-sessions');
-        if (sessEl) sessEl.textContent = fmtNum(artifacts) + ' artifacts total';
+        if (sessEl) sessEl.textContent = fmtNum(artifacts) + ' ' + tt('costs.artifacts_total', 'artifacts total');
     }
 
     /* ── Budget ── */
@@ -712,7 +719,7 @@
         renderSwarmActivity(swarmData);
         isFirstLoad = false;
         var updEl = document.getElementById('last-updated');
-        if (updEl) updEl.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+        if (updEl) updEl.textContent = tt('costs.updated', 'Updated') + ': ' + new Date().toLocaleTimeString();
     }
 
     /* ── Budget submit ── */
@@ -747,7 +754,7 @@
         var ft = document.getElementById('footer-timer');
         var ff = document.getElementById('footer-refresh-fill');
         if (nt) nt.textContent = '\u21BB ' + timerSec + 's';
-        if (ft) ft.textContent = 'Next auto-refresh: ' + timerSec + 's';
+        if (ft) ft.textContent = tt('costs.next_refresh', 'Next auto-refresh') + ': ' + timerSec + 's';
         if (ff) ff.style.width = ((timerSec / REFRESH_SECS) * 100) + '%';
     }
 
@@ -772,28 +779,28 @@
             var dd = document.getElementById('bell-dropdown'); if (!dd) return;
             dd.innerHTML = '';
             if (!alerts.length && !items.length) {
-                dd.appendChild(mkEl('div', {cls:'bell-dropdown-empty', text:'No notifications'}));
+                dd.appendChild(mkEl('div', {cls:'bell-dropdown-empty', text:tt('nav.no_notifications', 'No notifications')}));
             } else {
                 if (alerts.length) {
-                    dd.appendChild(mkEl('div', {cls:'bell-dropdown-header', text:'ALERTS'}));
+                    dd.appendChild(mkEl('div', {cls:'bell-dropdown-header', text:tt('nav.alerts', 'ALERTS')}));
                     alerts.forEach(function(a) {
                         var el = document.createElement('a'); el.className = 'bell-dropdown-item'; el.href = '/v4/ops';
                         var dot = document.createElement('span'); dot.className = 'bell-dropdown-severity ' + (a.severity || 'error');
-                        el.appendChild(dot); el.appendChild(document.createTextNode(a.title || a.message || 'Alert'));
+                        el.appendChild(dot); el.appendChild(document.createTextNode(a.title || a.message || tt('nav.alert', 'Alert')));
                         dd.appendChild(el);
                     });
                 }
                 if (items.length) {
-                    dd.appendChild(mkEl('div', {cls:'bell-dropdown-header', text:'INBOX'}));
+                    dd.appendChild(mkEl('div', {cls:'bell-dropdown-header', text:tt('nav.inbox_upper', 'INBOX')}));
                     items.forEach(function(it) {
                         var el = document.createElement('a'); el.className = 'bell-dropdown-item'; el.href = '/v4/inbox#' + (it.id || '');
                         var dot = document.createElement('span'); dot.className = 'bell-dropdown-severity ' + (it.severity || 'info');
-                        el.appendChild(dot); el.appendChild(document.createTextNode(it.title || 'Notification'));
+                        el.appendChild(dot); el.appendChild(document.createTextNode(it.title || tt('nav.notification', 'Notification')));
                         dd.appendChild(el);
                     });
                 }
             }
-            var fo = mkEl('a', {cls:'bell-dropdown-footer', text:'View all \u2192', href:'/v4/inbox', style:'display:block;text-decoration:none;'});
+            var fo = mkEl('a', {cls:'bell-dropdown-footer', text:tt('nav.view_all', 'View all') + ' \u2192', href:'/v4/inbox', style:'display:block;text-decoration:none;'});
             dd.appendChild(fo);
         } catch (err) { console.error(err); }
     }

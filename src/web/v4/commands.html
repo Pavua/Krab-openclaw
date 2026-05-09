@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Commands - Krab AI</title>
+<title data-i18n="commands.page_title">Команды — Krab AI</title>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/v4/liquid-glass.css">
 <script src="/v4/theme-toggle.js" defer></script>
+<script src="/v4/i18n.js" defer></script>
 <style>
     body {
         margin: 0;
@@ -486,17 +487,17 @@
 <nav class="glass-nav">
     <div class="nav-logo">Krab AI</div>
     <div class="nav-links">
-        <a href="/v4/" class="nav-link">Hub</a>
-        <a href="/v4/chat" class="nav-link">Chat</a>
-        <a href="/costs" class="nav-link">Costs</a>
-        <a href="/inbox" class="nav-link">Inbox</a>
-        <a href="/swarm" class="nav-link">Swarm</a>
-        <a href="/translator" class="nav-link">Translator</a>
-        <a href="/ops" class="nav-link">Ops</a>
-        <a href="/v4/research" class="nav-link">Research</a>
-        <a href="/commands" class="nav-link active">Commands</a>
+        <a href="/v4/" class="nav-link" data-i18n="nav.hub">Hub</a>
+        <a href="/v4/chat" class="nav-link" data-i18n="nav.chat">Chat</a>
+        <a href="/costs" class="nav-link" data-i18n="nav.costs">Costs</a>
+        <a href="/inbox" class="nav-link" data-i18n="nav.inbox">Inbox</a>
+        <a href="/swarm" class="nav-link" data-i18n="nav.swarm">Swarm</a>
+        <a href="/translator" class="nav-link" data-i18n="nav.translator">Translator</a>
+        <a href="/ops" class="nav-link" data-i18n="nav.ops">Ops</a>
+        <a href="/v4/research" class="nav-link" data-i18n="nav.research">Research</a>
+        <a href="/commands" class="nav-link active" data-i18n="nav.commands">Commands</a>
         <div class="nav-bell-wrapper">
-            <a href="/inbox" class="nav-bell" title="Notifications">
+            <a href="/inbox" class="nav-bell" data-i18n-title="commands.notifications_title" title="Notifications">
                 <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
                 </svg>
@@ -510,10 +511,10 @@
 <main class="page-content">
     <div class="page-header">
         <div>
-            <h1>Commands Reference</h1>
+            <h1 data-i18n="commands.title">Справочник команд</h1>
             <div class="header-meta">
-                <span class="meta-badge" id="totalBadge">— commands</span>
-                <span class="last-updated" id="lastUpdated">Loading…</span>
+                <span class="meta-badge" id="totalBadge" data-i18n="commands.badge_placeholder">— команд</span>
+                <span class="last-updated" id="lastUpdated" data-i18n="commands.loading">Загрузка…</span>
             </div>
         </div>
     </div>
@@ -523,45 +524,47 @@
             <circle cx="11" cy="11" r="8"></circle>
             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
         </svg>
-        <input type="search" id="searchInput" class="search-input" placeholder="Search by name, description, or alias…" autocomplete="off" spellcheck="false" aria-label="Search commands">
+        <input type="search" id="searchInput" class="search-input" placeholder="Поиск по имени, описанию или алиасу…" data-i18n-placeholder="commands.search_placeholder" data-i18n-aria-label="commands.search_aria" autocomplete="off" spellcheck="false" aria-label="Поиск команд">
         <span class="search-kbd">⌘F</span>
     </div>
 
-    <div class="tabs-wrap" id="tabsWrap" role="tablist" aria-label="Categories"></div>
+    <div class="tabs-wrap" id="tabsWrap" role="tablist" data-i18n-aria-label="commands.categories" aria-label="Категории"></div>
 
-    <div class="chip-row" role="group" aria-label="Quick filters">
-        <button class="chip" data-chip="owner">Owner only</button>
-        <button class="chip" data-chip="aliases">Has aliases</button>
-        <button class="chip" data-chip="ai">AI commands</button>
-        <button class="chip" data-chip="admin">Admin</button>
+    <div class="chip-row" role="group" data-i18n-aria-label="commands.quick_filters" aria-label="Быстрые фильтры">
+        <button class="chip" data-chip="owner" data-i18n="commands.chip_owner">Только владелец</button>
+        <button class="chip" data-chip="aliases" data-i18n="commands.chip_aliases">С алиасами</button>
+        <button class="chip" data-chip="ai" data-i18n="commands.chip_ai">AI-команды</button>
+        <button class="chip" data-chip="admin" data-i18n="commands.chip_admin">Админ</button>
     </div>
 
     <div class="summary-bar" id="summaryBar">
-        <span id="summaryText">Loading…</span>
-        <button class="summary-reset" id="resetBtn" type="button">Reset filters</button>
+        <span id="summaryText" data-i18n="commands.loading">Загрузка…</span>
+        <button class="summary-reset" id="resetBtn" type="button" data-i18n="commands.reset_filters">Сбросить фильтры</button>
     </div>
 
     <div class="cmd-table-wrap">
-        <table class="cmd-table" aria-label="Commands list">
+        <table class="cmd-table" data-i18n-aria-label="commands.list_aria" aria-label="Список команд">
             <thead>
                 <tr>
-                    <th class="col-name sortable" data-sort="name">Command <span class="sort-arrow">▲</span></th>
-                    <th class="col-cat sortable" data-sort="category">Category <span class="sort-arrow"></span></th>
-                    <th class="col-desc">Description</th>
-                    <th class="col-owner" title="Owner-only commands">Owner</th>
-                    <th class="col-aliases">Aliases</th>
+                    <th class="col-name sortable" data-sort="name"><span data-i18n="commands.col_name">Команда</span> <span class="sort-arrow">▲</span></th>
+                    <th class="col-cat sortable" data-sort="category"><span data-i18n="commands.col_category">Категория</span> <span class="sort-arrow"></span></th>
+                    <th class="col-desc" data-i18n="commands.col_description">Описание</th>
+                    <th class="col-owner" data-i18n="commands.col_owner" data-i18n-title="commands.col_owner_tip" title="Команды только для владельца">Владелец</th>
+                    <th class="col-aliases" data-i18n="commands.col_aliases">Алиасы</th>
                 </tr>
             </thead>
             <tbody id="cmdBody"></tbody>
         </table>
     </div>
 
-    <div class="pager" id="pager" aria-label="Pagination"></div>
+    <div class="pager" id="pager" data-i18n-aria-label="commands.pagination" aria-label="Пагинация"></div>
 </main>
 
 <script>
 (function () {
     'use strict';
+
+    function tt(k){return (window.t||(x=>x))(k);}
 
     const API_BASE = '';
     const PAGE_SIZE = 50;
@@ -619,7 +622,7 @@
         const td = document.createElement('td');
         td.colSpan = 5;
         td.className = 'loading';
-        td.textContent = 'Loading commands…';
+        td.textContent = tt('commands.loading_cmds');
         tr.appendChild(td);
         cmdBody.appendChild(tr);
     })();
@@ -728,7 +731,7 @@
             btn.setAttribute('aria-selected', state.category === cat ? 'true' : 'false');
 
             const label = document.createElement('span');
-            label.textContent = cat === 'all' ? 'All' : cat.charAt(0).toUpperCase() + cat.slice(1);
+            label.textContent = cat === 'all' ? tt('commands.cat_all') : (tt('commands.cat_' + cat) !== ('commands.cat_' + cat) ? tt('commands.cat_' + cat) : cat.charAt(0).toUpperCase() + cat.slice(1));
             btn.appendChild(label);
 
             const count = document.createElement('span');
@@ -769,8 +772,8 @@
         const pageItems = sorted.slice(start, start + PAGE_SIZE);
 
         summaryText.textContent = totalFiltered === state.all.length
-            ? `All ${state.all.length} commands`
-            : `${totalFiltered} of ${state.all.length} commands`;
+            ? `${tt('commands.summary_all_prefix')} ${state.all.length} ${tt('commands.summary_cmds_suffix')}`
+            : `${totalFiltered} ${tt('commands.summary_of')} ${state.all.length} ${tt('commands.summary_cmds_suffix')}`;
 
         clearNode(cmdBody);
 
@@ -780,10 +783,10 @@
             td.colSpan = 5;
             const empty = document.createElement('div');
             empty.className = 'empty-state';
-            empty.textContent = 'No commands match your filters.';
+            empty.textContent = tt('commands.empty_no_match');
             const hint = document.createElement('span');
             hint.className = 'empty-state-hint';
-            hint.textContent = 'Try clearing search or filters.';
+            hint.textContent = tt('commands.empty_hint');
             empty.appendChild(hint);
             td.appendChild(empty);
             tr.appendChild(td);
@@ -818,7 +821,7 @@
             tdCat.className = 'col-cat';
             const catBadge = document.createElement('span');
             catBadge.className = 'cmd-cat-badge';
-            catBadge.textContent = cmd.category || 'other';
+            catBadge.textContent = cmd.category || tt('commands.cat_other');
             tdCat.appendChild(catBadge);
             tr.appendChild(tdCat);
 
@@ -835,13 +838,13 @@
             if (cmd.owner_only) {
                 ownerSpan.className = 'owner-ico yes';
                 ownerSpan.textContent = '●';
-                ownerSpan.title = 'Owner only';
-                ownerSpan.setAttribute('aria-label', 'Owner only');
+                ownerSpan.title = tt('commands.owner_only');
+                ownerSpan.setAttribute('aria-label', tt('commands.owner_only'));
             } else {
                 ownerSpan.className = 'owner-ico no';
                 ownerSpan.textContent = '○';
-                ownerSpan.title = 'Public';
-                ownerSpan.setAttribute('aria-label', 'Public');
+                ownerSpan.title = tt('commands.public');
+                ownerSpan.setAttribute('aria-label', tt('commands.public'));
             }
             tdOwner.appendChild(ownerSpan);
             tr.appendChild(tdOwner);
@@ -902,7 +905,7 @@
 
         const label = document.createElement('div');
         label.className = 'expand-label';
-        label.textContent = 'Usage';
+        label.textContent = tt('commands.usage');
         inner.appendChild(label);
 
         const usage = document.createElement('div');
@@ -913,20 +916,20 @@
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';
         copyBtn.className = 'expand-copy-btn';
-        copyBtn.textContent = 'Copy';
+        copyBtn.textContent = tt('commands.copy');
         copyBtn.addEventListener('click', async (ev) => {
             ev.stopPropagation();
             try {
                 await navigator.clipboard.writeText(cmd.usage || ('!' + cmd.name));
-                copyBtn.textContent = 'Copied';
+                copyBtn.textContent = tt('commands.copied');
                 copyBtn.classList.add('copied');
                 setTimeout(() => {
-                    copyBtn.textContent = 'Copy';
+                    copyBtn.textContent = tt('commands.copy');
                     copyBtn.classList.remove('copied');
                 }, 1500);
             } catch (_) {
-                copyBtn.textContent = 'Failed';
-                setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+                copyBtn.textContent = tt('commands.copy_failed');
+                setTimeout(() => { copyBtn.textContent = tt('commands.copy'); }, 1500);
             }
         });
         inner.appendChild(copyBtn);
@@ -991,7 +994,7 @@
             return b;
         };
 
-        pager.appendChild(mk('‹ Prev', state.page - 1, state.page <= 1));
+        pager.appendChild(mk('‹ ' + tt('commands.prev'), state.page - 1, state.page <= 1));
 
         // Smart window of pages
         const win = 2;
@@ -1011,11 +1014,11 @@
             }
         });
 
-        pager.appendChild(mk('Next ›', state.page + 1, state.page >= pages));
+        pager.appendChild(mk(tt('commands.next') + ' ›', state.page + 1, state.page >= pages));
 
         const info = document.createElement('span');
         info.className = 'pager-info';
-        info.textContent = `${(state.page - 1) * PAGE_SIZE + 1}–${Math.min(state.page * PAGE_SIZE, total)} of ${total}`;
+        info.textContent = `${(state.page - 1) * PAGE_SIZE + 1}–${Math.min(state.page * PAGE_SIZE, total)} ${tt('commands.summary_of')} ${total}`;
         pager.appendChild(info);
     }
 
@@ -1110,8 +1113,8 @@
             state.all = Array.isArray(data.commands) ? data.commands : [];
             state.categories = Array.isArray(data.categories) ? data.categories : [];
 
-            totalBadge.textContent = `${data.total ?? state.all.length} commands`;
-            lastUpdated.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+            totalBadge.textContent = `${data.total ?? state.all.length} ${tt('commands.summary_cmds_suffix')}`;
+            lastUpdated.textContent = `${tt('commands.updated')} ${new Date().toLocaleTimeString()}`;
 
             renderChips();
             renderTabs();
@@ -1126,7 +1129,7 @@
             td.colSpan = 5;
             const div = document.createElement('div');
             div.className = 'empty-state';
-            div.textContent = 'Failed to load commands.';
+            div.textContent = tt('commands.load_failed');
             const hint = document.createElement('span');
             hint.className = 'empty-state-hint';
             hint.textContent = String(err && err.message || err);
@@ -1134,8 +1137,8 @@
             td.appendChild(div);
             tr.appendChild(td);
             cmdBody.appendChild(tr);
-            totalBadge.textContent = '— commands';
-            lastUpdated.textContent = 'Load failed';
+            totalBadge.textContent = tt('commands.badge_placeholder');
+            lastUpdated.textContent = tt('commands.load_failed_short');
         }
     }
 
@@ -1179,13 +1182,13 @@
             if (alerts.length === 0 && latestItems.length === 0) {
                 const emptyDiv = document.createElement('div');
                 emptyDiv.className = 'bell-dropdown-empty';
-                emptyDiv.textContent = 'Нет уведомлений';
+                emptyDiv.textContent = tt('commands.bell_empty');
                 dropdown.appendChild(emptyDiv);
             } else {
                 if (alerts.length > 0) {
                     const header = document.createElement('div');
                     header.className = 'bell-dropdown-header';
-                    header.textContent = 'ALERTS';
+                    header.textContent = tt('commands.bell_alerts');
                     dropdown.appendChild(header);
                     alerts.forEach((alert) => {
                         const a = document.createElement('a');
@@ -1193,7 +1196,7 @@
                         a.href = '/v4/ops';
                         const dot = document.createElement('span');
                         dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
-                        const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+                        const text = document.createTextNode(alert.title || alert.message || alert.code || tt('commands.bell_alert_default'));
                         a.appendChild(dot);
                         a.appendChild(text);
                         dropdown.appendChild(a);
@@ -1202,7 +1205,7 @@
                 if (latestItems.length > 0) {
                     const header = document.createElement('div');
                     header.className = 'bell-dropdown-header';
-                    header.textContent = 'INBOX';
+                    header.textContent = tt('commands.bell_inbox');
                     dropdown.appendChild(header);
                     latestItems.forEach((item) => {
                         const a = document.createElement('a');
@@ -1210,7 +1213,7 @@
                         a.href = `/v4/inbox#${item.id || item.item_id || ''}`;
                         const dot = document.createElement('span');
                         dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
-                        const text = document.createTextNode(item.title || 'Notification');
+                        const text = document.createTextNode(item.title || tt('commands.bell_notification_default'));
                         a.appendChild(dot);
                         a.appendChild(text);
                         dropdown.appendChild(a);
@@ -1221,7 +1224,7 @@
             const footer = document.createElement('a');
             footer.className = 'bell-dropdown-footer';
             footer.href = '/v4/inbox';
-            footer.textContent = 'Открыть все →';
+            footer.textContent = tt('commands.bell_open_all');
             footer.style.display = 'block';
             footer.style.textDecoration = 'none';
             dropdown.appendChild(footer);

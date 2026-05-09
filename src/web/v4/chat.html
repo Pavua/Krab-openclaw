@@ -3,9 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Krab Dashboard - AI Chat</title>
+    <title data-i18n="chat.page_title">Krab Dashboard — AI Чат</title>
     <link rel="stylesheet" href="/v4/liquid-glass.css">
     <script src="/v4/theme-toggle.js" defer></script>
+    <script src="/v4/i18n.js" defer></script>
     <style>
         /* Structural layout using variables assumed from liquid-glass.css */
         body {
@@ -300,18 +301,18 @@
     <nav class="glass-nav">
         <div class="nav-logo">Krab AI</div>
         <div class="nav-links">
-            <a href="/v4/" class="nav-link">Hub</a>
-            <a href="/v4/chat" class="nav-link active">Chat</a>
-            <a href="/costs" class="nav-link">Costs</a>
-            <a href="/inbox" class="nav-link">Inbox</a>
-            <a href="/swarm" class="nav-link">Swarm</a>
-            <a href="/translator" class="nav-link">Translator</a>
-            <a href="/ops" class="nav-link">Ops</a>
-            <a href="/v4/research" class="nav-link">Research</a>
-            <a href="/settings" class="nav-link">Settings</a>
-            <a href="/commands" class="nav-link">Commands</a>
+            <a href="/v4/" class="nav-link" data-i18n="nav.hub">Hub</a>
+            <a href="/v4/chat" class="nav-link active" data-i18n="nav.chat">Chat</a>
+            <a href="/costs" class="nav-link" data-i18n="nav.costs">Costs</a>
+            <a href="/inbox" class="nav-link" data-i18n="nav.inbox">Inbox</a>
+            <a href="/swarm" class="nav-link" data-i18n="nav.swarm">Swarm</a>
+            <a href="/translator" class="nav-link" data-i18n="nav.translator">Translator</a>
+            <a href="/ops" class="nav-link" data-i18n="nav.ops">Ops</a>
+            <a href="/v4/research" class="nav-link" data-i18n="nav.research">Research</a>
+            <a href="/settings" class="nav-link" data-i18n="nav.settings">Settings</a>
+            <a href="/commands" class="nav-link" data-i18n="nav.commands">Commands</a>
             <div class="nav-bell-wrapper">
-                <a href="/inbox" class="nav-bell" title="Notifications">
+                <a href="/inbox" class="nav-bell" data-i18n-title="chat.notifications_tip" title="Уведомления">
                     <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
                     </svg>
@@ -325,11 +326,11 @@
     <!-- Main Chat Area -->
     <div class="chat-container">
         <div class="chat-header">
-            <h2>💬 AI Chat</h2>
+            <h2><span data-i18n="chat.header_title">💬 AI Чат</span></h2>
             <div class="mode-toggles">
-                <button class="glass-pill" data-mode="Debug">Debug</button>
-                <button class="glass-pill active" data-mode="Normal">Normal</button>
-                <button class="glass-pill" data-mode="Clean">Clean</button>
+                <button class="glass-pill" data-mode="Debug" data-i18n="chat.mode_debug">Debug</button>
+                <button class="glass-pill active" data-mode="Normal" data-i18n="chat.mode_normal">Normal</button>
+                <button class="glass-pill" data-mode="Clean" data-i18n="chat.mode_clean">Clean</button>
             </div>
         </div>
 
@@ -344,10 +345,10 @@
         <div class="chat-input-bar">
             <div class="attachment-preview" id="attachment-preview"></div>
             <div class="input-row">
-                <button class="glass-btn" id="btn-attach" title="Attach File">📎</button>
+                <button class="glass-btn" id="btn-attach" data-i18n-title="chat.attach_tip" title="Прикрепить файл">📎</button>
                 <input type="file" id="file-input" style="display:none;" accept="image/*,application/pdf,text/plain">
-                <textarea class="glass-input" id="chat-input" rows="1" placeholder="Message Assistant..."></textarea>
-                <button class="glass-button-primary" id="btn-send">Send</button>
+                <textarea class="glass-input" id="chat-input" rows="1" data-i18n-placeholder="chat.input_placeholder" placeholder="Сообщение ассистенту..."></textarea>
+                <button class="glass-button-primary" id="btn-send" data-i18n="chat.send_button">Отправить</button>
             </div>
         </div>
     </div>
@@ -355,20 +356,20 @@
     <!-- Keyboard shortcut overlays -->
     <div id="kbd-palette-overlay" class="kbd-overlay hidden" role="dialog" aria-label="Quick navigation">
         <div class="kbd-palette">
-            <input id="kbd-search" class="kbd-search" placeholder="Go to page... (Cmd+K)" autocomplete="off">
+            <input id="kbd-search" class="kbd-search" data-i18n-placeholder="chat.kbd_search_placeholder" placeholder="Перейти на страницу... (Cmd+K)" autocomplete="off">
             <div id="kbd-results" class="kbd-results"></div>
         </div>
     </div>
     <div id="kbd-help-overlay" class="kbd-overlay hidden" role="dialog" aria-label="Keyboard shortcuts">
         <div class="kbd-help">
-            <h3>Keyboard Shortcuts</h3>
+            <h3 data-i18n="chat.kbd_title">Горячие клавиши</h3>
             <table class="kbd-help-table">
-                <tr><td>Quick Navigation</td><td><span class="kbd-key">Cmd + K</span></td></tr>
-                <tr><td>Help</td><td><span class="kbd-key">Cmd + /</span></td></tr>
-                <tr><td>Send Message</td><td><span class="kbd-key">Cmd + Enter</span></td></tr>
-                <tr><td>Close Modal</td><td><span class="kbd-key">Esc</span></td></tr>
+                <tr><td data-i18n="chat.kbd_quick_nav">Быстрая навигация</td><td><span class="kbd-key">Cmd + K</span></td></tr>
+                <tr><td data-i18n="chat.kbd_help">Справка</td><td><span class="kbd-key">Cmd + /</span></td></tr>
+                <tr><td data-i18n="chat.kbd_send">Отправить сообщение</td><td><span class="kbd-key">Cmd + Enter</span></td></tr>
+                <tr><td data-i18n="chat.kbd_close">Закрыть окно</td><td><span class="kbd-key">Esc</span></td></tr>
             </table>
-            <p class="text-xs text-muted">Press Esc to close</p>
+            <p class="text-xs text-muted" data-i18n="chat.kbd_esc_hint">Нажмите Esc для закрытия</p>
         </div>
     </div>
 
@@ -376,27 +377,28 @@
     <div class="glass-tab-bar">
         <a href="/v4/" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-            Hub
+            <span data-i18n="nav.hub">Hub</span>
         </a>
         <a href="/v4/chat" class="tab-item active">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            Chat
+            <span data-i18n="nav.chat">Chat</span>
         </a>
         <a href="/costs" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-            Costs
+            <span data-i18n="nav.costs">Costs</span>
         </a>
         <a href="/swarm" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-            Swarm
+            <span data-i18n="nav.swarm">Swarm</span>
         </a>
         <a href="/translator" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
-            Trans
+            <span data-i18n="nav.trans_short">Trans</span>
         </a>
     </div>
 
     <script>
+        function tt(k){return (window.t||(x=>x))(k);}
         // State
         let toolMode = localStorage.getItem("krab_tool_mode") || "Normal";
         let chatHistory = JSON.parse(localStorage.getItem("krab_chat_history") || "[]");
@@ -473,7 +475,7 @@
         }
 
         function clearHistory() {
-            if(!confirm('Clear all chat history?')) return;
+            if(!confirm(tt('chat.confirm_clear'))) return;
             chatHistory = [];
             localStorage.removeItem("krab_chat_history");
             Array.from(elements.messages.children).forEach(child => {
@@ -553,7 +555,7 @@
             if (!file) return;
 
             elements.attachmentPreview.style.display = 'inline-flex';
-            elements.attachmentPreview.innerHTML = `⏳ Uploading ${file.name}...`;
+            elements.attachmentPreview.textContent = `⏳ ${tt('chat.uploading')} ${file.name}...`;
 
             const formData = new FormData();
             formData.append('file', file);
@@ -564,7 +566,7 @@
                 currentAttachmentSnippet = data.snippet;
                 elements.attachmentPreview.innerHTML = `📎 ${file.name} <button class="glass-btn" onclick="removeAttachment()">✖</button>`;
             } catch (err) {
-                elements.attachmentPreview.innerHTML = `❌ Upload failed <button class="glass-btn" onclick="removeAttachment()">✖</button>`;
+                elements.attachmentPreview.innerHTML = `❌ ${tt('chat.upload_failed')} <button class="glass-btn" onclick="removeAttachment()">✖</button>`;
             }
             e.target.value = ''; 
         }
@@ -585,7 +587,7 @@
 
             if (currentAttachmentSnippet) {
                 promptToSend = `${currentAttachmentSnippet}\n\n${text}`;
-                if(!text) promptToLog = "[Attachment Sent]";
+                if(!text) promptToLog = tt('chat.attachment_sent');
                 removeAttachment();
             }
 
@@ -652,7 +654,7 @@
 
             activeEventSource.addEventListener('error', () => {
                 closeStream();
-                if(!currentAssistantContent) currentAssistantMessageDiv.innerHTML = "<em>Error connecting to Assistant.</em>";
+                if(!currentAssistantContent) currentAssistantMessageDiv.innerHTML = `<em>${tt('chat.error_connecting')}</em>`;
             });
         }
 
@@ -708,13 +710,13 @@
             if (alerts.length === 0 && latestItems.length === 0) {
               const emptyDiv = document.createElement('div');
               emptyDiv.className = 'bell-dropdown-empty';
-              emptyDiv.textContent = 'Нет уведомлений';
+              emptyDiv.textContent = tt('chat.bell_empty');
               dropdown.appendChild(emptyDiv);
             } else {
               if (alerts.length > 0) {
                 const header = document.createElement('div');
                 header.className = 'bell-dropdown-header';
-                header.textContent = 'ALERTS';
+                header.textContent = tt('chat.bell_alerts');
                 dropdown.appendChild(header);
 
                 alerts.forEach(alert => {
@@ -725,7 +727,7 @@
                   const dot = document.createElement('span');
                   dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
           
-                  const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+                  const text = document.createTextNode(alert.title || alert.message || alert.code || tt('chat.bell_alert_default'));
           
                   a.appendChild(dot);
                   a.appendChild(text);
@@ -736,7 +738,7 @@
               if (latestItems.length > 0) {
                 const header = document.createElement('div');
                 header.className = 'bell-dropdown-header';
-                header.textContent = 'INBOX';
+                header.textContent = tt('chat.bell_inbox');
                 dropdown.appendChild(header);
 
                 latestItems.forEach(item => {
@@ -747,7 +749,7 @@
                   const dot = document.createElement('span');
                   dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
           
-                  const text = document.createTextNode(item.title || 'Notification');
+                  const text = document.createTextNode(item.title || tt('chat.bell_notification_default'));
           
                   a.appendChild(dot);
                   a.appendChild(text);
@@ -759,7 +761,7 @@
             const footer = document.createElement('a');
             footer.className = 'bell-dropdown-footer';
             footer.href = '/v4/inbox';
-            footer.textContent = 'Открыть все →';
+            footer.textContent = tt('chat.bell_open_all');
             footer.style.display = 'block';
             footer.style.textDecoration = 'none';
             dropdown.appendChild(footer);
@@ -852,7 +854,7 @@
                 if (currentMatches.length === 0) {
                     const empty = document.createElement('div');
                     empty.className = 'kbd-empty';
-                    empty.textContent = 'No matches';
+                    empty.textContent = tt('chat.kbd_no_matches');
                     kbdResults.appendChild(empty);
                     return;
                 }

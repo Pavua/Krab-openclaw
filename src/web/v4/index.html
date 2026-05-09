@@ -7,6 +7,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/v4/liquid-glass.css">
     <script src="/v4/theme-toggle.js" defer></script>
+    <script src="/v4/i18n.js" defer></script>
     <style>
         body {
             margin: 0;
@@ -353,16 +354,16 @@
     <nav class="glass-nav">
         <div class="nav-logo">Krab AI</div>
         <div class="nav-links">
-            <a href="/v4/" class="nav-link active">Hub</a>
-            <a href="/v4/chat" class="nav-link">Chat</a>
-            <a href="/costs" class="nav-link">Costs</a>
-            <a href="/inbox" class="nav-link">Inbox</a>
-            <a href="/swarm" class="nav-link">Swarm</a>
-            <a href="/translator" class="nav-link">Translator</a>
-            <a href="/ops" class="nav-link">Ops</a>
-            <a href="/v4/research" class="nav-link">Research</a>
-            <a href="/settings" class="nav-link">Settings</a>
-            <a href="/commands" class="nav-link">Commands</a>
+            <a href="/v4/" class="nav-link active" data-i18n="nav.hub">Hub</a>
+            <a href="/v4/chat" class="nav-link" data-i18n="nav.chat">Chat</a>
+            <a href="/costs" class="nav-link" data-i18n="nav.costs">Costs</a>
+            <a href="/inbox" class="nav-link" data-i18n="nav.inbox">Inbox</a>
+            <a href="/swarm" class="nav-link" data-i18n="nav.swarm">Swarm</a>
+            <a href="/translator" class="nav-link" data-i18n="nav.translator">Translator</a>
+            <a href="/ops" class="nav-link" data-i18n="nav.ops">Ops</a>
+            <a href="/v4/research" class="nav-link" data-i18n="nav.research">Research</a>
+            <a href="/settings" class="nav-link" data-i18n="nav.settings">Settings</a>
+            <a href="/commands" class="nav-link" data-i18n="nav.commands">Commands</a>
             <div class="nav-bell-wrapper">
                 <a href="/inbox" class="nav-bell" aria-label="Notifications (0 new)" title="Notifications">
                     <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -378,120 +379,120 @@
     <div class="glass-tab-bar">
         <a href="/v4/" class="tab-item active">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-            Hub
+            <span data-i18n="nav.hub">Hub</span>
         </a>
         <a href="/v4/chat" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            Chat
+            <span data-i18n="nav.chat">Chat</span>
         </a>
         <a href="/costs" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-            Costs
+            <span data-i18n="nav.costs">Costs</span>
         </a>
         <a href="/swarm" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-            Swarm
+            <span data-i18n="nav.swarm">Swarm</span>
         </a>
         <a href="/translator" class="tab-item">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>
-            Trans
+            <span data-i18n="nav.translator_short">Trans</span>
         </a>
     </div>
 
     <main class="container">
         <section class="hero-section mb-4">
             <h1 class="hero-title">🦀 Krab</h1>
-            <p class="text-muted text-sm mt-2 mb-4">Autonomous AI Orchestration Hub</p>
-            
+            <p class="text-muted text-sm mt-2 mb-4" data-i18n="hub.tagline">Autonomous AI Orchestration Hub</p>
+
             <div class="health-row gap-2 w-full max-w-md" role="status" aria-live="polite" aria-atomic="true">
                 <div class="glass-card flex items-center gap-2 p-2 flex-1 justify-center">
-                    <span class="status-dot" id="dot-tg" role="img" aria-label="Telegram: checking"></span> <span class="text-sm">Telegram</span>
+                    <span class="status-dot" id="dot-tg" role="img" aria-label="Telegram: checking"></span> <span class="text-sm" data-i18n="hub.health_telegram">Telegram</span>
                 </div>
                 <div class="glass-card flex items-center gap-2 p-2 flex-1 justify-center">
-                    <span class="status-dot" id="dot-claw" role="img" aria-label="OpenClaw: checking"></span> <span class="text-sm">OpenClaw</span>
+                    <span class="status-dot" id="dot-claw" role="img" aria-label="OpenClaw: checking"></span> <span class="text-sm" data-i18n="hub.health_openclaw">OpenClaw</span>
                 </div>
                 <div class="glass-card flex items-center gap-2 p-2 flex-1 justify-center">
-                    <span class="status-dot" id="dot-sched" role="img" aria-label="Scheduler: checking"></span> <span class="text-sm">Scheduler</span>
+                    <span class="status-dot" id="dot-sched" role="img" aria-label="Scheduler: checking"></span> <span class="text-sm" data-i18n="hub.health_scheduler">Scheduler</span>
                 </div>
             </div>
 
             <div class="glass-card mt-4 p-4 flex flex-col items-center gap-2 max-w-md w-full">
-                <span class="text-xs text-muted uppercase tracking-wider">Current Active Model</span>
-                <div class="model-badge skeleton" id="hero-model-badge" aria-live="polite">Loading...</div>
-                <div class="text-xs text-muted mt-2" id="hero-last-route" style="opacity:0.7;">Last route: — • — • —</div>
+                <span class="text-xs text-muted uppercase tracking-wider" data-i18n="hub.current_active_model">Current Active Model</span>
+                <div class="model-badge skeleton" id="hero-model-badge" aria-live="polite" data-i18n="hub.loading">Loading...</div>
+                <div class="text-xs text-muted mt-2" id="hero-last-route" style="opacity:0.7;" data-i18n="hub.last_route_empty">Last route: — • — • —</div>
             </div>
         </section>
 
         <section class="hub-grid mb-4">
             <a href="/costs" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
                 <div class="flex justify-between items-center mb-2">
-                    <h3 class="m-0 text-accent text-lg">💰 Costs</h3>
+                    <h3 class="m-0 text-accent text-lg"><span>💰 </span><span data-i18n="nav.costs">Costs</span></h3>
                 </div>
-                <span class="text-sm text-muted skeleton" id="stat-costs">— today</span>
+                <span class="text-sm text-muted skeleton" id="stat-costs" data-i18n="hub.stat_costs_empty">— today</span>
             </a>
-            
+
             <a href="/inbox" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
                 <div class="flex justify-between items-center mb-2">
-                    <h3 class="m-0 text-accent text-lg">📬 Inbox</h3>
+                    <h3 class="m-0 text-accent text-lg"><span>📬 </span><span data-i18n="nav.inbox">Inbox</span></h3>
                 </div>
-                <span class="text-sm text-muted skeleton" id="stat-inbox">— unread</span>
+                <span class="text-sm text-muted skeleton" id="stat-inbox" data-i18n="hub.stat_inbox_empty">— unread</span>
             </a>
 
             <a href="/swarm" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
                 <div class="flex justify-between items-center mb-2">
-                    <h3 class="m-0 text-accent text-lg">🐝 Swarm</h3>
+                    <h3 class="m-0 text-accent text-lg"><span>🐝 </span><span data-i18n="nav.swarm">Swarm</span></h3>
                 </div>
-                <span class="text-sm text-muted skeleton" id="stat-swarm">— teams active</span>
+                <span class="text-sm text-muted skeleton" id="stat-swarm" data-i18n="hub.stat_swarm_empty">— teams active</span>
             </a>
 
             <a href="/translator" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
                 <div class="flex justify-between items-center mb-2">
-                    <h3 class="m-0 text-accent text-lg">🔄 Translator</h3>
+                    <h3 class="m-0 text-accent text-lg"><span>🔄 </span><span data-i18n="nav.translator">Translator</span></h3>
                 </div>
-                <span class="text-sm text-muted skeleton" id="stat-translator">— translations</span>
+                <span class="text-sm text-muted skeleton" id="stat-translator" data-i18n="hub.stat_translator_empty">— translations</span>
             </a>
 
             <a href="/v4/chat" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
                 <div class="flex justify-between items-center mb-2">
-                    <h3 class="m-0 text-accent text-lg">💬 Chat</h3>
+                    <h3 class="m-0 text-accent text-lg"><span>💬 </span><span data-i18n="nav.chat">Chat</span></h3>
                 </div>
-                <span class="text-sm text-muted">Open AI Assistant</span>
+                <span class="text-sm text-muted" data-i18n="hub.open_ai_assistant">Open AI Assistant</span>
             </a>
 
             <a href="#ops" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
                 <div class="flex justify-between items-center mb-2">
-                    <h3 class="m-0 text-accent text-lg">🔧 Ops</h3>
+                    <h3 class="m-0 text-accent text-lg"><span>🔧 </span><span data-i18n="nav.ops">Ops</span></h3>
                 </div>
-                <span class="text-sm text-muted skeleton" id="stat-ops">— alerts</span>
+                <span class="text-sm text-muted skeleton" id="stat-ops" data-i18n="hub.stat_ops_empty">— alerts</span>
             </a>
         </section>
 
         <section class="glass-card p-4 mb-4 routing-card">
             <div class="flex justify-between items-center mb-3">
-                <h2 class="m-0 text-lg">Model Routing & Fallbacks</h2>
+                <h2 class="m-0 text-lg" data-i18n="hub.model_routing_title">Model Routing & Fallbacks</h2>
                 <div class="flex gap-2">
-                    <button class="glass-button text-xs" onclick="refreshCatalog()" id="btn-refresh-cat" aria-label="Refresh catalog">Refresh</button>
-                    <button class="glass-button text-xs" onclick="toggleAdvanced()" aria-label="Toggle advanced routing settings">Advanced</button>
+                    <button class="glass-button text-xs" onclick="refreshCatalog()" id="btn-refresh-cat" aria-label="Refresh catalog" data-i18n="hub.refresh">Refresh</button>
+                    <button class="glass-button text-xs" onclick="toggleAdvanced()" aria-label="Toggle advanced routing settings" data-i18n="hub.advanced">Advanced</button>
                 </div>
             </div>
-            
+
             <div class="flex flex-col gap-3">
                 <div class="glass-card p-3 flex flex-col gap-2" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(16, 185, 129, 0.3);">
                     <div class="flex justify-between items-center">
                         <div class="flex items-center gap-2">
-                            <span class="text-xs text-success">PRIMARY ROUTE</span>
+                            <span class="text-xs text-success" data-i18n="hub.primary_route">PRIMARY ROUTE</span>
                             <span id="primary-dirty-dot" class="dirty-dot hidden"></span>
-                            <span id="recently-switched-badge" class="recently-switched hidden">Recently switched</span>
+                            <span id="recently-switched-badge" class="recently-switched hidden" data-i18n="hub.recently_switched">Recently switched</span>
                         </div>
                         <span class="badge text-xs skeleton" id="route-primary-provider">—</span>
                     </div>
-                    <label for="primary-model-select" class="sr-only">Primary Model</label>
+                    <label for="primary-model-select" class="sr-only" data-i18n="hub.primary_model">Primary Model</label>
                     <select id="primary-model-select" class="glass-input w-full text-sm font-bold text-accent" style="background: rgba(0,0,0,0.2);">
-                        <option value="">Loading catalog...</option>
+                        <option value="" data-i18n="hub.loading_catalog">Loading catalog...</option>
                     </select>
                 </div>
 
-                <div class="text-xs text-muted mt-2">Fallback Chain:</div>
+                <div class="text-xs text-muted mt-2" data-i18n="hub.fallback_chain">Fallback Chain:</div>
                 <div id="fallback-chain" class="flex flex-col gap-2">
                     <div class="skeleton p-2" style="height: 30px;"></div>
                     <div class="skeleton p-2" style="height: 30px;"></div>
@@ -499,29 +500,29 @@
 
                 <div class="mt-4 flex flex-col gap-2">
                     <div class="flex justify-center hidden" id="unsaved-changes-container">
-                        <span class="unsaved-badge">Есть несохранённые изменения</span>
+                        <span class="unsaved-badge" data-i18n="hub.unsaved_changes">Есть несохранённые изменения</span>
                     </div>
-                    <button id="btn-apply-changes" class="glass-button glass-button-primary w-full opacity-50" style="padding: 12px; font-size: 1rem; font-weight: 700;" disabled title="Сохранить и применить" aria-label="Apply routing changes" onclick="applyModelSwitch()">
+                    <button id="btn-apply-changes" class="glass-button glass-button-primary w-full opacity-50" style="padding: 12px; font-size: 1rem; font-weight: 700;" disabled title="Сохранить и применить" aria-label="Apply routing changes" onclick="applyModelSwitch()" data-i18n="hub.apply_changes">
                         Apply Changes
                     </button>
-                    <div class="text-muted text-xs text-center">Изменения применяются сразу без рестарта</div>
+                    <div class="text-muted text-xs text-center" data-i18n="hub.apply_hint">Изменения применяются сразу без рестарта</div>
                 </div>
             </div>
 
             <div id="advanced-routing" class="hidden mt-4 pt-4" style="border-top: 1px solid rgba(255,255,255,0.1);">
                 <div class="flex flex-col gap-3">
                     <div class="flex justify-between items-center">
-                        <span class="text-sm">Force Local Only</span>
-                        <label for="toggle-local" class="sr-only">Force Local Only</label>
-                        <button class="glass-button text-xs" id="toggle-local" aria-label="Toggle Force Local Only" onclick="this.classList.toggle('glass-button-primary')">Off</button>
+                        <span class="text-sm" data-i18n="hub.force_local_only">Force Local Only</span>
+                        <label for="toggle-local" class="sr-only" data-i18n="hub.force_local_only">Force Local Only</label>
+                        <button class="glass-button text-xs" id="toggle-local" aria-label="Toggle Force Local Only" onclick="this.classList.toggle('glass-button-primary')" data-i18n="hub.off">Off</button>
                     </div>
                     <div class="flex justify-between items-center">
-                        <span class="text-sm">Thinking Depth</span>
-                        <label for="thinking-depth" class="sr-only">Thinking Depth</label>
+                        <span class="text-sm" data-i18n="hub.thinking_depth">Thinking Depth</span>
+                        <label for="thinking-depth" class="sr-only" data-i18n="hub.thinking_depth">Thinking Depth</label>
                         <select id="thinking-depth" class="glass-input text-xs" aria-label="Thinking Depth" style="width: auto;">
-                            <option>Auto</option>
-                            <option>Low</option>
-                            <option>High</option>
+                            <option data-i18n="hub.depth_auto">Auto</option>
+                            <option data-i18n="hub.depth_low">Low</option>
+                            <option data-i18n="hub.depth_high">High</option>
                         </select>
                     </div>
                 </div>
@@ -530,8 +531,8 @@
 
         <section class="glass-card p-4 mb-4" id="provider-cards-section">
             <div class="flex justify-between items-center mb-3">
-                <h2 class="m-0 text-lg">Provider Status</h2>
-                <button class="glass-button text-xs" onclick="refreshProviderCards()" aria-label="Refresh provider status">Refresh</button>
+                <h2 class="m-0 text-lg" data-i18n="hub.provider_status">Provider Status</h2>
+                <button class="glass-button text-xs" onclick="refreshProviderCards()" aria-label="Refresh provider status" data-i18n="hub.refresh">Refresh</button>
             </div>
             <div id="provider-cards" class="flex flex-col gap-2">
                 <div class="skeleton p-3" style="height: 50px;"></div>
@@ -540,13 +541,13 @@
 
         <section class="quick-actions flex gap-2 justify-between mt-4">
             <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1" aria-label="Run health check" onclick="runAction('/api/ops/diagnostics', 'GET', this)">
-                <span class="text-lg">🩺</span> <span class="text-xs">Health Check</span>
+                <span class="text-lg">🩺</span> <span class="text-xs" data-i18n="hub.health_check">Health Check</span>
             </button>
-            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1" aria-label="Restart runtime" onclick="confirmAction('Restart runtime? This will disconnect current chat sessions temporarily.', '/api/runtime/recover', 'POST', this)">
-                <span class="text-lg">⚡</span> <span class="text-xs">Restart</span>
+            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1" aria-label="Restart runtime" onclick="confirmAction(tt('hub.confirm_restart'), '/api/runtime/recover', 'POST', this)">
+                <span class="text-lg">⚡</span> <span class="text-xs" data-i18n="hub.restart">Restart</span>
             </button>
-            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1 text-error" aria-label="Clear chat context" onclick="confirmAction('Clear current chat context? Unsaved messages will be lost.', '/api/runtime/chat-session/clear', 'POST', this)">
-                <span class="text-lg">🗑️</span> <span class="text-xs">Clear Context</span>
+            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1 text-error" aria-label="Clear chat context" onclick="confirmAction(tt('hub.confirm_clear_context'), '/api/runtime/chat-session/clear', 'POST', this)">
+                <span class="text-lg">🗑️</span> <span class="text-xs" data-i18n="hub.clear_context">Clear Context</span>
             </button>
         </section>
     </main>
@@ -555,17 +556,21 @@
 
     <div id="custom-modal" class="glass-modal-overlay">
         <div class="glass-modal">
-            <h3 class="m-0 mb-3 text-lg">Confirm Action</h3>
+            <h3 class="m-0 mb-3 text-lg" data-i18n="hub.confirm_action">Confirm Action</h3>
             <p id="custom-modal-text" class="text-sm text-muted mb-4"></p>
             <div class="flex justify-end gap-2">
-                <button class="glass-button" onclick="closeModal()">Cancel</button>
-                <button class="glass-button glass-button-primary" id="custom-modal-confirm">Confirm</button>
+                <button class="glass-button" onclick="closeModal()" data-i18n="hub.cancel">Cancel</button>
+                <button class="glass-button glass-button-primary" id="custom-modal-confirm" data-i18n="hub.confirm">Confirm</button>
             </div>
         </div>
     </div>
 
     <script>
         const API_BASE = '';
+        // tt() helper — matches inbox.html pattern (window.t from /v4/i18n.js)
+        function tt(key) {
+            return (window.t || ((k) => k))(key);
+        }
         let catalogData = [];
         let fallbackChain = [];
         let currentPrimaryModel = '';
@@ -677,7 +682,7 @@
             ]);
 
             const systemOk = !health._error && health.ok !== false && summary.health?.status !== 'error';
-            document.title = systemOk ? "🦀 Krab ✅" : "🦀 Krab ⚠️";
+            document.title = systemOk ? "🦀 Krab ✅" : "🦀 Krab ⚠️";  // emojis only — no localization
 
             setStatus('dot-tg', health.telegram_session_state === 'connected' || health.ok, 'Telegram');
             setStatus('dot-claw', systemOk, 'OpenClaw');
@@ -690,29 +695,29 @@
             const lrModel = lastRoute.model || '—';
             const lrProvider = lastRoute.provider || '—';
             const lrTs = lastRoute.ts ? new Date(lastRoute.ts * 1000).toLocaleTimeString() : '—';
-            setVal('hero-last-route', `Last route: ${lrModel} • ${lrProvider} • ${lrTs}`);
+            setVal('hero-last-route', `${tt('hub.last_route_prefix')} ${lrModel} • ${lrProvider} • ${lrTs}`);
 
             if (!budget._error && budget.budget) {
-                setVal('stat-costs', `$${parseFloat(budget.budget.spent_usd || 0).toFixed(2)} today`);
-            } else setVal('stat-costs', '— today');
+                setVal('stat-costs', `$${parseFloat(budget.budget.spent_usd || 0).toFixed(2)} ${tt('hub.suffix_today')}`);
+            } else setVal('stat-costs', `— ${tt('hub.suffix_today')}`);
 
             if (!notifs._error) {
-                setVal('stat-inbox', `${notifs.total || 0} unread`);
-            } else setVal('stat-inbox', '— unread');
+                setVal('stat-inbox', `${notifs.total || 0} ${tt('hub.suffix_unread')}`);
+            } else setVal('stat-inbox', `— ${tt('hub.suffix_unread')}`);
 
             if (!swarm._error && swarm.summary) {
                 const teams = swarm.summary.by_team ? Object.keys(swarm.summary.by_team).length : 0;
-                setVal('stat-swarm', `${teams} teams active`);
-            } else setVal('stat-swarm', '— teams active');
+                setVal('stat-swarm', `${teams} ${tt('hub.suffix_teams_active')}`);
+            } else setVal('stat-swarm', `— ${tt('hub.suffix_teams_active')}`);
 
             if (!summary._error && summary.translator) {
-                setVal('stat-translator', `${summary.translator.count || 0} translations`);
-            } else setVal('stat-translator', '— translations');
+                setVal('stat-translator', `${summary.translator.count || 0} ${tt('hub.suffix_translations')}`);
+            } else setVal('stat-translator', `— ${tt('hub.suffix_translations')}`);
 
             if (!alerts._error && alerts.alerts) {
                 const count = alerts.alerts.length;
-                setVal('stat-ops', count > 0 ? `<span class="text-error">${count} alerts</span>` : `0 alerts`, true);
-            } else setVal('stat-ops', '— alerts');
+                setVal('stat-ops', count > 0 ? `<span class="text-error">${count} ${tt('hub.suffix_alerts')}</span>` : `0 ${tt('hub.suffix_alerts')}`, true);
+            } else setVal('stat-ops', `— ${tt('hub.suffix_alerts')}`);
 
             if (catalogData.length === 0) {
                 loadCatalog(false).then(() => {
@@ -726,13 +731,13 @@
             const container = document.getElementById('provider-cards');
             if (!container) return;
             const data = await fetchAPI('/api/openclaw/model-routing/status');
-            if (data._error) { container.textContent = 'Ошибка загрузки'; return; }
+            if (data._error) { container.textContent = tt('hub.load_error'); return; }
             const routing = data.routing || data;
             const providers = [];
             for (const [key, val] of Object.entries(routing)) {
                 if (val && typeof val === 'object' && val.provider) providers.push(val);
             }
-            if (providers.length === 0) { container.textContent = 'Нет провайдеров'; return; }
+            if (providers.length === 0) { container.textContent = tt('hub.no_providers'); return; }
             while (container.firstChild) container.removeChild(container.firstChild);
             for (const p of providers) {
                 const card = document.createElement('div');
@@ -746,7 +751,7 @@
                 nameEl.textContent = p.provider;
                 const statusEl = document.createElement('div');
                 statusEl.className = 'text-xs ' + (p.readiness === 'ready' ? 'text-success' : 'text-error');
-                const models = (p.runtime_models || []).join(', ') || 'нет моделей';
+                const models = (p.runtime_models || []).join(', ') || tt('hub.no_models');
                 statusEl.textContent = p.readiness.toUpperCase() + ' \u00b7 ' + p.auth_mode + ' \u00b7 ' + models;
                 left.appendChild(nameEl);
                 left.appendChild(statusEl);
@@ -761,8 +766,8 @@
                     const btn = document.createElement('button');
                     btn.className = 'glass-button text-xs';
                     btn.style.cssText = 'white-space:nowrap;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.4)';
-                    btn.textContent = '\ud83d\udd11 Re-login';
-                    btn.setAttribute('aria-label', 'Re-login ' + p.provider);
+                    btn.textContent = '\ud83d\udd11 ' + tt('hub.relogin');
+                    btn.setAttribute('aria-label', tt('hub.relogin') + ' ' + p.provider);
                     btn.onclick = async function() {
                         btn.disabled = true; btn.textContent = '\u23f3...';
                         const res = await fetchAPI('/api/model/provider-action', {
@@ -771,11 +776,11 @@
                             body: JSON.stringify({provider: p.provider, action: 'repair_oauth'})
                         });
                         if (res._error || !res.ok) {
-                            btn.textContent = '\u274c \u041e\u0448\u0438\u0431\u043a\u0430';
-                            setTimeout(function() { btn.textContent = '\ud83d\udd11 Re-login'; btn.disabled = false; }, 3000);
+                            btn.textContent = '\u274c ' + tt('hub.error');
+                            setTimeout(function() { btn.textContent = '\ud83d\udd11 ' + tt('hub.relogin'); btn.disabled = false; }, 3000);
                         } else {
-                            btn.textContent = '\u2705 Helper \u043e\u0442\u043a\u0440\u044b\u0442';
-                            setTimeout(function() { btn.textContent = '\ud83d\udd11 Re-login'; btn.disabled = false; refreshProviderCards(); }, 5000);
+                            btn.textContent = '\u2705 ' + tt('hub.helper_opened');
+                            setTimeout(function() { btn.textContent = '\ud83d\udd11 ' + tt('hub.relogin'); btn.disabled = false; refreshProviderCards(); }, 5000);
                         }
                     };
                     card.appendChild(btn);
@@ -820,7 +825,7 @@
 
             if (localModels.length > 0) {
                 const group = document.createElement('optgroup');
-                group.label = 'Local (LM Studio)';
+                group.label = tt('hub.local_lm_studio');
                 localModels.forEach(m => {
                     const opt = document.createElement('option');
                     opt.value = m.id;
@@ -851,7 +856,7 @@
             const currentPrimary = routingStatus.current_primary || (cat.cloud_slots && cat.cloud_slots.chat) || '';
             
             currentPrimaryModel = currentPrimary;
-            catalogData = [...cloudInv, ...localModels.map(m => ({...m, provider: 'lm_studio', provider_label: 'Local'}))];
+            catalogData = [...cloudInv, ...localModels.map(m => ({...m, provider: 'lm_studio', provider_label: tt('hub.local')}))];
             fallbackChain = [...(routingStatus.current_fallbacks || [])];
             
             originalFallbacks = [...fallbackChain];
@@ -869,7 +874,7 @@
             if (fallbackChain.length === 0) {
                 const empty = document.createElement('div');
                 empty.className = 'text-xs text-muted p-2 text-center';
-                empty.textContent = 'No fallbacks configured.';
+                empty.textContent = tt('hub.no_fallbacks');
                 container.appendChild(empty);
             } else {
                 fallbackChain.forEach((modelId, idx) => {
@@ -955,7 +960,7 @@
             const addContainer = document.createElement('div');
             const addBtn = document.createElement('button');
             addBtn.className = 'fallback-add-button text-sm';
-            addBtn.textContent = '+ Add Fallback';
+            addBtn.textContent = '+ ' + tt('hub.add_fallback');
             addBtn.setAttribute('aria-label', 'Add new fallback model');
             
             addBtn.onclick = () => {
@@ -970,7 +975,7 @@
                 
                 const defaultOpt = document.createElement('option');
                 defaultOpt.value = '';
-                defaultOpt.textContent = 'Select model...';
+                defaultOpt.textContent = tt('hub.select_model');
                 select.appendChild(defaultOpt);
 
                 const groups = new Map();
@@ -998,12 +1003,12 @@
 
                 const cancelBtn = document.createElement('button');
                 cancelBtn.className = 'glass-button text-xs';
-                cancelBtn.textContent = 'Cancel';
+                cancelBtn.textContent = tt('hub.cancel');
                 cancelBtn.onclick = () => renderFallbackChain();
 
                 const confirmBtn = document.createElement('button');
                 confirmBtn.className = 'glass-button glass-button-primary text-xs';
-                confirmBtn.textContent = 'Add';
+                confirmBtn.textContent = tt('hub.add');
                 confirmBtn.onclick = () => {
                     if (select.value) addFallback(select.value);
                 };
@@ -1051,7 +1056,7 @@
             const btn = document.getElementById('btn-refresh-cat');
             btn.textContent = '...';
             await loadCatalog(true);
-            btn.textContent = 'Refresh';
+            btn.textContent = tt('hub.refresh');
         }
 
         async function applyModelSwitch() {
@@ -1065,10 +1070,10 @@
             const btn = document.getElementById('btn-apply-changes');
             const originalText = btn.textContent;
             
-            btn.textContent = 'Applying...';
+            btn.textContent = tt('hub.applying');
             btn.classList.add('opacity-50');
             btn.disabled = true;
-            
+
             const res = await fetchAPI('/api/model/apply', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -1076,10 +1081,10 @@
             });
 
             if(!res._error) {
-                btn.textContent = 'Success!';
+                btn.textContent = tt('hub.success');
                 btn.classList.add('text-success');
-                showToast('Routing chain updated successfully', 'success');
-                
+                showToast(tt('hub.toast_routing_updated'), 'success');
+
                 currentPrimaryModel = pendingPrimary;
                 originalFallbacks = [...fallbackChain];
                 localStorage.setItem('lastPrimaryChangeTs', Date.now().toString());
@@ -1090,9 +1095,9 @@
                     refreshDashboard();
                 }, 500);
             } else {
-                btn.textContent = 'Failed';
+                btn.textContent = tt('hub.failed');
                 btn.classList.add('text-error');
-                showToast('Failed to update routing chain', 'error');
+                showToast(tt('hub.toast_routing_failed'), 'error');
                 updateDirtyUI();
             }
 
@@ -1136,16 +1141,28 @@
 
         async function runAction(endpoint, method, btnElement) {
             const originalHtml = btnElement.innerHTML;
-            btnElement.innerHTML = '<span class="spinner"></span> <span class="text-xs">Wait...</span>';
-            
+            // Build via DOM — values come from i18n table only
+            const _waitTxt = tt('hub.wait');
+            const _doneTxt = tt('hub.done');
+            const _errTxt = tt('hub.error');
+            btnElement.replaceChildren();
+            const _sp = document.createElement('span'); _sp.className = 'spinner';
+            const _wt = document.createElement('span'); _wt.className = 'text-xs'; _wt.textContent = _waitTxt;
+            btnElement.appendChild(_sp); btnElement.appendChild(document.createTextNode(' ')); btnElement.appendChild(_wt);
+
             const res = await fetchAPI(endpoint, { method });
-            
+
+            btnElement.replaceChildren();
+            const _resSpan = document.createElement('span');
             if(!res._error) {
-                btnElement.innerHTML = '<span class="text-success text-xs">Done ✅</span>';
-                if (endpoint.includes('clear')) showToast('Context cleared', 'success');
+                _resSpan.className = 'text-success text-xs';
+                _resSpan.textContent = _doneTxt + ' ✅';
+                if (endpoint.includes('clear')) showToast(tt('hub.toast_context_cleared'), 'success');
             } else {
-                btnElement.innerHTML = '<span class="text-error text-xs">Error ❌</span>';
+                _resSpan.className = 'text-error text-xs';
+                _resSpan.textContent = _errTxt + ' ❌';
             }
+            btnElement.appendChild(_resSpan);
             
             setTimeout(() => {
                 btnElement.innerHTML = originalHtml;
@@ -1200,13 +1217,13 @@
             if (alerts.length === 0 && latestItems.length === 0) {
               const emptyDiv = document.createElement('div');
               emptyDiv.className = 'bell-dropdown-empty';
-              emptyDiv.textContent = 'Нет уведомлений';
+              emptyDiv.textContent = tt('hub.no_notifications');
               dropdown.appendChild(emptyDiv);
             } else {
               if (alerts.length > 0) {
                 const header = document.createElement('div');
                 header.className = 'bell-dropdown-header';
-                header.textContent = 'ALERTS';
+                header.textContent = tt('hub.bell_alerts');
                 dropdown.appendChild(header);
 
                 alerts.forEach(alert => {
@@ -1217,7 +1234,7 @@
                   const dot = document.createElement('span');
                   dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
           
-                  const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+                  const text = document.createTextNode(alert.title || alert.message || alert.code || tt('hub.alert'));
           
                   a.appendChild(dot);
                   a.appendChild(text);
@@ -1228,7 +1245,7 @@
               if (latestItems.length > 0) {
                 const header = document.createElement('div');
                 header.className = 'bell-dropdown-header';
-                header.textContent = 'INBOX';
+                header.textContent = tt('hub.bell_inbox');
                 dropdown.appendChild(header);
 
                 latestItems.forEach(item => {
@@ -1239,7 +1256,7 @@
                   const dot = document.createElement('span');
                   dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
           
-                  const text = document.createTextNode(item.title || 'Notification');
+                  const text = document.createTextNode(item.title || tt('hub.notification'));
           
                   a.appendChild(dot);
                   a.appendChild(text);
@@ -1251,7 +1268,7 @@
             const footer = document.createElement('a');
             footer.className = 'bell-dropdown-footer';
             footer.href = '/v4/inbox';
-            footer.textContent = 'Открыть все →';
+            footer.textContent = tt('hub.open_all') + ' →';
             footer.style.display = 'block';
             footer.style.textDecoration = 'none';
             dropdown.appendChild(footer);

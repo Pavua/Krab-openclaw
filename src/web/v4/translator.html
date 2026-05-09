@@ -6,6 +6,8 @@
   <title>Krab AI - Translator</title>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link href="/v4/liquid-glass.css" rel="stylesheet">
+  <script src="/v4/theme-toggle.js" defer></script>
+  <script src="/v4/i18n.js" defer></script>
   <style>
     /* New Custom Styles for Translator Dashboard */
     
@@ -154,18 +156,18 @@
   <nav class="glass-nav">
       <div class="nav-logo">Krab AI</div>
       <div class="nav-links">
-          <a href="/v4/" class="nav-link">Hub</a>
-          <a href="/v4/chat" class="nav-link">Chat</a>
-          <a href="/costs" class="nav-link">Costs</a>
-          <a href="/inbox" class="nav-link">Inbox</a>
-          <a href="/swarm" class="nav-link">Swarm</a>
-          <a href="/translator" class="nav-link active">Translator</a>
-          <a href="/ops" class="nav-link">Ops</a>
-          <a href="/v4/research" class="nav-link">Research</a>
-          <a href="/settings" class="nav-link">Settings</a>
-          <a href="/commands" class="nav-link">Commands</a>
+          <a href="/v4/" class="nav-link" data-i18n="nav.hub">Hub</a>
+          <a href="/v4/chat" class="nav-link" data-i18n="nav.chat">Chat</a>
+          <a href="/costs" class="nav-link" data-i18n="nav.costs">Costs</a>
+          <a href="/inbox" class="nav-link" data-i18n="nav.inbox">Inbox</a>
+          <a href="/swarm" class="nav-link" data-i18n="nav.swarm">Swarm</a>
+          <a href="/translator" class="nav-link active" data-i18n="nav.translator">Translator</a>
+          <a href="/ops" class="nav-link" data-i18n="nav.ops">Ops</a>
+          <a href="/v4/research" class="nav-link" data-i18n="nav.research">Research</a>
+          <a href="/settings" class="nav-link" data-i18n="nav.settings">Settings</a>
+          <a href="/commands" class="nav-link" data-i18n="nav.commands">Commands</a>
           <div class="nav-bell-wrapper">
-              <a href="/inbox" class="nav-bell" title="Notifications">
+              <a href="/inbox" class="nav-bell" data-i18n-title="nav.notifications_title" title="Notifications">
                   <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
                   </svg>
@@ -179,23 +181,23 @@
   <div class="glass-tab-bar">
       <a href="/v4/" class="tab-item">
           <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-          Hub
+          <span data-i18n="nav.hub">Hub</span>
       </a>
       <a href="/v4/chat" class="tab-item">
           <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          Chat
+          <span data-i18n="nav.chat">Chat</span>
       </a>
       <a href="/costs" class="tab-item">
           <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-          Costs
+          <span data-i18n="nav.costs">Costs</span>
       </a>
       <a href="/swarm" class="tab-item">
           <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          Swarm
+          <span data-i18n="nav.swarm">Swarm</span>
       </a>
       <a href="/translator" class="tab-item active">
           <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>
-          Trans
+          <span data-i18n="nav.trans_short">Trans</span>
       </a>
   </div>
 
@@ -207,30 +209,30 @@
       <div class="flex items-center gap-3">
         <div id="statusDot" class="status-dot warning"></div>
         <h1 class="flex items-center gap-2">
-          Translator
-          <span id="langBadge" class="skeleton" style="display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; min-width: 80px; letter-spacing: 0.03em;">Loading</span>
+          <span data-i18n="translator.title">Translator</span>
+          <span id="langBadge" class="skeleton" style="display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; min-width: 80px; letter-spacing: 0.03em;" data-i18n="common.loading">Loading</span>
         </h1>
       </div>
-      <div id="statusText" class="text-sm text-muted" style="font-weight: 600; letter-spacing: 0.08em;">INITIALIZING</div>
+      <div id="statusText" class="text-sm text-muted" style="font-weight: 600; letter-spacing: 0.08em;" data-i18n="translator.status_initializing">INITIALIZING</div>
     </header>
 
     <!-- Session Controls -->
     <div class="flex items-center gap-3" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.1s;">
       <button id="btnStart" class="glass-button glass-button-primary" onclick="handleAction('start')" style="display: none;">
         <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-        Start
+        <span data-i18n="translator.btn_start">Start</span>
       </button>
       <button id="btnPause" class="glass-button" onclick="handleAction('pause')" style="display: none;">
         <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-        Pause
+        <span data-i18n="translator.btn_pause">Pause</span>
       </button>
       <button id="btnResume" class="glass-button glass-button-primary" onclick="handleAction('resume')" style="display: none;">
         <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-        Resume
+        <span data-i18n="translator.btn_resume">Resume</span>
       </button>
       <button id="btnStop" class="glass-button" onclick="handleAction('stop')" style="display: none; color: var(--accent-red); border-color: rgba(248,113,113,0.3);">
         <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M9 10h6v4H9z"></path></svg>
-        Stop
+        <span data-i18n="translator.btn_stop">Stop</span>
       </button>
     </div>
 
@@ -239,8 +241,8 @@
       <div class="live-indicator-wrapper">
         <div id="bigLiveCircle" class="live-circle"></div>
         <div style="display: flex; flex-direction: column; align-items: flex-start;">
-          <h2 id="bigLiveText" style="margin: 0; font-size: 2.5rem; font-weight: 700; letter-spacing: 0.05em; line-height: 1; color: var(--text-muted);">OFFLINE</h2>
-          <span id="bigLiveSubtext" class="text-muted" style="font-size: 1rem; margin-top: 0.25rem;">System is currently idle</span>
+          <h2 id="bigLiveText" style="margin: 0; font-size: 2.5rem; font-weight: 700; letter-spacing: 0.05em; line-height: 1; color: var(--text-muted);" data-i18n="translator.state_offline">OFFLINE</h2>
+          <span id="bigLiveSubtext" class="text-muted" style="font-size: 1rem; margin-top: 0.25rem;" data-i18n="translator.state_idle_sub">System is currently idle</span>
         </div>
       </div>
     </div>
@@ -257,26 +259,26 @@
 
       <!-- Profile Card -->
       <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.2s;">
-        <h2 class="mb-3">Profile Settings</h2>
+        <h2 class="mb-3" data-i18n="translator.profile_title">Profile Settings</h2>
         <div class="flex flex-col gap-3 text-sm">
           <div class="flex justify-between items-center">
-            <span class="text-muted">Language Pair</span>
+            <span class="text-muted" data-i18n="translator.lang_pair">Language Pair</span>
             <span id="profLang" class="skeleton" style="min-width: 70px; display: inline-block; border-radius: 6px;">&nbsp;</span>
           </div>
           <div class="flex justify-between items-center">
-            <span class="text-muted">Mode</span>
+            <span class="text-muted" data-i18n="translator.mode">Mode</span>
             <span id="profMode" class="skeleton" style="min-width: 90px; display: inline-block; border-radius: 6px;">&nbsp;</span>
           </div>
           <div class="flex justify-between items-center">
-            <span class="text-muted">Voice Strategy</span>
+            <span class="text-muted" data-i18n="translator.voice_strategy">Voice Strategy</span>
             <span id="profVoice" class="skeleton" style="min-width: 110px; display: inline-block; border-radius: 6px;">&nbsp;</span>
           </div>
           <div class="flex justify-between items-center" style="padding-top: 0.75rem; border-top: 1px solid var(--glass-border);">
-            <span class="text-muted">Ordinary Calls</span>
+            <span class="text-muted" data-i18n="translator.ordinary_calls">Ordinary Calls</span>
             <div id="profOrd" class="status-dot" style="animation: none;"></div>
           </div>
           <div class="flex justify-between items-center">
-            <span class="text-muted">Internet Calls</span>
+            <span class="text-muted" data-i18n="translator.internet_calls">Internet Calls</span>
             <div id="profInt" class="status-dot" style="animation: none;"></div>
           </div>
         </div>
@@ -284,22 +286,22 @@
 
       <!-- Session Card -->
       <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.3s;">
-        <h2 class="mb-3">Live Session</h2>
+        <h2 class="mb-3" data-i18n="translator.session_title">Live Session</h2>
         <div class="flex flex-col gap-3 text-sm">
           <div class="flex justify-between items-center">
-            <span class="text-muted">Active Chats</span>
+            <span class="text-muted" data-i18n="translator.active_chats">Active Chats</span>
             <span id="sessChats" class="text-accent skeleton" style="font-weight: 700; min-width: 30px; display: inline-block; border-radius: 6px;">&nbsp;</span>
           </div>
           <div class="flex justify-between items-center">
-            <span class="text-muted">Total Translations</span>
+            <span class="text-muted" data-i18n="translator.total_translations">Total Translations</span>
             <span id="sessTotal" class="skeleton" style="min-width: 40px; display: inline-block; border-radius: 6px;">&nbsp;</span>
           </div>
           <div class="flex justify-between items-center">
-            <span class="text-muted">Avg Latency</span>
+            <span class="text-muted" data-i18n="translator.avg_latency">Avg Latency</span>
             <span id="sessLatency" class="skeleton" style="min-width: 60px; display: inline-block; border-radius: 6px;">&nbsp;</span>
           </div>
           <div class="flex justify-between items-center" style="padding-top: 0.75rem; border-top: 1px solid var(--glass-border);">
-            <span class="text-muted">Muted</span>
+            <span class="text-muted" data-i18n="translator.muted">Muted</span>
             <span id="sessMuted" class="skeleton" style="min-width: 40px; display: inline-block; border-radius: 6px;">&nbsp;</span>
           </div>
         </div>
@@ -309,22 +311,22 @@
 
     <!-- Latency Stats Dashboard -->
     <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.35s;">
-      <h2 class="mb-3">Latency & Performance</h2>
+      <h2 class="mb-3" data-i18n="translator.latency_title">Latency & Performance</h2>
       <div class="stats-grid">
         <div class="stat-mini-card">
-          <span class="stat-label">Current Latency</span>
+          <span class="stat-label" data-i18n="translator.stat_current">Current Latency</span>
           <span id="statCurLat" class="stat-value skeleton" style="min-width: 60px; border-radius: 6px;">&nbsp;</span>
         </div>
         <div class="stat-mini-card">
-          <span class="stat-label">Avg Latency</span>
+          <span class="stat-label" data-i18n="translator.stat_avg">Avg Latency</span>
           <span id="statAvgLat" class="stat-value skeleton" style="min-width: 60px; border-radius: 6px;">&nbsp;</span>
         </div>
         <div class="stat-mini-card">
-          <span class="stat-label">Max Latency</span>
+          <span class="stat-label" data-i18n="translator.stat_max">Max Latency</span>
           <span id="statMaxLat" class="stat-value skeleton" style="min-width: 60px; border-radius: 6px;">&nbsp;</span>
         </div>
         <div class="stat-mini-card">
-          <span class="stat-label">Success Rate</span>
+          <span class="stat-label" data-i18n="translator.stat_success">Success Rate</span>
           <span id="statSuccess" class="stat-value skeleton" style="min-width: 60px; border-radius: 6px;">&nbsp;</span>
         </div>
       </div>
@@ -332,24 +334,24 @@
 
     <!-- Test Translation Quick Box -->
     <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.38s;">
-      <h2 class="mb-3">Test Translation</h2>
+      <h2 class="mb-3" data-i18n="translator.test_title">Test Translation</h2>
       <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
         <div style="flex: 1; min-width: 250px; display: flex; flex-direction: column; gap: 0.75rem;">
-          <textarea id="testInput" class="test-input" placeholder="Type something to translate..."></textarea>
+          <textarea id="testInput" class="test-input" placeholder="Type something to translate..." data-i18n-placeholder="translator.test_placeholder"></textarea>
           <button onclick="handleTestTranslation()" class="glass-button glass-button-primary" style="align-self: flex-start;">
             <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"></path></svg>
-            Translate
+            <span data-i18n="translator.btn_translate">Translate</span>
           </button>
         </div>
         <div class="test-output-box">
-          <span id="testOutput" class="text-muted">Result will appear here...</span>
+          <span id="testOutput" class="text-muted" data-i18n="translator.test_output_placeholder">Result will appear here...</span>
         </div>
       </div>
     </div>
 
     <!-- Last Translation -->
     <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.4s;">
-      <h2 class="mb-3">Last Translation</h2>
+      <h2 class="mb-3" data-i18n="translator.last_title">Last Translation</h2>
       <div style="display: flex; gap: 1rem; align-items: stretch;">
         <div id="lastOrig" class="skeleton text-muted" style="flex: 1; padding: 1rem; background: rgba(0,0,0,0.2); border-radius: 12px; min-height: 70px; font-size: 0.95rem; line-height: 1.5; word-break: break-word;">&nbsp;</div>
         <div class="flex items-center justify-center text-muted" style="padding: 0 0.5rem; flex-shrink: 0;">
@@ -362,8 +364,8 @@
     <!-- History Card -->
     <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.5s;">
       <div class="flex justify-between items-center mb-3">
-        <h2>Recent History</h2>
-        <span class="text-xs text-muted">Last 10</span>
+        <h2 data-i18n="translator.history_title">Recent History</h2>
+        <span class="text-xs text-muted" data-i18n="translator.history_last10">Last 10</span>
       </div>
       <div id="historyContainer" class="flex flex-col gap-2">
         <div class="skeleton" style="height: 64px; border-radius: 12px;"></div>
@@ -376,6 +378,17 @@
 
   <script>
     const API = '/api/translator';
+
+    // i18n helper — falls back to provided default if i18n.js unavailable.
+    function tt(key, fallback) {
+      try {
+        if (window.t) {
+          const v = window.t(key);
+          if (v && v !== key) return v;
+        }
+      } catch (e) { /* ignore */ }
+      return fallback != null ? fallback : key;
+    }
 
     // XSS-safe helpers using DOM methods
     function createTextNode(text) {
@@ -457,19 +470,19 @@
       
       if (!text) return;
       
-      outputEl.textContent = 'Translating...';
+      outputEl.textContent = tt('translator.translating', 'Translating...');
       outputEl.className = 'text-muted';
-      
+
       try {
         const res = await fetch(API + '/test?text=' + encodeURIComponent(text));
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        
-        outputEl.textContent = data.translation || data.result || 'No translation returned';
+
+        outputEl.textContent = data.translation || data.result || tt('translator.no_translation', 'No translation returned');
         outputEl.className = '';
         outputEl.style.color = '#ffffff';
       } catch (err) {
-        outputEl.textContent = 'Error: ' + err.message;
+        outputEl.textContent = tt('common.error', 'Error') + ': ' + err.message;
         outputEl.className = 'text-error';
         outputEl.style.color = 'var(--accent-red, #f87171)';
       }
@@ -511,8 +524,9 @@
       const dot = document.getElementById('statusDot');
       dot.className = 'status-dot ' + (currentStatus === 'active' ? 'ok' : currentStatus === 'paused' ? 'warning' : 'error');
 
-      // Status text (Header)
-      setTextContent('statusText', currentStatus.toUpperCase());
+      // Status text (Header) — localized label per status
+      const statusKey = 'translator.status_' + currentStatus;
+      setTextContent('statusText', tt(statusKey, currentStatus.toUpperCase()));
 
       // BIG Live Trial Indicator
       const bigCircle = document.getElementById('bigLiveCircle');
@@ -522,17 +536,18 @@
       bigCircle.className = 'live-circle ' + (currentStatus === 'active' ? 'active' : currentStatus === 'paused' ? 'paused' : '');
       
       if (currentStatus === 'active') {
-        bigText.textContent = 'LIVE';
+        bigText.textContent = tt('translator.state_live', 'LIVE');
         bigText.style.color = 'var(--accent-green, #22c55e)';
-        bigSubtext.textContent = (session.active_chats != null ? session.active_chats : 0) + ' active chats';
+        const chats = session.active_chats != null ? session.active_chats : 0;
+        bigSubtext.textContent = chats + ' ' + tt('translator.active_chats_label', 'active chats');
       } else if (currentStatus === 'paused') {
-        bigText.textContent = 'PAUSED';
+        bigText.textContent = tt('translator.state_paused', 'PAUSED');
         bigText.style.color = 'var(--accent-yellow, #eab308)';
-        bigSubtext.textContent = 'Session is paused';
+        bigSubtext.textContent = tt('translator.state_paused_sub', 'Session is paused');
       } else {
-        bigText.textContent = 'OFFLINE';
+        bigText.textContent = tt('translator.state_offline', 'OFFLINE');
         bigText.style.color = 'var(--text-muted, #9ca3af)';
-        bigSubtext.textContent = 'System is currently idle';
+        bigSubtext.textContent = tt('translator.state_idle_sub', 'System is currently idle');
       }
 
       // Language badge
@@ -568,7 +583,7 @@
       const mutedEl = document.getElementById('sessMuted');
       mutedEl.textContent = '';
       mutedEl.classList.remove('skeleton');
-      mutedEl.appendChild(makeSpan(session.translation_muted ? 'Yes' : 'No', session.translation_muted ? 'text-error' : 'text-success'));
+      mutedEl.appendChild(makeSpan(session.translation_muted ? tt('translator.yes', 'Yes') : tt('translator.no', 'No'), session.translation_muted ? 'text-error' : 'text-success'));
 
       // Latency Stats Dashboard
       const curMs = stats.last_latency_ms || stats.current_latency_ms || stats.translation_ms || 0;
@@ -583,29 +598,29 @@
 
       // Last translation
       const origEl = document.getElementById('lastOrig');
-      origEl.textContent = session.last_translated_original || 'No recent translation.';
+      origEl.textContent = session.last_translated_original || tt('translator.no_recent', 'No recent translation.');
       origEl.classList.remove('skeleton');
       origEl.style.opacity = session.last_translated_original ? '1' : '0.5';
 
       const transEl = document.getElementById('lastTrans');
-      transEl.textContent = session.last_translated_translation || 'Waiting for input...';
+      transEl.textContent = session.last_translated_translation || tt('translator.waiting_input', 'Waiting for input...');
       transEl.classList.remove('skeleton');
     }
 
     function renderOffline() {
       document.getElementById('statusDot').className = 'status-dot error';
-      setTextContent('statusText', 'OFFLINE');
-      
+      setTextContent('statusText', tt('translator.state_offline', 'OFFLINE'));
+
       const bigCircle = document.getElementById('bigLiveCircle');
       const bigText = document.getElementById('bigLiveText');
       const bigSubtext = document.getElementById('bigLiveSubtext');
-      
+
       if(bigCircle) bigCircle.className = 'live-circle error';
       if(bigText) {
-        bigText.textContent = 'ERROR';
+        bigText.textContent = tt('translator.state_error', 'ERROR');
         bigText.style.color = 'var(--accent-red, #f87171)';
       }
-      if(bigSubtext) bigSubtext.textContent = 'Cannot connect to API';
+      if(bigSubtext) bigSubtext.textContent = tt('translator.error_no_api', 'Cannot connect to API');
 
       document.getElementById('btnStart').style.display = 'inline-flex';
       ['btnPause','btnResume','btnStop'].forEach(id => {
@@ -621,7 +636,7 @@
         const empty = document.createElement('div');
         empty.className = 'text-muted text-sm';
         empty.style.cssText = 'text-align:center; padding: 1.5rem;';
-        empty.textContent = 'No translation history yet.';
+        empty.textContent = tt('translator.history_empty', 'No translation history yet.');
         container.appendChild(empty);
         return;
       }
@@ -690,6 +705,13 @@
     });
     setInterval(function() { fetchStatus(); fetchHistory(); }, 10000);
 
+    // Re-render JS-driven content when language toggled.
+    window.addEventListener('krab-lang-changed', function () {
+      fetchStatus();
+      fetchHistory();
+      updateBellCount();
+    });
+
     async function updateBellCount() {
       try {
         const [inboxRes, opsRes] = await Promise.all([
@@ -729,13 +751,13 @@
         if (alerts.length === 0 && latestItems.length === 0) {
           const emptyDiv = document.createElement('div');
           emptyDiv.className = 'bell-dropdown-empty';
-          emptyDiv.textContent = 'Нет уведомлений';
+          emptyDiv.textContent = tt('translator.bell_empty', 'Нет уведомлений');
           dropdown.appendChild(emptyDiv);
         } else {
           if (alerts.length > 0) {
             const header = document.createElement('div');
             header.className = 'bell-dropdown-header';
-            header.textContent = 'ALERTS';
+            header.textContent = tt('translator.bell_alerts', 'ALERTS');
             dropdown.appendChild(header);
 
             alerts.forEach(alert => {
@@ -746,7 +768,7 @@
               const dot = document.createElement('span');
               dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
           
-              const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+              const text = document.createTextNode(alert.title || alert.message || alert.code || tt('translator.bell_alert_default', 'Alert'));
           
               a.appendChild(dot);
               a.appendChild(text);
@@ -757,7 +779,7 @@
           if (latestItems.length > 0) {
             const header = document.createElement('div');
             header.className = 'bell-dropdown-header';
-            header.textContent = 'INBOX';
+            header.textContent = tt('translator.bell_inbox', 'INBOX');
             dropdown.appendChild(header);
 
             latestItems.forEach(item => {
@@ -768,7 +790,7 @@
               const dot = document.createElement('span');
               dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
           
-              const text = document.createTextNode(item.title || 'Notification');
+              const text = document.createTextNode(item.title || tt('translator.bell_notification_default', 'Notification'));
           
               a.appendChild(dot);
               a.appendChild(text);
@@ -780,7 +802,7 @@
         const footer = document.createElement('a');
         footer.className = 'bell-dropdown-footer';
         footer.href = '/v4/inbox';
-        footer.textContent = 'Открыть все →';
+        footer.textContent = tt('translator.bell_open_all', 'Открыть все →');
         footer.style.display = 'block';
         footer.style.textDecoration = 'none';
         dropdown.appendChild(footer);
