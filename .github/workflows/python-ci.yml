@@ -50,6 +50,9 @@ jobs:
       - name: Ruff format check (src/ scripts/)
         run: ruff format --check src/ scripts/
 
+      - name: Validate pre-commit config (Wave 55-A)
+        run: python -c "import yaml; yaml.safe_load(open('.pre-commit-config.yaml')); print('pre-commit config YAML OK')"
+
       - name: Pytest unit subset (Wave 44-Z + 45-* tests)
         run: |
           pytest -q --no-header \

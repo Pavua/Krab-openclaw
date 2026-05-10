@@ -1,0 +1,11 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.10
+    hooks:
+      # Линтер: auto-fix + падение если что-то исправлено (commit refused)
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^(src|scripts)/.*\.py$
+      # Форматтер: падение если файл изменён форматтером
+      - id: ruff-format
+        files: ^(src|scripts)/.*\.py$
