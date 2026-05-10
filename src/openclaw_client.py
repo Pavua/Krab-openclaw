@@ -1767,8 +1767,26 @@ class OpenClawClient:
         """Совместимый helper для модулей, которым нужен ключ провайдера."""
         provider_low = provider.strip().lower()
         if provider_low == "google":
-            key = self.gemini_tiers.get(self.active_tier, "")
-            src = f"env:GEMINI_API_KEY_{self.active_tier.upper()}"
+            # Wave 58-A: если active_tier == "paid" но флаг выключен — принудительно
+            # переключаемся на free чтобы paid key не утёк в обход env-guard.
+            tier = self.active_tier
+            paid_flag = str(os.environ.get("GEMINI_PAID_KEY_ENABLED", "0")).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            if tier == "paid" and not paid_flag:
+                import structlog as _sl
+
+                _sl.get_logger(__name__).warning(
+                    "paid_key_attempt_blocked",
+                    reason="GEMINI_PAID_KEY_ENABLED=0",
+                    active_tier=tier,
+                    fallback="free",
+                )
+                tier = "free"
+            key = self.gemini_tiers.get(tier, "")
+            src = f"env:GEMINI_API_KEY_{tier.upper()}"
             return key, src
         if provider_low == "openai":
             key = str(os.getenv("OPENAI_API_KEY", "") or "").strip()

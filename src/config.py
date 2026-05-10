@@ -68,15 +68,20 @@ class Config:
         "true",
         "yes",
     )
+    # Wave 58-A: hard guard — paid key forbidden когда flag=0.
+    # Читаем флаг повторно из env, а не из GEMINI_PAID_KEY_ENABLED, потому что
+    # class-body вычисляется сверху вниз: GEMINI_PAID_KEY_ENABLED уже computed.
+    _paid_key_guard: bool = os.getenv("GEMINI_PAID_KEY_ENABLED", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     GEMINI_API_KEY: Optional[str] = (
-        (
-            os.getenv("GEMINI_API_KEY_PAID")
-            if os.getenv("GEMINI_PAID_KEY_ENABLED", "0").strip().lower() in ("1", "true", "yes")
-            else None
-        )
+        (os.getenv("GEMINI_API_KEY_PAID") if _paid_key_guard else None)
         or os.getenv("GEMINI_API_KEY_FREE")
         or os.getenv("GEMINI_API_KEY")
     )
+    del _paid_key_guard  # не засорять пространство имён класса
     GEMINI_MODELS: list[str] = [
         "google/gemini-2.5-flash",
         "google/gemini-2.5-pro",
@@ -860,6 +865,13 @@ class Config:
                     cls.GEMINI_API_KEY = value
                 elif key == "GEMINI_PAID_KEY_ENABLED":
                     cls.GEMINI_PAID_KEY_ENABLED = value.strip().lower() in ("1", "true", "yes")
+                    # Wave 58-A: пересчитываем GEMINI_API_KEY при смене флага,
+                    # иначе уже запущенный процесс продолжит использовать paid key.
+                    cls.GEMINI_API_KEY = (
+                        (cls.GEMINI_API_KEY_PAID if cls.GEMINI_PAID_KEY_ENABLED else None)
+                        or cls.GEMINI_API_KEY_FREE
+                        or os.getenv("GEMINI_API_KEY")
+                    )
                 elif key == "BRAVE_SEARCH_API_KEY":
                     cls.BRAVE_SEARCH_API_KEY = value
                 elif key == "TELEGRAM_STREAM_UPDATE_INTERVAL_SEC":

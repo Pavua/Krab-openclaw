@@ -103,16 +103,25 @@ def _resolve_api_key() -> str | None:
     """Резолвит актуальный Gemini API ключ из config.
 
     Приоритет: paid (если GEMINI_PAID_KEY_ENABLED=1) → free → GEMINI_API_KEY.
+    Wave 58-A: явная блокировка paid key когда флаг выключен.
     """
     try:
         from ..config import config
 
+        paid_flag = str(os.environ.get("GEMINI_PAID_KEY_ENABLED", "0")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        # Wave 58-A: paid key forbidden когда флаг выключен — логируем попытку.
+        if not paid_flag and config.GEMINI_API_KEY_PAID:
+            logger.warning(
+                "paid_key_attempt_blocked",
+                reason="GEMINI_PAID_KEY_ENABLED=0",
+                fallback="free_key",
+            )
         # Paid key если явно включён
-        if (
-            str(os.environ.get("GEMINI_PAID_KEY_ENABLED", "0")).strip().lower()
-            in {"1", "true", "yes"}
-            and config.GEMINI_API_KEY_PAID
-        ):
+        if paid_flag and config.GEMINI_API_KEY_PAID:
             return str(config.GEMINI_API_KEY_PAID)
         # Free key или fallback GEMINI_API_KEY
         return (
