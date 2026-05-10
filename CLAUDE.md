@@ -32,6 +32,10 @@ openclaw gateway
 pytest tests/ -q
 pytest tests/unit/test_openclaw_client.py -q
 ruff check src/ && ruff format src/
+
+# Pre-commit (Wave 55-A): после клонирования/первого раза
+bash scripts/install_pre_commit.sh
+# Hook автоматически: ruff check --fix + ruff format при каждом git commit
 ```
 
 ## Auto-generated reference
