@@ -262,10 +262,86 @@ async def _probe_updates_flow_alive(
     return alive
 
 
+# Wave 57-A: throttle — не чаще одного catchup каждые 5 минут,
+# чтобы избежать catchup storm при heartbeat flapping.
+_GRACEFUL_RESTART_CATCHUP_THROTTLE_SEC: float = float(
+    os.environ.get("KRAB_GRACEFUL_RESTART_CATCHUP_THROTTLE_SEC", "300")
+)
+# Wave 57-A: минимальный uptime процесса перед тем как catchup допустим
+# после graceful restart (60s). Если process только стартовал, startup
+# catchup уже запускается из userbot_started — дублировать не нужно.
+_GRACEFUL_RESTART_CATCHUP_MIN_UPTIME_SEC: float = float(
+    os.environ.get("KRAB_GRACEFUL_RESTART_CATCHUP_MIN_UPTIME_SEC", "60")
+)
+
+
 class NetworkWatchdogMixin:
     """Wave 31-C: TCP-probe + петля мониторинга offline сети.
     Wave 36-A: MTProto session probe + zombie-escalation.
-    Wave 39-D: true split-brain detection через update_id tracking."""
+    Wave 39-D: true split-brain detection через update_id tracking.
+    Wave 57-A: catchup trigger после graceful Pyrogram restart."""
+
+    def _schedule_catchup_after_graceful_restart(self) -> None:
+        """Wave 57-A: fire-and-forget catchup task после graceful Pyrogram restart.
+
+        Вызывается из _telegram_heartbeat_loop сразу после успешного
+        _try_reconnect_pyrofork. Не блокирует watchdog loop.
+
+        Throttle: не чаще одного catchup за 5 минут (_GRACEFUL_RESTART_CATCHUP_THROTTLE_SEC).
+        Uptime guard: если процесс только стартовал (<60s), startup catchup
+        из userbot_started уже идёт — не дублируем.
+
+        Production bug 2026-05-10 21:12-21:31: после graceful restart (21:12:50
+        telegram_heartbeat_graceful_restart_success) пользователь написал
+        "Проверка связи" в 21:31:43 — сообщение не было ingested в inbox
+        т.к. catchup не был triggered (Wave 46-A срабатывает только при
+        полном process restart через userbot_started hook).
+        """
+        now = time.time()
+
+        # Uptime guard: если process только стартовал, startup catchup уже работает
+        session_start = getattr(self, "_session_start_time", now)
+        uptime_sec = now - session_start
+        if uptime_sec < _GRACEFUL_RESTART_CATCHUP_MIN_UPTIME_SEC:
+            logger.debug(
+                "graceful_restart_catchup_skipped_startup",
+                uptime_sec=round(uptime_sec, 1),
+                min_uptime_sec=_GRACEFUL_RESTART_CATCHUP_MIN_UPTIME_SEC,
+            )
+            return
+
+        # Throttle: избегаем catchup storm при heartbeat flapping
+        last_catchup = getattr(self, "_last_catchup_triggered_at", 0.0)
+        elapsed_since_last = now - last_catchup
+        if elapsed_since_last < _GRACEFUL_RESTART_CATCHUP_THROTTLE_SEC:
+            logger.debug(
+                "graceful_restart_catchup_throttled",
+                elapsed_since_last_sec=round(elapsed_since_last, 1),
+                throttle_sec=_GRACEFUL_RESTART_CATCHUP_THROTTLE_SEC,
+            )
+            return
+
+        # Проверяем что метод catchup доступен (mixin-совместимость)
+        catchup_fn = getattr(self, "_run_startup_catchup_safe", None)
+        if catchup_fn is None:
+            logger.warning("graceful_restart_catchup_method_missing")
+            return
+
+        # Записываем timestamp до create_task — защита от race condition
+        self._last_catchup_triggered_at = now
+
+        logger.info(
+            "graceful_restart_triggering_catchup",
+            uptime_sec=round(uptime_sec, 1),
+            elapsed_since_last_catchup_sec=round(elapsed_since_last, 1),
+        )
+
+        try:
+            asyncio.create_task(catchup_fn(), name="graceful_restart_catchup")
+        except Exception as exc:  # noqa: BLE001
+            # Rollback timestamp чтобы следующий restart мог попробовать снова
+            self._last_catchup_triggered_at = last_catchup
+            logger.warning("graceful_restart_catchup_schedule_failed", error=str(exc)[:200])
 
     @staticmethod
     async def _probe_telegram_dc(timeout: float = 5.0) -> bool:
@@ -752,6 +828,10 @@ class NetworkWatchdogMixin:
                     # имеет смысл сбросить silence timer (даём recovery период
                     # на receive первого update).
                     self._last_telegram_event_ts = time.time()
+                    # Wave 57-A: trigger catchup для missed messages за время
+                    # пока heartbeat был недоступен. Production bug 2026-05-10
+                    # 21:12-21:31: msg 16890 "Проверка связи" не попал в inbox.
+                    self._schedule_catchup_after_graceful_restart()
                     continue
                 else:
                     logger.warning("telegram_heartbeat_graceful_restart_failed")
