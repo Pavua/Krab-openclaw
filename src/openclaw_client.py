@@ -3265,6 +3265,8 @@ class OpenClawClient:
             # цепочки, чтобы не зациклить attempts.
             chain_advance_count = 0
             chain_advance_max = 6
+            # Wave 55-C: timestamp начала текущей попытки (для chain advance duration).
+            _attempt_start_ts: float = time.monotonic()
 
             # Wave 22-A: CLI subprocess bypass для codex-cli/* и google-gemini-cli/*.
             # OpenClaw 2026.5.x regression затронул ВСЕ providers (не только google/*).
@@ -4005,6 +4007,7 @@ class OpenClawClient:
                         # является model_fallback_engaged event'ом.
                         try:
                             from .core.prometheus_metrics import (
+                                record_chain_advance_duration,
                                 record_model_fallback_engaged,
                                 record_provider_timeout,
                             )
@@ -4022,8 +4025,17 @@ class OpenClawClient:
                                     provider=_prov,
                                     model=str(attempt_model or "unknown"),
                                 )
+                            # Wave 55-C: histogram duration от начала попытки до advance.
+                            record_chain_advance_duration(
+                                from_model=str(attempt_model or "unknown"),
+                                to_model=cloud_retry,
+                                reason=semantic["code"],
+                                duration_sec=time.monotonic() - _attempt_start_ts,
+                            )
                         except Exception:  # noqa: BLE001
                             pass
+                        # Wave 55-C: сбрасываем таймер для следующей модели.
+                        _attempt_start_ts = time.monotonic()
                         attempt_model = cloud_retry
                         self._cloud_tier_state["last_recovery_action"] = (
                             "switch_to_cloud_quality_retry"
@@ -4290,6 +4302,16 @@ class OpenClawClient:
                                     model=_recovery_model,
                                     delay_sec=_retry_delay,
                                 )
+                                # Wave 55-C: histogram smart retry wait — success outcome.
+                                try:
+                                    from .core.prometheus_metrics import record_smart_retry_wait
+
+                                    record_smart_retry_wait(
+                                        outcome="success",
+                                        wait_sec=_retry_delay,
+                                    )
+                                except Exception:  # noqa: BLE001
+                                    pass
                                 _sanitized_retry = self._sanitize_assistant_response(
                                     _retry_response
                                 )
@@ -4309,6 +4331,16 @@ class OpenClawClient:
                                     model=_recovery_model,
                                     retry_semantic=_retry_semantic,
                                 )
+                                # Wave 55-C: histogram smart retry wait — failure outcome.
+                                try:
+                                    from .core.prometheus_metrics import record_smart_retry_wait
+
+                                    record_smart_retry_wait(
+                                        outcome="failure",
+                                        wait_sec=_retry_delay,
+                                    )
+                                except Exception:  # noqa: BLE001
+                                    pass
                         # Fall through to extended error message after failed retry
 
                     # Wave 54-C: расширенное сообщение об ошибке с деталями по моделям.
@@ -4381,6 +4413,16 @@ class OpenClawClient:
                 )
 
             self._finalize_chat_response(chat_id, final_response)
+            # Wave 55-C: histogram размера ответа (chars) — observability verbose drift.
+            try:
+                from .core.prometheus_metrics import record_response_chars
+
+                record_response_chars(
+                    model=str(attempt_model or "unknown"),
+                    char_count=len(final_response),
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
             # В историю пишем без MEDIA:-строк; для yield восстанавливаем их,
             # чтобы userbot мог распознать и отправить голосовое/файл.

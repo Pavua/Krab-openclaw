@@ -468,6 +468,103 @@ def time_handler(handler_name: str) -> _HandlerLatencyTimer:
     return _HandlerLatencyTimer(handler_name)
 
 
+# === Wave 55-C: Timing histograms (chain advance / response chars / smart retry). ===
+# Три histogram'а для observability распределения времени и размера ответов.
+# Если prometheus_client недоступен — объекты None, helper'ы no-op. Никогда
+# не ломают hot path (try/except BLE001 во всех record_*).
+try:
+    from prometheus_client import Histogram as _Histogram5C  # type: ignore[import-not-found]
+
+    # Время от первого сбоя текущей модели до начала следующей в цепочке (1-90s range).
+    # Buckets: охватывают быстрые 1-5s переключения и медленные 60-90s таймауты.
+    krab_chain_advance_duration_seconds = _Histogram5C(
+        "krab_chain_advance_duration_seconds",
+        "Time spent on each chain advance attempt (from current model failure to next start)",
+        ["from_model", "to_model", "reason"],
+        buckets=(1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 45.0, 60.0, 90.0),
+    )
+
+    # Распределение размера ответов LLM (количество символов) перед отправкой в Telegram.
+    # Buckets: 50-5000 chars — охватывают от коротких команд до длинных сводок.
+    krab_model_response_chars = _Histogram5C(
+        "krab_model_response_chars",
+        "Response size distribution (chars) before Telegram delivery",
+        ["model"],
+        buckets=(50, 200, 500, 1000, 2000, 5000),
+    )
+
+    # Wave 54-B smart retry wait time по исходу (success/failure).
+    # Buckets: 5-90s — охватывают KRAB_CLOUD_RECOVERY_RETRY_DELAY_SEC диапазон.
+    krab_smart_retry_wait_seconds = _Histogram5C(
+        "krab_smart_retry_wait_seconds",
+        "Wave 54-B cloud recovery retry wait time per outcome",
+        ["outcome"],
+        buckets=(5.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0, 90.0),
+    )
+except Exception:  # noqa: BLE001 - prometheus_client optional
+    krab_chain_advance_duration_seconds = None  # type: ignore[assignment]
+    krab_model_response_chars = None  # type: ignore[assignment]
+    krab_smart_retry_wait_seconds = None  # type: ignore[assignment]
+
+
+def record_chain_advance_duration(
+    *,
+    from_model: str,
+    to_model: str,
+    reason: str,
+    duration_sec: float,
+) -> None:
+    """Записывает duration одного chain advance в histogram.
+
+    Вызывается из openclaw_client при переходе к следующей модели в цепочке.
+    duration_sec — время с начала попытки текущей модели до момента advance.
+    Fail-safe: никогда не бросает.
+    """
+    try:
+        if krab_chain_advance_duration_seconds is None:
+            return
+        krab_chain_advance_duration_seconds.labels(
+            from_model=(from_model or "unknown")[:80],
+            to_model=(to_model or "unknown")[:80],
+            reason=(reason or "unknown")[:40],
+        ).observe(max(0.0, float(duration_sec)))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def record_response_chars(*, model: str, char_count: int) -> None:
+    """Записывает размер финального ответа LLM в histogram.
+
+    Вызывается из openclaw_client._finalize_chat_response.
+    Fail-safe: никогда не бросает.
+    """
+    try:
+        if krab_model_response_chars is None:
+            return
+        krab_model_response_chars.labels(
+            model=(model or "unknown")[:80],
+        ).observe(max(0, int(char_count)))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def record_smart_retry_wait(*, outcome: str, wait_sec: float) -> None:
+    """Записывает Wave 54-B retry wait time в histogram.
+
+    outcome ∈ {success, failure}.
+    Вызывается из openclaw_client после cloud_recovery_retry_scheduled.
+    Fail-safe: никогда не бросает.
+    """
+    try:
+        if krab_smart_retry_wait_seconds is None:
+            return
+        krab_smart_retry_wait_seconds.labels(
+            outcome=(outcome or "unknown")[:20],
+        ).observe(max(0.0, float(wait_sec)))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def observe_thread_coherence(score: float | None, *, drift: bool, explicit: bool) -> None:
     """Записывает thread coherence в Prometheus (fail-safe, no-op без prom_client)."""
     try:

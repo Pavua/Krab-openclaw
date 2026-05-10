@@ -150,3 +150,33 @@ groups:
         annotations:
           summary: "Route switches > 20/h — нестабильность routing"
           description: "Анализируй `!routes` и `route_switches.jsonl`: возможен flapping из-за двух одинаково больных провайдеров."
+
+  # ── Wave 55-C: Timing histogram alerts ──────────────────────────────────────
+  - name: krab_wave_55c_histograms
+    interval: 1m
+    rules:
+      - alert: LongChainAdvanceAlert
+        # Wave 55-C: среднее время chain advance > 30s за 5 мин = замедленное переключение.
+        # Сигнализирует о длинных таймаутах провайдера перед advance (ожидание 30-90s ответа).
+        expr: >
+          rate(krab_chain_advance_duration_seconds_sum[5m])
+          /
+          rate(krab_chain_advance_duration_seconds_count[5m]) > 30
+        for: 5m
+        labels:
+          severity: warning
+          wave: "55-C"
+        annotations:
+          summary: "Chain advance avg > 30s за 5 мин — медленное переключение цепочки"
+          description: "Провайдеры отвечают слишком долго перед таймаутом. Проверь `!routes` и логи provider_timeout. Возможна деградация сети или провайдера."
+
+      - alert: ResponseSizeAnomalyAlert
+        # Wave 55-C: p95 размера ответа > 5000 chars = verbose drift обнаружен.
+        # LLM начал генерировать слишком длинные ответы — нужна tune промпта.
+        expr: histogram_quantile(0.95, rate(krab_model_response_chars_bucket[15m])) > 5000
+        labels:
+          severity: warning
+          wave: "55-C"
+        annotations:
+          summary: "p95 response > 5000 chars — verbose drift detected"
+          description: "LLM генерирует слишком длинные ответы (p95 > 5000 chars). Проверь промпт и system instructions. Model: {{ $labels.model }}."
