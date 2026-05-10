@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Wave 46-A / Wave 48-A: MessageCatchupMixin — startup catch-up.
+"""Wave 46-A / Wave 48-A / Wave 56-F: MessageCatchupMixin — startup catch-up.
 
 Зачем:
 - Production bug (Session 43): после restart 22:12→22:21 Pyrogram
@@ -37,6 +37,13 @@ Defensive design:
 - НЕ trigger live API в tests (всё через mocks).
 - max_lookback default 20, override через env ``KRAB_STARTUP_CATCHUP_LIMIT``.
 - Target chats: ``KRAB_STARTUP_CATCHUP_CHATS`` (CSV), иначе owner DM + swarm group.
+
+Wave 56-F: параллельный catchup через asyncio.gather + Semaphore.
+- ``_catchup_all_owner_chats`` теперь запускает все per-chat coroutines concurrently.
+- Semaphore (default 3) ограничивает число одновременных get_chat_history вызовов.
+- Configurable: ``KRAB_STARTUP_CATCHUP_CONCURRENCY`` env (range 1-10, default 3).
+- Ожидаемое ускорение: с N chats serial ~2-10s → parallel ~longest_single_chat ~1-2s.
+- Per-chat exception isolation сохранена: return_exceptions=True в gather.
 """
 
 from __future__ import annotations
@@ -175,6 +182,22 @@ def _resolve_max_lookback(default: int = 20) -> int:
     try:
         v = int(raw)
         return max(1, min(v, 200))  # safety clamp
+    except ValueError:
+        return default
+
+
+def _resolve_catchup_concurrency(default: int = 3) -> int:
+    """Wave 56-F: максимальное число параллельных get_chat_history вызовов.
+
+    Env ``KRAB_STARTUP_CATCHUP_CONCURRENCY`` (range 1-10, default 3).
+    Ограничено снизу 1, сверху 10 — защита от Telegram API rate-limit.
+    """
+    raw = os.environ.get("KRAB_STARTUP_CATCHUP_CONCURRENCY", "").strip()
+    if not raw:
+        return default
+    try:
+        v = int(raw)
+        return max(1, min(v, 10))  # clamp к допустимому диапазону
     except ValueError:
         return default
 
@@ -572,19 +595,23 @@ class MessageCatchupMixin:
         return int(stats.get("caught_up", 0))
 
     async def _catchup_all_owner_chats(self) -> dict[int, int]:
-        """Wave 48-A: catch-up для всех target chats. Возвращает {chat_id: caught_up}.
+        """Wave 48-A / Wave 56-F: catch-up для всех target chats. Возвращает {chat_id: caught_up}.
 
         Targets resolved через ``_resolve_catchup_target_chats``: env
         override ``KRAB_STARTUP_CATCHUP_CHATS`` либо defaults
         (owner DM + Krab Swarm group).
 
-        Per-chat resilience: failure в одном chat НЕ блокирует остальные —
-        ошибка логируется и переход к следующему target'у.
+        Wave 56-F: параллельный catchup через asyncio.gather + Semaphore.
+        Все coroutines запускаются одновременно, ограничены семафором
+        ``KRAB_STARTUP_CATCHUP_CONCURRENCY`` (default 3).
+        Ожидаемое ускорение: serial ~2-10s → parallel ~longest_single ~1-2s.
+
+        Per-chat resilience: failure в одном chat НЕ блокирует остальные.
+        return_exceptions=True в gather, Exception → warning + 0 в результате.
 
         Финальный structured log включает per-chat stats + totals.
         """
         result: dict[int, int] = {}
-        per_chat_stats: list[dict[str, Any]] = []
         targets = self._resolve_catchup_target_chats()
         # Wave 52-G: фиксируем wall-clock начала.
         started_at = time.time()
@@ -599,52 +626,65 @@ class MessageCatchupMixin:
             )
             return result
 
+        # Семафор ограничивает параллельные get_chat_history (Telegram rate-limit).
+        concurrency = _resolve_catchup_concurrency()
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _wrapped(cid: int) -> dict[str, Any]:
+            """Обёртка с семафором для одного чата."""
+            async with sem:
+                return await self._catchup_chat_history(cid)
+
+        # Параллельный запуск всех coroutines; порядок совпадает с targets.
+        coroutines = [_wrapped(cid) for cid in targets]
+        raw_results = await asyncio.gather(*coroutines, return_exceptions=True)
+
+        per_chat_stats: list[dict[str, Any]] = []
         total_caught_up = 0
         total_skipped_self = 0
-        for chat_id in targets:
-            try:
-                stats = await self._catchup_chat_history(chat_id)
-            except Exception as exc:  # noqa: BLE001
-                # Per-chat resilience: один chat не валит остальные.
+
+        for cid, res in zip(targets, raw_results):
+            if isinstance(res, Exception):
+                # Per-chat изоляция: исключение одного chat не валит остальные.
                 logger.warning(
                     "startup_catchup_chat_failed",
-                    chat_id=chat_id,
-                    error=str(exc),
-                    error_type=type(exc).__name__,
+                    chat_id=cid,
+                    error=str(res),
+                    error_type=type(res).__name__,
                 )
                 # Wave 51-A: prometheus counter — alert при > 3/час.
                 try:
                     from src.core.prometheus_metrics import record_startup_catchup_chat_failed
 
-                    record_startup_catchup_chat_failed(chat_id=chat_id)
+                    record_startup_catchup_chat_failed(chat_id=cid)
                 except Exception:  # noqa: BLE001
                     pass
                 per_chat_stats.append(
                     {
-                        "chat_id": chat_id,
+                        "chat_id": cid,
                         "caught_up": 0,
                         "skipped_self": 0,
                         "history_size": 0,
-                        "error": str(exc),
+                        "error": str(res),
                     }
                 )
-                result[chat_id] = 0
-                continue
-            caught = int(stats.get("caught_up", 0))
-            skipped = int(stats.get("skipped_self", 0))
-            history_size = int(stats.get("history_size", 0))
-            total_caught_up += caught
-            total_skipped_self += skipped
-            result[chat_id] = caught
-            per_chat_stats.append(
-                {
-                    "chat_id": chat_id,
-                    "caught_up": caught,
-                    "skipped_self": skipped,
-                    "history_size": history_size,
-                    "error": None,
-                }
-            )
+                result[cid] = 0
+            else:
+                caught = int(res.get("caught_up", 0))
+                skipped = int(res.get("skipped_self", 0))
+                history_size = int(res.get("history_size", 0))
+                total_caught_up += caught
+                total_skipped_self += skipped
+                result[cid] = caught
+                per_chat_stats.append(
+                    {
+                        "chat_id": cid,
+                        "caught_up": caught,
+                        "skipped_self": skipped,
+                        "history_size": history_size,
+                        "error": None,
+                    }
+                )
 
         logger.info(
             "startup_catchup_complete_multi",
@@ -652,6 +692,7 @@ class MessageCatchupMixin:
             total_caught_up=total_caught_up,
             total_skipped_self=total_skipped_self,
             target_count=len(targets),
+            concurrency=concurrency,
         )
         # Wave 52-G: persist history (defensive — никогда не прерывает catchup).
         _record_catchup_history(
