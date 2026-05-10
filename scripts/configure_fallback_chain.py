@@ -31,9 +31,9 @@ _MODELS_JSON_PATH = Path.home() / ".openclaw" / "agents" / "main" / "agent" / "m
 # Krab переключится на Claude после 1 провала, а не после 7.
 RECOMMENDED_FALLBACKS: list[str] = [
     "google-gemini-cli/gemini-3-pro-preview",
-    "anthropic-vertex/claude-opus-4-6",       # cross-vendor anchor: Claude после 1-й Google ошибки
+    "anthropic-vertex/claude-opus-4-6",  # cross-vendor anchor: Claude после 1-й Google ошибки
     "google-vertex/gemini-3-pro-preview",
-    "anthropic-vertex/claude-sonnet-4-6",     # fast Anthropic fallback
+    "anthropic-vertex/claude-sonnet-4-6",  # fast Anthropic fallback
     "google-vertex/gemini-flash-latest",
     "google-gemini-cli/gemini-2.5-pro",
     "google-gemini-cli/gemini-3-flash-preview",
@@ -83,11 +83,19 @@ def _check_chain(current: list[str]) -> None:
     """Проверяет текущую цепочку на наличие cross-vendor protection."""
     print("=== Текущая fallback-цепочка ===")
     for i, m in enumerate(current, 1):
-        vendor = "anthropic" if "anthropic" in m else "google" if "google" in m or "vertex" in m else "other"
+        vendor = (
+            "anthropic"
+            if "anthropic" in m
+            else "google"
+            if "google" in m or "vertex" in m
+            else "other"
+        )
         print(f"  {i}. {m}  [{vendor}]")
 
     anthropic_in_chain = [m for m in current if "anthropic" in m]
-    google_in_chain = [m for m in current if "google" in m or ("vertex" in m and "anthropic" not in m)]
+    google_in_chain = [
+        m for m in current if "google" in m or ("vertex" in m and "anthropic" not in m)
+    ]
 
     print(f"\nGoogle моделей: {len(google_in_chain)}")
     print(f"Anthropic моделей: {len(anthropic_in_chain)}")
@@ -101,10 +109,14 @@ def _check_chain(current: list[str]) -> None:
             (i for i, m in enumerate(current) if "anthropic" in m), len(current)
         )
         if first_anthropic_pos >= 3:
-            print(f"\n⚠️  Первый Anthropic — позиция {first_anthropic_pos + 1}. "
-                  "Рекомендуется переместить на позицию 2.")
+            print(
+                f"\n⚠️  Первый Anthropic — позиция {first_anthropic_pos + 1}. "
+                "Рекомендуется переместить на позицию 2."
+            )
         else:
-            print(f"\n✅ Cross-vendor цепочка OK (первый Anthropic на позиции {first_anthropic_pos + 1}).")
+            print(
+                f"\n✅ Cross-vendor цепочка OK (первый Anthropic на позиции {first_anthropic_pos + 1})."
+            )
 
 
 def _print_recommended(primary: str) -> None:
@@ -150,6 +162,7 @@ def main() -> None:
     args = sys.argv[1:]
     check_only = "--check" in args
     apply_mode = "--apply" in args
+    auto_yes = "--yes" in args or "-y" in args
 
     payload = _read_config()
     current = _get_current_fallbacks(payload)
@@ -176,7 +189,15 @@ def main() -> None:
     patch_json = json.dumps({"fallbacks": RECOMMENDED_FALLBACKS}, indent=2, ensure_ascii=False)
 
     if apply_mode:
-        confirm = input("\nПрименить изменения в runtime config? [y/N] ").strip().lower()
+        if auto_yes:
+            confirm = "y"
+            print("\n--yes: применяю автоматически.")
+        else:
+            try:
+                confirm = input("\nПрименить изменения в runtime config? [y/N] ").strip().lower()
+            except EOFError:
+                confirm = "n"
+                print("\n(non-interactive: пропускаю apply, используй --yes для autoapproval)")
         if confirm == "y":
             _apply_to_config(payload)
         else:
