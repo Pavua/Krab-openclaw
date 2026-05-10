@@ -2131,3 +2131,125 @@ async def handle_test(bot: "KraabUserbot", message: Message) -> None:
         reply += "_E2E smoke: `!test` | Full subset: `!test full`_"
 
     await message.reply(reply)
+
+
+# ---------------------------------------------------------------------------
+# !routing — управление политикой маршрутизации LM Studio vs Cloud (Wave 60-A)
+# ---------------------------------------------------------------------------
+
+
+async def handle_routing(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление явной политикой маршрутизации между LM Studio (local) и облаком.
+
+    Синтаксис (только для owner):
+      !routing               — показать текущую матрицу + временные overrides
+      !routing local <task>  — временно направлять <task> в local
+      !routing cloud <task>  — временно направлять <task> в cloud
+      !routing auto <task>   — сбросить override для <task> (вернуть к матрице)
+      !routing log [N]       — последние N решений маршрутизации (default 10)
+
+    Изменения временные: сбрасываются при рестарте Krab.
+    Для постоянных изменений — редактировать ROUTING_POLICY в routing_policy.py.
+    """
+    from ...core.access_control import is_owner_user_id  # noqa: PLC0415
+    from ...core.routing_policy import (  # noqa: PLC0415
+        ROUTING_POLICY,
+        clear_task_override,
+        get_overrides,
+        read_recent_decisions,
+        set_task_override,
+    )
+
+    # Owner-only
+    if not is_owner_user_id(message.from_user.id if message.from_user else 0):
+        await message.reply("❌ Команда доступна только владельцу.")
+        return
+
+    raw = (message.text or "").strip()
+    parts = raw.split(maxsplit=3)
+    # parts[0] = "!routing", parts[1:] = subcommand
+
+    if len(parts) < 2:
+        # Показать текущую матрицу + overrides
+        overrides = get_overrides()
+        lines = ["📡 **Routing Policy (Wave 60-A)**", "─────────────────────────────────", ""]
+        lines.append("**Матрица** (`task_type → backend`):")
+        for task, backend in sorted(ROUTING_POLICY.items()):
+            icon = "🏠" if backend == "local" else ("☁️" if backend == "cloud" else "⚡")
+            override_mark = f" ← **override: {overrides[task]}**" if task in overrides else ""
+            lines.append(f"  {icon} `{task}` → `{backend}`{override_mark}")
+
+        if overrides:
+            lines += ["", "**Временные overrides**:"]
+            for task, backend in sorted(overrides.items()):
+                lines.append(f"  🔧 `{task}` → `{backend}`")
+
+        lines += [
+            "",
+            "**Команды:**",
+            "`!routing local <task>` — направить в local",
+            "`!routing cloud <task>` — направить в cloud",
+            "`!routing auto <task>`  — сбросить override",
+            "`!routing log [N]`      — последние решения",
+        ]
+        await message.reply("\n".join(lines))
+        return
+
+    sub = parts[1].strip().lower()
+
+    # !routing log [N]
+    if sub == "log":
+        n = 10
+        if len(parts) >= 3:
+            try:
+                n = int(parts[2])
+            except ValueError:
+                n = 10
+        entries = read_recent_decisions(n)
+        if not entries:
+            await message.reply("📋 Лог решений пуст.")
+            return
+        lines = [f"📋 **Последние {len(entries)} решений маршрутизации**", ""]
+        for e in entries:
+            import datetime as _dt  # noqa: PLC0415
+
+            ts_str = _dt.datetime.fromtimestamp(e.get("ts", 0)).strftime("%H:%M:%S")
+            backend = e.get("backend", "?")
+            icon = "🏠" if backend == "local" else "☁️"
+            lines.append(
+                f"{icon} `{ts_str}` **{e.get('task_type', '?')}** → `{backend}`"
+                f"\n   _{e.get('reason', '')[:60]}_"
+            )
+        await message.reply("\n".join(lines))
+        return
+
+    # !routing local/cloud/auto <task>
+    if sub in ("local", "cloud", "auto") and len(parts) >= 3:
+        task_type = parts[2].strip()
+        if sub == "auto":
+            clear_task_override(task_type)
+            await message.reply(
+                f"🔄 Override сброшен для `{task_type}`.\n"
+                f"Матрица: `{ROUTING_POLICY.get(task_type, 'auto')}`"
+            )
+        else:
+            try:
+                set_task_override(task_type, sub)
+            except ValueError as exc:
+                await message.reply(f"❌ {exc}")
+                return
+            icon = "🏠" if sub == "local" else "☁️"
+            await message.reply(
+                f"{icon} Override установлен: `{task_type}` → `{sub}`\n"
+                f"Сброс: `!routing auto {task_type}`"
+            )
+        return
+
+    # Неизвестная подкоманда
+    await message.reply(
+        "❓ Неизвестная подкоманда. Используйте:\n"
+        "`!routing` — показать матрицу\n"
+        "`!routing local/cloud/auto <task>` — override\n"
+        "`!routing log [N]` — лог решений"
+    )

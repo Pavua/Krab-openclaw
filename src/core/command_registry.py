@@ -416,6 +416,13 @@ _COMMANDS: list[CommandInfo] = [
         owner_only=True,
     ),
     CommandInfo(
+        name="routing",
+        category="system",
+        description="Политика маршрутизации LM Studio vs Cloud: матрица, overrides, лог решений (Wave 60-A)",
+        usage="!routing [local|cloud|auto <task> | log [N]]",
+        owner_only=True,
+    ),
+    CommandInfo(
         name="mcp",
         category="system",
         description="Show registered MCP servers + inventory (read-only)",

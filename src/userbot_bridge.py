@@ -146,6 +146,7 @@ from .handlers import (
     handle_rm_remind,
     handle_role,
     handle_routes,
+    handle_routing,
     handle_say,
     handle_schedule,
     handle_scope,
@@ -808,6 +809,13 @@ class KraabUserbot(
         )
         async def wrap_routes(c, m):
             await run_cmd(handle_routes, m)
+
+        @self.client.on_message(
+            filters.command("routing", prefixes=prefixes) & _make_command_filter("routing"),
+            group=-1,
+        )
+        async def wrap_routing(c, m):
+            await run_cmd(handle_routing, m)
 
         @self.client.on_message(
             filters.command("mcp", prefixes=prefixes) & _make_command_filter("mcp"),
