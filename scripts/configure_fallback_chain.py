@@ -26,18 +26,33 @@ from typing import Any
 _RUNTIME_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
 _MODELS_JSON_PATH = Path.home() / ".openclaw" / "agents" / "main" / "agent" / "models.json"
 
-# Рекомендуемая cross-vendor fallback цепочка (Wave 54-A).
-# Anthropic-Vertex вставлены после первых 1-2 Google-попыток — при Google-outage
-# Krab переключится на Claude после 1 провала, а не после 7.
+# Рекомендуемая cross-vendor fallback цепочка (Wave 60-B обновление).
+#
+# Wave 60-B discovery (2026-05-10): Gemini 3 модели имеют статус PUBLIC_PREVIEW
+# в Vertex AI — endpoint aiplatform.googleapis.com возвращает 404.
+# Эти модели доступны ТОЛЬКО через Google AI Studio (generativelanguage API).
+# В OpenClaw: google-gemini-cli/* идёт через AI Studio, google-vertex/* — через Vertex.
+#
+# Не включать в цепочку:
+#   - google-vertex/gemini-3-*  (404 PUBLIC_PREVIEW — нет в Vertex API)
+#   - google-vertex/gemini-flash-latest  (404 в Vertex)
+#   - google-vertex/gemini-pro-latest    (404 в Vertex)
+#   - google-*/gemini-2.5-pro-002  (модель не существует)
+#   - google-*/gemini-2.5-flash-002 (модель не существует)
+#   - google-*/gemini-1.5-*  (deprecated, 404 везде)
+#
+# Рабочие маршруты:
+#   google-gemini-cli/* → AI Studio (generativelanguage.googleapis.com) — Gemini 3 OK
+#   google-vertex/*     → Vertex AI (aiplatform.googleapis.com) — только gemini-2.5-*
 RECOMMENDED_FALLBACKS: list[str] = [
-    "google-gemini-cli/gemini-3-pro-preview",
+    "google-gemini-cli/gemini-3-pro-preview",  # AI Studio — Gemini 3 Pro (работает)
     "anthropic-vertex/claude-opus-4-6",  # cross-vendor anchor: Claude после 1-й Google ошибки
-    "google-vertex/gemini-3-pro-preview",
+    "google-gemini-cli/gemini-3-flash-preview",  # AI Studio — Gemini 3 Flash (работает)
     "anthropic-vertex/claude-sonnet-4-6",  # fast Anthropic fallback
-    "google-vertex/gemini-flash-latest",
-    "google-gemini-cli/gemini-2.5-pro",
-    "google-gemini-cli/gemini-3-flash-preview",
-    "google-gemini-cli/gemini-2.5-flash",
+    "google-vertex/gemini-2.5-pro",  # Vertex — стабильный GA (работает)
+    "google-gemini-cli/gemini-2.5-pro",  # AI Studio — Gemini 2.5 Pro резерв
+    "google-vertex/gemini-2.5-flash",  # Vertex — быстрый GA (работает)
+    "google-gemini-cli/gemini-3.1-pro-preview",  # AI Studio — Gemini 3.1 Pro (работает)
 ]
 
 # Минимальный набор моделей без которых цепочка неполноценна
