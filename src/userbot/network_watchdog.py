@@ -262,10 +262,86 @@ async def _probe_updates_flow_alive(
     return alive
 
 
+# Wave 57-A: throttle — не чаще одного catchup каждые 5 минут,
+# чтобы избежать catchup storm при heartbeat flapping.
+_GRACEFUL_RESTART_CATCHUP_THROTTLE_SEC: float = float(
+    os.environ.get("KRAB_GRACEFUL_RESTART_CATCHUP_THROTTLE_SEC", "300")
+)
+# Wave 57-A: минимальный uptime процесса перед тем как catchup допустим
+# после graceful restart (60s). Если process только стартовал, startup
+# catchup уже запускается из userbot_started — дублировать не нужно.
+_GRACEFUL_RESTART_CATCHUP_MIN_UPTIME_SEC: float = float(
+    os.environ.get("KRAB_GRACEFUL_RESTART_CATCHUP_MIN_UPTIME_SEC", "60")
+)
+
+
 class NetworkWatchdogMixin:
     """Wave 31-C: TCP-probe + петля мониторинга offline сети.
     Wave 36-A: MTProto session probe + zombie-escalation.
-    Wave 39-D: true split-brain detection через update_id tracking."""
+    Wave 39-D: true split-brain detection через update_id tracking.
+    Wave 57-A: catchup trigger после graceful Pyrogram restart."""
+
+    def _schedule_catchup_after_graceful_restart(self) -> None:
+        """Wave 57-A: fire-and-forget catchup task после graceful Pyrogram restart.
+
+        Вызывается из _telegram_heartbeat_loop сразу после успешного
+        _try_reconnect_pyrofork. Не блокирует watchdog loop.
+
+        Throttle: не чаще одного catchup за 5 минут (_GRACEFUL_RESTART_CATCHUP_THROTTLE_SEC).
+        Uptime guard: если процесс только стартовал (<60s), startup catchup
+        из userbot_started уже идёт — не дублируем.
+
+        Production bug 2026-05-10 21:12-21:31: после graceful restart (21:12:50
+        telegram_heartbeat_graceful_restart_success) пользователь написал
+        "Проверка связи" в 21:31:43 — сообщение не было ingested в inbox
+        т.к. catchup не был triggered (Wave 46-A срабатывает только при
+        полном process restart через userbot_started hook).
+        """
+        now = time.time()
+
+        # Uptime guard: если process только стартовал, startup catchup уже работает
+        session_start = getattr(self, "_session_start_time", now)
+        uptime_sec = now - session_start
+        if uptime_sec < _GRACEFUL_RESTART_CATCHUP_MIN_UPTIME_SEC:
+            logger.debug(
+                "graceful_restart_catchup_skipped_startup",
+                uptime_sec=round(uptime_sec, 1),
+                min_uptime_sec=_GRACEFUL_RESTART_CATCHUP_MIN_UPTIME_SEC,
+            )
+            return
+
+        # Throttle: избегаем catchup storm при heartbeat flapping
+        last_catchup = getattr(self, "_last_catchup_triggered_at", 0.0)
+        elapsed_since_last = now - last_catchup
+        if elapsed_since_last < _GRACEFUL_RESTART_CATCHUP_THROTTLE_SEC:
+            logger.debug(
+                "graceful_restart_catchup_throttled",
+                elapsed_since_last_sec=round(elapsed_since_last, 1),
+                throttle_sec=_GRACEFUL_RESTART_CATCHUP_THROTTLE_SEC,
+            )
+            return
+
+        # Проверяем что метод catchup доступен (mixin-совместимость)
+        catchup_fn = getattr(self, "_run_startup_catchup_safe", None)
+        if catchup_fn is None:
+            logger.warning("graceful_restart_catchup_method_missing")
+            return
+
+        # Записываем timestamp до create_task — защита от race condition
+        self._last_catchup_triggered_at = now
+
+        logger.info(
+            "graceful_restart_triggering_catchup",
+            uptime_sec=round(uptime_sec, 1),
+            elapsed_since_last_catchup_sec=round(elapsed_since_last, 1),
+        )
+
+        try:
+            asyncio.create_task(catchup_fn(), name="graceful_restart_catchup")
+        except Exception as exc:  # noqa: BLE001
+            # Rollback timestamp чтобы следующий restart мог попробовать снова
+            self._last_catchup_triggered_at = last_catchup
+            logger.warning("graceful_restart_catchup_schedule_failed", error=str(exc)[:200])
 
     @staticmethod
     async def _probe_telegram_dc(timeout: float = 5.0) -> bool:
@@ -752,6 +828,10 @@ class NetworkWatchdogMixin:
                     # имеет смысл сбросить silence timer (даём recovery период
                     # на receive первого update).
                     self._last_telegram_event_ts = time.time()
+                    # Wave 57-A: trigger catchup для missed messages за время
+                    # пока heartbeat был недоступен. Production bug 2026-05-10
+                    # 21:12-21:31: msg 16890 "Проверка связи" не попал в inbox.
+                    self._schedule_catchup_after_graceful_restart()
                     continue
                 else:
                     logger.warning("telegram_heartbeat_graceful_restart_failed")
@@ -835,27 +915,66 @@ class NetworkWatchdogMixin:
                 try:
                     await self._force_pyrofork_session_reinit()
                 except Exception as exc:  # noqa: BLE001
-                    logger.error(
+                    # Wave 50-A + 41-O hygiene: WARNING (не ERROR) для
+                    # ожидаемых post-sleep transient failures. Network
+                    # offline monitor / zombie escalation подхватит если
+                    # реально zombie session.
+                    logger.warning(
                         "macos_post_sleep_reinit_failed",
                         error=str(exc)[:200],
                     )
+
+    @staticmethod
+    async def _safe_client_disconnect(client: "Client | None") -> bool:
+        """Wave 50-A: idempotent client teardown для post-sleep reinit.
+
+        Pyrogram raises `ConnectionError("Client is already disconnected")`
+        когда client.stop() вызывается на уже отключённом клиенте — это
+        ожидаемое состояние после macOS sleep, когда система сама порвала
+        socket. Глотаем ConnectionError + проверяем `is_connected` чтобы
+        не дёргать stop() впустую.
+
+        Returns: True если stop отработал или клиент уже отключён (no-op
+        success), False если stop поднял неожиданную ошибку.
+        """
+        if client is None:
+            return True
+        # Defensive: getattr — pyrofork может изменить API stability
+        is_conn = getattr(client, "is_connected", False)
+        if not is_conn:
+            logger.debug("safe_disconnect_skip_not_connected")
+            return True
+        if not hasattr(client, "stop"):
+            return True
+        try:
+            await client.stop(block=True)
+            return True
+        except ConnectionError as exc:
+            # Pyrofork: "Client is already disconnected" — ok после sleep
+            logger.debug("safe_disconnect_already_disconnected", error=str(exc)[:120])
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("safe_disconnect_unexpected_error", error=str(exc)[:200])
+            return False
 
     async def _force_pyrofork_session_reinit(self) -> None:
         """Wave 36-D: принудительный reinit pyrofork session после macOS sleep.
 
         Стратегия:
-        1. client.stop(block=True) — ждёт graceful disconnect (TTL freeze закончен)
+        1. _safe_client_disconnect — idempotent stop (Wave 50-A: глотает
+           "Client is already disconnected" ConnectionError, которая
+           возникает когда macOS sleep уже разорвал socket до wake).
         2. await asyncio.sleep(2) — даём сети устояться после пробуждения
         3. client.start() — re-handshake, fresh MTProto session
 
-        При failure → логируем и поднимаем исключение (caller решает что делать).
+        Wave 50-A: failure → log WARNING (не ERROR, Wave 41-O hygiene),
+        исключение поднимаем для caller-loop телеметрии.
         Fall-through на Wave 36-A escalation logic происходит автоматически
         через _network_offline_monitor_loop / heartbeat.
         """
         logger.info("forced_pyrofork_reinit_starting")
         try:
-            if self.client and hasattr(self.client, "stop"):
-                await self.client.stop(block=True)
+            await self._safe_client_disconnect(self.client)
             await asyncio.sleep(2)
             if self.client:
                 await self.client.start()
