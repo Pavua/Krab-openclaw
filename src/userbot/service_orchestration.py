@@ -19,6 +19,7 @@
 - ``_sync_scheduler_runtime`` — bind sender + start всех schedulers (krab,
   swarm, swarm_auto_executor, cron_native, swarm_channels) при enabled+connected;
   иначе graceful stop.
+- ``_ensure_audit_rotate_loop_started`` — Wave 56-I: daily 03:00 ротация audit-логов
 """
 
 from __future__ import annotations
@@ -56,6 +57,8 @@ class ServiceOrchestrationMixin:
     _memory_indexer_task: asyncio.Task | None
     # Wave 49-F: фоновый loop периодических snapshots state-файлов
     _state_snapshot_task: "asyncio.Task | None" = None
+    # Wave 56-I: фоновый loop ежедневной ротации audit-логов
+    _audit_rotate_task: "asyncio.Task | None" = None
 
     def _ensure_maintenance_started(self) -> None:
         """Запускает maintenance-задачу model_manager, если она еще не активна."""
@@ -123,6 +126,58 @@ class ServiceOrchestrationMixin:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("state_snapshot_loop_start_failed", error=str(exc), non_fatal=True)
+
+    def _ensure_audit_rotate_loop_started(self) -> None:
+        """Wave 56-I: запускает фоновый loop ежедневной ротации audit-логов в 03:00 local.
+
+        Параметры через env:
+          KRAB_AUDIT_LOG_MAX_MB (default 10) — порог ротации, МБ
+          KRAB_AUDIT_LOG_KEEP   (default 5)  — количество хранимых gzip-архивов
+        """
+        existing = getattr(self, "_audit_rotate_task", None)
+        if existing and not existing.done():
+            return
+
+        import os  # noqa: PLC0415
+
+        max_mb = int(os.environ.get("KRAB_AUDIT_LOG_MAX_MB", "10"))
+        keep = int(os.environ.get("KRAB_AUDIT_LOG_KEEP", "5"))
+
+        async def _runner() -> None:
+            from datetime import datetime  # noqa: PLC0415
+
+            from ..core.audit_log_rotator import audit_log_rotator  # noqa: PLC0415
+
+            while True:
+                try:
+                    # Вычислить секунды до следующего 03:00 local
+                    now = datetime.now()
+                    target = now.replace(hour=3, minute=0, second=0, microsecond=0)
+                    if target <= now:
+                        # Уже прошло сегодня — ждать до завтра
+                        from datetime import timedelta  # noqa: PLC0415
+
+                        target += timedelta(days=1)
+                    delay = (target - now).total_seconds()
+                    await asyncio.sleep(delay)
+                    # Ротация обоих логов
+                    results = audit_log_rotator.rotate_all(max_size_mb=max_mb, keep_count=keep)
+                    logger.info(
+                        "audit_rotate_daily_done",
+                        bash=results.get("bash", {}).get("rotated"),
+                        agent=results.get("agent", {}).get("rotated"),
+                    )
+                except asyncio.CancelledError:
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("audit_rotate_loop_error", error=str(exc))
+                    await asyncio.sleep(3600)  # Подождать час при ошибке
+
+        try:
+            self._audit_rotate_task = asyncio.create_task(_runner())
+            logger.info("audit_rotate_loop_started", max_mb=max_mb, keep=keep)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("audit_rotate_loop_start_failed", error=str(exc), non_fatal=True)
 
     def _ensure_memory_indexer_started(self) -> None:
         """Lazy boot Memory Indexer Worker (Phase 4)."""
@@ -218,6 +273,9 @@ class ServiceOrchestrationMixin:
 
             # Wave 49-F: периодические snapshots критичных state-файлов
             self._ensure_state_snapshot_loop_started()
+
+            # Wave 56-I: ежедневная ротация audit-логов в 03:00
+            self._ensure_audit_rotate_loop_started()
 
             # Swarm channels — live broadcast в Telegram-группы
             if self.me and self.client:
