@@ -1300,11 +1300,14 @@ async def _health_deep_report(bot: "KraabUserbot") -> str:
 
 async def handle_health(bot: "KraabUserbot", message: Message) -> None:
     """
-    Диагностика подсистем Краба (!health [deep]).
+    Диагностика подсистем Краба (!health [deep|detail|anthropic]).
 
-    !health      — стандартный health-check (ок / warning / error по строке).
-    !health deep — расширенная диагностика: uptime, archive.db integrity,
-                   LM Studio, SIGTERM count, memory validator, system load.
+    !health          — стандартный health-check (ок / warning / error по строке).
+    !health deep     — расширенная диагностика: uptime, archive.db integrity,
+                       LM Studio, SIGTERM count, memory validator, system load.
+    !health detail   — полный runtime-отчёт (Wave 52-H).
+    !health anthropic — проверка gcloud ADC токена + test-call к каждой
+                        anthropic-vertex модели в models.json (Wave 55-B).
     Owner-only команда.
     """
     from ...core.swarm_bus import TEAM_REGISTRY
@@ -1346,6 +1349,24 @@ async def handle_health(bot: "KraabUserbot", message: Message) -> None:
         session_start = getattr(bot, "_session_start_time", None)
         detail_data = await collect_health_detail(session_start_time=session_start)
         await message.reply(format_health_detail(detail_data))
+        return
+
+    # Wave 55-B: anthropic-vertex auth + model probe (owner-only).
+    if raw_args == "anthropic":
+        access_profile = bot._get_access_profile(message.from_user)
+        if access_profile.level != AccessLevel.OWNER:
+            raise UserInputError(user_message="🔒 `!health anthropic` доступен только владельцу.")
+        import importlib.util as _ilu
+        import pathlib as _pl
+
+        _script = (
+            _pl.Path(__file__).resolve().parents[4] / "scripts" / "krab_anthropic_auth_check.py"
+        )
+        _spec = _ilu.spec_from_file_location("krab_anthropic_auth_check", _script)
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _data = await _mod.run_check()
+        await message.reply(_mod.format_check_result(_data))
         return
 
     lines: list[str] = ["🏥 **Health Check**", "─────────────────"]
