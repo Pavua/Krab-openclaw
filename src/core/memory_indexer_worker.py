@@ -700,18 +700,29 @@ class MemoryIndexerWorker:
                 chunk_ids,
             )
             self._stats.embeddings_committed += len(chunk_ids)
-        except RuntimeError as exc:
-            # Гонка: executor успел закрыться после нашей проверки флага —
-            # silent skip, не логируем как ошибку (это не data loss).
-            if "cannot schedule new futures after shutdown" in str(exc):
-                return
-            self._stats.bump_failed("embed")
-            logger.error(
-                "memory_indexer_embed_failed",
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
         except Exception as exc:
+            # Импортируем здесь, чтобы не создавать циклический import на
+            # уровне модуля (memory_indexer_worker → memory_embedder).
+            from src.core.memory_embedder import VecUnavailableError  # noqa: PLC0415
+
+            if isinstance(exc, VecUnavailableError):
+                # vec0.dylib dlopen провалился — degraded FTS-only режим.
+                # Логируем как warning (не error), чтобы не создавать
+                # Sentry-событий (Sentry PYTHON-FASTAPI-7S).
+                if not self._stats.embed_disabled:
+                    logger.warning(
+                        "memory_indexer_vec_unavailable",
+                        error=str(exc),
+                        note="FTS-only mode, embeddings disabled",
+                    )
+                self._stats.embed_disabled = True
+                return
+            if isinstance(
+                exc, RuntimeError
+            ) and "cannot schedule new futures after shutdown" in str(exc):
+                # Гонка: executor успел закрыться после нашей проверки флага —
+                # silent skip, не логируем как ошибку (это не data loss).
+                return
             self._stats.bump_failed("embed")
             logger.error(
                 "memory_indexer_embed_failed",

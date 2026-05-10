@@ -63,6 +63,16 @@ DEFAULT_BATCH_SIZE = 512
 # ---------------------------------------------------------------------------
 
 
+class VecUnavailableError(RuntimeError):
+    """
+    Sentinel: sqlite_vec недоступен (dlopen vec0.dylib провалился).
+
+    Бросается из ``create_vec_table()`` вместо низкоуровневого
+    ``sqlite3.OperationalError``/``ImportError``, чтобы вызывающий код мог
+    поймать именно этот класс и перейти в FTS-only режим без Sentry-шума.
+    """
+
+
 def create_vec_table(conn: sqlite3.Connection, dim: int = DEFAULT_DIM) -> None:
     """
     Создать виртуальную таблицу ``vec_chunks`` sqlite-vec, если её ещё нет.
@@ -73,8 +83,18 @@ def create_vec_table(conn: sqlite3.Connection, dim: int = DEFAULT_DIM) -> None:
     JOIN'ить ``vec_chunks`` и ``chunks`` без дополнительных ключей.
 
     Функция идемпотентна: ``IF NOT EXISTS`` на CREATE VIRTUAL TABLE.
+
+    Raises:
+        VecUnavailableError: если sqlite_vec не установлен или vec0.dylib
+            не может быть загружен (dlopen failure на macOS — подпись,
+            arch mismatch и т.п.).  Caller должен поймать и перейти в
+            FTS-only режим без логирования как ошибки.
     """
-    import sqlite_vec  # type: ignore[import-not-found]
+    # Импорт может упасть если пакет не установлен.
+    try:
+        import sqlite_vec  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise VecUnavailableError(f"sqlite_vec не установлен: {exc}") from exc
 
     # enable_load_extension по умолчанию False на многих сборках; включаем
     # ровно на время загрузки и возвращаем обратно, чтобы не открывать
@@ -82,6 +102,11 @@ def create_vec_table(conn: sqlite3.Connection, dim: int = DEFAULT_DIM) -> None:
     conn.enable_load_extension(True)
     try:
         sqlite_vec.load(conn)
+    except (sqlite3.OperationalError, OSError) as exc:
+        # dlopen провалился: подпись macOS, arch mismatch, отсутствие .dylib.
+        # Оборачиваем в VecUnavailableError, чтобы caller мог различить
+        # "vec недоступен" от "что-то сломалось в логике".
+        raise VecUnavailableError(f"vec0.dylib dlopen failed: {exc}") from exc
     finally:
         conn.enable_load_extension(False)
 
@@ -190,6 +215,10 @@ class MemoryEmbedder:
         self._model: Any | None = _model
         # Фиксируем флаг, чтобы model_load_sec в тестах был 0.
         self._model_injected: bool = _model is not None
+        # Флаг доступности sqlite_vec (vec0.dylib). Выставляется False
+        # при первом dlopen-failure — embedder переходит в no-op режим.
+        # True = по умолчанию (будет проверено при первом _ensure_connection).
+        self._vec_available: bool = True
 
     # ------------------------------------------------------------------
     # Публичный API.
@@ -347,6 +376,10 @@ class MemoryEmbedder:
         ("SQLite objects created in a thread can only be used in that
         same thread"). asyncio.to_thread каждый раз может стартовать
         новый worker-thread, поэтому lazy-init на уровне TLS.
+
+        При dlopen-failure (vec0.dylib не загружается) выставляет
+        ``_vec_available=False`` и пробрасывает ``VecUnavailableError``,
+        чтобы вызывающий код мог перейти в FTS-only режим.
         """
         conn = getattr(self._tls, "conn", None)
         if conn is not None:
@@ -356,7 +389,14 @@ class MemoryEmbedder:
         # или create_schema).
         conn = open_archive(self._paths, read_only=False)
         # vec-таблица создаётся отдельно — схема archive.py её не трогает.
-        create_vec_table(conn, dim=self._dim)
+        try:
+            create_vec_table(conn, dim=self._dim)
+        except VecUnavailableError:
+            # dlopen провалился: выставляем флаг и пробрасываем дальше.
+            # Caller (_maybe_embed_chunks) поймает и перейдёт в no-op режим.
+            self._vec_available = False
+            conn.close()
+            raise
         self._tls.conn = conn
         with self._conns_lock:
             self._all_conns.append(conn)
