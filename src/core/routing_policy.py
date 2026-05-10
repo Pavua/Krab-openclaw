@@ -396,6 +396,97 @@ class RoutingPolicy:
 
 
 # ---------------------------------------------------------------------------
+# Классификатор task_type по контексту запроса
+# ---------------------------------------------------------------------------
+
+# Шаблоны для определения задачи генерации кода
+_CODE_GEN_PATTERN = re.compile(
+    r"\b(напиши\s+код|implement|fix\s+bug|debug|написать\s+код"
+    r"|create\s+function|write\s+a\s+script|сделай\s+функцию"
+    r"|реализу[а-я]+|исправ[а-я]+\s+баг)\b",
+    re.IGNORECASE,
+)
+
+# Команды, соответствующие simple_lookup
+_SIMPLE_COMMANDS = frozenset(
+    {
+        "status",
+        "health",
+        "uptime",
+        "version",
+        "quota",
+        "ping",
+        "info",
+        "whoami",
+    }
+)
+
+
+def classify_task_type(
+    *,
+    message_text: str,
+    chat_id: int,
+    is_owner_dm: bool,
+    has_photo: bool,
+    has_command_prefix: bool,
+) -> str:
+    """
+    Возвращает task_type ключ из ROUTING_POLICY matrix.
+
+    Heuristics (по убыванию приоритета):
+    1. has_photo → vision_analysis
+    2. is_owner_dm → owner_dm
+    3. !<simple_cmd> → simple_lookup
+    4. !translate → translation_short / translation_long
+    5. !swarm → swarm_output
+    6. !ask / !codex + код / длинный → code_generation / long_form
+    7. Regex: код-генерация → code_generation
+    8. Отрицательный chat_id (группа) → casual_chat_low_priority
+    9. default_chat
+    """
+    # --- 1. Фото → cloud vision ---
+    if has_photo:
+        return "vision_analysis"
+
+    # --- 2. Owner DM → cloud ---
+    if is_owner_dm:
+        return "owner_dm"
+
+    text = (message_text or "").strip()
+    text_len = len(text)
+
+    # --- 3. Команды с префиксом ---
+    if has_command_prefix and text.startswith("!"):
+        # Извлекаем первое слово команды (без !)
+        cmd_word = text[1:].split()[0].lower() if text[1:].split() else ""
+
+        if cmd_word in _SIMPLE_COMMANDS:
+            return "simple_lookup"
+
+        if cmd_word in ("translate", "tr", "пер"):
+            return "translation_long" if text_len >= 200 else "translation_short"
+
+        if cmd_word == "swarm":
+            return "swarm_output"
+
+        if cmd_word in ("ask", "codex", "code"):
+            # Длинный запрос или явно код → code_generation, иначе long_form
+            if text_len > 100 or _CODE_GEN_PATTERN.search(text):
+                return "code_generation"
+            return "long_form"
+
+    # --- 4. Regex: паттерны генерации кода ---
+    if _CODE_GEN_PATTERN.search(text):
+        return "code_generation"
+
+    # --- 5. Группа с отрицательным chat_id → casual ---
+    if chat_id < 0:
+        return "casual_chat_low_priority"
+
+    return "default_chat"
+
+
+# ---------------------------------------------------------------------------
 # Синглтон
 # ---------------------------------------------------------------------------
 

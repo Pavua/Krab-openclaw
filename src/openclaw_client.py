@@ -3078,7 +3078,67 @@ class OpenClawClient:
                     force_cloud=effective_force_cloud,
                 )
             else:
-                selected_model = await model_manager.get_best_model(has_photo=has_photo)
+                # Wave 61-A: вызываем RoutingPolicy.decide_route() перед get_best_model.
+                # Если решение → local, подставляем LOCAL_PREFERRED_MODEL напрямую.
+                # Если → cloud, оставляем стандартный path (get_best_model вернёт runtime primary).
+                # Если → auto, пробуем local сначала (как "local first, cloud fallback").
+                try:
+                    from .core.routing_policy import (  # noqa: PLC0415
+                        classify_task_type,
+                        get_routing_policy,
+                    )
+
+                    _chat_id_int = int(chat_id) if str(chat_id).lstrip("-").isdigit() else 0
+                    _task_type = classify_task_type(
+                        message_text=message,
+                        chat_id=_chat_id_int,
+                        is_owner_dm=effective_force_cloud,  # force_cloud = owner-DM proxy
+                        has_photo=has_photo,
+                        has_command_prefix=message.startswith("!") if message else False,
+                    )
+                    _route = await get_routing_policy().decide_route(
+                        task_type=_task_type,
+                        message_text=message,
+                        chat_id=_chat_id_int,
+                        has_photo=has_photo,
+                        force_cloud_env=effective_force_cloud,
+                    )
+                    _local_model_id = str(
+                        getattr(config, "LOCAL_PREFERRED_MODEL", "") or ""
+                    ).strip()
+                    if _route.backend in ("local", "auto") and _local_model_id:
+                        _lm_prefix = (
+                            _local_model_id
+                            if _local_model_id.startswith("lmstudio/")
+                            else f"lmstudio/{_local_model_id}"
+                        )
+                        selected_model = _lm_prefix
+                        logger.info(
+                            "routing_policy_applied",
+                            task_type=_task_type,
+                            backend=_route.backend,
+                            reason=_route.reason,
+                            selected=selected_model,
+                            chat_id=chat_id,
+                        )
+                    else:
+                        # backend == "cloud" или local_model_id пуст → стандартный path
+                        selected_model = await model_manager.get_best_model(has_photo=has_photo)
+                        logger.info(
+                            "routing_policy_applied",
+                            task_type=_task_type,
+                            backend=_route.backend,
+                            reason=_route.reason,
+                            selected=selected_model,
+                            chat_id=chat_id,
+                        )
+                except Exception as _rp_exc:  # noqa: BLE001
+                    # Routing policy сбой — не ломаем основной path, деградируем gracefully
+                    logger.warning(
+                        "routing_policy_failed_fallback_to_default",
+                        error=str(_rp_exc),
+                    )
+                    selected_model = await model_manager.get_best_model(has_photo=has_photo)
             # В force_cloud режиме не позволяем оставаться на локальной модели,
             # иначе runtime-route показывает local и ломает "cloud truth".
             if effective_force_cloud and model_manager.is_local_model(selected_model):
