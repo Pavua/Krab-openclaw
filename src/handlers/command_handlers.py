@@ -482,7 +482,7 @@ from .commands.state_commands import (  # noqa: E402, F401  # Phase 2 Wave 16
     handle_reset,
     handle_web,
 )
-from .commands.observability_commands import (  # noqa: E402, F401  # Phase 2 Wave 17 + Wave 25-D
+from .commands.observability_commands import (  # noqa: E402, F401  # Phase 2 Wave 17 + Wave 25-D + Wave 55-D
     _CHECKPOINTS_DIR,
     _count_today_calls,
     _estimate_session_tokens,
@@ -498,6 +498,7 @@ from .commands.observability_commands import (  # noqa: E402, F401  # Phase 2 Wa
     handle_note,
     handle_quota,
     handle_routes,
+    handle_skills,
     handle_watch,
 )
 from .commands.memory_admin_commands import (  # noqa: E402, F401  # Phase 2 Wave 18

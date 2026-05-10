@@ -1278,6 +1278,15 @@ _COMMANDS: list[CommandInfo] = [
         owner_only=True,
         stage="beta",
     ),
+    # ── Skills queue manager (Wave 55-D) ─────────────────────────────────────
+    CommandInfo(
+        name="skills",
+        category="swarm",
+        description="Manage SkillCurator pending improvements (Wave 53-A queue)",
+        usage="!skills [info <id> | apply <id> | reject <id> | clear --confirm]",
+        owner_only=True,
+        stage="beta",
+    ),
     # ── AgentEngine routing (Wave 16-B, Hermes Phase B) ──────────────────────
     CommandInfo(
         name="engine",

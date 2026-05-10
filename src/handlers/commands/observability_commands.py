@@ -1287,5 +1287,325 @@ __all__ = [
     "handle_note",
     "handle_quota",
     "handle_routes",
+    "handle_skills",
     "handle_watch",
 ]
+
+
+# ---------------------------------------------------------------------------
+# !skills — Wave 55-D: SkillCurator pending improvements queue management
+# ---------------------------------------------------------------------------
+
+# Module-level imports from skill_curator exposed at module scope so tests
+# can patch via `src.handlers.commands.observability_commands.<name>`.
+from ...core.skill_curator import (  # noqa: E402
+    PENDING_IMPROVEMENTS_PATH,
+    _load_pending_queue,
+    _save_pending_queue_atomic,
+    list_pending_improvements,
+)
+
+# Short ID length shown to user (first 6 hex chars of entry_id suffix)
+_SKILLS_ID_LEN = 6
+
+# Live skill_curator directory: overlays are applied here via CuratorState
+_SKILLS_LIVE_DIR_NAME = "curator"
+
+
+def _short_id(entry_id: str) -> str:
+    """Returns a short display ID from a full entry_id (e.g. 'coders-a1b2c3d4' → 'a1b2c3')."""
+    # entry_id format: "<team>-<8-hex-uuid>"
+    parts = entry_id.rsplit("-", 1)
+    return parts[-1][:_SKILLS_ID_LEN] if len(parts) == 2 else entry_id[:_SKILLS_ID_LEN]
+
+
+def _find_entry_by_short_id(
+    queue: list[dict],
+    short_id: str,
+) -> dict | None:
+    """Finds a queue entry whose entry_id ends with the given short_id (case-insensitive)."""
+    low = short_id.lower()
+    for entry in queue:
+        eid = (entry.get("entry_id") or "").lower()
+        if eid.endswith(low) or _short_id(entry.get("entry_id", "")).lower() == low:
+            return entry
+    return None
+
+
+def _apply_pending_entry(
+    entry: dict,
+    *,
+    backup_base: pathlib.Path | None = None,
+) -> tuple[bool, str]:
+    """Writes candidate prompt to live skill_curator overlay and removes entry from queue.
+
+    Safety: creates a before-apply backup of the current live prompt BEFORE writing.
+
+    Returns (ok, message).
+    """
+    from ...core.skill_curator import CURATOR_BASE_DIR  # noqa: PLC0415
+    from ...core.skill_curator_state import CURATOR_STATE_PATH, CuratorState  # noqa: PLC0415
+
+    team = (entry.get("team") or "").lower()
+    candidate_prompt = entry.get("candidate_prompt") or ""
+    entry_id = entry.get("entry_id", "?")
+
+    if not team:
+        return False, "entry missing team field"
+    if not candidate_prompt.strip():
+        return False, "entry has empty candidate_prompt"
+
+    _backup_base = backup_base or (CURATOR_BASE_DIR / "prompts_archive" / team)
+    _backup_base.mkdir(parents=True, exist_ok=True)
+
+    # 1. Backup current live prompt BEFORE overwriting (rollback safety)
+    try:
+        state = CuratorState.load(CURATOR_STATE_PATH)
+        overlay = state.get_overlay(team)
+        current_live = (overlay or {}).get("prompt", "")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("skills_apply_state_read_failed", team=team, error=str(exc))
+        current_live = ""
+
+    import datetime as _dt
+
+    ts_str = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%S")
+    backup_path = _backup_base / f"before_apply_{ts_str}.md"
+    try:
+        backup_path.write_text(current_live or "", encoding="utf-8")
+    except OSError as exc:
+        return False, f"backup failed: {exc}"
+
+    # 2. Write overlay via CuratorState (same path as skill_curator.apply_with_approval)
+    try:
+        state = CuratorState.load(CURATOR_STATE_PATH)
+        overlay = state.get_overlay(team) or {}
+        version = overlay.get("version", 0) + 1
+        applied_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        state.apply_overlay(
+            team,
+            {
+                "prompt": candidate_prompt,
+                "proposal_id": f"skills-queue-{entry_id}",
+                "applied_at": applied_at,
+                "version": version,
+                "archive_path": str(backup_path),
+            },
+        )
+        state.mark_apply(team)
+        state.save_atomic(CURATOR_STATE_PATH)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"state write failed: {exc}"
+
+    # Invalidate overlay cache
+    try:
+        from ...core import swarm_team_prompts as _stp  # noqa: PLC0415
+
+        _stp._invalidate_overlay_cache(team)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 3. Remove applied entry from the pending queue
+    try:
+        queue = _load_pending_queue(PENDING_IMPROVEMENTS_PATH)
+        queue = [e for e in queue if e.get("entry_id") != entry_id]
+        _save_pending_queue_atomic(queue, PENDING_IMPROVEMENTS_PATH)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("skills_apply_queue_remove_failed", entry_id=entry_id, error=str(exc))
+
+    logger.info(
+        "skills_apply_done",
+        team=team,
+        entry_id=entry_id,
+        version=version,
+        backup=str(backup_path),
+    )
+    return True, f"applied (version={version}, backup={backup_path.name})"
+
+
+async def handle_skills(bot: "KraabUserbot", message: Message) -> None:
+    """!skills — управление очередью pending improvements Wave 53-A.
+
+    Субкоманды:
+      !skills                        — список всех pending improvements по командам
+      !skills info <id>              — детали записи (промпт, delta_score, метаданные)
+      !skills apply <id>             — применить запись к live skill_curator overlay
+      !skills reject <id>            — удалить из очереди без применения
+      !skills clear --confirm        — очистить всю очередь (требует --confirm)
+
+    Owner-only.
+    """
+    from ...core.access_control import is_owner_user_id  # noqa: PLC0415
+
+    user_id = getattr(getattr(message, "from_user", None), "id", None)
+    if not is_owner_user_id(user_id or 0):
+        await message.reply("Команда `!skills` доступна только владельцу.")
+        return
+
+    try:
+        from ...core.command_registry import bump_command
+
+        bump_command("skills")
+    except Exception:  # noqa: BLE001
+        pass
+
+    raw = (message.text or "").strip()
+    parts = raw.split(maxsplit=2)
+    # parts[0] = "!skills", parts[1] = sub, parts[2] = arg
+    sub = parts[1].strip().lower() if len(parts) > 1 else ""
+    arg = parts[2].strip() if len(parts) > 2 else ""
+
+    # ── list (default) ──────────────────────────────────────────────────────
+    if not sub or sub in {"list", "ls"}:
+        queue = list_pending_improvements()
+        if not queue:
+            await message.reply(
+                "Skill Curator Queue\n\n_Очередь пуста — нет pending improvements._\n\n"
+                "Добавить: запусти `!curator propose <team>` или настрой "
+                "`KRAB_SKILL_CURATOR_WEEKLY_AUTO_PROPOSE=1`."
+            )
+            return
+
+        # Группируем по team
+        by_team: dict[str, list[dict]] = {}
+        for entry in queue:
+            t = entry.get("team") or "unknown"
+            by_team.setdefault(t, []).append(entry)
+
+        lines: list[str] = ["Skill Curator Queue\n"]
+        for team_name in sorted(by_team.keys()):
+            entries = by_team[team_name]
+            lines.append(f"**{team_name}** ({len(entries)} pending):")
+            for e in entries:
+                sid = _short_id(e.get("entry_id", "?"))
+                score = e.get("delta_score", 0.0)
+                meta = e.get("metadata") or {}
+                hint = (
+                    str(meta.get("rationale") or meta.get("reason") or "")[:60].strip()
+                    or "improvement queued"
+                )
+                lines.append(f"  `{sid}` delta +{score:.2f} — {hint}")
+            lines.append("")
+
+        lines.append(
+            "Используй `!skills info <id>` для деталей,\n    `!skills apply <id>` чтобы применить."
+        )
+        await message.reply("\n".join(lines))
+        return
+
+    # ── info <id> ───────────────────────────────────────────────────────────
+    if sub == "info":
+        if not arg:
+            await message.reply("Укажи id: `!skills info <id>`")
+            return
+        queue = _load_pending_queue(PENDING_IMPROVEMENTS_PATH)
+        entry = _find_entry_by_short_id(queue, arg)
+        if not entry:
+            await message.reply(f"Запись `{arg}` не найдена в очереди.")
+            return
+
+        sid = _short_id(entry.get("entry_id", "?"))
+        prompt_preview = (entry.get("candidate_prompt") or "")[:400].strip()
+        if len(entry.get("candidate_prompt") or "") > 400:
+            prompt_preview += "\n... (truncated)"
+        meta = entry.get("metadata") or {}
+        meta_str = "\n".join(f"  {k}: {v}" for k, v in meta.items()) if meta else "  —"
+        lines = [
+            f"Skill Curator Entry `{sid}`\n",
+            f"- Team: `{entry.get('team', '?')}`",
+            f"- delta_score: **{entry.get('delta_score', 0.0):.4f}**",
+            f"- threshold: {entry.get('threshold', 0.15)}",
+            f"- queued_at: {entry.get('queued_at', '?')[:16]}",
+            f"- status: {entry.get('status', 'pending')}",
+            f"\n**Metadata:**\n{meta_str}",
+            f"\n**Candidate prompt preview:**\n```\n{prompt_preview}\n```",
+            f"\nПрименить: `!skills apply {sid}`  |  Отклонить: `!skills reject {sid}`",
+        ]
+        await message.reply("\n".join(lines))
+        return
+
+    # ── apply <id> ──────────────────────────────────────────────────────────
+    if sub == "apply":
+        if not arg:
+            await message.reply("Укажи id: `!skills apply <id>`")
+            return
+        queue = _load_pending_queue(PENDING_IMPROVEMENTS_PATH)
+        entry = _find_entry_by_short_id(queue, arg)
+        if not entry:
+            await message.reply(f"Запись `{arg}` не найдена в очереди.")
+            return
+
+        sid = _short_id(entry.get("entry_id", "?"))
+        await message.reply(f"Применяю `{sid}`…")
+        try:
+            ok, msg = _apply_pending_entry(entry)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "skills_apply_command_failed", entry_id=entry.get("entry_id"), error=str(exc)
+            )
+            await message.reply(f"Apply error: {exc}")
+            return
+
+        icon = "✅" if ok else "❌"
+        await message.reply(f"{icon} `{sid}`: {msg}")
+        return
+
+    # ── reject <id> ─────────────────────────────────────────────────────────
+    if sub == "reject":
+        if not arg:
+            await message.reply("Укажи id: `!skills reject <id>`")
+            return
+        queue = _load_pending_queue(PENDING_IMPROVEMENTS_PATH)
+        entry = _find_entry_by_short_id(queue, arg)
+        if not entry:
+            await message.reply(f"Запись `{arg}` не найдена в очереди.")
+            return
+
+        sid = _short_id(entry.get("entry_id", "?"))
+        eid = entry.get("entry_id")
+        new_queue = [e for e in queue if e.get("entry_id") != eid]
+        try:
+            _save_pending_queue_atomic(new_queue, PENDING_IMPROVEMENTS_PATH)
+        except Exception as exc:  # noqa: BLE001
+            await message.reply(f"Reject error: {exc}")
+            return
+
+        logger.info("skills_reject_done", entry_id=eid, team=entry.get("team"))
+        await message.reply(f"Запись `{sid}` удалена из очереди.")
+        return
+
+    # ── clear --confirm ──────────────────────────────────────────────────────
+    if sub == "clear":
+        if "--confirm" not in (arg or ""):
+            # Show count without clearing
+            queue = _load_pending_queue(PENDING_IMPROVEMENTS_PATH)
+            count = len(queue)
+            await message.reply(
+                f"Очередь содержит **{count}** записей.\n"
+                "Добавь `--confirm` для полной очистки:\n"
+                "`!skills clear --confirm`"
+            )
+            return
+
+        queue = _load_pending_queue(PENDING_IMPROVEMENTS_PATH)
+        count = len(queue)
+        try:
+            _save_pending_queue_atomic([], PENDING_IMPROVEMENTS_PATH)
+        except Exception as exc:  # noqa: BLE001
+            await message.reply(f"Clear error: {exc}")
+            return
+
+        logger.info("skills_clear_done", cleared=count)
+        await message.reply(f"Очередь очищена: удалено **{count}** записей.")
+        return
+
+    # ── unknown subcommand → help ────────────────────────────────────────────
+    await message.reply(
+        "Skill Curator — управление очередью pending improvements\n\n"
+        "`!skills` — список всех pending (по командам)\n"
+        "`!skills info <id>` — детали записи\n"
+        "`!skills apply <id>` — применить к live overlay\n"
+        "`!skills reject <id>` — удалить из очереди\n"
+        "`!skills clear --confirm` — очистить очередь\n\n"
+        "Записи добавляются автоматически при `auto_apply_if_threshold` (Wave 53-A)."
+    )
