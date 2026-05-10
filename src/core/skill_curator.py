@@ -1908,3 +1908,5 @@ def _safe_team(team: str) -> str:
 
 # Singleton
 skill_curator = SkillCurator()
+
+

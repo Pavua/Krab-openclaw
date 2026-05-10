@@ -155,6 +155,7 @@ from .handlers import (
     handle_setpanelauth,
     handle_shop,
     handle_silence,
+    handle_skills,
     handle_snippet,
     handle_stats,
     handle_status,
@@ -813,6 +814,13 @@ class KraabUserbot(
         )
         async def wrap_mcp(c, m):
             await run_cmd(handle_mcp, m)
+
+        @self.client.on_message(
+            filters.command("skills", prefixes=prefixes) & _make_command_filter("skills"),
+            group=-1,
+        )
+        async def wrap_skills(c, m):
+            await run_cmd(handle_skills, m)
 
         @self.client.on_message(
             filters.command("memory", prefixes=prefixes) & _make_command_filter("memory"), group=-1
