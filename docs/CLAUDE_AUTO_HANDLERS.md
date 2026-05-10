@@ -1,30 +1,190 @@
-# Auto-generated handlers (172 handle_* функций)
+# Auto-generated handlers (180 handle_* функций)
 
 Phase 2 Waves 1-18 + Session 35-38. Модули в `src/handlers/commands/` (24 файла):
 text_utils / chat / scheduler / voice / memory / social / ai / swarm / translator / system / admin / cli / fileio / group_admin / content / state / observability / memory_admin / policy / _shared / engine_commands / curator_commands + `src/handlers/command_handlers.py`
 
-Обновлено: Session 38 (05.05.2026). Актуальный счётчик:
+Обновлено: auto-refresh (10.05.2026). Актуальный счётчик:
 ```bash
 grep -hE "^async def handle_" src/handlers/commands/*.py src/handlers/command_handlers.py | sort -u | wc -l
 ```
 
-`!access`, `!acl`, `!agent`, `!alias`, `!archive`, `!ask`
-`!autodel`, `!backup`, `!bench`, `!block`, `!blocklist`, `!browser`
-`!budget`, `!cap`, `!catchup`, `!chatban`, `!chatpolicy`, `!claude_cli`
-`!clear`, `!clear_session`, `!codex`, `!collect`, `!config`, `!context`
-`!costs`, `!cronstatus`, `!curator`, `!debug`, `!del`, `!diag`
-`!diagnose`, `!digest`, `!e`, `!emoji`, `!engine`, `!eval`
-`!explain`, `!export`, `!fix`, `!forget`, `!fwd`, `!gemini`
-`!grep`, `!health`, `!help`, `!hs`, `!id`, `!inbox`
-`!ls`, `!mac`, `!memo`, `!memory`, `!model`, `!models`
-`!monitor`, `!news`, `!note`, `!notify`, `!opencode`, `!panel`
-`!pin`, `!poll`, `!proactivity`, `!purge`, `!qr`, `!quiz`
-`!quota`, `!rate`, `!react`, `!read`, `!reasoning`, `!recall`
-`!remember`, `!remind`, `!reminders`, `!report`, `!restart`, `!rewrite`
-`!rm_remind`, `!role`, `!say`, `!schedule`, `!scope`, `!screenshot`
-`!search`, `!set`, `!shop`, `!stats`, `!status`, `!stopwatch`
-`!summary`, `!swarm`, `!sysinfo`, `!timer`, `!todo`, `!translate`
-`!translator`, `!trust`, `!unarchive`, `!unblock`, `!unpin`, `!uptime`
-`!version`, `!voice`, `!watch`, `!web`, `!who`, `!whois`, `!write`
-
-Beta (Session 17): `!mem` — быстрый поиск по архиву памяти; `!chado` — chado-sync агент; `!filter` — фильтрация сообщений по паттерну
+`!acl`
+`!afk`
+`!agent`
+`!alias`
+`!archive`
+`!ask`
+`!audio_message`
+`!autodel`
+`!b64`
+`!backup`
+`!bench`
+`!blocked`
+`!blocklist`
+`!bookmark`
+`!browser`
+`!budget`
+`!calc`
+`!cap`
+`!catchup`
+`!chado`
+`!chatban`
+`!chatinfo`
+`!chatmute`
+`!chatpolicy`
+`!claude_cli`
+`!clear`
+`!cmdblock`
+`!cmdunblock`
+`!codex`
+`!collect`
+`!color`
+`!config`
+`!confirm`
+`!contacts`
+`!context`
+`!convert`
+`!costs`
+`!cron`
+`!cronstatus`
+`!curator`
+`!currency`
+`!debug`
+`!decrypt`
+`!define`
+`!del`
+`!diag`
+`!diagnose`
+`!dice`
+`!diff`
+`!digest`
+`!dns`
+`!dreaming`
+`!e2e_smoke`
+`!emoji`
+`!encrypt`
+`!engine`
+`!eval`
+`!explain`
+`!export`
+`!filter`
+`!fix`
+`!forget`
+`!fwd`
+`!gemini_cli`
+`!grep`
+`!hash`
+`!health`
+`!help`
+`!history`
+`!hs`
+`!id`
+`!img`
+`!inbox`
+`!invite`
+`!ip`
+`!json`
+`!len`
+`!link`
+`!listen`
+`!log`
+`!ls`
+`!macos`
+`!mark`
+`!mcp`
+`!media`
+`!mem`
+`!members`
+`!memo`
+`!memory`
+`!metrics`
+`!model`
+`!models`
+`!monitor`
+`!new_chat_members`
+`!news`
+`!note`
+`!notify`
+`!ocr`
+`!opencode`
+`!panel`
+`!paste`
+`!pin`
+`!ping`
+`!poll`
+`!proactive`
+`!proactivity`
+`!profile`
+`!purge`
+`!qr`
+`!quiz`
+`!quota`
+`!quote`
+`!rand`
+`!rate`
+`!react`
+`!read`
+`!reasoning`
+`!recall`
+`!regex`
+`!remember`
+`!remind`
+`!reminders`
+`!replay`
+`!report`
+`!reset`
+`!restart`
+`!rewrite`
+`!rm_remind`
+`!role`
+`!routes`
+`!run`
+`!say`
+`!schedule`
+`!scope`
+`!screenshot`
+`!search`
+`!sed`
+`!set`
+`!setpanelauth`
+`!shop`
+`!silence`
+`!skills`
+`!slowmode`
+`!snippet`
+`!spam`
+`!stats`
+`!status`
+`!sticker`
+`!stopwatch`
+`!summary`
+`!swarm`
+`!sysinfo`
+`!tag`
+`!template`
+`!test`
+`!time`
+`!timer`
+`!todo`
+`!top`
+`!tor`
+`!translate`
+`!translate_auto`
+`!translator`
+`!trust`
+`!tts`
+`!typing`
+`!unarchive`
+`!unpin`
+`!uptime`
+`!urban`
+`!version`
+`!voice`
+`!watch`
+`!weather`
+`!web`
+`!welcome`
+`!who`
+`!whois`
+`!write`
+`!yt`

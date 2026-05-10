@@ -1,12 +1,13 @@
-# Auto-generated endpoints (277 routes)
+# Auto-generated endpoints (290 routes)
 
 **29 routers** в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern.
-Обновлено: Session 38 (05.05.2026). Live проверить: `GET /api/endpoints`
+Обновлено: auto-refresh (10.05.2026). Live проверить: `GET /api/endpoints`
 
 | Endpoint | Метод |
 |----------|-------|
 | `/` | GET |
 | `/api/agent-engine/comparison` | GET |
+| `/api/agent-engine/dispatch-status` | GET |
 | `/api/agent-engine/runs` | GET |
 | `/api/agent-engine/status` | GET |
 | `/api/archive/growth` | GET |
@@ -20,10 +21,13 @@
 | `/api/browser/screenshot` | POST |
 | `/api/browser/status` | GET |
 | `/api/browser/tabs` | GET |
+| `/api/bypass/perf` | GET |
 | `/api/capabilities/registry` | GET |
 | `/api/channels/capabilities` | GET |
 | `/api/chat/policies` | GET |
-| `/api/chat/policy/{chat_id}` | GET/POST/DELETE |
+| `/api/chat/policy/{chat_id}` | GET |
+| `/api/chat/policy/{chat_id}` | POST |
+| `/api/chat/policy/{chat_id}` | DELETE |
 | `/api/chat_windows/clear` | POST |
 | `/api/chat_windows/config` | GET |
 | `/api/chat_windows/evict_idle` | POST |
@@ -31,6 +35,7 @@
 | `/api/chat_windows/stats` | GET |
 | `/api/chrome/dedicated/launch` | POST |
 | `/api/chrome/dedicated/status` | GET |
+| `/api/codex/accounts` | GET |
 | `/api/commands` | GET |
 | `/api/commands/usage` | GET |
 | `/api/commands/usage/top` | GET |
@@ -38,7 +43,7 @@
 | `/api/context/checkpoint` | POST |
 | `/api/context/latest` | GET |
 | `/api/context/transition-pack` | POST |
-| `/api/costs/budget` | GET/POST |
+| `/api/costs/budget` | GET |
 | `/api/costs/by-tier` | GET |
 | `/api/costs/by_chat` | GET |
 | `/api/costs/codex-quota` | GET |
@@ -60,7 +65,9 @@
 | `/api/hooks/sentry` | POST |
 | `/api/hooks/sentry/secret/rotate` | POST |
 | `/api/inbox/bulk-ack-stale` | POST |
+| `/api/inbox/cleanup-stale` | POST |
 | `/api/inbox/create` | POST |
+| `/api/inbox/create-vpn-alert` | POST |
 | `/api/inbox/events` | GET |
 | `/api/inbox/items` | GET |
 | `/api/inbox/stale-open` | GET |
@@ -86,7 +93,8 @@
 | `/api/model/apply` | POST |
 | `/api/model/catalog` | GET |
 | `/api/model/explain` | GET |
-| `/api/model/feedback` | GET/POST |
+| `/api/model/feedback` | GET |
+| `/api/model/feedback` | POST |
 | `/api/model/local/load-default` | POST |
 | `/api/model/local/status` | GET |
 | `/api/model/local/unload` | POST |
@@ -100,6 +108,12 @@
 | `/api/notify` | POST |
 | `/api/notify/status` | GET |
 | `/api/notify/toggle` | POST |
+| `/api/observability/audit-summary` | GET |
+| `/api/observability/catchup-history` | GET |
+| `/api/observability/route-switches` | GET |
+| `/api/observability/run/{request_id}` | GET |
+| `/api/observability/runs` | GET |
+| `/api/observability/snapshots` | GET |
 | `/api/openclaw/browser-mcp-readiness` | GET |
 | `/api/openclaw/browser-smoke` | GET |
 | `/api/openclaw/browser/open-owner-chrome` | POST |
@@ -130,7 +144,8 @@
 | `/api/openclaw/report` | GET |
 | `/api/openclaw/routing/effective` | GET |
 | `/api/openclaw/runtime-config` | GET |
-| `/api/ops/ack/{code}` | POST/DELETE |
+| `/api/ops/ack/{code}` | POST |
+| `/api/ops/ack/{code}` | DELETE |
 | `/api/ops/alerts` | GET |
 | `/api/ops/bundle` | GET |
 | `/api/ops/bundle/export` | GET |
@@ -151,10 +166,13 @@
 | `/api/policy` | GET |
 | `/api/policy/matrix` | GET |
 | `/api/provisioning/apply/{draft_id}` | POST |
-| `/api/provisioning/drafts` | GET/POST |
+| `/api/provisioning/drafts` | GET |
+| `/api/provisioning/drafts` | POST |
 | `/api/provisioning/preview/{draft_id}` | GET |
 | `/api/provisioning/templates` | GET |
 | `/api/queue` | GET |
+| `/api/quota` | GET |
+| `/api/quota/history` | GET |
 | `/api/reactions/incoming` | GET |
 | `/api/reactions/stats` | GET |
 | `/api/runtime/chat-session/clear` | POST |
@@ -171,6 +189,9 @@
 | `/api/stats/caches` | GET |
 | `/api/swarm/artifacts` | GET |
 | `/api/swarm/artifacts/cleanup` | POST |
+| `/api/swarm/auto-executor/status` | GET |
+| `/api/swarm/auto-executor/toggle` | POST |
+| `/api/swarm/channels/status` | GET |
 | `/api/swarm/delegations/active` | GET |
 | `/api/swarm/events` | GET |
 | `/api/swarm/listeners` | GET |
@@ -181,7 +202,8 @@
 | `/api/swarm/status` | GET |
 | `/api/swarm/task-board` | GET |
 | `/api/swarm/task-board/export` | GET |
-| `/api/swarm/task/{task_id}` | GET/DELETE |
+| `/api/swarm/task/{task_id}` | GET |
+| `/api/swarm/task/{task_id}` | DELETE |
 | `/api/swarm/task/{task_id}/priority` | POST |
 | `/api/swarm/task/{task_id}/update` | POST |
 | `/api/swarm/tasks` | GET |
@@ -232,9 +254,14 @@
 | `/api/voice/runtime` | GET |
 | `/api/voice/runtime/update` | POST |
 | `/api/voice/toggle` | POST |
+| `/api/vpn/help` | POST |
 | `/commands` | GET |
 | `/costs` | GET |
+| `/docs` | GET |
+| `/docs/oauth2-redirect` | GET |
 | `/inbox` | GET |
+| `/legacy` | GET |
+| `/legacy/` | GET |
 | `/legacy/commands` | GET |
 | `/legacy/costs` | GET |
 | `/legacy/inbox` | GET |
@@ -244,9 +271,12 @@
 | `/legacy/translator` | GET |
 | `/metrics` | GET |
 | `/nano_theme.css` | GET |
+| `/observability` | GET |
+| `/openapi.json` | GET |
 | `/ops` | GET |
 | `/prototypes/nano/nano_theme.css` | GET |
 | `/prototypes/{page}` | GET |
+| `/redoc` | GET |
 | `/settings` | GET |
 | `/stats` | GET |
 | `/swarm` | GET |
@@ -256,6 +286,7 @@
 | `/v4/chat` | GET |
 | `/v4/commands` | GET |
 | `/v4/costs` | GET |
+| `/v4/i18n.js` | GET |
 | `/v4/inbox` | GET |
 | `/v4/liquid-glass.css` | GET |
 | `/v4/ops` | GET |
