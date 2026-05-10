@@ -500,6 +500,7 @@ from .commands.observability_commands import (  # noqa: E402, F401  # Phase 2 Wa
     handle_quota,
     handle_routes,
     handle_skills,
+    handle_test,
     handle_watch,
 )
 from .commands.memory_admin_commands import (  # noqa: E402, F401  # Phase 2 Wave 18

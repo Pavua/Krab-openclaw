@@ -164,6 +164,7 @@ from .handlers import (
     handle_swarm,
     handle_sysinfo,
     handle_template,
+    handle_test,
     handle_timer,
     handle_todo,
     handle_top,
@@ -821,6 +822,13 @@ class KraabUserbot(
         )
         async def wrap_skills(c, m):
             await run_cmd(handle_skills, m)
+
+        @self.client.on_message(
+            filters.command("test", prefixes=prefixes) & _make_command_filter("test"),
+            group=-1,
+        )
+        async def wrap_test(c, m):
+            await run_cmd(handle_test, m)
 
         @self.client.on_message(
             filters.command("memory", prefixes=prefixes) & _make_command_filter("memory"), group=-1

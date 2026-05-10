@@ -1593,6 +1593,14 @@ __all__ = [
     "handle_skills",
     "handle_watch",
     "handle_mcp",
+    "handle_test",
+    "_run_pytest_subset",
+    "_resolve_pytest_bin",
+    "_E2E_SMOKE_FILE",
+    "_FULL_CI_PATHS",
+    "_MAX_ARGS_TOKENS",
+    "_KRAB_PROJECT_ROOT",
+    "_PYTEST_CANDIDATES",
     "_load_mcp_inventory",
     "_get_registered_mcps",
     "_check_env_var_present",
@@ -1921,3 +1929,205 @@ async def handle_skills(bot: "KraabUserbot", message: Message) -> None:
         "`!skills clear --confirm` — очистить очередь\n\n"
         "Записи добавляются автоматически при `auto_apply_if_threshold` (Wave 53-A)."
     )
+
+
+# ---------------------------------------------------------------------------
+# Wave 56-K: !test — on-demand pytest subset runner (owner-only)
+# ---------------------------------------------------------------------------
+
+import sys as _sys  # noqa: E402
+
+_KRAB_PROJECT_ROOT = pathlib.Path(__file__).parent.parent.parent.parent
+
+# Ordered list of candidate pytest executables (first that exists wins at runtime)
+_PYTEST_CANDIDATES = [
+    _KRAB_PROJECT_ROOT / "venv" / "bin" / "pytest",
+    _KRAB_PROJECT_ROOT / ".venv_krab" / "bin" / "pytest",
+]
+
+# Default e2e smoke test path (Wave 53-C)
+_E2E_SMOKE_FILE = "tests/integration/test_e2e_smoke_wave53c.py"
+
+# CI subset: lightweight unit tests (fast, no live network)
+_FULL_CI_PATHS = ["tests/unit/"]
+
+# Hard-coded safety cap: reject CLI with 30+ arg tokens
+_MAX_ARGS_TOKENS = 28
+
+
+def _resolve_pytest_bin() -> list[str]:
+    """Возвращает список аргументов для запуска pytest.
+
+    Предпочитает бинарник из project venv; fallback на sys.executable -m pytest.
+    """
+    for candidate in _PYTEST_CANDIDATES:
+        if candidate.exists():
+            return [str(candidate)]
+    return [_sys.executable, "-m", "pytest"]
+
+
+async def _run_pytest_subset(
+    pytest_args: list[str],
+    *,
+    timeout: int = 60,
+) -> dict:
+    """Запускает pytest в async subprocess с timeout.
+
+    Args:
+        pytest_args: аргументы после бинарника (пути, -k filters, etc.)
+        timeout: максимальное время в секундах (hard cap 120s)
+
+    Returns:
+        dict: ok, duration_sec, passed, failed, errors, summary_text
+    """
+    from ...core.subprocess_env import clean_subprocess_env  # noqa: PLC0415
+
+    _timeout = min(int(timeout), 120)
+    _pytest_bin = _resolve_pytest_bin()
+
+    cmd = _pytest_bin + ["--tb=no", "-q", "--no-header"] + pytest_args
+
+    t0 = asyncio.get_event_loop().time()
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(  # safe: uses execfile-style, not shell
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(_KRAB_PROJECT_ROOT),
+            env=clean_subprocess_env(),
+        )
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=_timeout)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+            duration = asyncio.get_event_loop().time() - t0
+            return {
+                "ok": False,
+                "duration_sec": round(duration, 2),
+                "passed": 0,
+                "failed": 0,
+                "errors": 0,
+                "summary_text": f"TIMEOUT after {_timeout}s — pytest killed",
+            }
+    except Exception as exc:  # noqa: BLE001
+        duration = asyncio.get_event_loop().time() - t0
+        return {
+            "ok": False,
+            "duration_sec": round(duration, 2),
+            "passed": 0,
+            "failed": 0,
+            "errors": 0,
+            "summary_text": f"subprocess error: {exc}",
+        }
+
+    duration = asyncio.get_event_loop().time() - t0
+    stdout = stdout_b.decode("utf-8", errors="replace")
+    stderr = stderr_b.decode("utf-8", errors="replace")
+    combined = stdout + ("\n" + stderr if stderr.strip() else "")
+
+    # Parse last summary line: "N passed in Xs" / "N failed, M passed in Xs" / etc.
+    passed = failed = errors = 0
+    summary_text = combined.strip().splitlines()[-1] if combined.strip() else ""
+
+    import re as _re  # noqa: PLC0415
+
+    _pass_m = _re.search(r"(\d+)\s+passed", summary_text)
+    _fail_m = _re.search(r"(\d+)\s+failed", summary_text)
+    _err_m = _re.search(r"(\d+)\s+error", summary_text)
+
+    if _pass_m:
+        passed = int(_pass_m.group(1))
+    if _fail_m:
+        failed = int(_fail_m.group(1))
+    if _err_m:
+        errors = int(_err_m.group(1))
+
+    ok = proc.returncode == 0 and failed == 0 and errors == 0
+
+    return {
+        "ok": ok,
+        "duration_sec": round(duration, 2),
+        "passed": passed,
+        "failed": failed,
+        "errors": errors,
+        "summary_text": summary_text,
+        "_stdout_tail": "\n".join(combined.strip().splitlines()[-5:]),
+    }
+
+
+async def handle_test(bot: "KraabUserbot", message: Message) -> None:
+    """!test — on-demand pytest subset runner (owner-only, Wave 56-K).
+
+    Использование:
+      !test              — e2e smoke (tests/integration/test_e2e_smoke_wave53c.py)
+      !test full         — unit subset (tests/unit/)
+      !test <pattern>    — pytest -k "<pattern>" по всем тестам
+    """
+    from ...core.access_control import AccessLevel  # noqa: PLC0415
+
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!test` доступен только владельцу.")
+
+    raw = (message.text or "").strip()
+    parts = raw.split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    # Safety: reject excessively long args
+    if len(arg.split()) > _MAX_ARGS_TOKENS:
+        raise UserInputError(
+            user_message=f"❌ Слишком много аргументов (>{_MAX_ARGS_TOKENS}). Упрости запрос."
+        )
+
+    # Determine run mode
+    if not arg:
+        # Default: e2e smoke suite
+        pytest_args = [_E2E_SMOKE_FILE]
+        label = "e2e_smoke_wave53c"
+    elif arg.lower() == "full":
+        # CI subset: unit tests only (fast)
+        pytest_args = _FULL_CI_PATHS
+        label = "unit subset"
+    else:
+        # Pattern filter: run -k <pattern> across all tests
+        pytest_args = ["-k", arg, "tests/"]
+        label = f"pattern: {arg[:40]}"
+
+    await message.reply(f"🧪 Запускаем тесты (`{label}`)…\nМакс. ожидание: 120s")
+
+    result = await _run_pytest_subset(pytest_args, timeout=60)
+
+    ok_icon = "✅" if result["ok"] else "❌"
+    passed = result["passed"]
+    failed = result["failed"]
+    errors = result["errors"]
+    duration = result["duration_sec"]
+    tail = result.get("_stdout_tail", result["summary_text"])
+
+    # Compact status line
+    total = passed + failed + errors
+    status_line = f"{ok_icon} {passed}/{total} passed | {failed} failed | {errors} errors"
+
+    # Last lines from output (Telegram-safe code block)
+    tail_lines = (
+        "\n".join(f"  {ln}" for ln in tail.strip().splitlines()[-5:])
+        if tail.strip()
+        else "  (нет вывода)"
+    )
+
+    reply = (
+        f"🧪 **Test Run** ({label})\n\n{status_line}\n⏱ {duration}s\n\n```\n{tail_lines}\n```\n\n"
+    )
+
+    if not arg:
+        reply += "_Full subset: `!test full` | Filter: `!test <pattern>`_"
+    elif arg.lower() == "full":
+        reply += "_E2E smoke: `!test` | Filter: `!test <pattern>`_"
+    else:
+        reply += "_E2E smoke: `!test` | Full subset: `!test full`_"
+
+    await message.reply(reply)

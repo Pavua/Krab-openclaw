@@ -422,6 +422,13 @@ _COMMANDS: list[CommandInfo] = [
         usage="!mcp [info <name> | inventory]",
         owner_only=True,
     ),
+    CommandInfo(
+        name="test",
+        category="system",
+        description="On-demand pytest subset runner: e2e smoke / unit CI / pattern filter (Wave 56-K)",
+        usage="!test [full | <pattern>]",
+        owner_only=True,
+    ),
     # ── notes ────────────────────────────────────────────────────────────────
     CommandInfo(
         name="memo",
