@@ -300,6 +300,31 @@ async def test_get_best_model_photo_falls_back_to_cloud_when_no_local_vision_is_
     assert router_best.await_count == 1
 
 
+def test_strip_local_prefix_normalizes_lmstudio_namespace(manager: ModelManager) -> None:
+    """
+    Wave 62: `lmstudio/` namespace-префикс используется в Python routing-слое
+    для type-classification (LOCAL_MLX), но LM Studio API и `_models_cache`
+    хранят raw IDs. _strip_local_prefix должен нормализовать к raw форме.
+
+    Регрессия 2026-05-11: префикс утекал в `/api/v1/models/load` → 404
+    `Model lmstudio/gemma-... not found` → `single_local_mode` выгружал
+    корректную gemma как "extra" → silent fallback на qwen2-0.5b (289 MB).
+    """
+    # Стрипаем lmstudio/ — case-insensitive
+    assert manager._strip_local_prefix("lmstudio/gemma-4-26b-a4b-it-optiq") == (
+        "gemma-4-26b-a4b-it-optiq"
+    )
+    assert manager._strip_local_prefix("LMStudio/qwen3.5-9b") == "qwen3.5-9b"
+    # Raw ID без префикса остаётся как есть
+    assert manager._strip_local_prefix("gemma-4-26b-a4b-it-optiq") == "gemma-4-26b-a4b-it-optiq"
+    # Cloud IDs не трогаем
+    assert manager._strip_local_prefix("google/gemini-2.5-pro") == "google/gemini-2.5-pro"
+    assert manager._strip_local_prefix("codex-cli/gpt-5.5") == "codex-cli/gpt-5.5"
+    # Пустые значения / None / whitespace
+    assert manager._strip_local_prefix("") == ""
+    assert manager._strip_local_prefix("   lmstudio/x   ") == "x"
+
+
 def test_is_local_model_treats_openai_codex_as_cloud(manager: ModelManager) -> None:
     """OpenAI/Codex и CLI backend IDs не должны маскироваться под локальные LM Studio модели."""
     assert manager.is_local_model("openai-codex/gpt-5.4") is False

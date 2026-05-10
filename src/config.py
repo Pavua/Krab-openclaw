@@ -106,6 +106,11 @@ class Config:
         "true",
         "yes",
     )
+    # Wave 62: max количество альтернативных локальных моделей для autoload fallback
+    # когда preferred LOCAL_PREFERRED_MODEL не загружается. 0 = не пробовать ничего,
+    # честно вернуть ошибку (вместо silent swap на самую мелкую модель типа qwen2-0.5b).
+    # Был зомби-env: упоминался в .env, но не читался → дефолт 3 → silent fallback bug.
+    LOCAL_AUTOLOAD_FALLBACK_LIMIT: int = int(os.getenv("LOCAL_AUTOLOAD_FALLBACK_LIMIT", "0") or "0")
     # Guarded idle-unload: в режиме стабильности не выгружаем локальную модель автоматически,
     # чтобы каналы OpenClaw (bot/iMessage/dashboard) не ловили "No models loaded" после простоя.
     GUARDED_IDLE_UNLOAD: bool = os.getenv("GUARDED_IDLE_UNLOAD", "1").strip().lower() in (
@@ -767,6 +772,11 @@ class Config:
                     cls.LM_STUDIO_API_KEY = value
                 elif key == "SINGLE_LOCAL_MODEL_MODE":
                     cls.SINGLE_LOCAL_MODEL_MODE = value.strip().lower() in ("1", "true", "yes")
+                elif key == "LOCAL_AUTOLOAD_FALLBACK_LIMIT":
+                    try:
+                        cls.LOCAL_AUTOLOAD_FALLBACK_LIMIT = max(0, int(value or 0))
+                    except (TypeError, ValueError):
+                        cls.LOCAL_AUTOLOAD_FALLBACK_LIMIT = 0
                 elif key == "GUARDED_IDLE_UNLOAD":
                     cls.GUARDED_IDLE_UNLOAD = value.strip().lower() in ("1", "true", "yes")
                 elif key == "GUARDED_IDLE_UNLOAD_GRACE_SEC":

@@ -129,6 +129,24 @@ class ModelManager:
         self._cost_analytics = cost_analytics
 
     @staticmethod
+    def _strip_local_prefix(model_id: str) -> str:
+        """
+        Снимает `lmstudio/` namespace-префикс перед обращением к LM Studio API
+        или `_models_cache` (которые оба используют raw IDs).
+
+        Wave 62 bugfix: префикс используется в Python routing-слое чтобы
+        `_detect_model_type()` уверенно классифицировал модель как LOCAL_MLX
+        даже без cache hit (см. `gemma-` namespace collision → CLOUD_GEMINI).
+        Но LM Studio'у нужен raw ID — иначе `Model lmstudio/... not found` (404)
+        и `single_local_mode` начинает выгружать корректную загруженную модель,
+        думая что она "extra".
+        """
+        normalized = str(model_id or "").strip()
+        if normalized.lower().startswith("lmstudio/"):
+            return normalized[len("lmstudio/") :]
+        return normalized
+
+    @staticmethod
     def _is_chat_capable_local_model(model_id: str, info: Optional[ModelInfo] = None) -> bool:
         """
         Возвращает True только для локальных моделей, пригодных для chat/completions.
@@ -627,6 +645,8 @@ class ModelManager:
         Если preferred модель не загрузилась (частый кейс после idle-unload/перегруза),
         пытается несколько более лёгких локальных кандидатов.
         """
+        # Wave 62: нормализация namespace-префикса (см. _strip_local_prefix).
+        model_id = self._strip_local_prefix(model_id)
         resolved_model = model_id
         if model_id.lower() in ("local", "lmstudio"):
             resolved_model = await self.resolve_preferred_local_model(has_photo=has_photo) or ""
@@ -908,6 +928,9 @@ class ModelManager:
 
     async def load_model(self, model_id: str) -> bool:
         """Загружает модель (Smart Loading) с Lock и API v1 fallback."""
+        # Wave 62: нормализация — LM Studio API + _models_cache используют raw ID
+        # без `lmstudio/` namespace-префикса. См. _strip_local_prefix docstring.
+        model_id = self._strip_local_prefix(model_id)
         lock_handle = None
         try:
             lock_handle = await self._acquire_interprocess_model_lock(

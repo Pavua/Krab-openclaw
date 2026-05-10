@@ -2057,7 +2057,12 @@ class OpenClawClient:
         """
         state = self._lm_native_chat_state.get(chat_id) or {}
         previous_response_id = ""
+        # Wave 62: LM Studio API expects raw model ID (`gemma-4-26b-a4b-it-optiq`),
+        # not provider-namespaced `lmstudio/gemma-...`. Strip the prefix here so
+        # routing layer can keep `lmstudio/` tag for `is_local_model()` typing.
         normalized_model = str(model_hint or "").strip()
+        if normalized_model.lower().startswith("lmstudio/"):
+            normalized_model = normalized_model[len("lmstudio/") :]
         if str(state.get("model", "") or "").strip() == normalized_model:
             previous_response_id = str(state.get("response_id", "") or "").strip()
         elif state:
@@ -2735,10 +2740,15 @@ class OpenClawClient:
                     if native_text:
                         return native_text
 
+                # Wave 62: strip `lmstudio/` namespace prefix before sending
+                # to LM Studio API (which uses raw IDs).
+                _compat_model = str(model_hint or "").strip()
+                if _compat_model.lower().startswith("lmstudio/"):
+                    _compat_model = _compat_model[len("lmstudio/") :]
                 payload = {
                     "messages": messages_for_lm,
                     "stream": False,
-                    "model": model_hint if model_hint else "local",
+                    "model": _compat_model if _compat_model else "local",
                 }
                 if isinstance(max_output_tokens, int) and max_output_tokens > 0:
                     payload["max_tokens"] = max_output_tokens
