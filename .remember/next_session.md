@@ -1,13 +1,13 @@
-# Session N+1 — Starter Handoff (Session 45 close, 2026-05-12 ~01:00)
+# Session N+1 — Starter Handoff (Session 45 close, 2026-05-12 ~01:10)
 
 > **Project**: Krab (Telegram userbot). Этот handoff — ТОЛЬКО про Krab.
 > Krab Ear имеет свой handoff в `/Users/pablito/Antigravity_AGENTS/Krab Ear/.remember/next_session.md`.
 > См. [docs/PROJECT_SEPARATION_GUIDE.md](../docs/PROJECT_SEPARATION_GUIDE.md).
 
-## TL;DR — Session 45 closed 2026-05-12 ~01:00, **20+ коммитов**, 7 Linear closed, 3 paradigm shifts, >1000 Sentry events/week silenced
+## TL;DR — Session 45 closed 2026-05-12 ~01:10, **22 commits**, 7 Linear closed, 3 paradigm shifts, >1000 Sentry events/week silenced
 
 **FINAL STATE**:
-- **main HEAD**: `6ba12e1` Wave 65-H Sentry-poll direct API (плюс 65-F TBD)
+- **main HEAD**: `fab8319` Wave 65-F (conftest test artifact leak prevention)
 - **Krab core**: alive, journal_mode=delete (all 5 sessions), `get_state_probe_enabled=True`
 - **Sentry quota saved**: **>1000 events/week** stop firing
 - **Linear**: 7 issues closed (AGE-5/6/8/9/12/15/16). Krab backlog: 0 open. Krab Ear AGE-14/10 — отдельный repo.
@@ -39,7 +39,7 @@
 * `4a954a9` 65-G: LM Studio idle unload alias + 10 tests (Wave 29-RR shipped earlier)
 * `866359e` docs: CLAUDE.md Session 45 update
 * `6ba12e1` 65-H: Sentry-poll direct API (replace bash curl 15s timeout с httpx 30s + retries)
-* (65-F: test conftest guard — TBD, agent running)
+* `fab8319` 65-F: conftest guard для test artifact leak (Session 39/40/44+ recurring pattern закрыт)
 
 ## Operational state
 
