@@ -235,9 +235,36 @@ async def test_complete_via_anthropic_vertex_exception_propagated(monkeypatch):
     fake_client = MagicMock()
     fake_client.messages.create.side_effect = RuntimeError("quota exceeded")
     _inject_anthropic_mock(monkeypatch, fake_client)
+    # Wave 65-D: claude-sonnet-4-5 теперь preempted by default; используем
+    # claude-opus-4-7 чтобы exercise actual SDK code path.
+    monkeypatch.setenv("KRAB_ANTHROPIC_VERTEX_DISABLED_MODELS", "")
 
     with pytest.raises(RuntimeError, match="quota exceeded"):
         await avd.complete_via_anthropic_vertex(
-            model="anthropic-vertex/claude-sonnet-4-5",
+            model="anthropic-vertex/claude-opus-4-7",
             messages=[{"role": "user", "content": "fail me"}],
+        )
+
+
+@pytest.mark.asyncio
+async def test_wave65d_preempts_disabled_model(monkeypatch):
+    """Wave 65-D: модели в KRAB_ANTHROPIC_VERTEX_DISABLED_MODELS preempt'ятся
+    с RuntimeError ДО SDK calls — save 0.5s authentication + quota reject."""
+    monkeypatch.setenv("KRAB_ANTHROPIC_VERTEX_DISABLED_MODELS", "claude-sonnet-4-5")
+    with pytest.raises(RuntimeError, match="preempted — no quota"):
+        await avd.complete_via_anthropic_vertex(
+            model="anthropic-vertex/claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+
+@pytest.mark.asyncio
+async def test_wave65d_default_disabled_includes_sonnet_45(monkeypatch):
+    """Wave 65-D: default value KRAB_ANTHROPIC_VERTEX_DISABLED_MODELS includes
+    claude-sonnet-4-5 — bypass quota errors out of the box."""
+    monkeypatch.delenv("KRAB_ANTHROPIC_VERTEX_DISABLED_MODELS", raising=False)
+    with pytest.raises(RuntimeError, match="preempted — no quota"):
+        await avd.complete_via_anthropic_vertex(
+            model="anthropic-vertex/claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "test"}],
         )

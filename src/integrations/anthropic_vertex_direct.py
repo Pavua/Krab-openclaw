@@ -137,6 +137,26 @@ async def complete_via_anthropic_vertex(
     proj = project or os.environ.get("KRAB_ANTHROPIC_VERTEX_PROJECT") or DEFAULT_PROJECT
     reg = region or os.environ.get("KRAB_ANTHROPIC_VERTEX_REGION") or DEFAULT_REGION
     bare_model = _strip_prefix(model)
+
+    # Wave 65-D (2026-05-12): preempt моделей без quota в текущем GCP project.
+    # `claude-sonnet-4-5` — 100% fail (7/7) с "quota exceeded" в bypass_perf.jsonl
+    # (project caramel-anvil-492816-t5 не имеет Anthropic quota approved).
+    # Skip перед AnthropicVertex client init чтобы fallback chain advance'ил быстро,
+    # не тратя 0.5s на authentication attempt + handshake → quota reject.
+    # Override через env: `KRAB_ANTHROPIC_VERTEX_DISABLED_MODELS=claude-sonnet-4-5,claude-opus-4-9`.
+    _disabled_csv = os.environ.get(
+        "KRAB_ANTHROPIC_VERTEX_DISABLED_MODELS", "claude-sonnet-4-5"
+    ).strip()
+    _disabled = {m.strip() for m in _disabled_csv.split(",") if m.strip()}
+    if bare_model in _disabled:
+        add_bypass_breadcrumb(
+            bypass_kind="anthropic-vertex",
+            event="preempted_no_quota",
+            model=bare_model,
+            extra={"reason": "model in KRAB_ANTHROPIC_VERTEX_DISABLED_MODELS"},
+            level="info",
+        )
+        raise RuntimeError(f"anthropic-vertex/{bare_model} preempted — no quota in project {proj}")
     # Breadcrumb: старт Anthropic-via-Vertex bypass — region + project (Wave 30-B)
     add_bypass_breadcrumb(
         bypass_kind="anthropic-vertex",
