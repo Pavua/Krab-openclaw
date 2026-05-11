@@ -333,6 +333,40 @@ class TestDecideRouteCalledPerRequest:
         # В реальном коде при preferred_model_id != "" мы сразу selected_model = preferred_model_id
         # и блок с routing policy не выполняется — это правильное поведение
 
+    def test_owner_dm_wiring_uses_is_owner_user_id_not_force_cloud(self):
+        """
+        Wave 62-C regression: is_owner_dm flag классификатора должен определяться
+        через `is_owner_user_id(chat_id)`, а НЕ через force_cloud.
+
+        Раньше (Wave 61-A): `is_owner_dm=effective_force_cloud` — это путало
+        классификацию когда force_cloud=True пришёл из группового чата
+        (например `!cmd` админская команда в группе): chat_id < 0, не private DM,
+        но force_cloud=True → классификатор ошибочно ставил owner_dm.
+        """
+        # Group chat (chat_id < 0) с force_cloud=True не должен быть owner_dm:
+        # owner_dm требует приватного chat_id (> 0) и matching owner ID в ACL.
+        task_type_group = classify_task_type(
+            message_text="!status",
+            chat_id=-1001234567890,
+            is_owner_dm=False,  # ← правильно: групповой чат не может быть owner_dm
+            has_photo=False,
+            has_command_prefix=True,
+        )
+        # !cmd в группе → simple_lookup (по командному префиксу), не owner_dm
+        assert task_type_group == "simple_lookup"
+
+        # Private DM от owner (chat_id == owner_user_id) с force_cloud=False
+        # должен идти как owner_dm — потому что Wave 62-C wiring читает ACL,
+        # а не force_cloud.
+        task_type_owner_dm = classify_task_type(
+            message_text="расскажи шутку",
+            chat_id=312322764,  # положительный chat_id (private DM)
+            is_owner_dm=True,  # wiring установит True через is_owner_user_id()
+            has_photo=False,
+            has_command_prefix=False,
+        )
+        assert task_type_owner_dm == "owner_dm"
+
 
 # ---------------------------------------------------------------------------
 # Production bug regression: casual_chat → codex-cli (должен идти к local)

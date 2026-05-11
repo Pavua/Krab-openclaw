@@ -3099,10 +3099,25 @@ class OpenClawClient:
                     )
 
                     _chat_id_int = int(chat_id) if str(chat_id).lstrip("-").isdigit() else 0
+                    # Wave 62-C: корректный is_owner_dm:
+                    # - chat_id > 0 → private DM (chat_id == user_id в Telegram)
+                    # - is_owner_user_id() читает ACL + OWNER_USER_IDS env
+                    # Раньше использовали force_cloud как proxy — это путало классификацию
+                    # для force_cloud=True в групповых чатах (не должны быть owner_dm).
+                    _is_owner_dm = False
+                    if _chat_id_int > 0:
+                        try:
+                            from .core.access_control import (  # noqa: PLC0415
+                                is_owner_user_id,
+                            )
+
+                            _is_owner_dm = is_owner_user_id(_chat_id_int)
+                        except Exception:  # noqa: BLE001
+                            _is_owner_dm = False
                     _task_type = classify_task_type(
                         message_text=message,
                         chat_id=_chat_id_int,
-                        is_owner_dm=effective_force_cloud,  # force_cloud = owner-DM proxy
+                        is_owner_dm=_is_owner_dm,
                         has_photo=has_photo,
                         has_command_prefix=message.startswith("!") if message else False,
                     )
