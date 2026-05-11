@@ -19,6 +19,7 @@ import asyncio
 import json
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,6 +30,128 @@ if TYPE_CHECKING:
     from pyrogram import Client  # noqa: F401 — для "Client" type annotation
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Wave 63-A Step 1: GetState pts probe — detection state container
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class GetStateProbeResult:
+    """Wave 63-A Step 1: outcome `_probe_updates_via_get_state`.
+
+    Поля:
+      alive               — есть ли уверенность что updates dispatch loop жив
+      split_brain_suspected — server pts двинулся, update_id заморожен
+      server_pts          — последний server pts (или 0 если не получен)
+      server_pts_delta    — насколько pts вырос с предыдущего snapshot
+      error               — текст ошибки (None если probe прошёл)
+    """
+
+    alive: bool
+    split_brain_suspected: bool = False
+    server_pts: int = 0
+    server_pts_delta: int = 0
+    error: str | None = None
+
+
+async def _probe_updates_via_get_state(
+    owner: object,
+    *,
+    timeout_sec: float = 8.0,
+    update_id_baseline: int | None = None,
+) -> GetStateProbeResult:
+    """Wave 63-A Step 1: split-brain detector через `updates.GetState`.
+
+    Алгоритм:
+      1. Делаем `client.invoke(GetState())` (легковесный, нет side-effects).
+      2. Сравниваем server `pts` с предыдущим snapshot `owner._last_server_pts`.
+      3. Если server `pts` advanced (delta >= 1), но `_last_seen_update_id` НЕ
+         двинулся с указанного baseline → flag split-brain.
+
+    Параметры:
+      ``owner``               — duck-type с `_last_server_pts`, `_last_seen_update_id`,
+                                `client`.
+      ``update_id_baseline``  — против чего сравнивать update_id. По умолчанию
+                                равен текущему `_last_seen_update_id`
+                                (т.е. "со времени последнего вызова движений не было").
+
+    Возвращает `GetStateProbeResult`. Snapshot записывается в
+    ``owner._last_server_pts`` всегда когда GetState вернулся успешно — это
+    позволяет следующему probe сравнивать с актуальным значением.
+    """
+    client = getattr(owner, "client", None)
+    if client is None:
+        return GetStateProbeResult(alive=False, error="no_client")
+
+    prev_pts = int(getattr(owner, "_last_server_pts", 0) or 0)
+    current_uid = int(getattr(owner, "_last_seen_update_id", 0) or 0)
+    baseline_uid = current_uid if update_id_baseline is None else int(update_id_baseline)
+
+    try:
+        from pyrogram.raw.functions.updates import GetState  # noqa: PLC0415
+
+        state = await asyncio.wait_for(
+            client.invoke(GetState()),  # type: ignore[union-attr]
+            timeout=timeout_sec,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("get_state_probe_timeout", timeout_sec=timeout_sec)
+        return GetStateProbeResult(alive=False, error="timeout")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("get_state_probe_failed", error=str(exc)[:200])
+        return GetStateProbeResult(alive=False, error=str(exc)[:200])
+
+    server_pts = int(getattr(state, "pts", 0) or 0)
+    # Всегда обновляем snapshot — снимает дрейф между probe и следующим.
+    try:
+        owner._last_server_pts = server_pts  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
+
+    if prev_pts <= 0:
+        # Первая инициализация: нет previous, не можем судить о split-brain.
+        return GetStateProbeResult(
+            alive=True,
+            split_brain_suspected=False,
+            server_pts=server_pts,
+            server_pts_delta=0,
+        )
+
+    delta = server_pts - prev_pts
+    if delta <= 0:
+        # Server не двигался — quiet window, не split-brain.
+        return GetStateProbeResult(
+            alive=True,
+            split_brain_suspected=False,
+            server_pts=server_pts,
+            server_pts_delta=delta,
+        )
+
+    # Server pts advanced. Двинулся ли update_id?
+    if current_uid > baseline_uid:
+        return GetStateProbeResult(
+            alive=True,
+            split_brain_suspected=False,
+            server_pts=server_pts,
+            server_pts_delta=delta,
+        )
+
+    # Split-brain: server активен (pts +N), а dispatch loop стоит.
+    logger.warning(
+        "updates_pts_split_brain",
+        server_pts=server_pts,
+        server_pts_delta=delta,
+        last_seen_update_id=current_uid,
+        prev_server_pts=prev_pts,
+    )
+    return GetStateProbeResult(
+        alive=False,
+        split_brain_suspected=True,
+        server_pts=server_pts,
+        server_pts_delta=delta,
+    )
 
 
 def _launchd_exit_78() -> None:
@@ -586,8 +709,16 @@ class NetworkWatchdogMixin:
                                 logger.warning("network_offline_alert_send_failed", error=str(_e))
                         continue
 
-                    # Wave 36-A: DC reachable + тишина достаточно долгая → session probe
-                    if _zombie_enabled and silence_sec > _ZOMBIE_DOUBLE_SILENCE_SEC:
+                    # Wave 63-A Step 2: DROP 10-минутный gate для split-brain probe.
+                    # Раньше (Wave 36-A): `silence_sec > _ZOMBIE_DOUBLE_SILENCE_SEC=600`
+                    # — split-brain probe запускался только после 10+ минут тишины.
+                    # Это давало 93+ минут до detection в инциденте 2026-05-11
+                    # 22:07→23:42. Теперь probe запускается сразу при достижении
+                    # threshold_sec (180s default), gated только на dc_reachable +
+                    # zombie_enabled. Константа `_ZOMBIE_DOUBLE_SILENCE_SEC`
+                    # сохранена для других путей (например future reconnect
+                    # cooldown), но больше не контролирует probe.
+                    if _zombie_enabled:
                         session_alive = await _probe_telegram_session_alive(self.client)
                         if not session_alive:
                             _consecutive_zombie_failures += 1
@@ -740,11 +871,21 @@ class NetworkWatchdogMixin:
         _fail_threshold = int(os.environ.get("KRAB_TELEGRAM_HEARTBEAT_FAIL_THRESHOLD", "3"))
         _timeout = float(os.environ.get("KRAB_TELEGRAM_HEARTBEAT_TIMEOUT_SEC", "10.0"))
 
+        # Wave 63-A Step 1: GetState pts probe — детектит split-brain за 4 мин
+        # вместо 93. ENV gate для safe rollout (default ON).
+        _get_state_probe_enabled = os.environ.get(
+            "KRAB_HEARTBEAT_GET_STATE_PROBE_ENABLED", "1"
+        ).strip().lower() in {"1", "true", "yes"}
+        _get_state_probe_timeout = float(
+            os.environ.get("KRAB_HEARTBEAT_GET_STATE_TIMEOUT_SEC", "8.0")
+        )
+
         logger.info(
             "telegram_heartbeat_started",
             interval_sec=_interval,
             fail_threshold=_fail_threshold,
             timeout_sec=_timeout,
+            get_state_probe_enabled=_get_state_probe_enabled,
         )
 
         consecutive_failures = 0
@@ -782,6 +923,57 @@ class NetworkWatchdogMixin:
                 consecutive_failures = 0
                 heartbeat_restart_attempted = False
                 logger.debug("telegram_heartbeat_ok")
+
+                # Wave 63-A Step 1: GetState pts probe для split-brain detection.
+                # Сравниваем server `pts` с предыдущим snapshot. Если server pts
+                # вырос, а `_last_seen_update_id` не двинулся — dispatch loop
+                # мёртв (invoke работает, updates_subscriber — нет).
+                # Detect за heartbeat-цикл (~4 мин) вместо silence+probe (~93 мин).
+                if _get_state_probe_enabled:
+                    try:
+                        pre_probe_uid = int(getattr(self, "_last_seen_update_id", 0) or 0)
+                        probe = await _probe_updates_via_get_state(
+                            self,
+                            timeout_sec=_get_state_probe_timeout,
+                            update_id_baseline=pre_probe_uid,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "heartbeat_get_state_probe_exception",
+                            error=str(exc)[:200],
+                        )
+                        probe = None
+
+                    if probe is not None and probe.split_brain_suspected:
+                        logger.warning(
+                            "split_brain_via_get_state",
+                            server_pts=probe.server_pts,
+                            server_pts_delta=probe.server_pts_delta,
+                            last_seen_update_id=pre_probe_uid,
+                            action="immediate_reconnect",
+                        )
+                        try:
+                            reconnect_ok = await self._try_reconnect_pyrofork(self.client)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "split_brain_via_get_state_reconnect_exception",
+                                error=str(exc)[:200],
+                            )
+                            reconnect_ok = False
+                        if reconnect_ok:
+                            logger.info(
+                                "split_brain_via_get_state_reconnect_ok",
+                                server_pts=probe.server_pts,
+                            )
+                            # После reconnect сбрасываем silence-timer и триггерим
+                            # catchup (Wave 57-A) для пропущенных сообщений.
+                            self._last_telegram_event_ts = time.time()
+                            self._schedule_catchup_after_graceful_restart()
+                        else:
+                            logger.warning(
+                                "split_brain_via_get_state_reconnect_failed",
+                                server_pts=probe.server_pts,
+                            )
                 continue
 
             except asyncio.TimeoutError:
