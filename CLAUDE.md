@@ -280,6 +280,12 @@ KRAB_STARTUP_CATCHUP_LIMIT=20        # startup history catchup messages (Wave 46
 KRAB_STARTUP_CATCHUP_CHATS=          # extra chat IDs to catch up (Wave 48-A)
 KRAB_SWARM_GROUP_ID=-1003703978531   # Krab Swarm forum group (Wave 48-A)
 KRAB_STATE_SNAPSHOT_INTERVAL_MINUTES=60  # state snapshot interval (Wave 49-F)
+KRAB_HEARTBEAT_GET_STATE_PROBE_ENABLED=1 # GetState pts probe split-brain (Wave 63-A)
+KRAB_HEARTBEAT_GET_STATE_TIMEOUT_SEC=8.0  # GetState invoke timeout (Wave 63-A)
+LOCAL_AUTOLOAD_FALLBACK_LIMIT=0      # 0=strict preferred (Wave 62 — было zombie env)
+KRAB_ANTHROPIC_VERTEX_DISABLED_MODELS=claude-sonnet-4-5  # preempt no-quota (Wave 65-D)
+KRAB_COEXIST_SWAP_WARN_GB=22         # swap warn threshold (Wave 65-E, logged only)
+KRAB_COEXIST_SWAP_THRESHOLD_GB=32    # swap critical (Wave 65-E, Telegram alert)
 ```
 
 ## Правила
@@ -294,10 +300,54 @@ KRAB_STATE_SNAPSHOT_INTERVAL_MINUTES=60  # state snapshot interval (Wave 49-F)
 ## Phase 7 статус
 
 - **Phase 7: 100%**, Memory Phase 2: **LIVE** (`KRAB_RAG_PHASE2_ENABLED=1`)
-- **13795/13916 тестов collected** (Session 44, 10.05.2026)
-- **286 API endpoints** (live: `/api/endpoints`), 177+ handlers, 158 registered commands (185+ с алиасами)
+- **13900+ тестов collected** (Session 45, 12.05.2026)
+- **290 API endpoints** (live: `/api/endpoints`), 177+ handlers, 158 registered commands (185+ с алиасами)
 
 ## Session highlights (последние)
+
+### Session 45 highlights (2026-05-11 → 12 — Waves 62-65, 17 commits, self-healing milestones)
+
+Branch `main`. Все изменения deployed в production. **Самый результативный тур.**
+
+**3 paradigm shifts** — все на pattern «не верить health monitor если outcome stuck»:
+- **Wave 64** (commit `4f279cc`) — `journal_mode=WAL → DELETE` + `PRAGMA fullfsync=1` для Pyrogram session.db. Фикс recurring SQLite corruption cluster (Linear AGE-15/12/9 — 3 кластера/2 недели). `_REQUIRED_TABLES += "version"`. Migration автоматическая при `_patched_open`. 22 новых теста.
+- **Wave 63-A** (commit `145d6a9`) — `updates.GetState` pts probe + drop 10-min gate. Ловит split-brain detection с 93 мин → **4 мин**. Server pts advanced vs `_last_seen_update_id` frozen = immediate `_try_reconnect_pyrofork`. Env gate `KRAB_HEARTBEAT_GET_STATE_PROBE_ENABLED` (default ON). 21 новый тест.
+- **Wave 50-B** (commit `cba58cf`) — OAuth force-refresh через Google endpoint при `expiry_in_min < -60`. Daemon `sync_gemini_oauth_to_openclaw.py` теперь не просто mirror'ит, а реально refresh'ит. Verified live: -1492 → 60 min fresh.
+
+**Wave 62 series (7 commits)** — routing + Sentry hygiene:
+- **62-C** (`a62e311`): `is_owner_dm` via ACL — Wave 60-A wiring complete (читает ACL вместо force_cloud proxy)
+- **62-D** (`739b8f2`): cloud routing decision bypass local-first heuristic (owner_dm → cloud действительно идёт в cloud)
+- **62-E** (`83d0544`): `gemini_rerank_provider`: `gemini-3-pro-preview` → `gemini-2.5-pro` (AI Studio v1beta path). **-9 Sentry events/day** (PYTHON-FASTAPI-7M).
+- **62-F** (`7546573`): Sentry benign markers — `load_failed lmstudio`, `codex_quota_exhausted` filtered
+- **62-G** (`2c7dc4d`): codex preempt при weekly quota — `is_codex_disabled()` теперь читается в hot path (был dead-letter с Wave 44-V). Save 2-3s/request пока quota не recover. Wave 62-H (`a140ee6`): footer cosmetic "codex weekly quota" вместо "сбоя primary".
+- AGE-8 cherry-pick (`d9ba689`): `memory_doctor.run_repairs` regression test (sentinel concurrent task verify event loop не блокируется)
+
+**Wave 65 series (5 commits)** — operational + UX polish:
+- **65-A** (`9cbb61d`): `leak_monitor` Chrome filter — 20 false-positives → 1 real (gateway). Chrome browser-bridge OpenClaw spawns matched substring "openclaw" в `--user-data-dir`.
+- **65-B** (`9cbb61d`): `nightly-audit` `RunAtLoad=true` — catch-up missed nights после macbook sleep
+- **65-C** (`49e6afc`): swarm DM bots распознают owner sender (AGE-16). `build_role_system_prompt(sender=...)` + `is_owner_user_id(sender.id)` injection. **Verified live**: Coders ответил «Создатель» вместо «не могу идентифицировать».
+- **65-D** (`148bef9`): `anthropic-vertex/claude-sonnet-4-5` preempt (no quota в GCP project caramel-anvil). **-7 Sentry events/day**. Env override `KRAB_ANTHROPIC_VERTEX_DISABLED_MODELS`.
+- **65-E** (`870d36e`): two-tier swap thresholds — `SWAP_WARN_THRESHOLD=22 GB` (logged only) + `SWAP_THRESHOLD=32 GB` (Telegram alert). **-88% Telegram noise** (515/week → ~60/week).
+
+**Operational changes (non-code, 4 шт)**:
+- `~/.codex/config.toml`: MCP context7 `type="streamable_http"` discriminator — 5 OpenClaw cron jobs работают снова (8 days down)
+- `kraab.session` manually migrated `wal → delete`, fullfsync=1 (500 peers preserved)
+- Inbox 40 stale items bulk-acked через `/api/inbox/bulk-ack-stale`
+- 23 corrupt session backups archived в `/tmp/krab_session_corrupt_archive_20260511/`
+
+**Linear (7 issues closed)**: AGE-5/6/8/15/12/9/16 → Done
+
+**Sentry quota saved**: **>1000 events/week** stop firing (gemini_rerank -9/day + sonnet-4-5 -7/day + swap_critical -88% + benign markers).
+
+**Architecture milestone — «Outcomes, not heartbeats» pattern**:
+1. Wave 63-A: detect-and-recover split-brain (server pts vs local)
+2. Wave 50-B: pre-empt-and-refresh OAuth (don't trust "already synced" flag)
+3. Wave 65-D: pre-empt before failing call (know model unavailability upfront)
+4. Wave 62-G: pre-empt codex weekly quota (read state file, skip subprocess)
+
+Все используют один принцип: **check outcomes, not process aliveness**.
+
+**Background agents used (11+ parallel)** — Sonnet only (Haiku context window не справился). Sentry triage / Linear / log scan / memory pressure / routines / AGE-15 research / AGE-8 fix / Wave 63-A / Wave 64 / cron jobs / Wave 65-C / Wave 65-F/G/H.
 
 ### Session 43+44 highlights (2026-05-09 → 2026-05-10 — Waves 44-Z, 45-*, 46-*, 47, 48-*, 49-*)
 
@@ -423,6 +473,7 @@ Empirical rule: sonnet — 200-300 word с TDD; haiku — < 100 word.
 | **Session 40 (07.05)** | **+30 SkillCurator analyzer + e2e fixes** (см. ниже) |
 | **Session 41 (09.05)** | **~12817 collected** (+115: Wave 37-41-O) |
 | **Session 43+44 (10.05)** | **13795/13916 collected** (+~377: Waves 44-Z, 45-*, 46-*, 47, 48-*, 49-*) |
+| **Session 45 (11→12.05)** | **~13900+ collected** (+~100 tests: Waves 62-65 + AGE-8/15/12/9/16 + 50-B). **17 commits**, **7 Linear issues closed**, **>1000 Sentry events/week** stop firing. 3 paradigm shifts: «outcomes-not-heartbeats» pattern (Wave 63-A/50-B/65-D/62-G). |
 
 ### Session 40 highlights (07.05.2026 — runtime e2e + KE deadlock fix + ecosystem health)
 
