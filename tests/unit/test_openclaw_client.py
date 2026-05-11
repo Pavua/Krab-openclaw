@@ -852,24 +852,33 @@ async def test_semantic_error_returns_user_message_when_force_cloud(client: Open
 async def test_local_autoload_failure_switches_to_cloud_candidate(client: OpenClawClient) -> None:
     from src.model_manager import model_manager
 
-    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="local")):
-        with patch.object(
-            model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")
-        ):
+    # Wave 61-A: routing_policy запускается до get_best_model и читает
+    # LOCAL_PREFERRED_MODEL. Без явного "" подбирается MagicMock-атрибут.
+    with patch("src.openclaw_client.config.LOCAL_PREFERRED_MODEL", ""):
+        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="local")):
             with patch.object(
-                model_manager, "ensure_model_loaded", new=AsyncMock(return_value=False)
+                model_manager,
+                "is_local_model",
+                side_effect=lambda mid: str(mid).startswith("local"),
             ):
                 with patch.object(
-                    client,
-                    "_pick_cloud_retry_model",
-                    new=AsyncMock(return_value="google/gemini-2.5-flash"),
+                    model_manager, "ensure_model_loaded", new=AsyncMock(return_value=False)
                 ):
                     with patch.object(
-                        client, "_openclaw_completion_once", new=AsyncMock(return_value="Cloud OK")
-                    ) as completion:
-                        chunks = []
-                        async for chunk in client.send_message_stream("Hi", "chat-local-fallback"):
-                            chunks.append(chunk)
+                        client,
+                        "_pick_cloud_retry_model",
+                        new=AsyncMock(return_value="google/gemini-2.5-flash"),
+                    ):
+                        with patch.object(
+                            client,
+                            "_openclaw_completion_once",
+                            new=AsyncMock(return_value="Cloud OK"),
+                        ) as completion:
+                            chunks = []
+                            async for chunk in client.send_message_stream(
+                                "Hi", "chat-local-fallback"
+                            ):
+                                chunks.append(chunk)
 
     assert "".join(chunks) == "Cloud OK"
     assert completion.await_count == 1
@@ -1173,33 +1182,47 @@ async def test_provider_timeout_does_not_use_local_recovery_when_disabled(
     from src.model_manager import model_manager
 
     with patch("src.openclaw_client.config.LOCAL_FALLBACK_ENABLED", False):
-        with patch.object(
-            model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+        # Wave 61-A: routing_policy reads LOCAL_PREFERRED_MODEL; пусто → legacy path.
+        # Wave 18-B + 23-A: Google AI Studio + Vertex direct SDK bypass обходят
+        # _openclaw_completion_once mock. Отключаем оба bypass в тесте.
+        with patch("src.openclaw_client.config.LOCAL_PREFERRED_MODEL", ""), patch(
+            "src.openclaw_client.config.KRAB_GOOGLE_DIRECT_BYPASS_ENABLED", False
+        ), patch(
+            "src.integrations.google_vertex_direct.is_vertex_enabled", return_value=False
+        ), patch(
+            "src.integrations.google_genai_direct.is_google_direct_enabled", return_value=False
         ):
-            with patch.object(model_manager, "is_local_model", return_value=False):
-                with patch.object(
-                    client,
-                    "_openclaw_completion_once",
-                    new=AsyncMock(return_value="provider timeout"),
-                ):
+            with patch.object(
+                model_manager,
+                "get_best_model",
+                new=AsyncMock(return_value="google/gemini-2.5-flash"),
+            ):
+                with patch.object(model_manager, "is_local_model", return_value=False):
                     with patch.object(
                         client,
-                        "_resolve_local_model_for_retry",
-                        new=AsyncMock(return_value="local/qwen"),
-                    ) as to_local:
+                        "_openclaw_completion_once",
+                        new=AsyncMock(return_value="provider timeout"),
+                    ):
                         with patch.object(
                             client,
-                            "_direct_lm_fallback",
-                            new=AsyncMock(return_value="Локальный ответ"),
-                        ) as direct_local:
-                            chunks = []
-                            async for chunk in client.send_message_stream(
-                                "Hi", "chat-no-local-recovery"
-                            ):
-                                chunks.append(chunk)
+                            "_resolve_local_model_for_retry",
+                            new=AsyncMock(return_value="local/qwen"),
+                        ) as to_local:
+                            with patch.object(
+                                client,
+                                "_direct_lm_fallback",
+                                new=AsyncMock(return_value="Локальный ответ"),
+                            ) as direct_local:
+                                chunks = []
+                                async for chunk in client.send_message_stream(
+                                    "Hi", "chat-no-local-recovery"
+                                ):
+                                    chunks.append(chunk)
 
     text = "".join(chunks).lower()
-    assert "облачный сервис" in text
+    # Error message формат менялся: "облачный сервис недоступен" → "облако недоступно".
+    # Тестируем стабильное "облак*" + "недоступ*" semantic, не точную строку.
+    assert "облак" in text and "недоступ" in text
     to_local.assert_not_awaited()
     direct_local.assert_not_awaited()
 
@@ -1229,19 +1252,23 @@ async def test_cloud_retry_updates_runtime_route_to_current_attempt(client: Open
             return "provider timeout"
         return "Cloud retry OK"
 
-    with patch.object(
-        model_manager, "get_best_model", new=AsyncMock(return_value="codex-cli/gpt-5.4")
-    ):
-        with patch.object(model_manager, "is_local_model", return_value=False):
-            with patch.object(
-                client,
-                "_pick_cloud_retry_model",
-                new=AsyncMock(return_value="google-gemini-cli/gemini-3-flash-preview"),
-            ):
-                with patch.object(client, "_openclaw_completion_once", new=_fake_completion):
-                    chunks = []
-                    async for chunk in client.send_message_stream("Hi", "chat-cloud-retry-route"):
-                        chunks.append(chunk)
+    # Wave 61-A: routing_policy reads LOCAL_PREFERRED_MODEL; пусто → legacy path.
+    with patch("src.openclaw_client.config.LOCAL_PREFERRED_MODEL", ""):
+        with patch.object(
+            model_manager, "get_best_model", new=AsyncMock(return_value="codex-cli/gpt-5.4")
+        ):
+            with patch.object(model_manager, "is_local_model", return_value=False):
+                with patch.object(
+                    client,
+                    "_pick_cloud_retry_model",
+                    new=AsyncMock(return_value="google-gemini-cli/gemini-3-flash-preview"),
+                ):
+                    with patch.object(client, "_openclaw_completion_once", new=_fake_completion):
+                        chunks = []
+                        async for chunk in client.send_message_stream(
+                            "Hi", "chat-cloud-retry-route"
+                        ):
+                            chunks.append(chunk)
 
     assert "".join(chunks) == "Cloud retry OK"
     assert seen_routes[0] == {
@@ -1789,36 +1816,49 @@ async def test_empty_response_does_not_override_last_auth_error(client: OpenClaw
     from src.model_manager import model_manager
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False):
-        with patch.object(
-            model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+        # Wave 61-A: routing_policy reads LOCAL_PREFERRED_MODEL; пусто → legacy path.
+        # Wave 18-B + 23-A: оба Google direct bypass обходят _openclaw_completion_once mock.
+        with patch("src.openclaw_client.config.LOCAL_PREFERRED_MODEL", ""), patch(
+            "src.openclaw_client.config.KRAB_GOOGLE_DIRECT_BYPASS_ENABLED", False
+        ), patch(
+            "src.integrations.google_vertex_direct.is_vertex_enabled", return_value=False
+        ), patch(
+            "src.integrations.google_genai_direct.is_google_direct_enabled", return_value=False
         ):
             with patch.object(
                 model_manager,
-                "is_local_model",
-                side_effect=lambda mid: str(mid).startswith("local"),
+                "get_best_model",
+                new=AsyncMock(return_value="google/gemini-2.5-flash"),
             ):
                 with patch.object(
                     model_manager,
-                    "get_best_cloud_model",
-                    new=AsyncMock(return_value="google/gemini-2.5-flash"),
+                    "is_local_model",
+                    side_effect=lambda mid: str(mid).startswith("local"),
                 ):
                     with patch.object(
-                        client, "_resolve_local_model_for_retry", new=AsyncMock(return_value=None)
+                        model_manager,
+                        "get_best_cloud_model",
+                        new=AsyncMock(return_value="google/gemini-2.5-flash"),
                     ):
                         with patch.object(
                             client,
-                            "_openclaw_completion_once",
-                            new=AsyncMock(
-                                side_effect=ProviderAuthError(
-                                    message="401", user_message="auth failed"
-                                )
-                            ),
+                            "_resolve_local_model_for_retry",
+                            new=AsyncMock(return_value=None),
                         ):
-                            chunks = []
-                            async for chunk in client.send_message_stream(
-                                "Hi", "chat-auth-priority"
+                            with patch.object(
+                                client,
+                                "_openclaw_completion_once",
+                                new=AsyncMock(
+                                    side_effect=ProviderAuthError(
+                                        message="401", user_message="auth failed"
+                                    )
+                                ),
                             ):
-                                chunks.append(chunk)
+                                chunks = []
+                                async for chunk in client.send_message_stream(
+                                    "Hi", "chat-auth-priority"
+                                ):
+                                    chunks.append(chunk)
 
     text = "".join(chunks).lower()
     assert "ключ" in text
