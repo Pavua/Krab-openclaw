@@ -40,13 +40,19 @@ from src.bootstrap.session_recovery import (
 
 
 def _make_healthy_session(path: Path, *, peer_rows: int = 5) -> None:
-    """Создаёт минимальный валидный Pyrogram-like .session файл."""
+    """Создаёт минимальный валидный Pyrogram-like .session файл.
+
+    Wave 64: добавлена version table — Pyrofork.update() читает её немедленно,
+    и _REQUIRED_TABLES теперь включает 'version' (recovery должна её сохранить).
+    """
     conn = sqlite3.connect(str(path))
     try:
         conn.execute("CREATE TABLE sessions (dc_id INTEGER, auth_key BLOB)")
         conn.execute("INSERT INTO sessions (dc_id, auth_key) VALUES (2, X'DEADBEEF')")
         conn.execute("CREATE TABLE peers (id INTEGER PRIMARY KEY, access_hash INTEGER, type TEXT)")
         conn.execute("CREATE TABLE usernames (id INTEGER, username TEXT)")
+        conn.execute("CREATE TABLE version (number INTEGER PRIMARY KEY)")
+        conn.execute("INSERT INTO version VALUES (3)")
         for i in range(peer_rows):
             conn.execute(
                 "INSERT INTO peers (id, access_hash, type) VALUES (?, ?, 'user')",

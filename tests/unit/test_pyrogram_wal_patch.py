@@ -4,13 +4,14 @@ Unit-тесты для ``src/bootstrap/pyrogram_patch.py``.
 
 Проверяем:
 1. Патч применяется идемпотентно.
-2. После вызова patched ``FileStorage.open`` PRAGMA journal_mode=wal,
-   busy_timeout=5000, synchronous=FULL (Session 33 hardening: sleep/torn-page risk),
-   wal_autocheckpoint=1000.
+2. После вызова patched ``FileStorage.open`` PRAGMA journal_mode=DELETE
+   (Wave 64: было WAL — concurrent writers + macOS sleep провоцировали
+   torn pages в WAL → corruption cluster AGE-15/AGE-12/AGE-9),
+   busy_timeout=5000, synchronous=FULL (Session 33 hardening).
 3. ``update_usernames`` глотает ``database is locked``, пробрасывает другие.
-4. VACUUM не вызывается при open() (через проверку WAL-режима и отсутствие
-   exclusive-lock ошибок при параллельном открытии).
-5. Существующая сессия переводится в WAL при open().
+4. VACUUM не вызывается при open() (через проверку отсутствия exclusive-lock
+   ошибок при параллельном открытии).
+5. Существующая WAL сессия переключается в DELETE при open() (Wave 64).
 6. _SQLITE_CONNECT_TIMEOUT >= 5 (не pyrofork-default 1s).
 """
 
@@ -44,7 +45,10 @@ def test_apply_is_idempotent():
 
 
 def test_pragmas_applied_on_open(tmp_path: Path):
-    """После FileStorage.open() sqlite-соединение должно быть в WAL-режиме."""
+    """После FileStorage.open() sqlite-соединение должно быть в DELETE-режиме.
+
+    Wave 64: было WAL — replaced after corruption cluster AGE-15/AGE-12/AGE-9.
+    """
     pyrogram_patch.apply_pyrogram_sqlite_hardening()
 
     from pyrogram.storage.file_storage import FileStorage
@@ -61,7 +65,8 @@ def test_pragmas_applied_on_open(tmp_path: Path):
             await storage.close()
 
     journal_mode, busy_timeout = asyncio.run(_run())
-    assert str(journal_mode).lower() == "wal"
+    # Wave 64: было "wal"
+    assert str(journal_mode).lower() == "delete"
     assert int(busy_timeout) == 5000
 
 
@@ -113,15 +118,14 @@ def test_update_usernames_swallows_locked_error():
         asyncio.run(dummy.update_usernames([(1, "bob")]))
 
 
-def test_vacuum_suppressed_wal_mode_preserved(tmp_path: Path):
+def test_vacuum_suppressed_delete_mode_preserved(tmp_path: Path):
     """
-    WAL-mode активен после open() — косвенное доказательство, что VACUUM
-    не сбросил journal_mode обратно в DELETE.
+    DELETE-mode стабильно держится после open() — VACUUM не запускался
+    (если бы он запустился, в журнале появилась бы временная WAL-страница
+    с другим режимом или временный sidecar; в чистом DELETE такого нет).
 
-    VACUUM на WAL-базе вызывает WAL checkpoint + переписывает всё в DELETE
-    journal mode. Если после open() journal_mode=wal — VACUUM либо не
-    вызывался, либо был безвреден. Мы гарантируем первое через полную замену
-    open().
+    Wave 64: после переключения на DELETE этот тест проверяет, что
+    journal_mode не меняется неожиданно (например, через скрытый VACUUM).
     """
     pyrogram_patch.apply_pyrogram_sqlite_hardening()
 
@@ -138,16 +142,17 @@ def test_vacuum_suppressed_wal_mode_preserved(tmp_path: Path):
             await storage.close()
 
     journal_mode = asyncio.run(_run())
-    # Если VACUUM вызвался ПОСЛЕ journal_mode=WAL, он переключил бы journal
-    # обратно в DELETE. WAL здесь означает, что VACUUM не вызывался.
-    assert str(journal_mode).lower() == "wal", (
-        f"journal_mode={journal_mode!r}; VACUUM может был вызван после WAL"
+    # Wave 64: ожидаем DELETE (было WAL).
+    assert str(journal_mode).lower() == "delete", (
+        f"journal_mode={journal_mode!r}; Wave 64 expects DELETE"
     )
 
 
-def test_new_session_in_wal_mode(tmp_path: Path):
+def test_new_session_in_delete_mode(tmp_path: Path):
     """
-    Новая сессия создаётся сразу в WAL-режиме (pragmas применяются ДО create()).
+    Новая сессия создаётся сразу в DELETE-режиме (pragmas применяются ДО create()).
+
+    Wave 64: было WAL — заменено после AGE-15/AGE-12/AGE-9 corruption cluster.
     """
     pyrogram_patch.apply_pyrogram_sqlite_hardening()
 
@@ -166,22 +171,26 @@ def test_new_session_in_wal_mode(tmp_path: Path):
             await storage.close()
 
     journal_mode, busy_timeout, synchronous = asyncio.run(_run())
-    assert str(journal_mode).lower() == "wal", f"Expected wal, got {journal_mode!r}"
+    # Wave 64: было "wal"
+    assert str(journal_mode).lower() == "delete", f"Expected delete (Wave 64), got {journal_mode!r}"
     assert int(busy_timeout) == 5000, f"Expected 5000ms, got {busy_timeout}"
-    # Session 33 fix: synchronous=FULL=2 (было NORMAL=1) — защита от
-    # torn pages при macOS sleep + WAL + долгий uptime.
+    # Session 33 fix retained: synchronous=FULL=2 — защита от torn pages.
     assert int(synchronous) == 2, f"Expected FULL(2), got {synchronous}"
 
 
-def test_existing_session_gets_wal(tmp_path: Path):
+def test_existing_session_gets_delete(tmp_path: Path):
     """
-    Существующая сессия (без WAL) после open() переводится в WAL-режим.
+    Существующая сессия после open() переключается в DELETE-режим (Wave 64).
+
+    Покрывает migration path: pre-Wave-64 базы могли быть в WAL — должны
+    автоматически конвертироваться при первом open() через patched _execute_pragmas.
     """
     pyrogram_patch.apply_pyrogram_sqlite_hardening()
 
-    # Создаём старую сессию без WAL (имитируем файл до патча)
+    # Создаём старую сессию в WAL — имитируем pre-Wave-64 state.
     session_path = tmp_path / "existing.session"
     old_conn = sqlite3.connect(str(session_path))
+    old_conn.execute("PRAGMA journal_mode=WAL")
     old_conn.executescript(
         "CREATE TABLE sessions (dc_id INTEGER PRIMARY KEY, api_id INTEGER, "
         "test_mode INTEGER, auth_key BLOB, date INTEGER NOT NULL, "
@@ -208,8 +217,9 @@ def test_existing_session_gets_wal(tmp_path: Path):
             await storage.close()
 
     journal_mode, busy_timeout = asyncio.run(_run())
-    assert str(journal_mode).lower() == "wal", (
-        f"Existing session should be in WAL, got {journal_mode!r}"
+    # Wave 64: existing WAL session migrates to DELETE on next open().
+    assert str(journal_mode).lower() == "delete", (
+        f"Existing session should migrate to DELETE (Wave 64), got {journal_mode!r}"
     )
     assert int(busy_timeout) == 5000
 

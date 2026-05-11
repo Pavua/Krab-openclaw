@@ -61,7 +61,12 @@ MIN_PEERS_THRESHOLD: int = int(os.environ.get("KRAB_SESSION_MIN_PEERS_THRESHOLD"
 
 # Таблицы, которые ДОЛЖНЫ присутствовать в recovered Pyrogram session.
 # Если хотя бы одной нет — recovery считается неполной.
-_REQUIRED_TABLES: tuple[str, ...] = ("sessions", "peers", "usernames")
+#
+# Wave 64: добавлена "version" — Pyrofork.update() читает её немедленно при
+# open() (file_storage.py:71 → sqlite_storage.py:302). Если sqlite3 .recover
+# не сохранит version row (например, corrupted single-row table), recovery
+# пройдёт verify_key_tables, но Pyrofork сразу упадёт на следующем open().
+_REQUIRED_TABLES: tuple[str, ...] = ("sessions", "peers", "usernames", "version")
 
 # Timeout для subprocess sqlite3 (секунды).
 _SUBPROCESS_TIMEOUT_SEC: float = 30.0
