@@ -10,10 +10,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ── helpers ────────────────────────────────────────────────────────────────
 
-def _make_archive_db(path: Path, n_messages: int = 10, n_chunks: int = 5, n_encoded: int = 3) -> Path:
+
+def _make_archive_db(
+    path: Path, n_messages: int = 10, n_chunks: int = 5, n_encoded: int = 3
+) -> Path:
     """Создаёт минимальную archive.db для тестов."""
     conn = sqlite3.connect(str(path))
     conn.executescript("""
@@ -47,14 +49,17 @@ def _make_archive_db(path: Path, n_messages: int = 10, n_chunks: int = 5, n_enco
 
 # ── Импорт модуля ──────────────────────────────────────────────────────────
 
+
 @pytest.fixture()
 def memory_doctor(monkeypatch):
     """Импортирует memory_doctor с отключёнными внешними зависимостями."""
     from src.core import memory_doctor as md
+
     return md
 
 
 # ── Тест 1: run_diagnostics возвращает ожидаемую структуру ───────────────
+
 
 @pytest.mark.asyncio
 async def test_run_diagnostics_shape(tmp_path, memory_doctor):
@@ -74,11 +79,20 @@ async def test_run_diagnostics_shape(tmp_path, memory_doctor):
     assert "db_path" in result
     assert isinstance(result["checks"], dict)
     # Все 6 проверок (+ top_chats) должны быть
-    for key in ("db_size", "integrity", "counts", "encoded_ratio", "indexer", "mcp_reachable", "top_chats"):
+    for key in (
+        "db_size",
+        "integrity",
+        "counts",
+        "encoded_ratio",
+        "indexer",
+        "mcp_reachable",
+        "top_chats",
+    ):
         assert key in result["checks"], f"Отсутствует check: {key}"
 
 
 # ── Тест 2: encoded ratio calculation ────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_encoded_ratio_ok(tmp_path, memory_doctor):
@@ -130,6 +144,7 @@ async def test_encoded_ratio_warn(tmp_path, memory_doctor):
 
 # ── Тест 3: size threshold warnings ──────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_db_size_warn_large(tmp_path, monkeypatch, memory_doctor):
     """Размер > _SIZE_WARN_GB → status warn."""
@@ -143,7 +158,7 @@ async def test_db_size_warn_large(tmp_path, monkeypatch, memory_doctor):
         if self == db:
             # возвращаем объект с нужным st_size
             class FakeStat:
-                st_size = int(2.5 * 1024 ** 3)
+                st_size = int(2.5 * 1024**3)
 
             return FakeStat()
         return s
@@ -161,6 +176,7 @@ async def test_db_size_warn_large(tmp_path, monkeypatch, memory_doctor):
 
 # ── Тест 4: missing db → ok=False ────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_missing_db(tmp_path, memory_doctor):
     """Если archive.db не существует, ok=False и есть db_exists check."""
@@ -172,6 +188,7 @@ async def test_missing_db(tmp_path, memory_doctor):
 
 
 # ── Тест 5: run_repairs WAL checkpoint ───────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_run_repairs_wal_checkpoint(tmp_path, memory_doctor):
@@ -186,6 +203,7 @@ async def test_run_repairs_wal_checkpoint(tmp_path, memory_doctor):
 
 
 # ── Тест 6: run_repairs запускает backfill при fail encoded_ratio ─────────
+
 
 @pytest.mark.asyncio
 async def test_run_repairs_backfill_triggered(tmp_path, memory_doctor):
@@ -207,24 +225,23 @@ async def test_run_repairs_backfill_triggered(tmp_path, memory_doctor):
 
 # ── Тест 7: run_repairs перезапускает MCP при fail ───────────────────────
 
+
 @pytest.mark.asyncio
 async def test_run_repairs_mcp_restart(tmp_path, memory_doctor, monkeypatch):
-    """Если mcp_reachable status=fail, run_repairs пытается kickstart launchctl."""
+    """Если mcp_reachable status=fail, run_repairs пытается kickstart launchctl.
+
+    После AGE-8 fix (commit 7697788) memory_doctor использует
+    async `_run_command_capture` вместо blocking `subprocess.run`.
+    """
     db = _make_archive_db(tmp_path / "archive.db")
     checks = {
         "mcp_reachable": {"status": "fail"},
     }
 
-    import subprocess as _sp
+    async def fake_run(argv, *, timeout_sec):
+        return 0, "", ""
 
-    def fake_run(args, **kwargs):
-        m = MagicMock()
-        m.returncode = 0
-        m.stdout = ""
-        m.stderr = ""
-        return m
-
-    monkeypatch.setattr(_sp, "run", fake_run)
+    monkeypatch.setattr(memory_doctor, "_run_command_capture", fake_run)
 
     result = await memory_doctor.run_repairs(checks=checks, db_path=db)
     restart = next((r for r in result["repairs"] if r["action"] == "restart_mcp_yung_nagato"), None)
@@ -233,6 +250,7 @@ async def test_run_repairs_mcp_restart(tmp_path, memory_doctor, monkeypatch):
 
 
 # ── Тест 8: shell script существует и исполняемый ────────────────────────
+
 
 def test_shell_script_exists_and_executable():
     """scripts/memory_doctor.command существует и имеет бит x."""
@@ -243,6 +261,7 @@ def test_shell_script_exists_and_executable():
 
 
 # ── Тест 9: top_chats в результате диагностики ───────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_top_chats_populated(tmp_path, memory_doctor):
@@ -263,6 +282,7 @@ async def test_top_chats_populated(tmp_path, memory_doctor):
 
 
 # ── Тест 10: indexer panel недоступен → status skip ─────────────────────
+
 
 @pytest.mark.asyncio
 async def test_indexer_panel_unavailable(tmp_path, memory_doctor):
