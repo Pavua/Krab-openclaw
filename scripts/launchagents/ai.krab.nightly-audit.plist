@@ -32,7 +32,10 @@
     <false/>
 
     <key>RunAtLoad</key>
-    <false/>
+    <!-- Wave 65-B (2026-05-12): true чтобы catch-up missed nights когда
+         macbook был в sleep в 03:00. Script gated на warn/critical только —
+         silent если всё ok, не спамит при каждом reboot. -->
+    <true/>
 
     <key>StandardOutPath</key>
     <string>/tmp/krab_nightly_audit.log</string>

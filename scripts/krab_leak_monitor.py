@@ -84,8 +84,21 @@ def count_openclaw_procs() -> tuple[int, list[tuple[int, int, str]]]:
         if not match:
             continue
         pid, ppid, cmd = int(match.group(1)), int(match.group(2)), match.group(3)
-        # Match openclaw-like commands (не grep/python tools)
-        if "openclaw" in cmd.lower() and "grep" not in cmd.lower() and "leak_monitor" not in cmd:
+        cmd_lower = cmd.lower()
+        # Match openclaw-like commands (не grep/python tools).
+        # Wave 65-A: exclude Chrome browser/helper processes — OpenClaw
+        # spawns Chrome with `--user-data-dir=/Users/pablito/.openclaw/...`
+        # для browser_use tools, и Chrome helpers (gpu-process, renderer,
+        # utility) matched "openclaw" в args, давая ложные LEAK_WARNING (20+
+        # вместо реальных 1-3 openclaw процессов). Browser children spawn'ит
+        # сам OpenClaw — это legitimate behavior, не leak.
+        if (
+            "openclaw" in cmd_lower
+            and "grep" not in cmd_lower
+            and "leak_monitor" not in cmd
+            and "google chrome" not in cmd_lower
+            and "chromium" not in cmd_lower
+        ):
             procs.append((pid, ppid, cmd))
     return len(procs), procs
 
