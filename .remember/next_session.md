@@ -1,436 +1,120 @@
-# Session N+1 — Starter Handoff (Session 42 close, 2026-05-09 evening)
+# Session N+1 — Starter Handoff (Session 45 close, 2026-05-12 ~01:00)
 
 > **Project**: Krab (Telegram userbot). Этот handoff — ТОЛЬКО про Krab.
 > Krab Ear имеет свой handoff в `/Users/pablito/Antigravity_AGENTS/Krab Ear/.remember/next_session.md`.
-> См. также [PROJECT_SEPARATION_GUIDE.md](../docs/PROJECT_SEPARATION_GUIDE.md).
-
-## TL;DR — Session 42 закрыта 2026-05-09 ~20:05, **17 коммитов** Wave 44-A...L + UI-1/2/3 + i18n-1/2
-
-**FINAL STATE (закрытие 2026-05-09 ~20:05)**:
-
-- **main HEAD**: `bdc3595` Wave 44-D-UI-3 (Hub fallback dropdown UX)
-- **17 коммитов** Session 42:
-  - 44-A `95e1a3f` Sentry statsPeriod coerce (+18 tests)
-  - 44-B `a471e86` watchdog gateway restart fix
-  - 44-C `743b1d2` split-brain post-reconnect verify (+6 tests, P0 fix)
-  - 44-D-UI `db2c0a0` inbox layout + RU localization
-  - 44-D-UI-2 `cc19417` light-mode + tooltips + precise time
-  - 44-D-i18n-1 `1640319` i18n.js scaffold + inbox POC
-  - 44-D-i18n-2 `31b61a7` full panel 471 attrs (10 pages, 9 sub-agents parallel)
-  - 44-E `978abde` Sentry PII redaction + split_brain BENIGN markers (+15 tests)
-  - 44-F `98f1e93` Memory wins (singleton + history cap + spam_guard cleanup +7 tests)
-  - 44-G `e7db78f` Dead code removal (-497 LOC, 4 files)
-  - 44-H `5c1f40b` proactive_watch hygiene (-90% DM noise + cron benign +3 tests)
-  - 44-I `5458f95` Active probe via GetDialogs (Wave 44-C false-positive fix +7 tests)
-  - 44-J-trading `f06ae11` paper trading bot for Swarm Traders
-  - 44-J-ops `a8b962d` krab_runtime_risk_audit script + docs
-  - 44-K `acd22d4` CLAUDE.md MRO chain (4 missing mixins)
-  - 44-L `e83da0e` .remember/ archive cleanup (26 files moved)
-  - 44-D-UI-3 `bdc3595` Hub fallback dropdown UX (show all + disabled markers)
-  - Plus merge commit `99ef16e4` (Wave 44-I/K/L from worktree branch into main)
-- **Krab live**: PID 21062 post Stop+Start, session=ready, all waves deployed
-- **Tests**: 1281/1285 passed (4 pre-existing `test_memory_adaptive_rerank_llm.py` failures unrelated)
-- **Total LOC delta**: +3500/-1200 across waves
-- **Krab live**: PID 27224, session=ready, `KRAB_PROACTIVE_ENABLED=1`
-- **E2E verified**: pavua DM → Krab reply за 4s после Stop+Start canonical
-- **Tests**: +24 (Wave 44-A: 18, 44-C: 6); 192 watchdog+sentry+mcp slice green; ruff clean
-
-### Session 42 highlights — split-brain emergency triage + permanent fix
-
-**Производственный инцидент Day**: Wave 39-D split-brain detection логировал
-"split_brain_resolved_via_reconnect", но на самом деле _try_reconnect_pyrofork
-восстанавливал TCP/MTProto handshake без оживления updates_subscriber.
-Произошло 2 раза 09.05 (~06:58 и ~18:46). Оба раза:
-- pavua писал DM → Krab silent
-- Krab отправлял proactive alerts/digests (invoke API alive)
-- log казал "resolved", но incoming messages не дошли → ~75 мин и часы downtime
-- Recovery только через manual kickstart core
-
-**Wave 44-A (95e1a3f)** — Sentry MCP statsPeriod coercion:
-Sentry SaaS 2025+ принимает только {'', '24h', '14d'} на /issues/?statsPeriod.
-Любое другое (1h/7d/30d) → HTTP 400 "Invalid stats_period". Утром Wave 40-S
-правильно фиксил User-Agent (это была реальная проблема), но эта 400 — другой
-root cause. _coerce_stats_period() с маппингом + INFO-логом + JSON-ответ
-exposes statsPeriod (effective) + statsPeriod_requested (original).
-
-**Wave 44-B (a471e86)** — `scripts/telegram_session_watchdog.py`:
-Заменил stop+pkill+spawn anti-pattern на sanctioned `openclaw gateway restart`
-(verified subcommand exists). Также добавил OPENCLAW_BIN env override + multiple
-search paths для LaunchAgent context (минимальный PATH).
-
-**Wave 44-C (743b1d2)** — KILLER fix:
-После `_try_reconnect_pyrofork` returns True, перед logging
-`split_brain_resolved_via_reconnect` — **повторный** `_probe_updates_flow_alive`
-с verify_settle_sec=clamp(10..15, check_interval*0.3). Если update_id всё
-ещё frozen → log `split_brain_reconnect_did_not_restore_updates` + alert
-owner + `_launchd_exit_78()` (full process respawn).
-
-Trade-off: при truly quiet окне (3am, 0 incoming) verify может дать
-false-positive failure. Принимаемо: 10s respawn vs скрытый split-brain
-на час+.
-
-Tests: 6 new (3 source-AST + 2 behavioral + 1 helper marker).
-Wave 39-D regression: 5/5 still pass.
-
-**Sentry status (24h post-deploy)**: 11 issues (1 Krab core stale PYTHON-FASTAPI-7S,
-10 KE отдельный проект). Krab core actionable: 0.
-
-**Memory pressure observed**: Pavua получал alerts `combined_rss_high:13.5GB / 19.7GB`
-17:58-18:13. Известный backlog item P2 — KE backend RSS reduction.
-
----
-
-## Производственная активность для следующей сессии
-
-### P0 — Verify Wave 44-C in production
-Wait for next split-brain эпизод. Должно быть видно в логе:
-- ✅ Success path: `split_brain_resolved_via_reconnect verified=True verify_settle_sec=N`
-- ✅ Escalation: `split_brain_reconnect_did_not_restore_updates` → `_launchd_exit_78` →
-  launchd auto-respawn ~10s.
-
-Если за 24h split-brain эпизодов 0 — отлично, проблема возможно решена и
-без 44-C (но 44-C страховка).
-
-### P1 — Memory pressure mitigation
-KE backend RSS regularly hits 19+GB combined. Watchdog уже emit'ит alerts.
-Возможные направления:
-- Whisper-MLX модель в отдельный subprocess (better isolation)
-- Перевод на меньшую whisper-medium-mlx если quality OK для use case
-- Memory limits через cgroups/launchd ProcessLimits
-
-### P1 — Wave 44-D candidate: false-positive mitigation для quiet windows
-Если 44-C в production даёт false-positive escalation в quiet окно
-(3am-7am когда трафика нет) — рассмотреть active probe:
-вместо ожидания passive update_id движения, делать `client.get_chat_history(self_id, 1)`
-который ДОЛЖЕН триггернуть update event если subscriber alive.
-
-### P2 — Memory alert digest squelch
-Текущие alerts на каждое RSS-spike — шумно. Сделать опциональный squelch
-"RSS-alert не более 1/hour" чтобы не флудить owner DMs.
-
----
-
-## Session 41 ARCHIVE — Wave 37 → 43-Z + 39-B activated (предыдущая итерация)
-
-**FINAL STATE (закрытие сессии 2026-05-09 ~05:30)**:
-
-- **main HEAD**: `be940b0` Wave 43-Z (Sentry hygiene)
-- **12 коммитов**: Wave 37, 38, merge, separation guide, 39, 40, 41, 41-O, CLAUDE.md, 42, 39-B, 43-Z
-- **Krab live**: PID 95129, session=ready, **`KRAB_PROACTIVE_ENABLED=1` ACTIVE** (added в plist EnvironmentVariables + .env)
-- **Tests**: 13186+ collected (~219 added в этой сессии)
-
-**Sentry status (24h)**: 6 issues resolved сегодня:
-- PYTHON-FASTAPI-60 (53e/day, openclaw 500) — Wave 41-O downgrade to warning
-- PYTHON-FASTAPI-6B (5e/day, health_check_failed) — Wave 42 exc_class fix
-- PYTHON-FASTAPI-7X (5e/day, client closed) — Wave 41 root cause fix
-- PYTHON-FASTAPI-Z (390e/24h, generic Traceback) — Wave 43-Z CancelledError shutdown filter
-- PYTHON-FASTAPI-4T/4S (8e total, concurrent stream reads) — Wave 43-Z benign marker
-
-**Sentry remaining**: 10 unresolved (5 KE Backend + 5 KE Agent App Hangs) — все Krab Ear project, отдельный repo per separation guide. **Krab core: 0 actionable issues** post-deploy.
-
-**Wave 39-B activation status**: ENV ON в plist + .env. Default per-chat:
-joins=ON для NORMAL, media=OFF, ai=OFF. На следующий join event в любом
-NORMAL chat → Krab автоматически welcome (1/chat/day quota). Owner может
-расширить через `!proactive media on` per chat.
-
-**Производственная активность для следующей session**:
-- Observe Sentry 24h — confirm Wave 41/41-O/42/43-Z eliminated noise
-- Observe `proactive_event_dispatched` логи — verify joins работают, false positive rate, dismiss reactions
-- Если в YMB pavua reply'нет с anaphora — verify Wave 39-X output redirect
-- KE App Hangs — отдельная Krab Ear session (project_separation_guide)
-
----
-
-## Session 41 ARCHIVE (для context — детали 12 коммитов)
-
-## TL;DR — Wave 39 DEPLOYED 2026-05-09 ~02:30 (поверх Wave 37+38 ~02:09)
-
-- **Krab main HEAD**: `6bb5c41` Wave 39 ← `5805465` docs ← `0dfe561` merge ←
-  Wave 38/37 ← `82d03c6` Wave 36
-- **Krab live**: PID 67301, session=ready
-- **Wave 39-C VERIFIED**: `inbox_janitor_swept_acked kinds=[..., owner_mention, ...]
-  matched=5 swept=5` на startup — 5 stale_processing_owner_mentions закрылись
-  автоматически.
-- **Wave 39 fix list**:
-  - X) Output-based reply target (regression fix). Парсит начало LLM ответа
-    "🐶, ..." / "@user" / `[name](tg://user?id=N)` → reply_target = referenced
-    если matches. Lечит regression case 09.05 02:14 в YMB FAMILY FOREVER когда
-    Wave 37-B anaphora regex не сработал на "поправил, попробуй снова".
-  - A) Repetition guard. Token Jaccard similarity (0.6 threshold, 600s window),
-    per-chat FIFO. На повтор text заменяется на "🦀 Уже сказал близко по теме
-    чуть выше." Не спамит вариациями.
-  - C) Stale processing owner_mentions fix. _AUTO_SWEEP_KINDS теперь включает
-    "owner_mention". 5 stuck items swept на restart.
-  - D) Updates-flow tracker. `_last_seen_update_id` (через message.id в
-    _process_message) + `_probe_updates_flow_alive` для true split-brain
-    detection (invoke alive + updates dead → graceful reconnect first).
-
-## Предыдущая итерация: Wave 37+38 deployed 2026-05-09 ~02:09
-
-- **Krab main HEAD**: `5805465` (docs) ← `0dfe561` (merge) ← `b92ec45` Wave 38 ← `ab4430f` Wave 37 ← `82d03c6` (Wave 36)
-- **Krab live**: PID 61692, session=ready, telegram_heartbeat_started, network_offline_monitor_started
-- **Krab Ear**: codesign re-applied (Sealed Resources `version=2 rules=13 files=1`,
-  было `none`). spctl reject — норма для adhoc. Перм SIGKILL должен пропасть.
-- **Wave 37+38 LIVE**: heartbeat reliability + reply target redirect + anaphora hint
-  + tech-metaphors restraint + inline mention link для users без @username
-- **Sentry**: Krab clean (0 unresolved); Krab Ear имеет 2 unresolved (MLX whisper
-  60s timeout, fallback сработал) — **не Krab issue**.
-
----
-
-## Что сделано в этой сессии (Wave 37, 2026-05-09)
-
-Все changes в worktree `Краб/.claude/worktrees/cranky-allen-a8855f` (branch `claude/cranky-allen-a8855f`).
-Тесты проходят: 638 passed (broad userbot scope), 40 новых tests в 3 files.
-
-### Wave 37-A — Pyrogram heartbeat reliability (P0-1)
-
-**Файл**: [src/userbot/network_watchdog.py](../src/userbot/network_watchdog.py:430)
-
-Два связанных bug'а в `_telegram_heartbeat_loop`:
-
-1. **Heartbeat success обновлял `_last_telegram_event_ts`** → маскировал split-brain detection
-   в `_network_offline_monitor_loop`. Pyrogram session мог быть split-brain (invoke API alive,
-   updates_subscriber dead) — silence monitor не срабатывал, потому что heartbeat'ы успешны.
-   Теперь heartbeat success обновляет ТОЛЬКО новое поле `_last_heartbeat_ok_ts` (для diagnostics);
-   `_last_telegram_event_ts` обновляется ТОЛЬКО в `_process_message` (real user events).
-
-2. **Threshold=3 too lenient**: на 1 heartbeat timeout приходилось ждать ~12 минут до escalation.
-   Теперь на 1 fail сразу попытка `_try_reconnect_pyrofork()` (graceful). Если success → counter=0,
-   recovery в seconds. Если fail → counter держится, threshold safety net остаётся.
-
-**Tests**: [tests/unit/test_telegram_heartbeat_wave37.py](../tests/unit/test_telegram_heartbeat_wave37.py) — 6 tests.
-**Bridge atom**: `_last_heartbeat_ok_ts: float = time.time()` в `__init__` ([userbot_bridge.py:407](../src/userbot_bridge.py:407)).
-
-### Wave 37-B — Reply target redirect + anaphora hint (P1-3, P1-5)
-
-**Файлы**:
-- [src/userbot/delivery_helpers.py](../src/userbot/delivery_helpers.py) — `_query_has_anaphora`, `_resolve_reply_target`
-- [src/userbot/reply_preprocessor.py](../src/userbot/reply_preprocessor.py:160) — anaphora hint в `build_segmented_prompt`
-
-**Issue 1 fix (P1-3)**: когда user пишет *"Краб, спроси его..."* в reply на сообщение от X,
-Krab теперь отправляет ответ с `reply_to_message_id = X.id` (не trigger user'а). Helper:
-
-```python
-def _resolve_reply_target(source_message, query):
-    referenced = getattr(source_message, "reply_to_message", None)
-    if referenced and _query_has_anaphora(query):
-        return referenced
-    return source_message
-```
-
-**Issue 3 fix (P1-5)**: в LLM prompt добавляется блок-подсказка:
-```
-[Контекст: местоимения 'его/ему/её/ей' в текущем сообщении относятся к
-@{reply_to_author} (автору цитаты выше), не к отправителю]
-```
-
-**Tests**: [test_anaphora_detection_wave37.py](../tests/unit/test_anaphora_detection_wave37.py) — 31 test.
-
-**Anaphora regex** (word-boundary, RU+EN): `его/ему/него/нему/её/ей/неё/ней/ним/нею/him/her/his/hers`.
-
-### Wave 38 — Inline mention link для users без @username
-
-**Файл**: [src/userbot/delivery_helpers.py](../src/userbot/delivery_helpers.py:90) — `_inject_user_mention_link`.
-
-**Источник проблемы** (verified в YMB FAMILY FOREVER 2026-05-09 01:14-01:18, msg
-[767211→767223](https://t.me/c/1804661353/767211)):
-
-- 🐶 (user без @username, just emoji nickname) joined chat (msg 767199, empty text)
-- pavua: *"Краб, спроси его почему он не здоровается"* (msg 767211, reply на 767199)
-- Krab отвечал в text "🐶, теперь точно тебе" но **plain text, не clickable**
-- В Telegram UI mention не было navigable → user видел только текст-обращение
-
-Wave 37-B (P1-3) уже redirect'ит **reply target** на 🐶 (через anaphora "его").
-**Wave 38 добавляет inline mention link** — `[🐶](tg://user?id=N)` markdown syntax,
-который Pyrofork render'ит как clickable mention.
-
-**Helper logic**:
-- Replace ТОЛЬКО при name в начале text (избегаем false positives внутри)
-- Word-boundary check: `Ан` в `Антон` НЕ срабатывает
-- Idempotent: уже linked text не дублируется
-- Priority: `@username` > `first_name`
-
-**Integration**: применяется в `_deliver_response_parts` ТОЛЬКО когда
-`reply_target is not source_message` (т.е. Wave 37-B redirect сработал).
-
-**Tests**: [test_inline_mention_wave38.py](../tests/unit/test_inline_mention_wave38.py) — 10 tests, все pass.
-
-### Wave 37-C — Tech-metaphors restraint (P1-4)
-
-**Файл**: [src/userbot/access_control.py](../src/userbot/access_control.py:285) — `_append_runtime_constraints`.
-
-Issue 2: Krab перегружал ответы IT-аналогиями (SSH-сеансы, OAuth, ports, kernel,
-Telegram-матрица). Добавил guidance в system prompt — лёгкая ирония + жизненные сравнения OK,
-обязательные tech-метафоры в каждом ответе — нет.
-
-**Tests**: [test_tech_metaphors_restraint_wave37.py](../tests/unit/test_tech_metaphors_restraint_wave37.py) — 3 tests.
-
-### P0-2 — Krab Ear codesign fix (manual user action)
-
-**Status**: команды готовы, ждут пользователя. Документация в
-[docs/KRAB_EAR_CODESIGN_FIX.md](../docs/KRAB_EAR_CODESIGN_FIX.md).
-
-**Действие**:
-```bash
-xattr -cr "/Applications/Krab Ear.app"
-codesign --force --deep --sign - "/Applications/Krab Ear.app"
-spctl --assess -vv "/Applications/Krab Ear.app"
-```
-
-После этого `Sealed Resources` должно показать non-zero count, perm crashes пропадают.
-Это пометка для Krab Ear проекта, но без её выполнения KE app будет crashить на launch.
-
----
-
-## Pending для следующей сессии
-
-### P0 — Smoke test Wave 37+38 в production
-
-После merge worktree → main:
-1. Restart Krab (с user approval): `bash "/Users/pablito/Antigravity_AGENTS/new Stop Krab.command" && sleep 3 && bash "/Users/pablito/Antigravity_AGENTS/new start_krab.command"`
-2. Observe Sentry 24-48h на новые `telegram_heartbeat_*` events.
-3. Verify в YMB FAMILY FOREVER (или другом групповом чате):
-   - Reply на чужое сообщение + "Краб, спроси его..." → ответ Krab уходит на
-     **исходное** сообщение (не на trigger).
-   - Inline mention в text Krab'а — кликабельный (для users без @username тоже).
-
-### P2 — Wave 39 candidate: proactive event detection
-
-User feedback (2026-05-09): "Краб не мог отвечать не на мои сообщения к нему,
-а отмечать нужного пользователя или событие".
-
-Wave 37-B + 38 решают **address part** (правильный reply target + clickable mention).
-**Event part** (proactive welcome на join, реакция на media-events без trigger) —
-требует обсуждения:
-
-- Anti-spam guardrails (cooldowns, capacity per chat).
-- Event types: `MessageService` (join/leave), photo/video posts, link previews.
-- Trigger threshold для proactive — currently `KRAB_IMPLICIT_TRIGGER_THRESHOLD=0.4`.
-
-**Не делать без обсуждения** — proactive поведение может раздражать в чатах где
-Krab не должен светиться.
-
-### P1 — UnboundLocalError 'token' в LM Studio
-
-mlx_lm 0.31.3 bundled bug. Latest LM Studio runtime (1.7.0) ещё содержит. Wait for next LM Studio
-release. KE patches (tool_choice=none) защищают.
-
-### P1 — Sentry MCP HTTP 400 (Cloudflare WAF)
-
-`mcp__krab-p0lrd__krab_sentry_status` возвращает HTTP 400 после long-lived process. Fix:
-- `mcp-servers/telegram/server.py:2972-2981` — add explicit `User-Agent: krab-mcp/1.0` header
-- + exponential backoff retry on 4xx
-- Quick mitigation: `launchctl kickstart -k gui/$UID/com.krab.mcp-p0lrd`
-
-### P1 — Smart routing trigger improvements
-
-`trigger_detector.py` regex coverage хорошее для русского "краб"/"Краб". Возможно расширить:
-- Ironic mentions ("ну где же Краб?")
-- Compound mentions ("@yung_nagato Краб...")
-
-### P2 — Memory pressure mitigation
-
-36 GB M4 Max regularly hits 35G/36G. Watchdog panic when swap >32 GB.
-- Investigate way to reduce KE backend RSS
-- Possible: separate process for Whisper-MLX (better isolation)
-
-### P2 — _network_offline_monitor с invoke probe для split-brain
-
-Wave 37-A разделил timestamps, но `_probe_telegram_session_alive` использует тот же
-`GetUsers([InputUserSelf()])` что и heartbeat → если invoke жив но updates dead, probe success
-не помогает. Доработать: track `update_id` stream, detect когда updates остановились но invoke
-жив → trigger restart.
-
----
-
-## Style guide для следующих сессий
-
-- Russian language
-- НЕ рестартать Krab/KE без explicit user approval (особенно если active KE transcribe — check
-  `tail err.log | grep frames/s` перед `launchctl kickstart -k gui/$UID/ai.krab.ear.backend`)
-- TodoWrite для multi-step tasks (3+ items)
-- Verify findings перед attribution (don't blame stream client without timestamp correlation)
-- Skills: superpowers:systematic-debugging для bugs, superpowers:test-driven-development
-  для implementation. RED → GREEN → REFACTOR строго.
-
----
-
-## Полезные пути (Krab)
-
-### Logs
-- `~/.openclaw/krab_runtime_state/krab_main.log` — Krab structlog (~100 MB)
-- `/Users/pablito/Antigravity_AGENTS/Краб/logs/krab_launchd.out.log` — combined stdout
-- `~/.openclaw/krab_runtime_state/coexistence_monitor.log` (JSONL, every 60s)
-
-### Health endpoints
-- `curl http://127.0.0.1:8080/api/health/lite`
-- `curl http://127.0.0.1:8080/api/runtime/status`
-
-### Restart commands (только с user approval!)
-- Krab: `bash "/Users/pablito/Antigravity_AGENTS/new Stop Krab.command" && sleep 3 && bash "/Users/pablito/Antigravity_AGENTS/new start_krab.command"`
-- Targeted core only: `launchctl kickstart -k gui/$UID/ai.krab.core` (если launchd-копия активна)
-- OpenClaw gateway: `openclaw gateway` (НЕ SIGHUP!)
-- MCP-p0lrd: `launchctl kickstart -k gui/$UID/com.krab.mcp-p0lrd`
-
-### Тесты
-```bash
-pytest tests/ -q                                                # все
-pytest tests/unit/test_telegram_heartbeat_wave37.py -v          # Wave 37-A
-pytest tests/unit/test_anaphora_detection_wave37.py -v          # Wave 37-B
-pytest tests/unit/test_tech_metaphors_restraint_wave37.py -v    # Wave 37-C
-pytest tests/unit/test_inline_mention_wave38.py -v              # Wave 38
-ruff check src/ && ruff format src/
-```
-
----
-
-## Cross-project (Krab Ear) — minimal touchpoints
-
-Krab Ear — **отдельный проект** с **отдельным handoff**. В этой сессии для KE сделано
-ТОЛЬКО документирование codesign fix (manual action). Подробности — в Krab Ear handoff.
-
-Если будущая сессия касается KE — открой папку `/Users/pablito/Antigravity_AGENTS/Krab Ear/`
-и читай `Krab Ear/.remember/next_session.md` отдельно.
-
-См. [docs/PROJECT_SEPARATION_GUIDE.md](../docs/PROJECT_SEPARATION_GUIDE.md).
-
----
-
-## State right now (close of Wave 37 session)
-
-- **Krab core**: PID 50465 на момент close, не рестартован после Wave 37 commits — fix
-  ещё в worktree, **не на main**.
-- **Worktree**: `claude/cranky-allen-a8855f` готов к PR/merge.
-  Branch base: `82d03c6` (main).
-- **Sentry**: clean baseline после 12 resolved 8-9 May.
-- **Tests**: 12702+ collected, 40 новых в Wave 37 файлах.
-
-## Команда для merge в main (когда user готов)
+> См. [docs/PROJECT_SEPARATION_GUIDE.md](../docs/PROJECT_SEPARATION_GUIDE.md).
+
+## TL;DR — Session 45 closed 2026-05-12 ~01:00, **20+ коммитов**, 7 Linear closed, 3 paradigm shifts, >1000 Sentry events/week silenced
+
+**FINAL STATE**:
+- **main HEAD**: `6ba12e1` Wave 65-H Sentry-poll direct API (плюс 65-F TBD)
+- **Krab core**: alive, journal_mode=delete (all 5 sessions), `get_state_probe_enabled=True`
+- **Sentry quota saved**: **>1000 events/week** stop firing
+- **Linear**: 7 issues closed (AGE-5/6/8/9/12/15/16). Krab backlog: 0 open. Krab Ear AGE-14/10 — отдельный repo.
+
+## 🎯 Heroic fixes (3 paradigm shifts) — «outcomes-not-heartbeats» pattern
+
+| Wave | Commit | Эффект |
+|---|---|---|
+| **64** | `4f279cc` | SQLite corruption fix: `journal_mode=WAL→DELETE` + `fullfsync=1`. Migration автоматическая. 22 теста. |
+| **63-A** | `145d6a9` | Split-brain detection 93min → **4min** via `updates.GetState` pts probe. 21 тест. |
+| **50-B** | `cba58cf` | OAuth force-refresh при expiry<-60min. Verified -1492→60 min fresh. |
+
+## Wave 62 series — Sentry hygiene (7 commits)
+
+* `a62e311` 62-C: is_owner_dm via ACL (Wave 60-A wiring)
+* `739b8f2` 62-D: cloud routing bypass local-first
+* `83d0544` 62-E: gemini_rerank → 2.5-pro (**-9 Sentry/day**)
+* `7546573` 62-F: benign markers
+* `2c7dc4d` 62-G: codex weekly quota preempt (save 2-3s/request)
+* `d9ba689` AGE-8: memory_doctor regression test
+* `a140ee6` 62-H: footer cosmetic «codex weekly quota»
+
+## Wave 65 series — operational + UX (8 commits)
+
+* `9cbb61d` 65-A/B: leak_monitor Chrome filter + nightly-audit RunAtLoad
+* `49e6afc` 65-C: swarm DM sender identity (AGE-16, Coders → «Создатель»)
+* `148bef9` 65-D: anthropic sonnet-4-5 preempt (**-7 Sentry/day**)
+* `870d36e` 65-E: two-tier swap thresholds (**-88% Telegram noise**)
+* `4a954a9` 65-G: LM Studio idle unload alias + 10 tests (Wave 29-RR shipped earlier)
+* `866359e` docs: CLAUDE.md Session 45 update
+* `6ba12e1` 65-H: Sentry-poll direct API (replace bash curl 15s timeout с httpx 30s + retries)
+* (65-F: test conftest guard — TBD, agent running)
+
+## Operational state
+
+* Codex weekly quota disabled in `codex_quota_state.json` (7d cooldown from 2026-05-11 22:50, auto-recover ~2026-05-18)
+* `~/.codex/config.toml`: MCP context7 `type="streamable_http"` fixed (5 OpenClaw cron jobs работают после 8 days down)
+* kraab.session journal_mode=delete, fullfsync=1, 500 peers preserved
+* All 5 Pyrogram sessions (kraab + 4 swarm) journal_mode=delete
+* Inbox 40 stale acked, 23 corrupt session backups archived в `/tmp/krab_session_corrupt_archive_20260511/`
+* leak_monitor count: 20 false-positives → 1 real (Chrome browser-bridge excluded)
+* sentry-poll: bash → Python (httpx + retries, persistent cursor)
+
+## Architecture patterns shipped
+
+**«Outcomes-not-heartbeats» principle** — check actual outcomes, not process aliveness:
+
+1. **Wave 63-A**: detect split-brain через server pts vs local seen_id
+2. **Wave 50-B**: pre-empt OAuth refresh если expiry past (don't trust "already synced" flag)
+3. **Wave 65-D**: pre-empt model call если no quota (env-driven blacklist)
+4. **Wave 62-G**: pre-empt codex weekly quota (read state file, skip subprocess)
+5. **Wave 65-H**: replace 15s curl timeout с httpx + retries (handle transient timeouts)
+
+## Background agents (12+ Sonnet successful, 1 Haiku failed)
+
+* Sentry/Linear/log scan/memory pressure/routines triage (5 agents, 30-50 min each)
+* AGE-15 SQLite corruption research (5 min)
+* AGE-8 fix (5 min)
+* Wave 63-A/64/65-C/65-F/65-G/65-H implementations (5-32 min each)
+* Cron jobs investigation (18 min)
+
+Lesson: **Sonnet for codebase context (200KB CLAUDE.md), Haiku only for one-shot lookups without project context.**
+
+## Pending для Session 46
+
+### Krab-side
+* Wave 63-B/C/D: dispatcher_tick hook, per-client probe (swarm), surgical recovery (если Wave 63-A не покрыл всё)
+* AGE-13/AGE-11 — Low priority daily review test gaps (test coverage formal)
+* Verify Wave 64 reduces corruption recurrence (1-week observation window)
+* Memory pressure optimization (routines findings): `casual_chat_low_priority` → cloud Gemini 3 Flash при peak hours? OrbStack stop on idle?
+
+### Krab Ear-side (отдельный repo)
+* AGE-14: KRAB-EAR-AGENT-G AppHang ≥2000ms
+* AGE-10: KRAB-EAR-AGENT-8 AppHang regression
+
+### Routine maintenance
+* Через 1 неделю проверить Sentry quota usage drop (Wave 65-E + Wave 62-F + Wave 65-D)
+* Codex weekly quota recover ~2026-05-18 → удалить flag из codex_quota_state.json или auto-recovery
+* Inbox cleanup cron `ai.krab.inbox-cleanup` — почему накопились stale 40? Cron работает но не bulk-acks?
+
+## Quick commands
 
 ```bash
-cd /Users/pablito/Antigravity_AGENTS/Краб
-git worktree list  # увидишь worktrees/cranky-allen-a8855f
-# Создать PR (если хочешь):
-cd .claude/worktrees/cranky-allen-a8855f
-gh pr create --title "Wave 37: heartbeat reliability + reply target + anaphora hint + tech-metaphor restraint" --body "..."
-# Или merge напрямую:
-git checkout main && git merge --no-ff claude/cranky-allen-a8855f
+# Krab restart (НЕ SIGHUP openclaw!)
+/Users/pablito/Antigravity_AGENTS/new\ Stop\ Krab.command
+/Users/pablito/Antigravity_AGENTS/new\ start_krab.command
+
+# Verify Wave 64 sticks
+sqlite3 /Users/pablito/Antigravity_AGENTS/Краб/data/sessions/kraab.session "PRAGMA journal_mode;"
+# expect: delete
+
+# Verify Wave 63-A active
+grep "get_state_probe_enabled" logs/krab_launchd.out.log | tail -1
+# expect: =True
+
+# Live status
+curl -sS http://127.0.0.1:8080/api/model/status | python3 -m json.tool
+
+# Inbox stale cleanup (manual)
+curl -sS -X POST http://127.0.0.1:8080/api/inbox/bulk-ack-stale | python3 -m json.tool
+
+# Tests
+venv/bin/python -m pytest tests/unit/test_pyrogram_patch_wave64.py tests/unit/test_network_watchdog_wave63a.py tests/unit/test_sentry_poll_wave65h.py tests/unit/test_lm_idle_unload_wave65g.py -q
 ```
 
-После merge — **restart Krab** (с user approval) для apply нового behavior в production.
+## Memory anchors
 
----
-
-## ✅ DEPLOYMENT log (2026-05-09 02:05-02:09)
-
-- 02:05 Krab Ear codesign: `xattr -cr` + `codesign --force --deep --sign -`
-  → Sealed Resources `version=2 rules=13 files=1` (было `none`). spctl reject
-  — норма для adhoc-signed.
-- 02:06 Wave 37 commit `ab4430f` + Wave 38 commit `b92ec45` в worktree branch.
-- 02:06 Merge to main → `0dfe561` (no-ff merge).
-- 02:06 Docs commit `5805465` (handoff + separation guide).
-- 02:07 Stop Krab.command (graceful 6s + KE backend stopped + KE Agent stopped).
-- 02:08 start_krab.command → launchd kickoff.
-- 02:09 Krab UP (PID 61692): `telegram_heartbeat_started fail_threshold=3 interval_sec=240`,
-  `network_offline_monitor_started threshold_sec=60`, session=ready.
+* Tour produced **20+ commits** в single session — highest commit density
+* «Outcomes-not-heartbeats» — emerging Krab architecture principle
+* Sonnet quota at 27% post-tour, Opus quota 82% (user работает на Opus, тур использовал ~11 Sonnet agents)
