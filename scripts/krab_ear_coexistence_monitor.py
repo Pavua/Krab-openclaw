@@ -24,11 +24,20 @@ import psutil
 # поэтому swap > 8GB на macOS НЕ критично. Для Linux 8GB реально означает memory pressure.
 _GB = 1_000_000_000
 COMBINED_RSS_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_RSS_THRESHOLD_GB", "12")) * _GB)
-# Wave (08.05.2026): bumped 18→28 GB. macOS compressed swap 19-22 GB наблюдается
-# в норме под workload (compressor + OrbStack VPN + heavy apps на 36GB M4 Max).
-# Threshold 18 давал 216 false-positive alerts за 11h. Реальная panic-зона:
-# user verified swap >32 GB → kernel I/O queue overflow → watchdog timeout → reboot.
-SWAP_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_SWAP_THRESHOLD_GB", "28")) * _GB)
+# Wave 65-E (2026-05-12): two-tier swap threshold.
+# История:
+#   * Pre 08.05: 18 GB — давал 216 false-positives за 11h (compressed swap часто 19-22 GB
+#     в норме на 36GB M4 Max под compressor + OrbStack + heavy apps).
+#   * Wave 08.05: bumped 18→28 GB. Но 515 alerts/week всё равно — multiple cron jobs
+#     fire'ятся каждые 15 мин (ALERT_COOLDOWN) когда swap > 28 GB.
+#   * Wave 65-E: real panic-zone — >32 GB (verified by user: kernel I/O queue overflow
+#     → watchdog timeout → reboot). 30 GB = elevated. <22 GB = noise.
+#
+# Two-tier:
+#   - WARN at 22 GB — logged в JSONL только, БЕЗ Telegram alert (noise reduction).
+#   - CRITICAL at 32 GB — Telegram alert (real panic, imminent OOM risk).
+SWAP_WARN_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_SWAP_WARN_GB", "22")) * _GB)
+SWAP_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_SWAP_THRESHOLD_GB", "32")) * _GB)
 RAM_AVAIL_THRESHOLD = int(float(os.environ.get("KRAB_COEXIST_RAM_AVAIL_THRESHOLD_GB", "3")) * _GB)
 # Session 40: cooldown между Telegram alerts чтобы не спамить каждую минуту.
 # При memory pressure которое держится час — 1-2 уведомления, не 60.
@@ -159,15 +168,22 @@ def main() -> int:
     }
 
     # Вычислить alerts
-    alerts: list[str] = []
+    # Wave 65-E: two-tier swap — warnings логируются в JSONL без Telegram,
+    # critical → Telegram alert. Warnings полезны для analytics (cron failure
+    # correlation), но не для real-time owner notifications.
+    alerts: list[str] = []  # critical — триггерят Telegram
+    warnings: list[str] = []  # warn-only — only logged
     if combined > COMBINED_RSS_THRESHOLD:
         alerts.append(f"combined_rss_high:{combined / 1e9:.1f}GB")
     if sw.used > SWAP_THRESHOLD:
         alerts.append(f"swap_used_critical:{sw.used / 1e9:.1f}GB")
+    elif sw.used > SWAP_WARN_THRESHOLD:
+        warnings.append(f"swap_used_warn:{sw.used / 1e9:.1f}GB")
     if vm.available < RAM_AVAIL_THRESHOLD:
         alerts.append(f"ram_available_low:{vm.available / 1e9:.1f}GB")
 
     snapshot["alerts"] = alerts
+    snapshot["warnings"] = warnings
 
     # Записать строку JSONL
     with LOG_FILE.open("a") as f:
