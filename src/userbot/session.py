@@ -31,13 +31,19 @@ def checkpoint_session_wal(session_path: str | Path) -> dict | None:
     оставляя многомегабайтный *.session-wal sidecar. На многих рестартах WAL
     растёт неограниченно (см. session 32: 4MB → ручной truncate).
 
+    Wave 64 (May 2026): Pyrogram sessions переключены в journal_mode=DELETE.
+    В DELETE mode WAL не существует — checkpoint бессмыслен. Helper делает
+    graceful no-op при detection DELETE/MEMORY/OFF mode (без warning'а), чтобы
+    backward-compat для legacy WAL sessions сохранилась.
+
     Контракт:
     - Вызывается ПОСЛЕ `client.stop()` (storage уже закрыта, файл существует).
     - Идемпотентен: если файла нет (первый запуск) — silent skip, возвращает None.
+    - Если journal_mode != WAL → возвращает None (no-op skip, Wave 64).
     - Никогда не бросает наружу: все ошибки логируются как warning.
-    - Возвращает dict с `frames_checkpointed` / `pages_in_wal` при успехе.
+    - Возвращает dict с `frames_checkpointed` / `pages_in_wal` при WAL.
 
-    PRAGMA wal_checkpoint(TRUNCATE) семантика:
+    PRAGMA wal_checkpoint(TRUNCATE) семантика на WAL DB:
         result = (busy, log_frames, checkpointed_frames)
         — busy: 0 если успешно, 1 если был writer
         — log_frames: всего фреймов в WAL до checkpoint
@@ -48,6 +54,21 @@ def checkpoint_session_wal(session_path: str | Path) -> dict | None:
         return None
     try:
         with sqlite3.connect(str(path), timeout=2.0) as conn:
+            # Wave 64: если journal_mode не WAL — checkpoint бессмыслен.
+            # DELETE/MEMORY/OFF/TRUNCATE/PERSIST все не имеют WAL sidecar.
+            try:
+                mode_row = conn.execute("PRAGMA journal_mode").fetchone()
+                mode = str(mode_row[0]).lower() if mode_row else ""
+            except sqlite3.Error:
+                mode = ""
+            if mode != "wal":
+                logger.debug(
+                    "pyrogram_wal_checkpoint_skipped_not_wal",
+                    session_path=str(path),
+                    journal_mode=mode,
+                )
+                return None
+
             cur = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             row = cur.fetchone() or (None, None, None)
             busy, log_frames, checkpointed = row

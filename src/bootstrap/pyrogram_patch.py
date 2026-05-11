@@ -135,41 +135,50 @@ def _record_storage_success(storage) -> None:
 def _execute_pragmas(conn) -> None:
     """Применяет hardening-PRAGMA к уже открытому sqlite3-соединению.
 
+    Wave 64 (May 2026): journal_mode=DELETE + fullfsync=1 после повторяющегося
+    cluster Sentry corruption events (AGE-15/AGE-12/AGE-9 за 2 недели).
+    Root cause: WAL mode + concurrent writers + macOS sleep/wake → torn pages
+    в WAL → next boot corruption ("database disk image is malformed").
+
+    Изменения по сравнению с Wave 14-J:
+    1. journal_mode=DELETE (а не WAL).
+       Pyrogram session.db — single-writer (один Client per session). WAL даёт
+       выгоду только при concurrent readers; здесь все 5 sessions
+       (kraab + 4 swarm teams) изолированы, WAL не нужен. DELETE rollback
+       journal удаляется при commit, нет SHM mmap, нет torn-page риска при
+       macOS sleep/wake. wal_autocheckpoint удалён за ненадобностью.
+    2. fullfsync=1 — обязательно на macOS.
+       Текущий synchronous=FULL делает fsync(), но НЕ F_FULLFSYNC на macOS —
+       APFS драйвер может задержать запись в block cache до 30+ секунд.
+       fullfsync=1 форсирует physical disk write через F_FULLFSYNC fcntl
+       (~5ms extra per write на SSD M4 — negligible при 10 writes/min).
+       Apple SQLite docs прямо рекомендуют для macOS.
+
     Порядок важен:
     1. busy_timeout ПЕРВЫМ — чтобы сами последующие PRAGMA не падали на lock.
-    2. journal_mode=WAL — persists в заголовке файла.
+    2. journal_mode=DELETE — persists в заголовке файла; при существующей WAL
+       база автоматически конвертируется (sqlite сам checkpoint'нёт перед
+       переключением).
     3. synchronous=FULL — atomic write guarantee, защищает от torn pages при
-       macOS sleep / OS-level write reorder. См. Session 33 forensic report:
-       12+ часов uptime при synchronous=NORMAL + WAL + macOS sleep cycle =
-       textbook risk window для btreeInitPage corruption (произошло утром
-       02.05). Tradeoff: ~2× slower writes на peer cache (rare path,
-       <50ms/write, invisible). Альтернатива была NORMAL — отвергнута после
-       physical page damage на pages 5/11/12/14/16/17/18/19/20/21/22/23.
-    4. wal_autocheckpoint=1000 — auto-checkpoint после 1000 WAL frames
-       (~4MB). Без этого WAL рос unbounded между restarts (12h uptime → MB+
-       WAL → расширенное окно torn-page risk).
+       macOS sleep / OS-level write reorder. Session 33 P1 retained: 12+ часов
+       uptime при synchronous=NORMAL + sleep cycle = textbook risk window.
+    4. fullfsync=1 — macOS-specific F_FULLFSYNC enforcement (Wave 64).
+    5. temp_store=MEMORY — temp tables/indexes в RAM (Wave 14-J).
+    6. cache_size=-65536 — 64MB page cache (Wave 14-J).
 
-    Примечание: ``auto_vacuum=INCREMENTAL`` намеренно НЕ применяется здесь.
-    SQLite позволяет изменить auto_vacuum только до первой записи на новой базе,
-    но к моменту вызова _execute_pragmas journal_mode=WAL уже записывает заголовок
-    (4096 байт). Для существующих баз изменение auto_vacuum требует полного VACUUM —
-    что является опасной операцией. Пространство освобождается органически через
-    free-page list при обновлениях.
+    Примечание: ``auto_vacuum`` намеренно НЕ применяется здесь — изменение
+    требует полного VACUUM на существующей базе (опасная операция).
+    Пространство освобождается органически через free-page list.
     """
-    # Wave 14-J additions:
-    # - ``temp_store=MEMORY`` — temp tables/indexes держим в RAM. SQLite по
-    #   default может писать temp в /tmp, и при OOM/disk-pressure это даёт
-    #   torn writes → "disk image is malformed". RAM-temp полностью исключает
-    #   этот класс corruption для intermediate-операций.
-    # - ``cache_size=-65536`` — 64MB page cache (negative = KB). Default 2MB
-    #   слишком мало для нагрузки 4+ pyrofork-клиентов: страницы постоянно
-    #   эвиктятся, page-checksum errors при concurrent reads/writes.
+    # Wave 64: journal_mode=DELETE для session.db — устраняет торн-pages в WAL
+    # под macOS sleep/wake cycle. F_FULLFSYNC форсирует disk write вместо
+    # OS-cached fsync().
     for pragma in (
         "PRAGMA busy_timeout=5000",
-        "PRAGMA journal_mode=WAL",
+        "PRAGMA journal_mode=DELETE",  # Wave 64: было WAL
         "PRAGMA synchronous=FULL",
-        "PRAGMA wal_autocheckpoint=1000",
-        # Wave 14-J additions (keep alongside Wave 6-A synchronous=FULL):
+        "PRAGMA fullfsync=1",  # Wave 64: macOS F_FULLFSYNC enforcement
+        # Wave 14-J additions (preserved):
         "PRAGMA temp_store=MEMORY",
         "PRAGMA cache_size=-65536",
     ):
