@@ -3658,6 +3658,17 @@ class OpenClawClient:
                                     error_type=type(_cli_exc).__name__,
                                     quota_exhausted=_is_codex_quota,
                                 )
+                                # Wave 62-H: distinguish footer text — codex preempt
+                                # (Wave 62-G) vs реальный сбой primary. Без этого
+                                # footer пишет "(fallback после сбоя primary)" даже
+                                # когда codex преэмптился без attempt — что грязно.
+                                if _is_codex_quota:
+                                    self._cloud_tier_state["last_error_code"] = (
+                                        "codex_quota_exhausted"
+                                    )
+                                    # NB: НЕ устанавливаем last_recovery_action здесь —
+                                    # outer loop поставит "switch_to_cloud_quality_retry"
+                                    # и delivery_helpers будет смотреть last_error_code.
                     except (NameError, ImportError) as _cli_init_exc:
                         logger.warning(
                             "cli_subprocess_bypass_init_skip",

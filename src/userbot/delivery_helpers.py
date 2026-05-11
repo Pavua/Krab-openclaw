@@ -306,7 +306,13 @@ class DeliveryHelpersMixin:
             last_error = ""
 
         if recovery and recovery not in {"none", ""}:
-            if "quality" in recovery:
+            # Wave 62-H: codex weekly quota preempt (Wave 62-G) → специальный label.
+            # Без этого footer пишет "(fallback после сбоя primary)" хотя primary
+            # не сбоил — был skip'нут заранее через is_codex_disabled() preempt.
+            if last_error == "codex_quota_exhausted":
+                fallback_used = True
+                fallback_reason = "codex weekly quota"
+            elif "quality" in recovery:
                 fallback_used = True
                 fallback_reason = "сбоя primary"
             elif "cloud_retry" in recovery or recovery.startswith("switch_to_cloud"):
