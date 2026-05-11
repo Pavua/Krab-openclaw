@@ -360,6 +360,7 @@ async def _complete_codex_with_account_rotation(
         CodexQuotaExhaustedError,
         classify_quota,
         cooldown_for_kind,
+        is_codex_disabled,
         is_quota_error,
     )
 
@@ -369,6 +370,29 @@ async def _complete_codex_with_account_rotation(
     _perf_error_type: str | None = None
     _perf_error_message: str | None = None
     full_model = f"codex-cli/{model_id}"
+
+    # Wave 62-G (2026-05-11): preempt — если codex marked weekly-disabled
+    # через mark_codex_disabled (например через !quota команду или вручную),
+    # не делаем subprocess attempt вообще. Сохраняем 2-3s per request
+    # пока quota не recover (WEEKLY_COOLDOWN=7d).
+    # До Wave 62-G: is_codex_disabled() нигде не читался → state file был dead-letter.
+    if is_codex_disabled():
+        logger.info(
+            "codex_preempted_weekly_disabled",
+            model=model_id,
+            reason="is_codex_disabled() returned True — see codex_quota_state.json",
+        )
+        add_bypass_breadcrumb(
+            bypass_kind="cli",
+            event="preempted_weekly_disabled",
+            model=model_id,
+            extra={"binary": "codex"},
+            level="info",
+        )
+        raise CodexQuotaExhaustedError(
+            "Codex preempted (weekly quota state) — falling back to next model in chain",
+            kind="weekly",
+        )
 
     max_attempts = max(2, len([a for a in list_accounts() if a.get("logged_in")]) + 1)
 

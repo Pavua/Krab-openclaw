@@ -144,6 +144,12 @@ async def test_complete_via_cli_subprocess_call() -> None:
             "asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ),
+        # Wave 62-G: preempt skip — mock is_codex_disabled через прямой импорт
+        # внутри функции _complete_codex_with_account_rotation.
+        patch(
+            "src.integrations.codex_quota_state.is_codex_disabled",
+            return_value=False,
+        ),
     ):
         result = await complete_via_cli(
             model="codex-cli/gpt-5.5",
@@ -209,6 +215,11 @@ async def test_complete_via_cli_timeout_kills_proc() -> None:
         patch(
             "asyncio.wait_for",
             side_effect=asyncio.TimeoutError(),
+        ),
+        # Wave 62-G: preempt skip
+        patch(
+            "src.integrations.codex_quota_state.is_codex_disabled",
+            return_value=False,
         ),
     ):
         with pytest.raises(RuntimeError, match="timeout"):
@@ -280,3 +291,41 @@ def test_is_cli_subprocess_enabled_disabled(monkeypatch: pytest.MonkeyPatch) -> 
     """KRAB_CLI_SUBPROCESS_BYPASS_ENABLED=0 → disabled."""
     monkeypatch.setenv("KRAB_CLI_SUBPROCESS_BYPASS_ENABLED", "0")
     assert is_cli_subprocess_enabled() is False
+
+
+# ---------------------------------------------------------------------------
+# Wave 62-G: preempt при is_codex_disabled() = True
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_complete_via_cli_preempts_when_codex_disabled() -> None:
+    """Wave 62-G: codex marked disabled (weekly quota) → CodexQuotaExhaustedError
+    raised БЕЗ subprocess attempt — caller fall back на next model в chain.
+
+    Регрессия: до Wave 62-G `is_codex_disabled()` был dead-letter
+    (нигде не читался), хотя `mark_codex_disabled` его выставлял. Это
+    приводило к wasted 2-3s per request пока quota actively recovered.
+    """
+    from src.integrations.codex_quota_state import CodexQuotaExhaustedError
+
+    # Mock: shutil.which не должен быть вызван при preempt
+    mock_which = MagicMock(return_value="/usr/local/bin/codex")
+    mock_subprocess = MagicMock()
+
+    with (
+        patch("src.integrations.cli_subprocess_bypass.shutil.which", mock_which),
+        patch("asyncio.create_subprocess_exec", mock_subprocess),
+        patch(
+            "src.integrations.codex_quota_state.is_codex_disabled",
+            return_value=True,
+        ),
+    ):
+        with pytest.raises(CodexQuotaExhaustedError, match="preempted"):
+            await complete_via_cli(
+                model="codex-cli/gpt-5.5",
+                messages=[{"role": "user", "content": "Hello"}],
+            )
+
+    # Verify: subprocess НЕ был запущен (preempt сработал ДО)
+    mock_subprocess.assert_not_called()
