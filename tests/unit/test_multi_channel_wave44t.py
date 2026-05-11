@@ -406,13 +406,23 @@ def test_owner_token_bypass_email(tmp_path, monkeypatch):
         ("krab_send_email.py", ["--to", "x@y.com", "--subject", "s", "--body", "b"]),
     ],
 )
-def test_scripts_executable(script, extra_args):
-    """Every script returns parseable JSON, never crashes."""
+def test_scripts_executable(script, extra_args, tmp_path):
+    """Every script returns parseable JSON, never crashes.
+
+    Wave 65-F: пробрасываем HOME + KRAB_RUNTIME_STATE_DIR в tmp_path,
+    иначе subprocess audit_event() пишет в production
+    ~/.openclaw/krab_runtime_state/agent_audit.jsonl с fake recipients
+    (s#c / +1 / x@y.com).
+    """
     rc, out, _ = _run(
         script,
         [*extra_args, "--text", "hi"]
         if "--text" in str(extra_args) or script != "krab_send_email.py"
         else extra_args,
+        env_extra={
+            "HOME": str(tmp_path),
+            "KRAB_RUNTIME_STATE_DIR": str(tmp_path / ".openclaw" / "krab_runtime_state"),
+        },
     )
     # We expect non-zero (first-time blocked or argparse), but JSON should parse
     # OR argparse error which is rc=2 with no JSON. Either way no crash.

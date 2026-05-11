@@ -16,7 +16,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-RUNTIME_STATE_DIR = Path.home() / ".openclaw" / "krab_runtime_state"
+# Wave 65-F: env override для isolation тестов (subprocess не наследует
+# monkeypatch parent процесса, нужен env-var). Совпадает с pattern в
+# src/userbot_bridge.py:1638 (KRAB_RUNTIME_STATE_DIR).
+RUNTIME_STATE_DIR = Path(
+    os.environ.get("KRAB_RUNTIME_STATE_DIR")
+    or str(Path.home() / ".openclaw" / "krab_runtime_state")
+).expanduser()
 OWNER_CONFIRM_TOKEN_PATH = RUNTIME_STATE_DIR / "owner_confirm.token"
 AGENT_AUDIT_PATH = RUNTIME_STATE_DIR / "agent_audit.jsonl"
 

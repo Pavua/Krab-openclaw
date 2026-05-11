@@ -103,6 +103,25 @@ def _isolate_persistent_runtime_state(
     """
     tmp_root = tmp_path_factory.mktemp("krab_test_state")
 
+    # Wave 65-F: subprocess isolation для scripts/agent_tools/.
+    # _multi_channel_helpers.py + krab_audit_wrapper.py читают
+    # KRAB_RUNTIME_STATE_DIR / KRAB_AGENT_AUDIT_PATH из env. Тесты, которые
+    # запускают эти скрипты через subprocess.run, наследуют parent env →
+    # если переменная установлена, subprocess пишет в tmp вместо
+    # ~/.openclaw/krab_runtime_state/. Это closes recurring leak pattern
+    # (Session 39 swarm_channels.json, Session 40 same path, Session 44+
+    # agent_audit.jsonl).
+    #
+    # Имя последнего компонента — "krab_runtime_state" (тот же что в prod),
+    # чтобы тесты, проверяющие ``.name`` (типа test_helpers_imports), не
+    # ломались на dir-name diff.
+    _isolated_state = tmp_root / "krab_runtime_state"
+    monkeypatch.setenv("KRAB_RUNTIME_STATE_DIR", str(_isolated_state))
+    monkeypatch.setenv(
+        "KRAB_AGENT_AUDIT_PATH",
+        str(_isolated_state / "agent_audit.jsonl"),
+    )
+
     # 1. RUNS_DB_PATH — openclaw task tracker (главный источник watchdog cancel'ов)
     try:
         from src.core import openclaw_task_poller as _otp
