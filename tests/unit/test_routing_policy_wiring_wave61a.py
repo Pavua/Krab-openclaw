@@ -333,6 +333,26 @@ class TestDecideRouteCalledPerRequest:
         # В реальном коде при preferred_model_id != "" мы сразу selected_model = preferred_model_id
         # и блок с routing policy не выполняется — это правильное поведение
 
+    def test_wave62d_cloud_decision_bypasses_local_first_heuristic(self):
+        """
+        Wave 62-D regression: routing_policy decision=cloud не должно быть
+        перебито `get_best_model()` local-first heuristic.
+
+        Bug сценарий 2026-05-11: owner_dm → cloud (по матрице), но wiring
+        fallthrough → `get_best_model(has_photo=False)` который при живом
+        LM Studio возвращает local preferred → cloud decision проигнорировано.
+        В логе: `backend=cloud reason='owner_dm → cloud' selected=gemma-...optiq`.
+
+        Wave 62-D fix: для `backend=cloud` + `force_cloud=False` (т.е. явное
+        cloud решение routing policy) вызывать `get_best_cloud_model()` напрямую.
+        """
+        # Owner_dm task type → cloud по матрице
+        assert ROUTING_POLICY.get("owner_dm") == "cloud"
+        # Vision analysis тоже cloud
+        assert ROUTING_POLICY.get("vision_analysis") == "cloud"
+        # Casual chat low priority остаётся local (групповые)
+        assert ROUTING_POLICY.get("casual_chat_low_priority") == "local"
+
     def test_owner_dm_wiring_uses_is_owner_user_id_not_force_cloud(self):
         """
         Wave 62-C regression: is_owner_dm flag классификатора должен определяться

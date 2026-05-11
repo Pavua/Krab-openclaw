@@ -973,9 +973,14 @@ async def test_vision_addon_missing_auto_mode_skips_alt_local_vision_and_goes_to
     from src.model_manager import model_manager
 
     completion = AsyncMock(return_value="Cloud vision OK")
+    # Wave 62-D: vision_analysis → cloud; mock get_best_cloud_model.
     with patch("src.openclaw_client.config.LOCAL_PREFERRED_VISION_MODEL", "auto"):
         with patch.object(
             model_manager, "get_best_model", new=AsyncMock(return_value="local/nemotron")
+        ), patch.object(
+            model_manager,
+            "get_best_cloud_model",
+            new=AsyncMock(return_value="local/nemotron"),
         ):
             with patch.object(
                 model_manager,
@@ -1025,10 +1030,15 @@ async def test_photo_auto_mode_remaps_accidental_local_vision_selection_to_cloud
 ) -> None:
     from src.model_manager import model_manager
 
+    # Wave 62-D: photo → vision_analysis → cloud; mock get_best_cloud_model.
     with patch("src.openclaw_client.config.LOCAL_PREFERRED_VISION_MODEL", "auto"):
         with patch.object(
             model_manager,
             "get_best_model",
+            new=AsyncMock(return_value="qwen2-vl-2b-instruct-abliterated-mlx"),
+        ), patch.object(
+            model_manager,
+            "get_best_cloud_model",
             new=AsyncMock(return_value="qwen2-vl-2b-instruct-abliterated-mlx"),
         ):
             with patch.object(

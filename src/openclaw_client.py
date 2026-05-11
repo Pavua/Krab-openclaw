@@ -3138,25 +3138,25 @@ class OpenClawClient:
                             else f"lmstudio/{_local_model_id}"
                         )
                         selected_model = _lm_prefix
-                        logger.info(
-                            "routing_policy_applied",
-                            task_type=_task_type,
-                            backend=_route.backend,
-                            reason=_route.reason,
-                            selected=selected_model,
-                            chat_id=chat_id,
+                    elif _route.backend == "cloud" and not effective_force_cloud:
+                        # Wave 62-D: явное cloud-решение routing policy (например owner_dm)
+                        # с force_cloud=False. НЕ используем get_best_model (он local-first).
+                        # При force_cloud=True legacy remap ниже сам обработает local→cloud.
+                        selected_model = await model_manager.get_best_cloud_model(
+                            has_photo=has_photo
                         )
                     else:
-                        # backend == "cloud" или local_model_id пуст → стандартный path
+                        # backend == "auto" с пустым LOCAL_PREFERRED_MODEL,
+                        # либо force_cloud=True (legacy remap обработает дальше).
                         selected_model = await model_manager.get_best_model(has_photo=has_photo)
-                        logger.info(
-                            "routing_policy_applied",
-                            task_type=_task_type,
-                            backend=_route.backend,
-                            reason=_route.reason,
-                            selected=selected_model,
-                            chat_id=chat_id,
-                        )
+                    logger.info(
+                        "routing_policy_applied",
+                        task_type=_task_type,
+                        backend=_route.backend,
+                        reason=_route.reason,
+                        selected=selected_model,
+                        chat_id=chat_id,
+                    )
                 except Exception as _rp_exc:  # noqa: BLE001
                     # Routing policy сбой — не ломаем основной path, деградируем gracefully
                     logger.warning(
