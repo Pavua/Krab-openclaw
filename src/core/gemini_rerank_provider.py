@@ -26,7 +26,12 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # Модель для реранкинга: pro, не flash (пользовательский приоритет).
-_RERANK_MODEL = "gemini-3-pro-preview"
+# Wave 62-E (2026-05-11): был "gemini-3-pro-preview" — 404 в AI Studio v1beta direct API.
+# Gemini 3 PUBLIC_PREVIEW: доступна только через provider-prefixed route
+# (google-gemini-cli/gemini-3-pro-preview через OpenClaw), не через bare ID.
+# 9 errors/day в Sentry (PYTHON-FASTAPI-7M). Откатываемся на 2.5-pro
+# который GA в v1beta direct path. См. docs/VERTEX_MODEL_AVAILABILITY.md.
+_RERANK_MODEL = "gemini-2.5-pro"
 _GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _DEFAULT_TIMEOUT = 5.0
 
