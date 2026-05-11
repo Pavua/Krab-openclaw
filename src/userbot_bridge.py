@@ -414,6 +414,10 @@ class KraabUserbot(
         # message.id монотонно растёт в пределах чата и служит proxy для
         # живости updates_subscriber. Frozen id + alive invoke = split-brain.
         self._last_seen_update_id: int = 0
+        # Wave 63-A Step 1: server pts snapshot для GetState-probe.
+        # Сравниваем с предыдущим: server pts вырос + update_id frozen =
+        # split-brain. Detect за 4 мин heartbeat-цикла вместо 93 мин silence-gate.
+        self._last_server_pts: int = 0
         self._network_offline_monitor_task: Optional[asyncio.Task] = None
         # Runtime-состояние старта userbot для health/handoff и контролируемой деградации.
         self._startup_state = "initializing"
