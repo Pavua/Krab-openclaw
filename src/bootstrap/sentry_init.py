@@ -304,6 +304,20 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     # _stop_swarm_team_clients / reserve_bot stop с per-team try/except.
     # Sentry issues: PYTHON-FASTAPI-4T (5 events) + PYTHON-FASTAPI-4S (3 events).
     "read() called while another coroutine is already waiting for incoming data",
+    # Wave 62-F (2026-05-11): "Model lmstudio/... not found in downloaded models"
+    # — LM Studio 404 после Wave 62 strip-prefix fix. Routing уровень корректен
+    # (см. Wave 62 commit d9800dc), но если где-то prefix всё ещё утёк
+    # (например в legacy code path или внешний API call) — fallback chain
+    # сам recover'ится. Это ожидаемая "soft failure", не Sentry-bug.
+    # Sentry: PYTHON-FASTAPI-8B/8C (~2 events/day).
+    "not found in downloaded models",
+    "lm_load_endpoint_failed",
+    # Wave 62-F: codex quota exhaustion — это нормальная situation,
+    # mark_codex_disabled + transition logged + alert sent owner отдельно.
+    # logger.error/warning из openclaw_client при первой попытке codex когда
+    # quota exhausted — не bug, fallback chain работает.
+    "codex_quota_exhausted",
+    "All codex accounts exhausted",
 )
 
 
