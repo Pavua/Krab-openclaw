@@ -121,7 +121,10 @@ async def _stream_reply(
     """
     header = _build_header(team_name)
     session_id = f"swarm_dm_{team_name}_{message.chat.id}"
-    system_prompt = get_team_system_prompt(team_name)
+    # Wave 65-C / AGE-16: передаём sender, чтобы prompt получил owner/sender identity
+    # и swarm bot не отвечал paranoid security default'ом.
+    sender = getattr(message, "from_user", None)
+    system_prompt = get_team_system_prompt(team_name, sender=sender)
 
     # Отправляем заглушку
     try:
