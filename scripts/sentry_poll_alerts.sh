@@ -1,8 +1,12 @@
 #!/bin/bash
 # Poll Sentry для новых unresolved issues и отправляет alert в Telegram.
 #
-# Замена webhook'а — нужна потому что Sentry блокирует *.trycloudflare.com URLs,
-# а реального домена/cert'а пока нет (см. CLAUDE.md → cf_tunnel_sync блок).
+# Wave 65-H: dispatcher. По умолчанию exec в Python-вариант
+# (sentry_poll_direct.py — httpx с retry/backoff/cursor/429 handling).
+# Для возврата к bash-варианту: KRAB_SENTRY_POLL_DIRECT_API=0
+#
+# Историческое назначение (Session 23): замена webhook'а — Sentry блокирует
+# *.trycloudflare.com URLs, а реального домена/cert'а пока нет.
 #
 # Принцип:
 #   1. GET /api/0/projects/{org}/{proj}/issues/?query=is:unresolved&statsPeriod={WINDOW}
@@ -13,7 +17,8 @@
 #   SENTRY_AUTH_TOKEN, SENTRY_ORG_SLUG (default po-zm),
 #   SENTRY_PROJECTS (default "python-fastapi krab-ear-agent krab-ear-backend"),
 #   OPENCLAW_TELEGRAM_BOT_TOKEN, OWNER_USER_IDS,
-#   SENTRY_POLL_WINDOW (default 15m), SENTRY_POLL_LEVELS (default "error fatal")
+#   SENTRY_POLL_WINDOW (default 15m), SENTRY_POLL_LEVELS (default "error fatal"),
+#   KRAB_SENTRY_POLL_DIRECT_API (default 1 = use Python; 0 = legacy bash)
 #
 # Запуск: ./sentry_poll_alerts.sh  (LaunchAgent дёргает каждые 5 мин)
 
@@ -30,13 +35,32 @@ ERR_LOG="$STATE_DIR/poll.err.log"
 mkdir -p "$STATE_DIR"
 touch "$STATE_FILE"
 
-log()     { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
-log_err() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERR $*" | tee -a "$ERR_LOG" >&2; }
-
-# Load env
+# Load env early so we can read KRAB_SENTRY_POLL_DIRECT_API
 if [ -f "$ENV_FILE" ]; then
     set -a; source "$ENV_FILE"; set +a
 fi
+
+# Wave 65-H: по умолчанию используем Python-вариант (httpx + retry + cursor).
+# Возврат к bash-варианту: KRAB_SENTRY_POLL_DIRECT_API=0
+USE_DIRECT="${KRAB_SENTRY_POLL_DIRECT_API:-1}"
+if [ "$USE_DIRECT" = "1" ]; then
+    PY_SCRIPT="$SCRIPT_DIR/sentry_poll_direct.py"
+    if [ -f "$PY_SCRIPT" ]; then
+        # Prefer project venv python (httpx уже установлен)
+        VENV_PY="$KRAB_ROOT/venv/bin/python3"
+        if [ -x "$VENV_PY" ]; then
+            exec "$VENV_PY" "$PY_SCRIPT"
+        fi
+        # Fallback на system python3
+        exec /usr/bin/env python3 "$PY_SCRIPT"
+    fi
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARN direct-api script $PY_SCRIPT missing, falling back to bash" >> "$LOG_FILE"
+fi
+
+log()     { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
+log_err() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERR $*" | tee -a "$ERR_LOG" >&2; }
+
+# env loaded above для KRAB_SENTRY_POLL_DIRECT_API dispatcher
 
 ORG="${SENTRY_ORG_SLUG:-po-zm}"
 PROJECTS="${SENTRY_PROJECTS:-python-fastapi krab-ear-agent krab-ear-backend}"
