@@ -130,9 +130,9 @@ async def test_close_idempotent_when_never_started():
 async def test_stream_full_path_with_mocked_connection(monkeypatch, tmp_path):
     """End-to-end stream() через mocked connect_to_agent + queue → chunks."""
     from src.integrations.hermes_acp_bridge import (
+        _STREAM_FINISH_SENTINEL,
         HermesACPBridge,
         StreamChunk,
-        _STREAM_FINISH_SENTINEL,
     )
 
     # Создаём fake binary file (executable) — проходит binary_available()

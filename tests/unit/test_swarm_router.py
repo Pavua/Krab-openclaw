@@ -24,7 +24,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.modules.web_routers._context import RouterContext
-from src.modules.web_routers.swarm_router import build_swarm_router, router as swarm_router
+from src.modules.web_routers.swarm_router import build_swarm_router
+from src.modules.web_routers.swarm_router import router as swarm_router
 
 
 def _client() -> TestClient:

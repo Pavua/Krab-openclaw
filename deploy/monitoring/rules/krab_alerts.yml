@@ -518,3 +518,37 @@ groups:
         labels: {severity: warning, wave: "130"}
         annotations:
           summary: "SSL cert {{ $labels.host }} expires in < 14 days"
+
+  # ── Wave 133: LM Studio overloaded (loaded models RAM footprint) ─────────────
+  - name: krab_wave133_lm_registry
+    interval: 5m
+    rules:
+      - alert: LMStudioOverloaded
+        expr: krab_lm_estimated_ram_gb > 20
+        for: 10m
+        labels: {severity: warning, wave: "133"}
+        annotations:
+          summary: "LM Studio загружено ~{{ $value }} ГБ моделей в RAM (>20 ГБ за 10 мин)"
+
+  # ── Wave 142: Pyrogram reconnect storm ──────────────────────────────────────
+  - name: krab_wave142_pyrogram_reconnect
+    interval: 1m
+    rules:
+      - alert: PyrogramReconnectStorm
+        expr: rate(krab_pyrogram_disconnects_total[5m]) > 0.1
+        for: 5m
+        labels: {severity: warning, wave: "142"}
+        annotations:
+          summary: "Pyrogram {{ $labels.session }} reconnect storm — >0.1/sec за 5m"
+          description: "Likely blocking I/O in event loop. Check handoff_auto_export или другие sync calls."
+
+  # ── Wave 143: handoff auto-export timeout ───────────────────────────────────
+  - name: krab_wave143_handoff
+    interval: 5m
+    rules:
+      - alert: HandoffExportTimeoutChronic
+        expr: rate(krab_handoff_export_total{outcome="timeout"}[1h]) > 0.005
+        for: 30m
+        labels: {severity: info, wave: "143"}
+        annotations:
+          summary: "Handoff auto-export timeouts > rate 0.005/sec за 1h"

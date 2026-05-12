@@ -40,10 +40,10 @@ bash scripts/install_pre_commit.sh
 
 ## Auto-generated reference
 
-- **Endpoints** (~291 routes): [docs/CLAUDE_AUTO_ENDPOINTS.md](docs/CLAUDE_AUTO_ENDPOINTS.md)
+- **Endpoints** (~299 routes): [docs/CLAUDE_AUTO_ENDPOINTS.md](docs/CLAUDE_AUTO_ENDPOINTS.md)
 - **Handlers** (~181 функций): [docs/CLAUDE_AUTO_HANDLERS.md](docs/CLAUDE_AUTO_HANDLERS.md)
 - **Commands** (~158 registered, 185+ с алиасами): [docs/CLAUDE_COMMANDS_REFERENCE.md](docs/CLAUDE_COMMANDS_REFERENCE.md)
-- **Prometheus** (31 alerts, 35 metrics): [docs/CLAUDE_AUTO_PROMETHEUS.md](docs/CLAUDE_AUTO_PROMETHEUS.md)
+- **Prometheus** (40 alerts, 50 metrics): [docs/CLAUDE_AUTO_PROMETHEUS.md](docs/CLAUDE_AUTO_PROMETHEUS.md)
 - **Owner Panel API** (детальный): [docs/CLAUDE_OWNER_PANEL_API.md](docs/CLAUDE_OWNER_PANEL_API.md)
 
 Актуальные счётчики:
@@ -306,7 +306,7 @@ KRAB_VERTEX_REGION=global              # Vertex location
 
 - **Phase 7: 100%**, Memory Phase 2: **LIVE** (`KRAB_RAG_PHASE2_ENABLED=1`)
 - **13900+ тестов collected** (Session 45, 12.05.2026)
-- **290 API endpoints** (live: `/api/endpoints`), 177+ handlers, 158 registered commands (185+ с алиасами)
+- **299 API endpoints** (live: `/api/endpoints`), 181 handlers, 158 registered commands (185+ с алиасами), 40 alerts / 50 metrics
 
 ## Session highlights (последние)
 

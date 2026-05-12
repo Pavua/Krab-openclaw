@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Wave 54-A: helper script logic (configure_fallback_chain)
 # ---------------------------------------------------------------------------

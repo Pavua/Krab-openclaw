@@ -22,7 +22,6 @@ from unittest.mock import patch
 
 import pytest
 
-
 # ── _collect_sentry ─────────────────────────────────────────────────────────
 
 

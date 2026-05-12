@@ -100,6 +100,16 @@ from .process import (
     time_handler,
 )
 
+# === pyrogram_reconnect (Wave 142) ===
+from .pyrogram_reconnect import (
+    _PYROGRAM_DISCONNECTS_COUNTER,
+    _PYROGRAM_SESSION_LABEL,
+    _pyrogram_disconnects_total,
+    get_pyrogram_session_label,
+    inc_pyrogram_disconnect,
+    set_pyrogram_session_label,
+)
+
 # === smart_routing (Wave 73) ===
 from .smart_routing import (
     krab_smart_routing_decisions_total,
@@ -148,6 +158,14 @@ from .token_cost import (
     krab_completion_cost_eur_total,
     krab_tokens_consumed_total,
     record_completion_cost,
+)
+
+# === voice_stt (Wave 138) ===
+from .voice_stt import (
+    krab_voice_stt_cost_eur_total,
+    krab_voice_stt_duration_seconds,
+    krab_voice_stt_total,
+    record_voice_stt,
 )
 
 __all__ = [
@@ -224,6 +242,11 @@ __all__ = [
     "krab_nlu_commands_dispatched_total",
     "krab_nlu_confidence_score",
     "record_nlu_intent",
+    # voice_stt (Wave 138)
+    "krab_voice_stt_cost_eur_total",
+    "krab_voice_stt_duration_seconds",
+    "krab_voice_stt_total",
+    "record_voice_stt",
     # pressure_aware (Wave 86)
     "_PRESSURE_AWARE_FALLBACK_COUNTER",
     "_pressure_aware_fallback_total",
@@ -234,6 +257,13 @@ __all__ = [
     "_swarm_artifacts_size_mb",
     "_swarm_artifacts_total",
     "set_swarm_artifacts_metrics",
+    # pyrogram_reconnect (Wave 142)
+    "_PYROGRAM_DISCONNECTS_COUNTER",
+    "_PYROGRAM_SESSION_LABEL",
+    "_pyrogram_disconnects_total",
+    "get_pyrogram_session_label",
+    "inc_pyrogram_disconnect",
+    "set_pyrogram_session_label",
     # capability_cache_audit (Wave 129)
     "_CAPABILITY_CACHE_MISMATCH_COUNTER",
     "_capability_cache_mismatch_total",

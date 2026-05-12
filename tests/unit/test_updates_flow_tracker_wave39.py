@@ -18,7 +18,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helper: минимальный stub owner с _last_seen_update_id
 # ---------------------------------------------------------------------------

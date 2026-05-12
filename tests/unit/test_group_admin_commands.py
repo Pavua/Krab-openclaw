@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.core.exceptions import UserInputError
 from src.handlers.commands.group_admin_commands import (
     _MUTE_FOREVER_UNTIL,
     _SLOWMODE_LABELS,
@@ -31,8 +32,6 @@ from src.handlers.commands.group_admin_commands import (
     handle_slowmode,
     handle_welcome,
 )
-from src.core.exceptions import UserInputError
-
 
 # ---------------------------------------------------------------------------
 # Welcome helpers

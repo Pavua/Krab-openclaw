@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from src.bootstrap.sentry_init import _before_send, _redact_string
 
-
 # ── PII redaction tests ─────────────────────────────────────────────────────
 
 

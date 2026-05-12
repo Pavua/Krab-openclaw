@@ -88,9 +88,7 @@ ALERT_TELEGRAM: bool = os.environ.get("KRAB_SENTRY_QUOTA_ALERT_TELEGRAM", "0") =
 TG_TOKEN: str | None = os.environ.get("OPENCLAW_TELEGRAM_BOT_TOKEN")
 _OWNER_LIST: str = os.environ.get("OWNER_USER_IDS", "")
 TG_OWNER: str = (
-    _OWNER_LIST.split(",")[0].strip()
-    if _OWNER_LIST
-    else os.environ.get("OWNER_NOTIFY_CHAT_ID", "")
+    _OWNER_LIST.split(",")[0].strip() if _OWNER_LIST else os.environ.get("OWNER_NOTIFY_CHAT_ID", "")
 )
 
 TIMEOUT_SEC: float = float(os.environ.get("SENTRY_QUOTA_TIMEOUT_SEC", "30"))
@@ -98,9 +96,7 @@ MAX_RETRIES: int = int(os.environ.get("SENTRY_QUOTA_MAX_RETRIES", "3"))
 
 # Runtime state — следуем project convention (~/.openclaw/krab_runtime_state/)
 DEFAULT_STATE_DIR = Path.home() / ".openclaw" / "krab_runtime_state"
-STATE_DIR: Path = Path(
-    os.environ.get("KRAB_SENTRY_QUOTA_STATE_DIR", str(DEFAULT_STATE_DIR))
-)
+STATE_DIR: Path = Path(os.environ.get("KRAB_SENTRY_QUOTA_STATE_DIR", str(DEFAULT_STATE_DIR)))
 BASELINE_FILE: Path = STATE_DIR / "sentry_quota_baseline.json"
 LOG_FILE: Path = STATE_DIR / "sentry_quota_check.log"
 ALERT_LOG: Path = STATE_DIR / "sentry_quota_check.alert.log"
@@ -164,9 +160,7 @@ def _get_with_retry(
                 )
                 time.sleep(sleep_sec)
                 continue
-            log_err(
-                f"get exhausted url={url} error_type={type(exc).__name__} error={exc}"
-            )
+            log_err(f"get exhausted url={url} error_type={type(exc).__name__} error={exc}")
             return None
 
         if resp.status_code == 429:
@@ -185,10 +179,7 @@ def _get_with_retry(
         if 500 <= resp.status_code < 600:
             if attempt + 1 < max_retries:
                 sleep_sec = 2.0 * (2**attempt)
-                log_err(
-                    f"get 5xx={resp.status_code} attempt={attempt + 1} "
-                    f"retry_in={sleep_sec}s"
-                )
+                log_err(f"get 5xx={resp.status_code} attempt={attempt + 1} retry_in={sleep_sec}s")
                 time.sleep(sleep_sec)
                 continue
             log_err(f"get 5xx={resp.status_code} exhausted")
@@ -214,9 +205,7 @@ def fetch_weekly_event_count(client: httpx.Client) -> int | None:
     if resp is None:
         return None
     if resp.status_code != 200:
-        log_err(
-            f"stats_v2 status={resp.status_code} body_first120={resp.text[:120]}"
-        )
+        log_err(f"stats_v2 status={resp.status_code} body_first120={resp.text[:120]}")
         return None
     try:
         data = resp.json()
@@ -333,9 +322,7 @@ def send_telegram_alert(
     if owns_client:
         client = httpx.Client(timeout=timeout)
     try:
-        resp = client.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json=payload
-        )
+        resp = client.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json=payload)
         if resp.status_code != 200:
             log_err(f"telegram_alert status={resp.status_code}")
             return False
@@ -398,9 +385,7 @@ def run_check(
 
         top_issues = fetch_top_issues(client)
         baseline = load_baseline(baseline_path)
-        snapshot = build_snapshot(
-            current_total, top_issues, baseline, threshold=threshold
-        )
+        snapshot = build_snapshot(current_total, top_issues, baseline, threshold=threshold)
 
         # Первый запуск — инициализируем baseline
         if baseline is None:

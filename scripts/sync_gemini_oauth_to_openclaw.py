@@ -35,9 +35,7 @@ _MS_PER_SEC = 1000
 
 # Wave 50-B: gemini-cli OAuth client (public — built into gemini-cli binary)
 # Видно в любом id_token aud claim: <client_id>.apps.googleusercontent.com
-_GEMINI_OAUTH_CLIENT_ID = (
-    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
-)
+_GEMINI_OAUTH_CLIENT_ID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
 # Google OAuth installed-app credentials. Для refresh-token grant Google требует
 # и client_id и client_secret, но gemini-cli — installed application, секрет
 # которого публично вшит в его bundle (он буквально хранится в строке вида

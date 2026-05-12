@@ -547,6 +547,24 @@ def collect_metrics() -> str:
     except Exception:  # noqa: BLE001
         pass
 
+    # === Wave 142: Pyrogram reconnect counter ===
+    try:
+        from .pyrogram_reconnect import _PYROGRAM_DISCONNECTS_COUNTER
+
+        lines.append(
+            "# HELP krab_pyrogram_disconnects_total Wave 142: Pyrogram Connection.close events"
+        )
+        lines.append("# TYPE krab_pyrogram_disconnects_total counter")
+        if not _PYROGRAM_DISCONNECTS_COUNTER:
+            lines.append('krab_pyrogram_disconnects_total{session="none"} 0')
+        else:
+            for session, count in _PYROGRAM_DISCONNECTS_COUNTER.items():
+                lines.append(
+                    f'krab_pyrogram_disconnects_total{{session="{_sanitize_label(session)}"}} {count}'
+                )
+    except Exception:  # noqa: BLE001
+        pass
+
     # === Timestamps ===
     lines.append(
         _format_metric(

@@ -11,7 +11,6 @@ Userbot Bridge - Мост между Telegram и OpenClaw/AI
 
 import asyncio
 import base64
-import json
 import os
 import re
 import sys
@@ -1564,40 +1563,18 @@ class KraabUserbot(
         """
         Auto-export handoff snapshot before shutdown or session change (Phase 2.2).
 
-        Never raises — if export fails, logs warning and returns exported=False.
+        Wave 143: делегирует в ``src.core.handoff_auto_export`` — async httpx
+        вместо blocking urllib.urlopen (которое блокировало event loop и было
+        root cause `auto_handoff_export_failed timed out` + reconnect storm'ов).
+        Никогда не бросает — при ошибке возвращает ``exported=False``.
         """
-        import urllib.request
-        from datetime import datetime, timezone
+        from .core.handoff_auto_export import auto_export_handoff_snapshot
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         artifacts_dir = config.BASE_DIR / "artifacts"
-        dest = artifacts_dir / f"auto_handoff_{timestamp}.json"
-
-        try:
-            artifacts_dir.mkdir(parents=True, exist_ok=True)
-            # Для периодического auto-export нам нужен быстрый truthful snapshot,
-            # а не тяжёлый cloud runtime probe, который может жить дольше maintenance-таймаута.
-            handoff_url = "http://127.0.0.1:8080/api/runtime/handoff?probe_cloud_runtime=0"
-            req = urllib.request.Request(handoff_url, method="GET")
-            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-                raw = resp.read()
-            data = json.loads(raw)
-            dest.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            logger.info(
-                "auto_handoff_export_success",
-                reason=reason,
-                path=str(dest),
-                size_bytes=len(raw),
-            )
-            return {"exported": True, "path": str(dest), "error": None, "reason": reason}
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "auto_handoff_export_failed",
-                reason=reason,
-                error=str(exc),
-                non_fatal=True,
-            )
-            return {"exported": False, "path": str(dest), "error": str(exc), "reason": reason}
+        return await auto_export_handoff_snapshot(
+            reason=reason,
+            artifacts_dir=artifacts_dir,
+        )
 
     @property
     def _owner_notify_target(self) -> int | str:
@@ -1631,6 +1608,13 @@ class KraabUserbot(
         """Запуск юзербота"""
         self._set_startup_state(state="starting")
         logger.info("starting_userbot")
+        # Wave 142: установить session label для Pyrogram reconnect counter.
+        try:
+            from .core.prometheus_metrics import set_pyrogram_session_label
+
+            set_pyrogram_session_label(config.TELEGRAM_SESSION_NAME)
+        except Exception:  # noqa: BLE001
+            pass
         # Предупреждения об устаревших конфигурациях (один раз при старте).
         emit_deprecation_warnings()
         # Persisted chat ban cache (B.8) + chat capability cache (B.6).
@@ -2291,6 +2275,26 @@ class KraabUserbot(
         if os.getenv("LM_STUDIO_IDLE_WATCHER_ENABLED", "1").strip().lower() in ("1", "true", "yes"):
             _lm_idle_watcher.configure(model_manager)
             logger.info("lm_studio_idle_watcher_bootstrap_done")
+
+        # Wave 133: LM Studio registry probe — visibility loaded models + RAM
+        if os.getenv("KRAB_LM_REGISTRY_PROBE_ENABLED", "1").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            try:
+                from src.core.lm_studio_registry_probe import (
+                    configure as _lm_registry_configure,
+                )
+
+                _lm_registry_configure()
+                logger.info("lm_studio_registry_probe_bootstrap_done")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "lm_studio_registry_probe_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
 
         # Wave 75: launchd health monitor — каждые 5 минут snapshot launchctl list,
         # экспонируем krab_launchd_last_exit_status / krab_launchd_running.

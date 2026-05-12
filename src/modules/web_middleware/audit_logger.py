@@ -51,8 +51,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from src.core.metrics.audit_log import record_request
+from src.core.metrics.audit_log import record_5xx, record_request
 from src.core.metrics.router_latency import observe_request_duration
+from src.core.owner_panel_error_tracker import (
+    ErrorEventLogger,
+    get_default_error_logger,
+)
 
 # Пути, исключённые из audit log: высокочастотные monitoring/health.
 # Forensic-ценность близка к нулю, объёмы записей — большие.
@@ -267,6 +271,35 @@ def _path_pattern(request: Request, fallback: str) -> str:
     return fallback or "unmatched"
 
 
+async def _capture_body_sample(response: Response, *, limit: int = 500) -> bytes | None:
+    """Wave 139: безопасно достать первые ``limit`` байт тела ответа.
+
+    Для starlette ``_StreamingResponse`` consume body_iterator и подменить его
+    новым итератором, который воспроизводит уже прочитанные chunk'и.
+    """
+    try:
+        body_iterator = getattr(response, "body_iterator", None)
+        if body_iterator is not None:
+            collected: list[bytes] = []
+            async for chunk in body_iterator:
+                if isinstance(chunk, str):
+                    chunk = chunk.encode("utf-8", errors="replace")
+                collected.append(chunk)
+            full = b"".join(collected)
+
+            async def _replay():
+                yield full
+
+            response.body_iterator = _replay()  # type: ignore[attr-defined]
+            return full[:limit] if full else None
+        body = getattr(response, "body", None)
+        if isinstance(body, (bytes, bytearray)):
+            return bytes(body[:limit])
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 def _client_ip(request: Request) -> str | None:
     """Голый IP клиента — поддержка reverse-proxy (X-Forwarded-For)."""
     fwd = request.headers.get("X-Forwarded-For", "")
@@ -292,12 +325,17 @@ class AuditLoggerMiddleware(BaseHTTPMiddleware):
         storage: AuditStorage | None = None,
         exempt_paths: frozenset[str] | None = None,
         clock_fn: Callable[[], float] | None = None,
+        error_logger: ErrorEventLogger | None = None,
     ) -> None:
         super().__init__(app)
         self._storage = storage if storage is not None else get_default_storage()
         self._exempt = exempt_paths if exempt_paths is not None else EXEMPT_PATHS
         self._clock: Callable[[], float] = clock_fn or time.time
         self._monotonic: Callable[[], float] = time.monotonic
+        # Wave 139: dedicated 5xx forensic logger (lazy singleton по умолчанию).
+        self._error_logger: ErrorEventLogger = (
+            error_logger if error_logger is not None else get_default_error_logger()
+        )
 
     @property
     def storage(self) -> AuditStorage:
@@ -315,7 +353,7 @@ class AuditLoggerMiddleware(BaseHTTPMiddleware):
         started_mono = self._monotonic()
         try:
             response = await call_next(request)
-        except Exception:
+        except Exception as exc:
             # Записываем 500-сурогат, чтобы инцидент остался в audit log.
             duration_seconds = self._monotonic() - started_mono
             duration_ms = duration_seconds * 1000.0
@@ -334,6 +372,26 @@ class AuditLoggerMiddleware(BaseHTTPMiddleware):
                 path_pattern=_path_pattern(request, path),
                 duration_seconds=duration_seconds,
             )
+            # Wave 139: dedicated forensic 5xx record с полным traceback.
+            import traceback as _tb  # noqa: PLC0415
+
+            error_class = type(exc).__name__
+            try:
+                self._error_logger.record(
+                    method=request.method,
+                    path=path,
+                    status=500,
+                    error_class=error_class,
+                    error_message=str(exc),
+                    traceback_text=_tb.format_exc(),
+                    body_sample=None,
+                    client_ip=_client_ip(request),
+                    auth_prefix=_auth_prefix(request),
+                    ts_unix=self._clock(),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            record_5xx(path=path, error_class=error_class)
             raise
         duration_seconds = self._monotonic() - started_mono
         duration_ms = duration_seconds * 1000.0
@@ -352,6 +410,25 @@ class AuditLoggerMiddleware(BaseHTTPMiddleware):
             path_pattern=_path_pattern(request, path),
             duration_seconds=duration_seconds,
         )
+        # Wave 139: explicit 5xx response (e.g. HTTPException(500) — Sentry не ловит).
+        if response.status_code >= 500:
+            body_sample = await _capture_body_sample(response)
+            try:
+                self._error_logger.record(
+                    method=request.method,
+                    path=path,
+                    status=response.status_code,
+                    error_class="HTTPResponse",
+                    error_message=f"explicit 5xx response status={response.status_code}",
+                    traceback_text=None,
+                    body_sample=body_sample,
+                    client_ip=_client_ip(request),
+                    auth_prefix=_auth_prefix(request),
+                    ts_unix=self._clock(),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            record_5xx(path=path, error_class="HTTPResponse")
         return response
 
 

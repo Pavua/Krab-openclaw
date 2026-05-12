@@ -1,8 +1,32 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-05-12 (session 45)
+> Составлен: 2026-03-23 | Обновлён: 2026-05-12 (session 47)
 > Статус: Активная разработка
 > Владелец: По
+
+---
+
+## 📋 Session 47 (2026-05-12) — Waves 87-139, observability / FinOps / resilience sweep
+
+### Highlights
+- 53 waves landed across ~14 compound commits. Counts: **299 endpoints / 181 handlers / 40 alerts / 50 metrics** (см. CLAUDE_AUTO_*).
+- Самая крупная партия новых Prometheus метрик + alerts с начала Phase 7.
+
+### Waves 87-139 — compact summary
+- **87-90**: автоматизированный session-close skill, cron schedule audit, archive.db orphan pruner (~173 МБ savings).
+- **84-86**: OrbStack idle auto-stop (env-gate OFF), inbox cleanup double-stage fix, pressure-aware model selection по free RAM.
+- **89/91/93-96**: новые модули `swarm_activity_log`, `translation_cache`, `provider_quarantine`, `cost_budget`, web `rate_limiter`, `browser_pool` (wiring deferred).
+- **97/99-101**: production wiring предыдущих модулей; metrics drift detector; secrets audit (164K lines, 0 leaks); shutdown coordinator.
+- **102-106**: Sentry PII redaction (manual after agent failures), chat heat scoring (4 факторов), Anthropic Vertex preflight, backup integrity verify (SHA256+integrity_check), env hot-reload.
+- **108-111**: moderation audit log (SQLite append-only), MCP server health probe (13 servers), dependency vuln scanner (pip-audit), disk space monitor (3 paths, alerts >90%/>95%).
+- **112-116**: bootstrap consolidation, MCP Telegram session pool (idle-recycle), owner weekly heartbeat digest, cron run history (SQLite + krab_cron_wrap.py), catchup metrics.
+- **117-121**: Google Sales POC followup reminder, session backup integrity (3 backups all auth_ok), idle wake watcher (>120s gap), Brave search analytics ($0.005/req), Telegram rate observe.
+- **122-126**: owner panel audit middleware (SQLite), voice gateway metrics + cost tracking, OpenClaw HTTP watchdog (frozen detection + kickstart -k), Pyrogram deprecation log filter, MCP tool latency histograms.
+- **127-131**: TG outgoing throttle (25 rps sliding window), LLM context cap monitor (alert >0.8), capability cache audit (weekly Wed), SSL cert audit (4 hosts: 45-104 days OK), router latency.
+- **132-136**: Grafana dashboard generator (23 panels, 5 rows), LM Studio registry probe (size heuristic + LMStudioOverloaded alert), swarm artifact retention (keep last 200/team), NLU command intent telemetry, Prometheus alerts CI (27 groups / 41 alerts validated via promtool).
+
+### Net Prometheus additions
+40 alerts (+9 vs Wave 82) / 50 metrics (+15). Каждый wave добавлял в `src/core/metrics/<name>.py` submodule (Wave 83 package pattern).
 
 ---
 

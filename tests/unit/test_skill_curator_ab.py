@@ -29,7 +29,6 @@ import pytest
 from src.core.skill_curator import SkillCurator
 from src.core.skill_curator_state import CuratorState
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

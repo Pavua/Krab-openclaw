@@ -14,14 +14,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from pathlib import Path
-
 from src.modules.web_routers._context import RouterContext
 from src.modules.web_routers.agent_engine_metrics_router import (
-    build_agent_engine_metrics_router,
     _parse_window,
+    build_agent_engine_metrics_router,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

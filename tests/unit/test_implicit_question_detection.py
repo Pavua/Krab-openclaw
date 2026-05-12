@@ -17,7 +17,6 @@ import pytest
 
 from src.core.trigger_detector import detect_implicit_question, last_krab_msg
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательный fixture — сброс store
 # ---------------------------------------------------------------------------

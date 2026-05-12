@@ -74,8 +74,9 @@ def fetch_peer_cert(host: str, port: int = 443, timeout: float = 10.0) -> dict[s
     return cert or {}
 
 
-def probe_host(host: str, port: int = 443, timeout: float = 10.0,
-               now: datetime | None = None) -> dict[str, Any]:
+def probe_host(
+    host: str, port: int = 443, timeout: float = 10.0, now: datetime | None = None
+) -> dict[str, Any]:
     """Опросить одного хоста, вернуть структуру результата.
 
     Никогда не бросает — все ошибки оборачиваются в {error: ...}.
@@ -120,9 +121,12 @@ def _resolve_timeout() -> float:
         return 10.0
 
 
-def run_audit(hosts: list[str] | None = None, port: int | None = None,
-              timeout: float | None = None,
-              now: datetime | None = None) -> dict[str, Any]:
+def run_audit(
+    hosts: list[str] | None = None,
+    port: int | None = None,
+    timeout: float | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     """Сформировать снапшот audit'а по списку hosts."""
     targets = hosts if hosts is not None else _resolve_hosts()
     p = port if port is not None else _resolve_port()
@@ -139,17 +143,18 @@ def run_audit(hosts: list[str] | None = None, port: int | None = None,
 
         for entry in results:
             if "days_until_expiry" in entry:
-                record_cert_days(host=entry["host"],
-                                 days_until_expiry=float(entry["days_until_expiry"]))
+                record_cert_days(
+                    host=entry["host"], days_until_expiry=float(entry["days_until_expiry"])
+                )
     except Exception:  # noqa: BLE001 - metrics opt-in
         pass
 
     return {"timestamp": ts, "hosts": results}
 
 
-def persist_report(report: dict[str, Any],
-                   path: Path = DEFAULT_REPORT_PATH,
-                   max_history: int = MAX_HISTORY) -> None:
+def persist_report(
+    report: dict[str, Any], path: Path = DEFAULT_REPORT_PATH, max_history: int = MAX_HISTORY
+) -> None:
     """Дописать report в history JSON, обрезать до last N runs."""
     path.parent.mkdir(parents=True, exist_ok=True)
     history: list[dict[str, Any]] = []
@@ -162,8 +167,9 @@ def persist_report(report: dict[str, Any],
             history = []
     history.append(report)
     history = history[-max_history:]
-    path.write_text(json.dumps({"history": history}, indent=2, ensure_ascii=False),
-                    encoding="utf-8")
+    path.write_text(
+        json.dumps({"history": history}, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

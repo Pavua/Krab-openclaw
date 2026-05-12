@@ -29,10 +29,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.routing_policy import (
+    _VALID_BACKENDS,
     ROUTING_POLICY,
     RouteDecision,
     RoutingPolicy,
-    _VALID_BACKENDS,
     _append_decision,
     clear_task_override,
     get_overrides,
@@ -41,7 +41,6 @@ from src.core.routing_policy import (
     reset_lm_health_cache,
     set_task_override,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

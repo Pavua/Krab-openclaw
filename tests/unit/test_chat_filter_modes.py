@@ -19,7 +19,6 @@ import pytest
 
 from src.core.chat_filter_config import ChatFilterConfig
 
-
 # ─── фикстуры ─────────────────────────────────────────────────────────────────
 
 

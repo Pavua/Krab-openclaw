@@ -1,12 +1,19 @@
 """
 Фильтры для stdlib logging.
 
-PyrogramDeprecatedFilter подавляет шумные DeprecationWarning от pyrofork
-2.3.69 про message.forward_from / forward_sender_name / forward_from_chat —
+PyrogramDeprecatedFilter (Wave 125) подавляет шумные DeprecationWarning от
+pyrofork 2.3.69 про message.forward_from / forward_sender_name / forward_from_chat —
 эти атрибуты остались для backward compat, но pyrogram пишет warning на
 каждое полученное сообщение, что засоряет krab_launchd.out.log.
-
 Активируется через KRAB_PYROGRAM_DEPR_FILTER_ENABLED (default ON).
+
+PyrogramReconnectMetricFilter (Wave 142) проходит сквозь все pyrogram-логи
+БЕЗ изменения вывода и инкрементирует Prometheus Counter
+krab_pyrogram_disconnects_total{session} каждый раз, когда видит
+"Disconnected" сообщение от pyrogram.connection.connection (источник:
+Connection.close()). Не дропает записи — всегда возвращает True.
+Используется для alert PyrogramReconnectStorm.
+Активируется через KRAB_PYROGRAM_RECONNECT_METRIC_ENABLED (default ON).
 """
 
 from __future__ import annotations
@@ -14,6 +21,8 @@ from __future__ import annotations
 import logging
 import os
 import re
+
+from .prometheus_metrics import inc_pyrogram_disconnect
 
 # Регексп подбирает классические формулировки pyrofork:
 #   "message.forward_from is deprecated, use forward_origin instead"
@@ -23,6 +32,11 @@ _PYROGRAM_DEPR_PATTERN = re.compile(
     r"(forward_from|forward_sender_name|forward_from_chat)\b.*?\b(is|property is)\s+deprecated",
     re.IGNORECASE,
 )
+
+# Wave 142: pyrogram.connection.connection пишет ровно одну строку "Disconnected"
+# при закрытии транспорта (см. Connection.close()). Совпадение по полной строке
+# (после .strip()) — узкая и стабильная сигнатура, не зависящая от форматтера.
+_PYROGRAM_DISCONNECTED_PATTERN = re.compile(r"^Disconnected\s*$")
 
 
 class PyrogramDeprecatedFilter(logging.Filter):
@@ -41,9 +55,48 @@ class PyrogramDeprecatedFilter(logging.Filter):
         return True
 
 
+class PyrogramReconnectMetricFilter(logging.Filter):
+    """Wave 142: считает Disconnected events от pyrogram без модификации вывода.
+
+    Каждое совпадение → inc_pyrogram_disconnect() (session label берётся
+    из глобального registry в prometheus_metrics). Сам record пропускается
+    дальше unchanged (filter всегда return True).
+
+    Применяется к logger "pyrogram" — наследуется всеми
+    pyrogram.connection.connection / pyrogram.session.* loggers.
+    """
+
+    def __init__(self, name: str = "") -> None:
+        super().__init__(name)
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003 - stdlib API
+        try:
+            # Узкая проверка: только записи от pyrogram.connection.connection —
+            # это место, где log.info("Disconnected") emit'ится. Парент
+            # "pyrogram" получит запись через propagation, поэтому фильтр
+            # навешиваем на корневой "pyrogram" но проверяем имя модуля.
+            if not record.name.startswith("pyrogram.connection"):
+                return True
+            message = record.getMessage()
+        except Exception:  # pragma: no cover - defensive: record args broken
+            return True
+        if _PYROGRAM_DISCONNECTED_PATTERN.match(message.strip()):
+            try:
+                inc_pyrogram_disconnect()
+            except Exception:  # pragma: no cover - инструментация best-effort
+                pass
+        return True
+
+
 def is_pyrogram_depr_filter_enabled() -> bool:
     """Env-gate: дефолт ON, отключается явным '0'/'false'/'no'."""
     raw = os.environ.get("KRAB_PYROGRAM_DEPR_FILTER_ENABLED", "1")
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def is_pyrogram_reconnect_metric_enabled() -> bool:
+    """Wave 142 env-gate: дефолт ON, отключается явным '0'/'false'/'no'."""
+    raw = os.environ.get("KRAB_PYROGRAM_RECONNECT_METRIC_ENABLED", "1")
     return raw.strip().lower() not in {"0", "false", "no", "off", ""}
 
 
@@ -60,8 +113,25 @@ def install_pyrogram_depr_filter() -> PyrogramDeprecatedFilter | None:
     return flt
 
 
+def install_pyrogram_reconnect_metric_filter() -> PyrogramReconnectMetricFilter | None:
+    """Wave 142: навешивает reconnect-counter фильтр на logger 'pyrogram'.
+
+    Идемпотентность: повторный вызов добавит новый фильтр (stdlib logging
+    допускает множественные фильтры). Bootstrap должен вызывать ровно
+    один раз — в setup_logger.
+    """
+    if not is_pyrogram_reconnect_metric_enabled():
+        return None
+    flt = PyrogramReconnectMetricFilter()
+    logging.getLogger("pyrogram").addFilter(flt)
+    return flt
+
+
 __all__ = [
     "PyrogramDeprecatedFilter",
+    "PyrogramReconnectMetricFilter",
     "install_pyrogram_depr_filter",
+    "install_pyrogram_reconnect_metric_filter",
     "is_pyrogram_depr_filter_enabled",
+    "is_pyrogram_reconnect_metric_enabled",
 ]

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 
-
 # Ставим дефолты до импорта модулей если переменные пустые
 if not os.environ.get("TELEGRAM_API_ID"):
     os.environ["TELEGRAM_API_ID"] = "0"

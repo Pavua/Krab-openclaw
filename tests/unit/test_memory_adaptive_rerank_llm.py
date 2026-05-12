@@ -21,7 +21,6 @@ from src.core.memory_llm_rerank import (
     should_apply_llm_rerank,
 )
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные функции.
 # ---------------------------------------------------------------------------
@@ -304,7 +303,6 @@ def test_cache_expired_returns_none():
     cands = [_cand("e1", 0.5)]
     _cache_put(key, cands)
     # Подделываем timestamp как очень старый.
-    from src.core.memory_llm_rerank import _rerank_cache
 
     _rerank_cache[key] = (time.monotonic() - 9999, cands)
     assert _cache_get(key) is None

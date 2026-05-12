@@ -105,15 +105,22 @@ def setup_logger(level: str = "INFO") -> None:
     )
     # Шумные DeprecationWarning от pyrofork (forward_from / forward_sender_name /
     # forward_from_chat) засоряют krab_launchd.out.log — глушим через фильтр.
-    from src.core.logging_filters import install_pyrogram_depr_filter  # noqa: PLC0415
+    from src.core.logging_filters import (  # noqa: PLC0415
+        install_pyrogram_depr_filter,
+        install_pyrogram_reconnect_metric_filter,
+    )
 
     pyrogram_depr_filter_installed = install_pyrogram_depr_filter() is not None
+    # Wave 142: count Pyrogram Disconnected events для Prometheus alert
+    # PyrogramReconnectStorm (без модификации output).
+    pyrogram_reconnect_metric_installed = install_pyrogram_reconnect_metric_filter() is not None
 
     structlog.get_logger(__name__).info(
         "logger_configured",
         message="structlog setup complete",
         log_file=str(log_file) if log_file else None,
         pyrogram_depr_filter=pyrogram_depr_filter_installed,
+        pyrogram_reconnect_metric=pyrogram_reconnect_metric_installed,
     )
 
 

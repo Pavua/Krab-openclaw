@@ -21,6 +21,18 @@ try:
 except Exception:  # noqa: BLE001
     krab_owner_panel_requests_total = None
 
+# Wave 139: dedicated counter для 5xx-ошибок с разбивкой по error_class.
+try:
+    from prometheus_client import Counter as _Counter5xx  # type: ignore[import-not-found]
+
+    krab_owner_panel_5xx_total: Any = _Counter5xx(
+        "krab_owner_panel_5xx_total",
+        "Owner-panel 5xx responses (Wave 139 error tracking)",
+        ["path", "error_class"],
+    )
+except Exception:  # noqa: BLE001
+    krab_owner_panel_5xx_total = None
+
 
 def classify_status(status: int) -> str:
     """Возвращает класс HTTP-статуса: 2xx / 3xx / 4xx / 5xx / other."""
@@ -44,6 +56,19 @@ def record_request(method: str, path: str, status: int) -> None:
             method=method,
             path=path,
             status_class=classify_status(status),
+        ).inc()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def record_5xx(path: str, error_class: str) -> None:
+    """Wave 139: инкремент 5xx counter (no-op без prometheus)."""
+    if krab_owner_panel_5xx_total is None:
+        return
+    try:
+        krab_owner_panel_5xx_total.labels(
+            path=path,
+            error_class=error_class or "Unknown",
         ).inc()
     except Exception:  # noqa: BLE001
         pass

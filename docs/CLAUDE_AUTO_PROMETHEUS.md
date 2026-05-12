@@ -1,45 +1,60 @@
-# Auto-generated Prometheus (31 алертов, 35 метрик)
+# Auto-generated Prometheus (40 алертов, 50 метрик)
 
 Обновлено: auto-refresh (12.05.2026). Конфиг: `scripts/prometheus/`
 
-## Alerts (31)
+## Alerts (40)
 
-`ArchiveChunksStalled`, `ArchiveDbSizeCritical`, `ArchiveDbSizeWarning`, `ChatFilterModeMuteDominant`, `CodexQuotaExhaustedAlert`, `CommandInvocationSpike`, `FallbackChainExhaustedAlert`, `KrabArchiveDBLarge`, `KrabArchiveGrowingFast`, `KrabAutoRestartSpiking`, `KrabDown`, `KrabInjectionSpike`, `KrabLLMRouteDown`, `KrabMemoryValidatorOverload`, `KrabMetricsStale`, `LLMRouteLatencyHigh`, `LongChainAdvanceAlert`, `MainDispatcherStarved`, `MemoryRetrievalSlow`, `MemoryValidatorConfirmFailedSpike`, `MemoryValidatorPendingHigh`, `MultiChatCatchupFailedAlert`, `PaidGeminiGuardDisabled`, `ProviderTimeoutHighAlert`, `RemindersQueueBacklog`, `ResponseSizeAnomalyAlert`, `RouteSwitchHighFrequencyAlert`, `SmartRoutingHighDenyRate`, `StateSnapshotFailedAlert`, `SwarmTeamProbeStale`, `VecQueryLatencyHigh`
+`BackupCorruption`, `CapabilityCacheStale`, `CodexQuotaExhaustedAlert`, `CriticalDependencyVuln`, `CronScheduleStale`, `DiskSpaceCritical`, `DiskSpaceLow`, `FallbackChainExhaustedAlert`, `HighHourlyTokenCost`, `HighModerationActivity`, `HighPanelErrorRate`, `KrabArchiveDBLarge`, `KrabArchiveGrowingFast`, `KrabAutoRestartSpiking`, `KrabEarDown`, `KrabInjectionSpike`, `KrabLLMRouteDown`, `KrabMemoryValidatorOverload`, `KrabMetricsStale`, `LLMContextNearCap`, `LMStudioOverloaded`, `LaunchAgentFailed`, `LongChainAdvanceAlert`, `LongSleepDetected`, `MCPServerDown`, `MainDispatcherStarved`, `MemoryRetrievalSlow`, `MultiChatCatchupFailedAlert`, `OpenClawGatewayDown`, `PaidGeminiGuardDisabled`, `ProviderTimeoutHighAlert`, `ResponseSizeAnomalyAlert`, `RouteSwitchHighFrequencyAlert`, `SSLCertExpiringSoon`, `SessionBackupCorrupt`, `SlowMCPTool`, `SmartRoutingHighDenyRate`, `StateSnapshotFailedAlert`, `SwarmTeamProbeStale`, `TelegramRateLimitedExtended`
 
-## Metrics (35)
+## Metrics (50)
 
 `krab_alerts`,
-`krab_archive_chunks_embedded_total`,
-`krab_archive_chunks_total`,
 `krab_archive_db_size_bytes`,
 `krab_archive_messages_total`,
 `krab_auto_restart_attempts_total`,
+`krab_backup_corrupt_count`,
+`krab_backup_verify`,
+`krab_capability_cache_mismatches_total`,
 `krab_capacity`,
 `krab_chain_advance_duration_seconds_count`,
 `krab_chain_advance_duration_seconds_sum`,
-`krab_chat_filter_modes_total`,
 `krab_codex_disabled_transition_total`,
-`krab_command_invocations_total`,
+`krab_completion_cost_eur_total`,
 `krab_critical`,
+`krab_cron_schedule_stale`,
+`krab_dependency_vulns_total`,
+`krab_disk_used_pct`,
+`krab_ear_consecutive_failures`,
 `krab_engagement`,
-`krab_llm_route_latency_seconds_bucket`,
+`krab_idle_wake_gap_seconds_bucket`,
+`krab_launchd_last_exit_status`,
+`krab_llm_context_usage_pct`,
 `krab_llm_route_ok`,
+`krab_lm_estimated_ram_gb`,
 `krab_main_dispatcher_tick_ago_seconds`,
+`krab_mcp_server_alive`,
+`krab_mcp_tool_duration_seconds_bucket`,
 `krab_memory_retrieval_duration_seconds_bucket`,
-`krab_memory_validator_confirm_failed_total`,
 `krab_memory_validator_injection_blocked_total`,
 `krab_memory_validator_pending`,
 `krab_metrics_generated_at`,
 `krab_model_fallback_engaged_total`,
 `krab_model_response_chars_bucket`,
+`krab_moderation_actions_total`,
+`krab_openclaw_gateway_healthy`,
+`krab_openclaw_watchdog`,
+`krab_owner_panel_requests_total`,
 `krab_paid_gemini_guard_mode`,
 `krab_provider_timeout_total`,
-`krab_reminders_pending_total`,
 `krab_runtime_state`,
+`krab_session_backup_check`,
+`krab_session_backup_corrupt_count`,
 `krab_smart_routing_decisions_total`,
+`krab_ssl_cert_days_remaining`,
 `krab_startup_catchup_chat_failed_total`,
 `krab_state_snapshot_failed_total`,
 `krab_swarm_probe_ago_seconds`,
-`krab_vec_query_duration_seconds_bucket`,
+`krab_telegram_rate_limited_active`,
+`krab_tokens_consumed_total`,
 `krab_wave`,
 `krab_wave_`,

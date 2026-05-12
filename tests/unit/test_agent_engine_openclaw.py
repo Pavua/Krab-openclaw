@@ -13,9 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.core.agent_engine import EngineHealth, StreamChunk
 from src.core.agent_engine_openclaw import OpenClawAdapter
-from src.core.agent_engine import StreamChunk, EngineHealth
-
 
 # ---------------------------------------------------------------------------
 # Helpers

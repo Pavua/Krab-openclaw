@@ -16,7 +16,6 @@ import pytest
 
 from src.userbot.llm_text_processing import LLMTextProcessingMixin
 
-
 _strip = LLMTextProcessingMixin._strip_gospodin
 
 

@@ -214,7 +214,11 @@ def build_handoff(
     alerts_display = str(n_alerts) if n_alerts >= 0 else "(rules file missing)"
 
     commits_block = "\n".join(f"- `{line}`" for line in commits) if commits else "_(нет коммитов)_"
-    pending_block = "\n".join(f"- {item}" for item in pending) if pending else "_(пусто — пройди CLAUDE.md backlog)_"
+    pending_block = (
+        "\n".join(f"- {item}" for item in pending)
+        if pending
+        else "_(пусто — пройди CLAUDE.md backlog)_"
+    )
 
     return f"""# Session Handoff — auto-generated {session_tag}
 

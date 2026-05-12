@@ -1,4 +1,4 @@
-# Auto-generated endpoints (291 routes)
+# Auto-generated endpoints (299 routes)
 
 **29 routers** в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern.
 Обновлено: auto-refresh (12.05.2026). Live проверить: `GET /api/endpoints`
@@ -6,6 +6,8 @@
 | Endpoint | Метод |
 |----------|-------|
 | `/` | GET |
+| `/api/admin/audit/recent` | GET |
+| `/api/admin/env/reload` | POST |
 | `/api/agent-engine/comparison` | GET |
 | `/api/agent-engine/dispatch-status` | GET |
 | `/api/agent-engine/runs` | GET |
@@ -28,11 +30,13 @@
 | `/api/chat/policy/{chat_id}` | GET |
 | `/api/chat/policy/{chat_id}` | POST |
 | `/api/chat/policy/{chat_id}` | DELETE |
+| `/api/chat/{chat_id}/heat` | GET |
 | `/api/chat_windows/clear` | POST |
 | `/api/chat_windows/config` | GET |
 | `/api/chat_windows/evict_idle` | POST |
 | `/api/chat_windows/list` | GET |
 | `/api/chat_windows/stats` | GET |
+| `/api/chats/heat/top10` | GET |
 | `/api/chrome/dedicated/launch` | POST |
 | `/api/chrome/dedicated/status` | GET |
 | `/api/codex/accounts` | GET |
@@ -43,6 +47,7 @@
 | `/api/context/checkpoint` | POST |
 | `/api/context/latest` | GET |
 | `/api/context/transition-pack` | POST |
+| `/api/cost/budget` | GET |
 | `/api/costs/budget` | GET |
 | `/api/costs/by-tier` | GET |
 | `/api/costs/by_chat` | GET |
@@ -50,6 +55,7 @@
 | `/api/costs/history` | GET |
 | `/api/costs/hourly` | GET |
 | `/api/costs/report` | GET |
+| `/api/cron/history` | GET |
 | `/api/ctx` | GET |
 | `/api/dashboard/summary` | GET |
 | `/api/depth/status` | GET |
@@ -79,6 +85,7 @@
 | `/api/krab/restart_userbot` | POST |
 | `/api/krab_ear/status` | GET |
 | `/api/links` | GET |
+| `/api/mcp/health` | GET |
 | `/api/memory/coverage-audit` | GET |
 | `/api/memory/doctor` | GET |
 | `/api/memory/doctor/fix` | POST |
@@ -103,6 +110,7 @@
 | `/api/model/recommend` | GET |
 | `/api/model/status` | GET |
 | `/api/model/switch` | POST |
+| `/api/moderation/audit` | GET |
 | `/api/mood/{chat_id}` | GET |
 | `/api/network/probes` | GET |
 | `/api/notifications/count` | GET |

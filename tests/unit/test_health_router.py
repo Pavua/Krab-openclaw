@@ -19,7 +19,6 @@ from fastapi.testclient import TestClient
 from src.modules.web_routers._context import RouterContext
 from src.modules.web_routers.health_router import build_health_router
 
-
 # ---------------------------------------------------------------------------
 # Test fixtures
 # ---------------------------------------------------------------------------

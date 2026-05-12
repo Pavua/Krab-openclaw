@@ -1,7 +1,7 @@
 """Tests for cron_chado_sync dry-run stub."""
 
-import sys
 import os
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -10,10 +10,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../scripts"))
 
 from cron_chado_sync import (
     MAX_DIGEST_CHARS,
+    dry_run_preview,
     format_digest,
     get_git_log_7d,
     pick_top_features,
-    dry_run_preview,
 )
 
 

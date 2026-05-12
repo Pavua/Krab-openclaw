@@ -18,7 +18,6 @@ from fastapi.testclient import TestClient
 from src.modules.web_routers._context import RouterContext
 from src.modules.web_routers.admin_router import build_admin_router
 
-
 # ---------------------------------------------------------------------------
 # Test fixtures: fake provisioning_service + ACL helpers
 # ---------------------------------------------------------------------------

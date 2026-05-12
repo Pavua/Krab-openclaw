@@ -13,12 +13,12 @@ from pathlib import Path
 from src.trading.paper_bot import (
     MarketSnapshot,
     Portfolio,
+    apply_signals,
     build_signals,
     load_portfolio,
     portfolio_value,
     render_report,
     save_portfolio,
-    apply_signals,
 )
 
 

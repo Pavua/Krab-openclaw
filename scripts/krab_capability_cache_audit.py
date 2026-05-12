@@ -125,9 +125,7 @@ def fetch_live_capability(
         return None
 
 
-def compare_entries(
-    cached: dict[str, Any], live: dict[str, Any]
-) -> list[str]:
+def compare_entries(cached: dict[str, Any], live: dict[str, Any]) -> list[str]:
     """Возвращает список различающихся полей (пустой если match)."""
     diffs: list[str] = []
     for field in _COMPARED_FIELDS:
@@ -182,9 +180,7 @@ def run_audit(
     }
 
 
-def persist_report(
-    report: dict[str, Any], *, report_path: Path = DEFAULT_REPORT_PATH
-) -> None:
+def persist_report(report: dict[str, Any], *, report_path: Path = DEFAULT_REPORT_PATH) -> None:
     """Append-only FIFO журнал из MAX_HISTORY последних запусков."""
     history: list[dict[str, Any]] = []
     if report_path.exists():
@@ -197,9 +193,7 @@ def persist_report(
     history.append(report)
     history = history[-MAX_HISTORY:]
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(
-        json.dumps(history, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    report_path.write_text(json.dumps(history, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def emit_prometheus(mismatch_count: int) -> None:

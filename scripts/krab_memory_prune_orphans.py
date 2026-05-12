@@ -41,9 +41,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_ARCHIVE_DB = Path("~/.openclaw/krab_memory/archive.db").expanduser()
-DEFAULT_STATE_FILE = Path(
-    "~/.openclaw/krab_runtime_state/memory_prune_state.json"
-).expanduser()
+DEFAULT_STATE_FILE = Path("~/.openclaw/krab_runtime_state/memory_prune_state.json").expanduser()
 DEFAULT_THRESHOLD_DAYS = 180
 
 
@@ -89,9 +87,7 @@ def detect_orphan_chats(
     Чаты без единого сообщения тоже считаются orphan'ами.
     """
 
-    cutoff = (now_fn() - timedelta(days=threshold_days)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    cutoff = (now_fn() - timedelta(days=threshold_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Все chat_id из chats + те, что только в messages (на всякий случай).
     cur = conn.execute(
         """
@@ -144,9 +140,7 @@ def estimate_savings(
     return msg_count, chunk_count, round(bytes_estimate / (1024 * 1024), 2)
 
 
-def make_backup(
-    db_path: Path, *, now_fn: Callable[[], datetime] = _now_utc
-) -> Path:
+def make_backup(db_path: Path, *, now_fn: Callable[[], datetime] = _now_utc) -> Path:
     """Копирует archive.db в archive.db.pre-prune-<ts>. Возвращает путь."""
 
     ts = now_fn().strftime("%Y%m%d_%H%M%S")
@@ -155,9 +149,7 @@ def make_backup(
     return target
 
 
-def apply_prune(
-    conn: sqlite3.Connection, orphan_chat_ids: list[str]
-) -> tuple[int, int]:
+def apply_prune(conn: sqlite3.Connection, orphan_chat_ids: list[str]) -> tuple[int, int]:
     """Удаляет данные orphan-чатов. Возвращает `(deleted_messages, deleted_chunks)`.
 
     Полагается на `ON DELETE CASCADE` в схеме: удаление из `chats` каскадно
@@ -242,9 +234,7 @@ def run_audit(
 
     conn = sqlite3.connect(str(db_path))
     try:
-        orphans, accessible = detect_orphan_chats(
-            conn, threshold_days, now_fn=now_fn
-        )
+        orphans, accessible = detect_orphan_chats(conn, threshold_days, now_fn=now_fn)
         msg_count, chunk_count, mb = estimate_savings(conn, orphans)
     finally:
         conn.close()
@@ -279,9 +269,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Krab archive.db orphan pruner")
     parser.add_argument("--db", type=Path, default=DEFAULT_ARCHIVE_DB)
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE_FILE)
-    parser.add_argument(
-        "--threshold-days", type=int, default=DEFAULT_THRESHOLD_DAYS
-    )
+    parser.add_argument("--threshold-days", type=int, default=DEFAULT_THRESHOLD_DAYS)
     parser.add_argument(
         "--apply",
         action="store_true",

@@ -12,7 +12,6 @@ import pytest
 
 from src.core.memory_retrieval_scores import _ScoreWindow, record_scores, rrf_score_window
 
-
 # ---------------------------------------------------------------------------
 # Bounded buffer.
 # ---------------------------------------------------------------------------

@@ -15,7 +15,6 @@ import pytest
 from src.core.swarm_auto_executor import SwarmAutoExecutor
 from src.core.swarm_task_board import SwarmTask
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательные фабрики
 # ---------------------------------------------------------------------------

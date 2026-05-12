@@ -15,7 +15,6 @@ import pytest
 from src.core.agent_engine import EngineHealth
 from src.core.agent_engine_openclaw import OpenClawAdapter
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -103,6 +102,7 @@ async def test_dispatch_on_hermes_healthy(monkeypatch):
 
     with patch("src.integrations.hermes_acp_bridge.get_hermes_bridge", new=_fake_get_bridge):
         import importlib
+
         import src.core.agent_engine_resolver as mod
         importlib.reload(mod)
 
@@ -128,6 +128,7 @@ async def test_dispatch_on_hermes_unhealthy_fallback(monkeypatch):
 
     with patch("src.integrations.hermes_acp_bridge.get_hermes_bridge", new=_fake_get_bridge):
         import importlib
+
         import src.core.agent_engine_resolver as mod
         importlib.reload(mod)
 
@@ -152,6 +153,7 @@ async def test_dispatch_on_bridge_import_error_fallback(monkeypatch):
         side_effect=RuntimeError("bridge error"),
     ):
         import importlib
+
         import src.core.agent_engine_resolver as mod
         importlib.reload(mod)
 

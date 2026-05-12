@@ -22,6 +22,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from typing import Any
 import httpx
 import structlog
 
+from ..core.metrics.voice_stt import record_voice_stt
 from ..core.subprocess_env import clean_subprocess_env
 
 logger = structlog.get_logger(__name__)
@@ -119,11 +121,26 @@ class Perceptor:
         """
         if not audio_bytes:
             return ""
+        # Wave 138: tracking latency/outcome для voice_gateway STT
+        started = time.monotonic()
+        outcome = "error"
         try:
-            return await self._transcribe_via_gateway(audio_bytes, lang)
+            text = await self._transcribe_via_gateway(audio_bytes, lang)
+            outcome = "ok" if text else "error"
+            return text
+        except asyncio.TimeoutError:
+            outcome = "timeout"
+            logger.warning("perceptor_transcribe_failed", error="timeout", backend="gateway")
+            return ""
         except Exception as exc:
             logger.warning("perceptor_transcribe_failed", error=str(exc), backend="gateway")
             return ""
+        finally:
+            record_voice_stt(
+                provider="voice_gateway",
+                outcome=outcome,
+                duration_seconds=time.monotonic() - started,
+            )
 
     async def _transcribe_mlx_whisper(self, audio_path: str) -> str:
         """
@@ -131,6 +148,9 @@ class Perceptor:
 
         Возвращает транскрипт или "" при недоступности/ошибке.
         """
+        # Wave 138: tracking latency/outcome для local_whisper STT
+        started = time.monotonic()
+        outcome = "error"
         try:
             import mlx_whisper  # type: ignore[import-untyped]
 
@@ -140,6 +160,7 @@ class Perceptor:
             result = mlx_whisper.transcribe(audio_path, path_or_hf_repo=self._mlx_model)
             text = str(result.get("text") or "").strip()
             logger.info("perceptor_mlx_whisper_ok", chars=len(text))
+            outcome = "ok" if text else "error"
             return text
         except ImportError:
             logger.debug("perceptor_mlx_whisper_not_installed")
@@ -147,6 +168,12 @@ class Perceptor:
         except Exception as exc:
             logger.warning("perceptor_mlx_whisper_failed", error=str(exc))
             return ""
+        finally:
+            record_voice_stt(
+                provider="local_whisper",
+                outcome=outcome,
+                duration_seconds=time.monotonic() - started,
+            )
 
     async def transcribe(self, audio_path: str, model_manager: object = None) -> str:
         """
