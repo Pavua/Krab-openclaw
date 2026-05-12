@@ -8944,13 +8944,17 @@ class WebApp:
 
         self.app.include_router(_build_system_router(self._make_router_context()))
 
-        # Wave 144/146/152/155/156/157/164/165/169: admin UI pages (model picker
-        # / routing / swarm / costs / ecosystem / inbox / cron / sentry / logs).
+        # Wave 144/146/152/155/156/157/164/165/169/176: admin UI pages (model
+        # picker / routing / swarm / costs / ecosystem / inbox / cron / sentry
+        # / logs / db).
         from .web_routers.costs_admin_router import (  # noqa: PLC0415
             build_costs_admin_router,
         )
         from .web_routers.cron_admin_router import (  # noqa: PLC0415
             build_cron_admin_router,
+        )
+        from .web_routers.db_admin_router import (  # noqa: PLC0415
+            build_db_admin_router,
         )
         from .web_routers.ecosystem_admin_router import (  # noqa: PLC0415
             build_ecosystem_admin_router,
@@ -8980,6 +8984,7 @@ class WebApp:
             build_cron_admin_router,
             build_sentry_admin_router,
             build_logs_admin_router,
+            build_db_admin_router,
         ):
             try:
                 self.app.include_router(builder(self._make_router_context()))

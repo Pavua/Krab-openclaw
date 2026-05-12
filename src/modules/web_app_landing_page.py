@@ -318,7 +318,7 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- ADMIN CARD GRID — 6 cards к admin pages -->
+        <!-- ADMIN CARD GRID — 10 cards к admin pages -->
         <div class="card-grid">
             <a href="/admin/models" class="card" style="animation-delay: 0.05s;">
                 <div class="indicator" id="ind-models"></div>
@@ -378,6 +378,12 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <div class="emoji">📋</div>
                 <h2>Logs</h2>
                 <p>Live tail structlog (krab_main.log)<br>с level-фильтром, grep и download.</p>
+            </a>
+
+            <a href="/admin/db" class="card" style="animation-delay: 0.8s;">
+                <div class="emoji">🗃️</div>
+                <h2>DB</h2>
+                <p>SQLite БД: размер, integrity_check,<br>WAL checkpoint и VACUUM actions.</p>
             </a>
         </div>
 
