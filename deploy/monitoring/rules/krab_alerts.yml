@@ -259,6 +259,23 @@ groups:
           summary: "Memory Phase 2 retrieval P95 > 5s (10 min)"
           description: "Hybrid retrieval (RRF+MMR+rerank) slow. Check Vertex latency или Gemini rerank quota throttle."
 
+  # ── Wave 78: FinOps token-cost tracking ─────────────────────────────────────
+  - name: krab_wave78_finops
+    interval: 1m
+    rules:
+      - alert: HighHourlyTokenCost
+        # Wave 78: burn rate > €5/час sustained = €120/день.
+        # Post-Wave 66/67 leak fix контекст: €40/неделю при минимальной активности
+        # = ~€0.24/час. €5/час = explosion (20×) — точно сигнал об аномалии.
+        expr: rate(krab_completion_cost_eur_total[1h]) * 3600 > 5.0
+        for: 15m
+        labels:
+          severity: warning
+          wave: "78"
+        annotations:
+          summary: "Burn rate > €5/час за последний час"
+          description: "Стоимость completions превысила €5/час (€120/день). Проверить runaway loops, leaked paid Gemini, или explosion thoughts-tokens. Drill-down: krab_tokens_consumed_total{kind='thoughts'} и krab_completion_cost_eur_total by (model)."
+
   # ── Wave 75: launchd cron health ────────────────────────────────────────────
   - name: krab_wave75_launchd
     interval: 1m
@@ -273,3 +290,19 @@ groups:
         annotations:
           summary: "LaunchAgent {{ $labels.label }} exit status = {{ $value }} (10+ min)"
           description: "Cron job failed. Check logs/{{ $labels.label }}.{out,err}.log."
+
+  # ── Wave 79: Krab Ear backend health probe ──────────────────────────────────
+  - name: krab_wave79_krab_ear
+    interval: 1m
+    rules:
+      - alert: KrabEarDown
+        # Wave 79: 5 consecutive probe failures (>= 5 minutes downtime @ 60s interval).
+        # Алертит на регрессии вида Session 40 (SingleInstanceGuard deadlock).
+        expr: krab_ear_consecutive_failures >= 5
+        for: 5m
+        labels:
+          severity: warning
+          wave: "79"
+        annotations:
+          summary: "Krab Ear backend unresponsive ({{ $value }} consecutive failures)"
+          description: "KE /health probe failing for 5+ минут. Проверь Krab Ear процесс, launchctl list grep krab-ear, backend на :5005."
