@@ -28,7 +28,17 @@ def test_returns_unavailable_for_none_userbot(monkeypatch: pytest.MonkeyPatch) -
     assert snap["main_dispatcher_tick_ago_sec"] is None
     assert snap["main_last_event_ago_sec"] is None
     assert snap["swarm_probes"] == {}
-    assert snap["paid_gemini_guard"]["mode"] == "block"
+    guard = snap["paid_gemini_guard"]
+    assert guard["mode"] == "block"
+    # Wave 69: counters экспонированы из get_paid_gemini_guard_stats().
+    assert "blocked_count" in guard
+    assert "allowed_count" in guard
+    assert "warned_count" in guard
+    assert "last_blocked_at" in guard
+    assert "last_blocked_host" in guard
+    assert "last_blocked_model" in guard
+    assert isinstance(guard["blocked_count"], int)
+    assert isinstance(guard["allowed_count"], int)
 
 
 def test_populated_state_exposes_all_fields() -> None:

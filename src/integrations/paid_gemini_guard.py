@@ -24,6 +24,8 @@ Hook:
 from __future__ import annotations
 
 import os
+import threading
+import time
 import traceback
 from typing import Any
 from urllib.parse import urlparse
@@ -46,6 +48,52 @@ _patched: bool = False
 # Сохраняем оригинальный __init__ для восстановления + сквозного вызова.
 _orig_async_init: Any = None
 _orig_sync_init: Any = None
+
+# Wave 69: stateful counters для quantitative observability эффективности guard.
+# Thread-safe через _stats_lock — httpx может вызываться из любого worker thread.
+_stats_lock = threading.Lock()
+_blocked_count: int = 0
+_allowed_count: int = 0
+_warned_count: int = 0
+_last_blocked_at: float | None = None
+_last_blocked_host: str | None = None
+_last_blocked_model: str | None = None
+
+
+def get_paid_gemini_guard_stats() -> dict[str, Any]:
+    """Snapshot текущих counters Wave 67 guard.
+
+    Returns:
+        Dict с полями:
+            * ``blocked_count`` — сколько раз PaidGeminiGuardError был raised.
+            * ``allowed_count`` — сколько paid-host requests прошли (allow-list).
+            * ``warned_count`` — сколько раз был warn-mode pass-through.
+            * ``last_blocked_at`` — UNIX ts последнего block (None если не было).
+            * ``last_blocked_host`` — host последнего block (обычно _PAID_HOST).
+            * ``last_blocked_model`` — модель из URL последнего block.
+    """
+    with _stats_lock:
+        return {
+            "blocked_count": _blocked_count,
+            "allowed_count": _allowed_count,
+            "warned_count": _warned_count,
+            "last_blocked_at": _last_blocked_at,
+            "last_blocked_host": _last_blocked_host,
+            "last_blocked_model": _last_blocked_model,
+        }
+
+
+def reset_paid_gemini_guard_stats() -> None:
+    """Сбрасывает counters (используется в тестах для изоляции)."""
+    global _blocked_count, _allowed_count, _warned_count
+    global _last_blocked_at, _last_blocked_host, _last_blocked_model
+    with _stats_lock:
+        _blocked_count = 0
+        _allowed_count = 0
+        _warned_count = 0
+        _last_blocked_at = None
+        _last_blocked_host = None
+        _last_blocked_model = None
 
 
 class PaidGeminiGuardError(RuntimeError):
@@ -166,6 +214,9 @@ def _build_traceback_hint(depth: int = 8) -> str:
 
 def _trigger(url: str) -> None:
     """Внутренний trigger: парсит URL, проверяет allow-list, raise/warn по mode."""
+    global _blocked_count, _allowed_count, _warned_count
+    global _last_blocked_at, _last_blocked_host, _last_blocked_model
+
     mode = _guard_mode()
     if mode == "off":
         return  # disabled — ничего не делаем
@@ -174,6 +225,8 @@ def _trigger(url: str) -> None:
 
     # Allow-list (Gemma + KRAB_PAID_GEMINI_ALLOW_LIST) — пропускаем.
     if _is_allowed_model(model):
+        with _stats_lock:
+            _allowed_count += 1
         logger.debug(
             "paid_gemini_guard_allowed",
             url=url,
@@ -185,6 +238,8 @@ def _trigger(url: str) -> None:
     trace_hint = _build_traceback_hint()
 
     if mode == "warn":
+        with _stats_lock:
+            _warned_count += 1
         logger.warning(
             "paid_gemini_guard_warning",
             url=url,
@@ -195,7 +250,16 @@ def _trigger(url: str) -> None:
         )
         return
 
-    # mode == "block" — log + raise.
+    # mode == "block" — обновляем counters, log + raise.
+    try:
+        parsed_host = urlparse(url).hostname or _PAID_HOST
+    except Exception:  # noqa: BLE001
+        parsed_host = _PAID_HOST
+    with _stats_lock:
+        _blocked_count += 1
+        _last_blocked_at = time.time()
+        _last_blocked_host = parsed_host
+        _last_blocked_model = model or None
     logger.error(
         "paid_gemini_guard_triggered",
         url=url,
@@ -327,6 +391,8 @@ def unregister_paid_gemini_guard() -> None:
 
 __all__ = [
     "PaidGeminiGuardError",
+    "get_paid_gemini_guard_stats",
     "register_paid_gemini_guard",
+    "reset_paid_gemini_guard_stats",
     "unregister_paid_gemini_guard",
 ]

@@ -50,6 +50,30 @@ def _paid_gemini_guard_mode() -> str:
     return "block"
 
 
+def _paid_gemini_guard_stats() -> dict[str, Any]:
+    """Snapshot counters Wave 69. Fail-open: пустой dict при сбое импорта."""
+    try:
+        from src.integrations.paid_gemini_guard import get_paid_gemini_guard_stats
+
+        return get_paid_gemini_guard_stats()
+    except Exception:  # noqa: BLE001
+        return {
+            "blocked_count": 0,
+            "allowed_count": 0,
+            "warned_count": 0,
+            "last_blocked_at": None,
+            "last_blocked_host": None,
+            "last_blocked_model": None,
+        }
+
+
+def _paid_gemini_guard_section() -> dict[str, Any]:
+    """Sub-section ``paid_gemini_guard`` для snapshot dict."""
+    section: dict[str, Any] = {"mode": _paid_gemini_guard_mode()}
+    section.update(_paid_gemini_guard_stats())
+    return section
+
+
 def collect_network_probes_snapshot(userbot: Any, *, now: float | None = None) -> dict[str, Any]:
     """Собирает snapshot всех Wave 63 network probe полей.
 
@@ -82,7 +106,7 @@ def collect_network_probes_snapshot(userbot: Any, *, now: float | None = None) -
             "main_last_event_ago_sec": None,
             "main_last_seen_update_id": 0,
             "swarm_probes": {},
-            "paid_gemini_guard": {"mode": _paid_gemini_guard_mode()},
+            "paid_gemini_guard": _paid_gemini_guard_section(),
         }
 
     tick_count = _safe_int(getattr(userbot, "_dispatcher_tick_count", 0))

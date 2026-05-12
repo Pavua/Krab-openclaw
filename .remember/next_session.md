@@ -1,17 +1,31 @@
-# Session N+1 — Starter Handoff (Session 45 close, 2026-05-12 ~01:10)
+# Session N+2 — Starter Handoff (Session 46 close, 2026-05-12 ~05:00)
 
 > **Project**: Krab (Telegram userbot). Этот handoff — ТОЛЬКО про Krab.
 > Krab Ear имеет свой handoff в `/Users/pablito/Antigravity_AGENTS/Krab Ear/.remember/next_session.md`.
 > См. [docs/PROJECT_SEPARATION_GUIDE.md](../docs/PROJECT_SEPARATION_GUIDE.md).
 
-## TL;DR — Session 45 closed 2026-05-12, **25+ commits** (incl. Wave 66-A/B + Wave 67 in progress), 7 Linear closed, 3 paradigm shifts, >1000 Sentry events/week silenced, billing leak fixed
+## TL;DR — Session 46 closed 2026-05-12 (post unscheduled reboot), **5 commits**: Wave 63-B/63-C/63-D + Wave 65-K + AGE-13 closed, **all 4 ecosystem components теперь под launchd** (reboot resilience)
 
 **FINAL STATE**:
-- **main HEAD**: `8f73871` Wave 66-B (google_genai_direct Vertex mode preferred — paid leak fix)
-- **Krab core**: alive, journal_mode=delete (all 5 sessions), `get_state_probe_enabled=True`
+- **main HEAD**: `b0f20b1` (AGE-13 test coverage gaps closed)
+- **Recent commits**:
+  - `b0f20b1` AGE-13: krab_daily_maintenance test coverage (16 tests)
+  - `c3d883d` Wave 65-K: /api/network/probes endpoint + runtime_summary sub-section
+  - `2bbeb2d` Wave 63-D: surgical recovery (gate=OFF, observability-only mode)
+  - `9a95258` Wave 63-C: dispatcher_tick hook (outcomes-not-heartbeats для message dispatch)
+  - `7390be6` Wave 63-B: per-client GetState probe для swarm Telegram-сессий
+- **Krab core**: alive под `ai.krab.core` LaunchAgent (PID auto-restart on crash)
+- **Все 4 компонента под launchd**: `ai.krab.core`, `ai.krab.ear.backend`, `ai.krab.ear.rest`, `ai.krab.voice-gateway` (Wave 68) — auto-load on reboot ✅
+- **Tests**: +57 across 5 waves (8 dispatcher_recovery + 8 network_probes_api + 10 swarm_split_brain + 8 dispatcher_tick + 16 daily_maintenance + 7 retroactive)
+- **Linear**: AGE-13 closed
+- **Live verified**: `/api/network/probes` returns expected fields, paid_gemini_guard.mode=block активен после рестарта
+
+## Session 45 retrospect — billing leak + 3 paradigm shifts
+
+- **main HEAD pre-46**: `21c2cbc` Wave 67 (hard paid Gemini guard)
 - **Sentry quota saved**: **>1000 events/week** stop firing
-- **Linear**: 7 issues closed (AGE-5/6/8/9/12/15/16). Krab backlog: 0 open. Krab Ear AGE-14/10 — отдельный repo.
-- **Billing**: paid AI Studio leak stopped via Wave 66-A/B. Future Gemini traffic → caramel-anvil-492816-t5 bonus credits (€848 до 2027-03).
+- **Linear**: 7 issues closed (AGE-5/6/8/9/12/15/16). Krab backlog: AGE-13 closed in S46. Krab Ear AGE-14/10 — отдельный repo.
+- **Billing**: paid AI Studio leak stopped via Wave 66-A/B + Wave 67 runtime guard. Future Gemini traffic → caramel-anvil-492816-t5 bonus credits (€848 до 2027-03).
 
 ## 🎯 Heroic fixes (3 paradigm shifts) — «outcomes-not-heartbeats» pattern
 
@@ -90,13 +104,17 @@ Lesson: **Sonnet for codebase context (200KB CLAUDE.md), Haiku only for one-shot
 ## Pending для Session 46
 
 ### Krab-side
-* **Wave 67 hard paid Gemini guard** (in progress) — defence-in-depth runtime check, прерывать любую попытку paid AI Studio с громким logger.error + Sentry alert. Закрытие гарантирует zero recurrence Wave 66 leak.
-* **Anthropic Vertex quota approval** — pending Google Sales POC contact (Cases #70886393 + #70886496). Submitted Contact Sales form 5-6 May, awaiting POC. Meanwhile Wave 65-D preempts claude-sonnet-4-5.
-* **Verify Wave 66 billing fix** — после restart Krab observe `vertex_mode=True` в gemini_rerank logs + zero hits на paid AI Studio endpoint в .env probe (24h window).
-* Wave 63-B/C/D: dispatcher_tick hook, per-client probe (swarm), surgical recovery (если Wave 63-A не покрыл всё)
-* AGE-13/AGE-11 — Low priority daily review test gaps (test coverage formal)
-* Verify Wave 64 reduces corruption recurrence (1-week observation window)
+* ✅ **Wave 67** shipped (commit `21c2cbc`) — paid_gemini_guard registered live `mode=block`.
+* ✅ **Wave 63-B/C/D** shipped (S46).
+* ✅ **AGE-13** closed (S46, 16 tests).
+* ✅ **Voice Gateway launchd plist** shipped (Wave 68, ai.krab.voice-gateway).
+* **Anthropic Vertex quota approval** — pending Google Sales POC contact (Cases #70886393 + #70886496). Contact Sales form submitted 12 May. Meanwhile Wave 65-D preempts claude-sonnet-4-5.
+* **Verify Wave 66 billing fix** — после 24h observe paid_gemini_guard logs (zero PaidGeminiGuardError raises = success).
+* **Wave 63-D enable** (после 1-2 недели данных): `KRAB_DISPATCHER_RECOVERY_ENABLED=1` в .env когда наберём false-positive baseline на dispatcher_starved_detected.
+* AGE-11 — Low priority daily review test gaps (если останутся после AGE-13)
+* Verify Wave 64 reduces corruption recurrence (1-week observation window — продолжается)
 * Memory pressure optimization (routines findings): `casual_chat_low_priority` → cloud Gemini 3 Flash при peak hours? OrbStack stop on idle?
+* Prometheus alert на `main_dispatcher_tick_ago_sec > 600` через новый `/api/network/probes` endpoint (Wave 65-K).
 
 ### Krab Ear-side (отдельный repo)
 * AGE-14: KRAB-EAR-AGENT-G AppHang ≥2000ms
