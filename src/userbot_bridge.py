@@ -1999,6 +1999,17 @@ class KraabUserbot(
             telegram_rate_limiter.configure(max_per_sec=max(1, _rate_max), window_sec=1.0)
         except Exception as _exc:  # noqa: BLE001
             logger.warning("telegram_rate_limiter_bootstrap_failed", error=str(_exc))
+
+        # Wave 127: pre-emptive per-caller outgoing throttle (sliding 10s).
+        # Env-gate: KRAB_TG_OUTGOING_THROTTLE_ENABLED=1 (default ON).
+        try:
+            from .core.telegram_outgoing_throttle import telegram_outgoing_throttle
+
+            _max_rps_raw = os.environ.get("KRAB_TG_OUTGOING_MAX_RPS")
+            _max_rps = float(_max_rps_raw) if _max_rps_raw else 25.0
+            telegram_outgoing_throttle.configure(max_rps=_max_rps, window_sec=10.0)
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning("telegram_outgoing_throttle_bootstrap_failed", error=str(_exc))
         start_timeout_sec = int(getattr(config, "TELEGRAM_START_TIMEOUT_SEC", 35))
         max_attempts = int(getattr(config, "TELEGRAM_START_ATTEMPTS", 3))
         relogin_timeout_sec = int(getattr(config, "TELEGRAM_RELOGIN_TIMEOUT_SEC", 300))

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Wave 130: SSL cert expiry audit (weekly).
+
+        Probe TLS endpoints (Anthropic / Google AI / Vertex / Sentry) и
+        предупредить заранее, если cert внезапно close to expiry.
+        Cloudflared/Cloudflare обычно renew автоматически, но иногда ломается.
+
+        Output:
+          - JSON report в ~/.openclaw/krab_runtime_state/ssl_cert_audit.json (last 10 runs)
+          - Prometheus Gauge krab_ssl_cert_days_remaining{host}
+          - Alert SSLCertExpiringSoon при <14 days за 1h (warning)
+
+        Install:
+          launchctl bootstrap gui/501 \
+            /Users/pablito/Antigravity_AGENTS/Краб/scripts/launchagents/ai.krab.ssl-cert-audit.plist
+    -->
+    <key>Label</key>
+    <string>ai.krab.ssl-cert-audit</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/krab_ssl_cert_audit.py</string>
+    </array>
+
+    <!-- Weekly: Thursday 07:00 -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>4</integer>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONPATH</key>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/ssl_cert_audit.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/ssl_cert_audit.err.log</string>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

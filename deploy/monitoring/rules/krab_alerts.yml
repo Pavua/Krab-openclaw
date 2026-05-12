@@ -440,3 +440,81 @@ groups:
         labels: {severity: warning, wave: "121"}
         annotations:
           summary: "Telegram FloodWait active >30m for caller {{ $labels.caller }}"
+
+  # ── Wave 124: OpenClaw gateway watchdog ─────────────────────────────────────
+  - name: krab_wave124_openclaw_gateway
+    interval: 30s
+    rules:
+      - alert: OpenClawGatewayDown
+        expr: krab_openclaw_gateway_healthy == 0
+        for: 2m
+        labels: {severity: critical, wave: "124"}
+        annotations:
+          summary: "OpenClaw gateway :18789 unhealthy >2m"
+          description: "Wave 124 watchdog: HTTP probe /health failed. Auto kickstart count: {{ $value }}. См. ~/.openclaw/krab_runtime_state/openclaw_watchdog_state.json и scripts/krab_openclaw_watchdog.py."
+
+  # ── Wave 122/131: owner panel observability ──────────────────────────────────
+  - name: krab_wave122_panel
+    interval: 5m
+    rules:
+      - alert: HighPanelErrorRate
+        expr: rate(krab_owner_panel_requests_total{status_class="5xx"}[5m]) > 0.1
+        for: 10m
+        labels: {severity: warning, wave: "122"}
+        annotations:
+          summary: "Owner panel 5xx rate > 0.1/sec for 10m"
+
+  # ── Wave 124: OpenClaw gateway HTTP watchdog ─────────────────────────────────
+  - name: krab_wave124_openclaw
+    interval: 1m
+    rules:
+      - alert: OpenClawGatewayDown
+        expr: krab_openclaw_gateway_healthy == 0
+        for: 2m
+        labels: {severity: critical, wave: "124"}
+        annotations:
+          summary: "OpenClaw gateway :18789 not responding /health"
+
+  # ── Wave 126: MCP tool latency ────────────────────────────────────────────────
+  - name: krab_wave126_mcp_tool
+    interval: 5m
+    rules:
+      - alert: SlowMCPTool
+        expr: histogram_quantile(0.95, rate(krab_mcp_tool_duration_seconds_bucket[5m])) > 10
+        for: 30m
+        labels: {severity: info, wave: "126"}
+        annotations:
+          summary: "MCP tool P95 > 10s for 30m"
+
+  # ── Wave 128: LLM context near cap ────────────────────────────────────────────
+  - name: krab_wave128_context
+    interval: 5m
+    rules:
+      - alert: LLMContextNearCap
+        expr: krab_llm_context_usage_pct > 0.8
+        for: 5m
+        labels: {severity: warning, wave: "128"}
+        annotations:
+          summary: "LLM context usage {{ $value }} > 80% for 5m"
+
+  # ── Wave 129: capability cache stale ─────────────────────────────────────────
+  - name: krab_wave129_capability_cache
+    interval: 5m
+    rules:
+      - alert: CapabilityCacheStale
+        expr: increase(krab_capability_cache_mismatches_total[7d]) > 5
+        for: 1h
+        labels: {severity: warning, wave: "129"}
+        annotations:
+          summary: "Capability cache >5 mismatches in 7d — audit needed"
+
+  # ── Wave 130: SSL cert expiry ─────────────────────────────────────────────────
+  - name: krab_wave130_ssl
+    interval: 10m
+    rules:
+      - alert: SSLCertExpiringSoon
+        expr: krab_ssl_cert_days_remaining < 14
+        for: 1h
+        labels: {severity: warning, wave: "130"}
+        annotations:
+          summary: "SSL cert {{ $labels.host }} expires in < 14 days"

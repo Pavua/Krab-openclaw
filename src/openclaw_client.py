@@ -2196,6 +2196,18 @@ class OpenClawClient:
                     is_fallback=is_fallback,
                     context_tokens=context_tokens,
                 )
+            # Wave 128: per-model context usage Gauge (prompt_tokens / window).
+            try:
+                from .core.metrics.context_budget import record_context_usage
+
+                record_context_usage(model_id, int(normalized.get("prompt_tokens") or 0))
+            except Exception as ctx_exc:  # noqa: BLE001
+                logger.warning(
+                    "context_budget_record_failed",
+                    model=model_id,
+                    error=str(ctx_exc),
+                    error_type=type(ctx_exc).__name__,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "cost_analytics_record_usage_failed",

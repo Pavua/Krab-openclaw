@@ -15,6 +15,7 @@ from typing import Any
 
 from ..core.chat_capability_cache import chat_capability_cache
 from ..core.logger import get_logger
+from ..core.telegram_outgoing_throttle import telegram_outgoing_throttle
 from ..core.telegram_rate_limiter import telegram_rate_limiter
 
 logger = get_logger(__name__)
@@ -202,6 +203,9 @@ class _TelegramSendQueue:
                     # aggregate rate превысил soft cap (default 20 req/s).
                     # Ставим ДО coro_factory чтобы retry тоже учитывались.
                     await telegram_rate_limiter.acquire(purpose="send_queue")
+                    # Wave 127: pre-emptive per-caller throttle (sliding 10s окно).
+                    # Best-effort, не блокирует отправку при ошибке.
+                    await telegram_outgoing_throttle.acquire(caller="send_queue")
                     result_val = await coro_factory()
                     # Фиксируем время успешной отправки для slowmode-трекинга.
                     self._slowmode_last_sent[chat_id] = time.monotonic()

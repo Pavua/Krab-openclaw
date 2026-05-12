@@ -52,6 +52,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from src.core.metrics.audit_log import record_request
+from src.core.metrics.router_latency import observe_request_duration
 
 # Пути, исключённые из audit log: высокочастотные monitoring/health.
 # Forensic-ценность близка к нулю, объёмы записей — большие.
@@ -247,6 +248,25 @@ def _auth_prefix(request: Request) -> str | None:
     return None
 
 
+def _path_pattern(request: Request, fallback: str) -> str:
+    """Возвращает FastAPI route template (e.g. ``/api/inbox/{item_id}``).
+
+    Если route не сматчился (404, WebSocket, static) — возвращаем
+    ``"unmatched"`` чтобы не раздувать cardinality сырыми URL'ами.
+    Wave 131: критично для histogram label budget'а.
+    """
+    try:
+        route = request.scope.get("route")
+    except Exception:  # noqa: BLE001
+        route = None
+    if route is None:
+        return "unmatched"
+    pattern = getattr(route, "path", None)
+    if isinstance(pattern, str) and pattern:
+        return pattern
+    return fallback or "unmatched"
+
+
 def _client_ip(request: Request) -> str | None:
     """Голый IP клиента — поддержка reverse-proxy (X-Forwarded-For)."""
     fwd = request.headers.get("X-Forwarded-For", "")
@@ -297,7 +317,8 @@ class AuditLoggerMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
         except Exception:
             # Записываем 500-сурогат, чтобы инцидент остался в audit log.
-            duration_ms = (self._monotonic() - started_mono) * 1000.0
+            duration_seconds = self._monotonic() - started_mono
+            duration_ms = duration_seconds * 1000.0
             self._storage.record(
                 ts_unix=self._clock(),
                 method=request.method,
@@ -308,8 +329,14 @@ class AuditLoggerMiddleware(BaseHTTPMiddleware):
                 duration_ms=duration_ms,
             )
             record_request(method=request.method, path=path, status=500)
+            observe_request_duration(
+                method=request.method,
+                path_pattern=_path_pattern(request, path),
+                duration_seconds=duration_seconds,
+            )
             raise
-        duration_ms = (self._monotonic() - started_mono) * 1000.0
+        duration_seconds = self._monotonic() - started_mono
+        duration_ms = duration_seconds * 1000.0
         self._storage.record(
             ts_unix=self._clock(),
             method=request.method,
@@ -320,6 +347,11 @@ class AuditLoggerMiddleware(BaseHTTPMiddleware):
             duration_ms=duration_ms,
         )
         record_request(method=request.method, path=path, status=response.status_code)
+        observe_request_duration(
+            method=request.method,
+            path_pattern=_path_pattern(request, path),
+            duration_seconds=duration_seconds,
+        )
         return response
 
 

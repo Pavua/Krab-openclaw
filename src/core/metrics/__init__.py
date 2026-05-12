@@ -7,6 +7,13 @@
 
 from __future__ import annotations
 
+# === capability_cache_audit (Wave 129) ===
+from .capability_cache_audit import (
+    _CAPABILITY_CACHE_MISMATCH_COUNTER,
+    _capability_cache_mismatch_total,
+    inc_capability_cache_mismatch,
+)
+
 # === collect orchestrator ===
 from .collect import (
     _format_metric,
@@ -201,6 +208,10 @@ __all__ = [
     "_PRESSURE_AWARE_FALLBACK_COUNTER",
     "_pressure_aware_fallback_total",
     "inc_pressure_aware_fallback",
+    # capability_cache_audit (Wave 129)
+    "_CAPABILITY_CACHE_MISMATCH_COUNTER",
+    "_capability_cache_mismatch_total",
+    "inc_capability_cache_mismatch",
     # telegram_rate (Wave 121)
     "_TELEGRAM_RATE_LIMIT_DEADLINES",
     "_telegram_flood_wait_duration_seconds",
