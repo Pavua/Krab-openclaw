@@ -1,13 +1,32 @@
-# Auto-generated endpoints (299 routes)
+# Auto-generated endpoints (318 routes)
 
 **29 routers** в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern.
-Обновлено: auto-refresh (12.05.2026). Live проверить: `GET /api/endpoints`
+Обновлено: auto-refresh (13.05.2026). Live проверить: `GET /api/endpoints`
 
 | Endpoint | Метод |
 |----------|-------|
 | `/` | GET |
+| `/admin/costs` | GET |
+| `/admin/cron` | GET |
+| `/admin/ecosystem` | GET |
+| `/admin/inbox` | GET |
+| `/admin/models` | GET |
+| `/admin/routing` | GET |
+| `/admin/sentry` | GET |
+| `/admin/swarm` | GET |
 | `/api/admin/audit/recent` | GET |
+| `/api/admin/costs/dashboard` | GET |
+| `/api/admin/cron/list` | GET |
+| `/api/admin/cron/{label}/pause` | POST |
+| `/api/admin/cron/{label}/resume` | POST |
+| `/api/admin/cron/{label}/trigger` | POST |
+| `/api/admin/ecosystem/dashboard` | GET |
 | `/api/admin/env/reload` | POST |
+| `/api/admin/inbox/dashboard` | GET |
+| `/api/admin/model/switch` | POST |
+| `/api/admin/sentry/dashboard` | GET |
+| `/api/admin/sentry/issue/{issue_id}/resolve` | POST |
+| `/api/admin/swarm/dashboard` | GET |
 | `/api/agent-engine/comparison` | GET |
 | `/api/agent-engine/dispatch-status` | GET |
 | `/api/agent-engine/runs` | GET |
@@ -30,13 +49,11 @@
 | `/api/chat/policy/{chat_id}` | GET |
 | `/api/chat/policy/{chat_id}` | POST |
 | `/api/chat/policy/{chat_id}` | DELETE |
-| `/api/chat/{chat_id}/heat` | GET |
 | `/api/chat_windows/clear` | POST |
 | `/api/chat_windows/config` | GET |
 | `/api/chat_windows/evict_idle` | POST |
 | `/api/chat_windows/list` | GET |
 | `/api/chat_windows/stats` | GET |
-| `/api/chats/heat/top10` | GET |
 | `/api/chrome/dedicated/launch` | POST |
 | `/api/chrome/dedicated/status` | GET |
 | `/api/codex/accounts` | GET |
@@ -110,6 +127,7 @@
 | `/api/model/recommend` | GET |
 | `/api/model/status` | GET |
 | `/api/model/switch` | POST |
+| `/api/models/registry` | GET |
 | `/api/moderation/audit` | GET |
 | `/api/mood/{chat_id}` | GET |
 | `/api/network/probes` | GET |
@@ -184,6 +202,7 @@
 | `/api/quota/history` | GET |
 | `/api/reactions/incoming` | GET |
 | `/api/reactions/stats` | GET |
+| `/api/routing/stats` | GET |
 | `/api/runtime/chat-session/clear` | POST |
 | `/api/runtime/handoff` | GET |
 | `/api/runtime/operator-profile` | GET |

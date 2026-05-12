@@ -40,10 +40,10 @@ bash scripts/install_pre_commit.sh
 
 ## Auto-generated reference
 
-- **Endpoints** (~299 routes): [docs/CLAUDE_AUTO_ENDPOINTS.md](docs/CLAUDE_AUTO_ENDPOINTS.md)
+- **Endpoints** (~318 routes): [docs/CLAUDE_AUTO_ENDPOINTS.md](docs/CLAUDE_AUTO_ENDPOINTS.md)
 - **Handlers** (~181 функций): [docs/CLAUDE_AUTO_HANDLERS.md](docs/CLAUDE_AUTO_HANDLERS.md)
-- **Commands** (~158 registered, 185+ с алиасами): [docs/CLAUDE_COMMANDS_REFERENCE.md](docs/CLAUDE_COMMANDS_REFERENCE.md)
-- **Prometheus** (40 alerts, 50 metrics): [docs/CLAUDE_AUTO_PROMETHEUS.md](docs/CLAUDE_AUTO_PROMETHEUS.md)
+- **Commands** (~162 registered, 172+ с алиасами): [docs/CLAUDE_COMMANDS_REFERENCE.md](docs/CLAUDE_COMMANDS_REFERENCE.md)
+- **Prometheus** (42 alerts, 52 metrics): [docs/CLAUDE_AUTO_PROMETHEUS.md](docs/CLAUDE_AUTO_PROMETHEUS.md)
 - **Owner Panel API** (детальный): [docs/CLAUDE_OWNER_PANEL_API.md](docs/CLAUDE_OWNER_PANEL_API.md)
 
 Актуальные счётчики:
@@ -305,8 +305,8 @@ KRAB_VERTEX_REGION=global              # Vertex location
 ## Phase 7 статус
 
 - **Phase 7: 100%**, Memory Phase 2: **LIVE** (`KRAB_RAG_PHASE2_ENABLED=1`)
-- **13900+ тестов collected** (Session 45, 12.05.2026)
-- **299 API endpoints** (live: `/api/endpoints`), 181 handlers, 158 registered commands (185+ с алиасами), 40 alerts / 50 metrics
+- **15141/15264 тестов collected** (Session 48, 13.05.2026)
+- **318 API endpoints** (live: `/api/endpoints`), 181 handlers, 162 registered commands (172+ с алиасами), 42 alerts / 52 metrics
 
 ## Session highlights (последние)
 
@@ -485,6 +485,7 @@ Empirical rule: sonnet — 200-300 word с TDD; haiku — < 100 word.
 | **Session 41 (09.05)** | **~12817 collected** (+115: Wave 37-41-O) |
 | **Session 43+44 (10.05)** | **13795/13916 collected** (+~377: Waves 44-Z, 45-*, 46-*, 47, 48-*, 49-*) |
 | **Session 45 (11→12.05)** | **~13920+ collected** (+~120 tests: Waves 62-66 + AGE-8/15/12/9/16 + 50-B). **25 commits** (incl. Wave 66 billing leak fix), **7 Linear issues closed**, **>1000 Sentry events/week** stop firing. 3 paradigm shifts: «outcomes-not-heartbeats» pattern (Wave 63-A/50-B/65-D/62-G). Wave 66: €40/week paid AI Studio leak → Vertex bonus credits. |
+| **Session 47+48 (13.05)** | **15141/15264 collected** (+1346 from S44 baseline; admin pages add, autotables refresh — Wave 168) |
 
 ### Session 40 highlights (07.05.2026 — runtime e2e + KE deadlock fix + ecosystem health)
 
