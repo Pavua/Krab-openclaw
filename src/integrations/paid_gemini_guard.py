@@ -260,7 +260,13 @@ def _trigger(url: str) -> None:
         _last_blocked_at = time.time()
         _last_blocked_host = parsed_host
         _last_blocked_model = model or None
-    logger.error(
+    # Wave 170: понижено с logger.error → logger.warning. Это working-as-designed
+    # defence-in-depth механизм (Wave 67) — guard блокирует paid AI Studio запросы
+    # после отключения paid Gemini billing. Срабатывание не является runtime-bug,
+    # но logger.error создавал Sentry-шум (~17 events / 2h). Прецедент — Wave 41-O
+    # (openclaw 500 → warning). Локально через structlog warning продолжает писаться,
+    # а сам raise PaidGeminiGuardError ниже остаётся — каллер всё равно увидит fail.
+    logger.warning(
         "paid_gemini_guard_triggered",
         url=url,
         model=model,

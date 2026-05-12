@@ -373,6 +373,12 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>Sentry</h2>
                 <p>События, квота и unresolved issues<br>с one-click resolve.</p>
             </a>
+
+            <a href="/admin/logs" class="card" style="animation-delay: 0.7s;">
+                <div class="emoji">📋</div>
+                <h2>Logs</h2>
+                <p>Live tail structlog (krab_main.log)<br>с level-фильтром, grep и download.</p>
+            </a>
         </div>
 
         <footer>

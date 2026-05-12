@@ -349,6 +349,19 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     # _stop_swarm_team_clients / reserve_bot stop с per-team try/except.
     # Sentry issues: PYTHON-FASTAPI-4T (5 events) + PYTHON-FASTAPI-4S (3 events).
     "read() called while another coroutine is already waiting for incoming data",
+    # Wave 170 (13.05.2026): working-as-designed defence-in-depth маркеры.
+    # paid_gemini_guard_triggered: Wave 67 guard блокирует paid AI Studio запросы
+    #   после отключения billing — ожидаемое поведение, не runtime-bug. Источник
+    #   src/integrations/paid_gemini_guard.py (~17 events / 2h до даунгрейда).
+    # telegram_session_zombie_escalation: intentional escalation когда session
+    #   обнаружен в zombie state — LaunchAgent перезапускает процесс. Аналог
+    #   split_brain_escalation выше.
+    # macos_post_sleep_reinit_failed: ожидаемая транзитная ошибка после wake
+    #   из sleep — retry layer успешно её разрешает. Не Sentry-bug.
+    # Прецедент даунгрейда уровня логов: Wave 41-O (openclaw 500 → warning).
+    "paid_gemini_guard_triggered",
+    "telegram_session_zombie_escalation",
+    "macos_post_sleep_reinit_failed",
 )
 
 
