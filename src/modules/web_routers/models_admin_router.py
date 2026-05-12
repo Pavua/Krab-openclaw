@@ -669,6 +669,10 @@ _MODELS_PAGE_HTML = """<!DOCTYPE html>
     <nav class="tabs">
       <a href="/admin/models" class="active">Models</a>
       <a href="/admin/routing">Routing</a>
+      <a href="/admin/ecosystem">Ecosystem</a>
+      <a href="/admin/swarm">Swarm</a>
+      <a href="/admin/costs">Costs</a>
+      <a href="/admin/inbox">Inbox</a>
     </nav>
   </div>
   <div style="color: var(--muted); font-size: 12px;">

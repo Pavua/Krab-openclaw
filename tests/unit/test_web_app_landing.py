@@ -18,8 +18,8 @@ def test_html_doctype_and_lang():
 
 
 def test_html_title():
-    """Заголовок страницы содержит 'Krab Control Panel'."""
-    assert "<title>Krab Control Panel</title>" in LANDING_PAGE_HTML
+    """Заголовок страницы содержит 'Krab Owner Panel' (Wave 159 переименование)."""
+    assert "<title>Krab Owner Panel</title>" in LANDING_PAGE_HTML
 
 
 def test_html_charset_utf8():
@@ -50,8 +50,16 @@ def test_css_fade_in_animation():
 
 
 def test_nav_links_present():
-    """Все навигационные ссылки присутствуют."""
-    for href in ('href="/"', 'href="/stats"', 'href="/inbox"', 'href="/costs"', 'href="/swarm"'):
+    """Все навигационные ссылки присутствуют (Wave 159: добавлены admin pages)."""
+    for href in (
+        'href="/"',
+        'href="/admin/models"',
+        'href="/admin/routing"',
+        'href="/admin/swarm"',
+        'href="/admin/costs"',
+        'href="/stats"',
+        'href="/inbox"',
+    ):
         assert href in LANDING_PAGE_HTML, f"Ссылка {href} не найдена"
 
 
@@ -79,14 +87,14 @@ def test_stat_labels():
 
 
 def test_card_grid_links():
-    """Карточки ссылаются на все основные разделы."""
-    for href in ("/stats", "/inbox", "/costs", "/swarm"):
-        assert f'href="{href}"' in LANDING_PAGE_HTML
+    """Карточки ссылаются на admin pages (Wave 159)."""
+    for href in ("/admin/models", "/admin/routing", "/admin/swarm", "/admin/costs", "/inbox"):
+        assert f'href="{href}"' in LANDING_PAGE_HTML, f"Ссылка {href} не найдена в card grid"
 
 
 def test_card_grid_emojis():
-    """Эмодзи карточек присутствуют."""
-    for emoji in ("📊", "📥", "💰", "🐝"):
+    """Эмодзи карточек присутствуют (Wave 159: новый набор для admin pages)."""
+    for emoji in ("🎛️", "🎯", "🤖", "💰", "🌐", "📥"):
         assert emoji in LANDING_PAGE_HTML, f"Эмодзи {emoji} не найден"
 
 

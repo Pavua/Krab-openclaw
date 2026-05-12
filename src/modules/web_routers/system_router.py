@@ -38,10 +38,95 @@ from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 
 from ._context import RouterContext
 
+# Wave 146: Smart Routing 5-stage observability helpers (module-level for tests).
+_SMART_ROUTING_STAGES_ORDER: tuple[str, ...] = (
+    "hard_gate",
+    "chat_policy",
+    "regex",
+    "llm_classifier",
+    "feedback",
+)
+_SMART_ROUTING_OUTCOMES_ORDER: tuple[str, ...] = ("allow", "deny")
+
+
+def _read_smart_routing_counter() -> dict[tuple[str, str], int]:
+    """Wave 146: live snapshot krab_smart_routing_decisions_total{stage, outcome}."""
+    out: dict[tuple[str, str], int] = {}
+    try:
+        from src.core.prometheus_metrics import krab_smart_routing_decisions_total
+
+        if krab_smart_routing_decisions_total is None:
+            return out
+        for stage in _SMART_ROUTING_STAGES_ORDER:
+            for outcome in _SMART_ROUTING_OUTCOMES_ORDER:
+                try:
+                    metric = krab_smart_routing_decisions_total.labels(stage=stage, outcome=outcome)
+                    value = int(metric._value.get())  # noqa: SLF001
+                    if value > 0:
+                        out[(stage, outcome)] = value
+                except Exception:  # noqa: BLE001
+                    continue
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _build_routing_stats_payload() -> dict[str, Any]:
+    """Wave 146: aggregate Smart Routing counter → payload для UI."""
+    counter = _read_smart_routing_counter()
+    stages: list[dict[str, Any]] = []
+    total_decisions = 0
+    top_stage: str | None = None
+    top_outcome: str | None = None
+    top_count = 0
+    for stage in _SMART_ROUTING_STAGES_ORDER:
+        allow = counter.get((stage, "allow"), 0)
+        deny = counter.get((stage, "deny"), 0)
+        stage_total = allow + deny
+        allow_rate_pct = (allow / stage_total * 100.0) if stage_total > 0 else 0.0
+        stages.append(
+            {
+                "stage": stage,
+                "allow_count": allow,
+                "deny_count": deny,
+                "total": stage_total,
+                "allow_rate_pct": round(allow_rate_pct, 1),
+            }
+        )
+        total_decisions += stage_total
+        if allow > top_count:
+            top_count = allow
+            top_stage = stage
+            top_outcome = "allow"
+        if deny > top_count:
+            top_count = deny
+            top_stage = stage
+            top_outcome = "deny"
+    top_path: dict[str, Any] = {}
+    if top_stage and total_decisions > 0:
+        top_path = {
+            "winning_stage": top_stage,
+            "winning_outcome": top_outcome,
+            "winning_count": top_count,
+            "share_pct": round(top_count / total_decisions * 100.0, 1),
+        }
+    return {
+        "ok": True,
+        "stages": stages,
+        "total_decisions": total_decisions,
+        "top_decisions_path": top_path,
+    }
+
 
 def build_system_router(ctx: RouterContext) -> APIRouter:
     """Factory: APIRouter с runtime/stats/system endpoints."""
     router = APIRouter(tags=["system"])
+
+    # Wave 146: Smart Routing live dashboard
+    @router.get("/api/routing/stats")
+    async def routing_stats() -> dict:
+        """Wave 146: live aggregation Smart Routing 5-stage counter."""
+        return _build_routing_stats_payload()
 
     # ── /api/runtime/operator-profile ───────────────────────────────────────
 
@@ -59,7 +144,6 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
         """Единый summary endpoint — полное состояние Краба одним запросом."""
         from ...config import config
         from ...core.cost_analytics import cost_analytics as _ca
-        from ...core.network_probes_snapshot import collect_network_probes_snapshot
         from ...core.silence_mode import silence_manager
         from ...core.swarm_task_board import swarm_task_board
         from ...core.swarm_team_listener import is_listeners_enabled
@@ -98,8 +182,6 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
             },
             "silence": silence_manager.status(),
             "notify_enabled": bool(getattr(config, "TOOL_NARRATION_ENABLED", True)),
-            # Wave 65-K: snapshot Wave 63 probe state для proactive observability.
-            "network_probes": collect_network_probes_snapshot(kraab),
         }
 
     # ── /api/dashboard/summary ──────────────────────────────────────────────
@@ -183,24 +265,7 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
             "capability_slow_mode": slow_mode,
         }
 
-    # ── /api/network/probes (Wave 65-K) ─────────────────────────────────────
-
-    @router.get("/api/network/probes")
-    async def network_probes() -> dict:
-        """Wave 65-K: snapshot Wave 63 probe state (dispatcher/swarm/guard).
-
-        Используется внешним watchdog/observability для проактивного
-        обнаружения dispatcher starvation, swarm pts split-brain и paid
-        Gemini guard mode. fail-open: при отсутствии userbot возвращается
-        ``available=False`` без ошибки.
-        """
-        from ...core.network_probes_snapshot import collect_network_probes_snapshot
-
-        kraab = ctx.get_dep("kraab_userbot")
-        snapshot = collect_network_probes_snapshot(kraab)
-        return {"ok": True, "probes": snapshot}
-
-    # ── /api/moderation/audit (Wave 108) ────────────────────────────────────
+    # ── /api/moderation/audit ───────────────────────────────────────────────
 
     @router.get("/api/moderation/audit")
     async def moderation_audit(
@@ -208,11 +273,13 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
         action: str | None = Query(default=None),
         limit: int = Query(default=50, ge=1, le=1000),
     ) -> dict:
-        """Wave 108: append-only audit log модерационных действий."""
+        """Wave 108: append-only audit log модерационных действий.
+
+        Фильтры — опциональные. Без них возвращает последние `limit` записей
+        по всем чатам и действиям (DESC по timestamp).
+        """
         try:
-            from ...core.moderation_audit_log import (  # noqa: PLC0415
-                moderation_audit_log as _mal,
-            )
+            from ...core.moderation_audit_log import moderation_audit_log as _mal
 
             rows = _mal.query_recent(chat_id=chat_id, action=action, limit=limit)
             return {"ok": True, "count": len(rows), "rows": rows}
@@ -224,20 +291,6 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
                 "rows": [],
             }
 
-    # ── /api/mcp/health (Wave 109) ──────────────────────────────────────────
-
-    @router.get("/api/mcp/health")
-    async def mcp_health() -> dict:
-        """Wave 109: snapshot all MCP server probe state."""
-        try:
-            from ...core.mcp_health_probe import (  # noqa: PLC0415
-                mcp_health_probe as _mhp,
-            )
-
-            return {"ok": True, "servers": _mhp.get_snapshot()}
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": str(exc), "servers": {}}
-
     # ── /api/cron/history (Wave 115) ────────────────────────────────────────
 
     @router.get("/api/cron/history")
@@ -246,11 +299,14 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
         limit: int = Query(default=50, ge=1, le=1000),
         stats: bool = Query(default=False),
     ) -> dict:
-        """Wave 115: историческое окно cron-запусков (LaunchAgent invocations)."""
+        """Wave 115: историческое окно cron-запусков (LaunchAgent invocations).
+
+        - `label` — фильтр по job-метке (опционально).
+        - `limit` — сколько последних записей вернуть.
+        - `stats=true` — вернуть aggregated per-label статистику вместо rows.
+        """
         try:
-            from ...core.cron_history_log import (  # noqa: PLC0415
-                cron_history_log as _chl,
-            )
+            from ...core.cron_history_log import cron_history_log as _chl
 
             if stats:
                 rows = _chl.stats_by_label()
@@ -1042,57 +1098,35 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
             "after": after_state,
         }
 
-    # ── /api/admin/env/reload (Wave 106) ────────────────────────────────────
+    # ── Wave 106: hot-reload safe env flags без full restart ────────────────
 
     @router.post("/api/admin/env/reload")
     async def admin_env_reload(
-        payload: dict = Body(default_factory=dict),
+        request: Request,
         x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
         token: str = Query(default=""),
     ) -> dict:
-        """Wave 106: hot-reload whitelisted env vars из .env без рестарта.
-
-        Owner-only; читает .env (или payload.dotenv_path) и обновляет
-        os.environ только для SAFE_RELOAD_ENV_VARS. Возвращает diff.
         """
+        Перечитывает .env и обновляет os.environ только для whitelisted
+        observability-флагов (см. SAFE_RELOAD_ENV_VARS). Никаких credentials
+        и путей — для них нужен полноценный restart.
+        """
+        import structlog
+
+        from ...core.env_hot_reload import reload_safe_env
+
+        _logger = structlog.get_logger("system_router")
+        client_host = request.client.host if request.client else "unknown"
+
         ctx.assert_write_access(x_krab_web_key, token)
-        from src.core.env_hot_reload import reload_safe_env  # noqa: PLC0415
-
-        data = payload or {}
-        dotenv_path = str(data.get("dotenv_path") or "").strip() or None
-        result = reload_safe_env(dotenv_path=dotenv_path)
-        if not result.get("ok"):
-            raise HTTPException(
-                status_code=500,
-                detail=f"env_reload_failed: {result.get('error', 'unknown')}",
-            )
+        result = reload_safe_env()
+        _logger.info(
+            "admin_env_reload_called",
+            client_ip=client_host,
+            ok=result.get("ok"),
+            changed=len(result.get("diff", {}) or {}),
+        )
         return result
-
-    # ── /api/chat/{chat_id}/heat & /api/chats/heat/top10 (Wave 103) ─────────
-
-    @router.get("/api/chat/{chat_id}/heat")
-    async def chat_heat(chat_id: str, window_minutes: int = Query(1440, ge=5, le=10080)) -> dict:
-        """Wave 103: heat score (0..1) для чата + декомпозиция факторов."""
-        from src.core.chat_heat_score import compute_chat_heat  # noqa: PLC0415
-
-        comp = compute_chat_heat(chat_id, window_minutes=window_minutes)
-        return {"ok": True, "heat": comp.to_dict()}
-
-    @router.get("/api/chats/heat/top10")
-    async def chats_heat_top10(
-        limit: int = Query(10, ge=1, le=50),
-        window_minutes: int = Query(1440, ge=5, le=10080),
-    ) -> dict:
-        """Wave 103: top-N чатов по heat score за окно."""
-        from src.core.chat_heat_score import top_chats_by_heat  # noqa: PLC0415
-
-        results = top_chats_by_heat(limit=limit, window_minutes=window_minutes)
-        return {
-            "ok": True,
-            "count": len(results),
-            "window_minutes": window_minutes,
-            "chats": [c.to_dict() for c in results],
-        }
 
     # ── Wave 122: owner-panel audit log API ────────────────────────────────
 
@@ -1102,325 +1136,16 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
         token: str = Query(default=""),
         limit: int = Query(default=100, ge=1, le=1000),
     ) -> dict:
-        """Wave 122: последние записи owner-panel audit log."""
-        from ..web_middleware.audit_logger import get_default_storage  # noqa: PLC0415
+        """Возвращает последние ``limit`` записей owner-panel audit log.
+
+        Forensic-видимость: timestamp/method/path/status/auth_prefix/
+        client_ip/duration_ms для каждого non-exempt API request'а.
+        """
+        from ..web_middleware.audit_logger import get_default_storage
 
         ctx.assert_write_access(x_krab_web_key, token)
         storage = get_default_storage()
         rows = storage.query_recent(limit=limit)
         return {"ok": True, "count": len(rows), "items": rows}
 
-    # ── Wave 146: Smart Routing 5-stage pipeline statistics ─────────────────
-
-    @router.get("/api/routing/stats")
-    async def routing_stats() -> dict:
-        """Wave 146: агрегированная статистика Smart Routing pipeline.
-
-        Читает live counter krab_smart_routing_decisions_total (Wave 73) и
-        выдаёт per-stage allow/deny counts + общий total. Endpoint используется
-        страницей /admin/routing для визуализации 5-stage pipeline.
-
-        Stages в фиксированном порядке:
-            hard_gate → chat_policy → regex → llm_classifier → feedback
-        """
-        return _build_routing_stats_payload()
-
-    # ── Wave 146: HTML страница визуализации Smart Routing ──────────────────
-
-    @router.get("/admin/routing")
-    async def admin_routing_page():  # type: ignore[no-untyped-def]
-        """Wave 146: HTML страница с per-stage allow/deny + pipeline flow."""
-        from fastapi.responses import HTMLResponse  # noqa: PLC0415
-
-        return HTMLResponse(_ROUTING_PAGE_HTML, headers={"Cache-Control": "no-store"})
-
     return router
-
-
-# ── Wave 146: helpers вне router-factory (для unit-тестируемости) ──────────
-
-
-_SMART_ROUTING_STAGES_ORDER: tuple[str, ...] = (
-    "hard_gate",
-    "chat_policy",
-    "regex",
-    "llm_classifier",
-    "feedback",
-)
-
-
-def _read_smart_routing_counter(stage: str, outcome: str) -> float:
-    """Wave 146: безопасно читает live значение Counter{stage,outcome}.
-
-    Возвращает 0.0 если prometheus_client недоступен или метрика не
-    инициализирована. Fail-safe — никогда не бросает в hot path.
-    """
-    try:
-        from src.core import prometheus_metrics as pm  # noqa: PLC0415
-
-        counter = getattr(pm, "krab_smart_routing_decisions_total", None)
-        if counter is None:
-            return 0.0
-        # prometheus_client Counter: .labels(...)._value.get() даёт текущее значение
-        return float(counter.labels(stage=stage, outcome=outcome)._value.get())
-    except Exception:  # noqa: BLE001
-        return 0.0
-
-
-def _build_routing_stats_payload() -> dict[str, Any]:
-    """Wave 146: собирает payload для GET /api/routing/stats.
-
-    Структура:
-        {
-          "ok": true,
-          "stages": [
-            {"stage": "hard_gate", "allow_count": int, "deny_count": int,
-             "total": int, "allow_rate_pct": float},
-            ...
-          ],
-          "total_decisions": int,
-          "top_decisions_path": {
-              "winning_stage": "regex" | "hard_gate" | ...,
-              "winning_outcome": "allow" | "deny",
-              "winning_count": int,
-              "share_pct": float
-          }
-        }
-    """
-    stages_data: list[dict[str, Any]] = []
-    overall_total = 0
-    cells: list[tuple[str, str, int]] = []  # (stage, outcome, count)
-
-    for stage in _SMART_ROUTING_STAGES_ORDER:
-        allow_count = int(_read_smart_routing_counter(stage, "allow"))
-        deny_count = int(_read_smart_routing_counter(stage, "deny"))
-        total = allow_count + deny_count
-        overall_total += total
-        allow_rate_pct = round((allow_count / total * 100.0), 2) if total > 0 else 0.0
-        stages_data.append(
-            {
-                "stage": stage,
-                "allow_count": allow_count,
-                "deny_count": deny_count,
-                "total": total,
-                "allow_rate_pct": allow_rate_pct,
-            }
-        )
-        cells.append((stage, "allow", allow_count))
-        cells.append((stage, "deny", deny_count))
-
-    # top_decisions_path — cell (stage, outcome) с максимальным count.
-    top_payload: dict[str, Any] = {
-        "winning_stage": None,
-        "winning_outcome": None,
-        "winning_count": 0,
-        "share_pct": 0.0,
-    }
-    if overall_total > 0:
-        best_stage, best_outcome, best_count = max(cells, key=lambda c: c[2])
-        if best_count > 0:
-            top_payload = {
-                "winning_stage": best_stage,
-                "winning_outcome": best_outcome,
-                "winning_count": best_count,
-                "share_pct": round((best_count / overall_total * 100.0), 2),
-            }
-
-    return {
-        "ok": True,
-        "stages": stages_data,
-        "total_decisions": overall_total,
-        "top_decisions_path": top_payload,
-    }
-
-
-# ── Wave 146: HTML шаблон /admin/routing ────────────────────────────────────
-
-
-_ROUTING_PAGE_HTML = """<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<title>Krab — Smart Routing</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  :root {
-    --bg: #0d1117;
-    --card: #161b22;
-    --border: #30363d;
-    --fg: #e6edf3;
-    --muted: #8b949e;
-    --accent: #58a6ff;
-    --ok: #2ea043;
-    --warn: #d29922;
-    --err: #f85149;
-  }
-  body { background: var(--bg); color: var(--fg); margin: 0;
-         font: 14px -apple-system, BlinkMacSystemFont, sans-serif; }
-  header { padding: 16px 24px; border-bottom: 1px solid var(--border);
-           display: flex; justify-content: space-between; align-items: center; }
-  h1 { margin: 0; font-size: 18px; }
-  nav.tabs a { color: var(--muted); text-decoration: none; margin-right: 18px;
-               font-size: 13px; padding-bottom: 3px; }
-  nav.tabs a:hover { color: var(--accent); }
-  nav.tabs a.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
-  main { padding: 24px; max-width: 1200px; margin: auto; }
-  .summary { background: var(--card); border: 1px solid var(--border);
-             border-radius: 8px; padding: 16px; margin-bottom: 20px;
-             display: flex; gap: 32px; flex-wrap: wrap; }
-  .stat { display: flex; flex-direction: column; }
-  .stat-label { color: var(--muted); font-size: 11px; text-transform: uppercase;
-                letter-spacing: 1px; margin-bottom: 4px; }
-  .stat-value { font-size: 24px; font-weight: 600; color: var(--accent); }
-  .pipeline { display: flex; align-items: stretch; gap: 0; margin-bottom: 24px;
-              flex-wrap: wrap; }
-  .stage-card { background: var(--card); border: 1px solid var(--border);
-                border-radius: 8px; padding: 14px 16px; min-width: 180px;
-                flex: 1 1 180px; position: relative; }
-  .stage-arrow { display: flex; align-items: center; padding: 0 6px;
-                 color: var(--muted); font-size: 18px; }
-  .stage-name { font-weight: 600; font-size: 13px; color: var(--accent);
-                text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
-  .stage-total { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
-  .bar-row { font-size: 11px; color: var(--muted); margin: 4px 0 2px; display: flex;
-             justify-content: space-between; }
-  .bar { height: 6px; background: var(--border); border-radius: 4px; overflow: hidden; }
-  .bar-fill { height: 100%; transition: width 0.4s ease; }
-  .bar-fill.allow { background: var(--ok); }
-  .bar-fill.deny { background: var(--err); }
-  .b-allow { color: var(--ok); font-weight: 600; }
-  .b-deny  { color: var(--err); font-weight: 600; }
-  .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
-  .footer-note { color: var(--muted); font-size: 12px; margin-top: 18px; }
-  code { font-family: ui-monospace, monospace; font-size: 12px;
-         background: var(--card); padding: 2px 6px; border-radius: 4px; }
-</style>
-</head>
-<body>
-<header>
-  <div style="display:flex; align-items:center; gap:18px;">
-    <h1>Krab — Smart Routing</h1>
-    <nav class="tabs">
-      <a href="/admin/models">Models</a>
-      <a href="/admin/routing" class="active">Routing</a>
-    </nav>
-  </div>
-  <div style="color: var(--muted); font-size: 12px;">
-    Refresh: <span id="last-refresh">—</span>
-  </div>
-</header>
-<main>
-  <div class="summary">
-    <div class="stat">
-      <div class="stat-label">Total decisions</div>
-      <div class="stat-value" id="total-decisions">—</div>
-    </div>
-    <div class="stat">
-      <div class="stat-label">Top path</div>
-      <div class="stat-value" id="top-path">—</div>
-    </div>
-    <div class="stat">
-      <div class="stat-label">Top path share</div>
-      <div class="stat-value" id="top-share">—</div>
-    </div>
-  </div>
-  <div class="pipeline" id="pipeline"></div>
-  <div class="footer-note">
-    Wave 73 Prometheus counter <code>krab_smart_routing_decisions_total</code>.
-    Polling every 30s. Stages: hard_gate → chat_policy → regex → llm_classifier → feedback.
-  </div>
-</main>
-<script>
-'use strict';
-
-function el(tag, attrs, children) {
-  const node = document.createElement(tag);
-  if (attrs) {
-    for (const k in attrs) {
-      if (k === 'class') node.className = attrs[k];
-      else if (k === 'text') node.textContent = attrs[k];
-      else node.setAttribute(k, attrs[k]);
-    }
-  }
-  if (children) for (const c of children) if (c) node.appendChild(c);
-  return node;
-}
-
-function pct(v) { return (v == null) ? '—' : (v.toFixed(1) + '%'); }
-
-function clearNode(node) {
-  while (node.firstChild) node.removeChild(node.firstChild);
-}
-
-function renderStage(stage) {
-  const total = stage.total || 0;
-  const allowW = total > 0 ? (stage.allow_count / total * 100) : 0;
-  const denyW  = total > 0 ? (stage.deny_count  / total * 100) : 0;
-  const card = el('div', { class: 'stage-card' }, [
-    el('div', { class: 'stage-name', text: stage.stage }),
-    el('div', { class: 'stage-total', text: String(total) }),
-    el('div', { class: 'bar-row' }, [
-      el('span', { class: 'b-allow', text: 'allow ' + stage.allow_count }),
-      el('span', { text: pct(stage.allow_rate_pct) }),
-    ]),
-    el('div', { class: 'bar' }, [
-      el('div', { class: 'bar-fill allow', style: 'width:' + allowW + '%' }),
-    ]),
-    el('div', { class: 'bar-row' }, [
-      el('span', { class: 'b-deny', text: 'deny ' + stage.deny_count }),
-    ]),
-    el('div', { class: 'bar' }, [
-      el('div', { class: 'bar-fill deny', style: 'width:' + denyW + '%' }),
-    ]),
-  ]);
-  return card;
-}
-
-function renderPipeline(data) {
-  const root = document.getElementById('pipeline');
-  clearNode(root);
-  const stages = data.stages || [];
-  if (!stages.length) {
-    root.appendChild(el('div', { class: 'empty', text: 'no decisions recorded yet' }));
-    return;
-  }
-  stages.forEach((stage, i) => {
-    root.appendChild(renderStage(stage));
-    if (i < stages.length - 1) {
-      root.appendChild(el('div', { class: 'stage-arrow', text: '→' }));
-    }
-  });
-}
-
-function renderSummary(data) {
-  document.getElementById('total-decisions').textContent = String(data.total_decisions || 0);
-  const top = data.top_decisions_path || {};
-  if (top.winning_stage) {
-    document.getElementById('top-path').textContent =
-      top.winning_stage + ' / ' + top.winning_outcome;
-    document.getElementById('top-share').textContent = pct(top.share_pct);
-  } else {
-    document.getElementById('top-path').textContent = '—';
-    document.getElementById('top-share').textContent = '—';
-  }
-}
-
-async function refresh() {
-  try {
-    const r = await fetch('/api/routing/stats', { cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const data = await r.json();
-    renderSummary(data);
-    renderPipeline(data);
-    document.getElementById('last-refresh').textContent = new Date().toLocaleTimeString();
-  } catch (e) {
-    document.getElementById('last-refresh').textContent = 'error: ' + e.message;
-  }
-}
-
-refresh();
-setInterval(refresh, 30000);
-</script>
-</body>
-</html>
-"""

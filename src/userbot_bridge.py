@@ -1964,6 +1964,22 @@ class KraabUserbot(
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
+            # Wave 151: bootstrap для Wave 145 model_switch_history singleton.
+            # Persisted store для POST /api/admin/model/switch (Wave 144 UI picker)
+            # — гарантирует что путь резолвится в `_runtime_state_dir` до первого
+            # log_switch (иначе lazy default fallback).
+            try:
+                from .core.model_switch_history import model_switch_history  # noqa: PLC0415
+
+                model_switch_history.configure_default_path(
+                    _runtime_state_dir / "model_switch_history.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "model_switch_history_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
         except Exception as _exc:  # noqa: BLE001
             logger.warning(
                 "learning_singletons_bootstrap_failed",

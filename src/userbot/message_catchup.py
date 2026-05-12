@@ -52,6 +52,7 @@ import asyncio
 import json
 import os
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -116,6 +117,103 @@ def _resolve_history_path() -> Path:
         or str(Path.home() / ".openclaw" / "krab_runtime_state")
     ).expanduser()
     return base_dir / "catchup_history.jsonl"
+
+
+# Wave 154: лимит FIFO для JSONL истории catchup-sessions. Один restart Krab'а
+# = одна запись; ~100 хватает на ~1-3 месяца наблюдаемости.
+_HISTORY_MAX_ENTRIES = 100
+
+# Wave 154: in-process lock для сериализации append+trim. OS-level append-mode
+# даёт atomic write для коротких строк (< PIPE_BUF=4KB на macOS/Linux), но
+# trim требует read-modify-write — отдельная защита от race внутри процесса.
+_HISTORY_LOCK = threading.Lock()
+
+
+def _record_catchup_history(
+    *,
+    started_at: float,
+    completed_at: float,
+    target_count: int,
+    per_chat_stats: list[dict[str, Any]],
+) -> None:
+    """Wave 154: append одной записи о завершённой catchup-сессии в JSONL.
+
+    Schema (single entry, one JSON object per line):
+      - ``started_at_utc`` / ``completed_at_utc`` — ISO-8601 UTC из float unix-ts.
+      - ``duration_sec`` — completed_at - started_at (округлено до 3 знаков).
+      - ``target_count`` — длина исходного targets list.
+      - ``total_caught_up`` — sum(by_chat[*].caught_up).
+      - ``total_skipped_self`` — sum(by_chat[*].skipped_self).
+      - ``by_chat`` — verbatim per_chat_stats (dicts с chat_id/caught_up/...).
+
+    Поведение:
+      - File path: ``_resolve_history_path()`` (KRAB_RUNTIME_STATE_DIR).
+      - Append mode (``a``) — короткая строка пишется atomic на POSIX.
+      - После append проверяется кол-во строк; если > ``_HISTORY_MAX_ENTRIES``,
+        выполняется FIFO trim (rewrite через tmp + os.replace).
+      - In-process lock сериализует append+trim — concurrent writers из одного
+        процесса не теряют записи и не портят trim.
+      - Любая OSError (включая ENOSPC) → warning + return; catchup не блокируется.
+    """
+    duration_sec = round(max(0.0, float(completed_at) - float(started_at)), 3)
+    started_iso = datetime.fromtimestamp(float(started_at), tz=timezone.utc).isoformat()
+    completed_iso = datetime.fromtimestamp(float(completed_at), tz=timezone.utc).isoformat()
+    total_caught_up = 0
+    total_skipped_self = 0
+    for stat in per_chat_stats:
+        try:
+            total_caught_up += int(stat.get("caught_up", 0) or 0)
+            total_skipped_self += int(stat.get("skipped_self", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+    entry: dict[str, Any] = {
+        "started_at_utc": started_iso,
+        "completed_at_utc": completed_iso,
+        "duration_sec": duration_sec,
+        "target_count": int(target_count),
+        "total_caught_up": total_caught_up,
+        "total_skipped_self": total_skipped_self,
+        "by_chat": list(per_chat_stats),
+    }
+    line = json.dumps(entry, ensure_ascii=False)
+    path = _resolve_history_path()
+    try:
+        with _HISTORY_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Append одной строки — atomic на POSIX для коротких записей.
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+            # FIFO trim: если превысили лимит, переписываем файл с tail-ом.
+            try:
+                with open(path, encoding="utf-8") as f:
+                    lines = f.readlines()
+            except OSError:
+                return  # не критично — trim попробуем в следующий раз
+            if len(lines) > _HISTORY_MAX_ENTRIES:
+                tail = lines[-_HISTORY_MAX_ENTRIES:]
+                tmp_fd, tmp_path = tempfile.mkstemp(
+                    prefix=".catchup_history_",
+                    suffix=".jsonl.tmp",
+                    dir=str(path.parent),
+                )
+                try:
+                    with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                        f.writelines(tail)
+                    os.replace(tmp_path, path)
+                except OSError:
+                    # cleanup tmp при ошибке rewrite, не raise
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    raise
+    except OSError as exc:
+        logger.warning(
+            "catchup_history_write_failed",
+            path=str(path),
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
 
 
 def _resolve_max_lookback(default: int = 20) -> int:
@@ -578,6 +676,9 @@ class MessageCatchupMixin:
             logger.info("startup_catchup_skipped", reason="no_targets")
             return result
 
+        # Wave 154: фиксируем wall-clock для duration в catchup_history.jsonl.
+        started_at = time.time()
+
         # Семафор ограничивает параллельные get_chat_history (Telegram rate-limit).
         concurrency = _resolve_catchup_concurrency()
         sem = asyncio.Semaphore(concurrency)
@@ -637,7 +738,15 @@ class MessageCatchupMixin:
             concurrency=concurrency,
         )
         # Wave 116: Gauge на момент успешного завершения multi-chat catchup'а.
-        mark_catchup_completed(time.time())
+        completed_at = time.time()
+        mark_catchup_completed(completed_at)
+        # Wave 154: персистим запись о catchup-сессии в JSONL для observability.
+        _record_catchup_history(
+            started_at=started_at,
+            completed_at=completed_at,
+            target_count=len(targets),
+            per_chat_stats=per_chat_stats,
+        )
         return result
 
     async def _run_startup_catchup_safe(self) -> None:

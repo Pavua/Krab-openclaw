@@ -498,13 +498,18 @@ class WebApp:
         logger.info("rate_limit_middleware_enabled", source="env")
 
     def _setup_audit_log_middleware(self) -> None:
-        """Wave 122: append-only audit log всех authenticated API requests.
+        """Wave 122: append-only audit log всех API requests.
 
-        Записываем method/path/status/auth_prefix/client_ip/duration_ms в
-        SQLite ~/.openclaw/krab_runtime_state/owner_panel_audit.db.
-        Default-ON, env-gate KRAB_OWNER_PANEL_AUDIT_ENABLED=0 для отключения.
+        Логируем ``method/path/status/auth_prefix/client_ip/duration_ms`` в
+        SQLite ``~/.openclaw/krab_runtime_state/owner_panel_audit.db``.
+        Forensic-видимость на случай leak'а credentials.
+
+        Default-ON; отключение требует ``KRAB_OWNER_PANEL_AUDIT_ENABLED=0``.
         Exempt: /metrics, /health, /healthz, /api/health/lite, /api/v1/health.
-        Порядок: ПОСЛЕ rate_limiter — audit видит финальный 429 status.
+
+        Порядок middleware: добавляем ПОСЛЕ rate_limiter — Starlette
+        выполняет последний добавленный первым (audit оборачивает
+        rate_limit, видит финальный статус включая 429).
         """
         from .web_middleware.audit_logger import (
             AuditLoggerMiddleware,
@@ -9173,6 +9178,25 @@ class WebApp:
             """Возвращает capability-срез по control plane и внешним voice/audio сервисам."""
             return await self._ecosystem_capabilities_snapshot()
 
+        @self.app.get("/api/mcp/health")
+        async def mcp_health_snapshot():
+            """Wave 109: snapshot текущего MCP probe.
+
+            Возвращает per-server словарь с last_probe_ts/last_ok/
+            consecutive_fails/total_fails/last_reason. Если probe ещё не
+            прогонялся (early bootstrap), словарь будет пуст.
+            """
+            from ..core.mcp_health_probe import mcp_health_probe
+
+            snapshot = mcp_health_probe.get_snapshot()
+            alive = sum(1 for entry in snapshot.values() if entry.get("last_ok"))
+            return {
+                "servers": snapshot,
+                "total": len(snapshot),
+                "alive": alive,
+                "down": len(snapshot) - alive,
+            }
+
         # /api/ops/{diagnostics, runtime_snapshot, models, report/export,
         # bundle, bundle/export, openclaw-procs} — extracted в
         # monitoring_router.py (Phase 2 Part 2B, Session 27).
@@ -9223,14 +9247,6 @@ class WebApp:
         )
 
         self.app.include_router(_build_agent_engine_metrics(self._make_router_context()))
-
-        # Wave 144 (Session 53) — visual model picker UI на :8080.
-        # GET /admin/models + /api/models/registry + POST /api/admin/model/switch.
-        from .web_routers.models_admin_router import (
-            build_models_admin_router as _build_models_admin,
-        )
-
-        self.app.include_router(_build_models_admin(self._make_router_context()))
 
         # ── Chat Window Manager endpoints ────────────────────────────────────
 

@@ -26,8 +26,15 @@ import httpx
 # TTL кеша успешных результатов probe (секунды)
 _PROBE_CACHE_TTL = 60.0
 
-# Внешний таймаут обёртки wait_for (секунды)
-_PROBE_OUTER_TIMEOUT = 15.0
+# Wave 153: dashboard hang fix — раньше outer=15s + inner=12s давали суммарные
+# паузы до ~30s на /api/openclaw/cloud/runtime-check (free probe + paid probe).
+# Probe не должен задерживать smoke tests или owner panel. Снижаем outer→6s,
+# default inner→5s. При network unreachable получаем быстрый
+# semantic_error_code="probe_timeout" и UI рисует "недоступно" вместо hang.
+_PROBE_OUTER_TIMEOUT = 6.0
+
+# Default inner httpx timeout (override per-call возможен через probe_gemini_key(timeout=...)).
+_PROBE_HTTPX_DEFAULT_TIMEOUT = 5.0
 
 # Кеш: (api_key, key_source, key_tier) -> (CloudProbeResult, timestamp)
 _probe_ok_cache: dict[tuple[str, str, str], tuple[Any, float]] = {}
@@ -145,6 +152,29 @@ def _pick_probe_model(preferred_model: str, available_models: set[str]) -> str:
     return candidate or DEFAULT_GEMINI_MODEL
 
 
+def _paid_gemini_guard_blocks_probe(key_tier: str) -> bool:
+    """Wave 153: skip cloud probe если paid_gemini_guard блокирует paid host.
+
+    Returns True если:
+      * KRAB_BLOCK_PAID_GEMINI_AI_STUDIO=1 (default block mode);
+      * probe адресуется ``generativelanguage.googleapis.com`` (всегда — захардкожено в _do_probe).
+
+    Идея: при block mode не дёргаем endpoint, чтобы не получить
+    PaidGeminiGuardError из httpx hook и не тратить ~30s на полный probe ladder.
+    Free tier тоже скипаем, потому что host один и тот же (AI Studio paid+free
+    делят один endpoint). Free key всё равно работает только через Vertex/Gemma —
+    Wave 66 fix.
+    """
+    try:
+        from src.integrations.paid_gemini_guard import _guard_mode
+    except ImportError:
+        return False
+    try:
+        return _guard_mode() == "block"
+    except Exception:  # noqa: BLE001 — guard не должен ломать probe
+        return False
+
+
 async def _do_probe(
     api_key: str,
     *,
@@ -154,6 +184,13 @@ async def _do_probe(
     model: str,
 ) -> CloudProbeResult:
     """Внутренняя реализация HTTP-probe (без таймаута-обёртки и кеша)."""
+    # Wave 153: try import PaidGeminiGuardError для structured catch.
+    # Lazy import чтобы не создавать circular dep при первой инициализации.
+    try:
+        from src.integrations.paid_gemini_guard import PaidGeminiGuardError
+    except ImportError:
+        PaidGeminiGuardError = None  # type: ignore[assignment, misc]  # noqa: N806 — alias под exception class
+
     params = {"key": api_key}
     list_url = "https://generativelanguage.googleapis.com/v1beta/models"
     try:
@@ -203,6 +240,20 @@ async def _do_probe(
                 detail=gen_body if gen_resp.status_code != 200 else "",
             )
     except (httpx.HTTPError, OSError) as exc:
+        # Wave 153: PaidGeminiGuardError(RuntimeError) может всплыть как RuntimeError
+        # из httpx event_hook; httpx иногда оборачивает в RequestError. Перехватываем
+        # отдельно ниже, но defence in depth: проверяем по типу.
+        if PaidGeminiGuardError is not None and isinstance(
+            getattr(exc, "__cause__", None), PaidGeminiGuardError
+        ):
+            return CloudProbeResult(
+                provider_status="blocked",
+                key_source=key_source,
+                key_tier=key_tier,
+                semantic_error_code="blocked_by_guard",
+                recovery_action="use_vertex_or_disable_guard",
+                detail="paid_gemini_guard blocked probe (Wave 67)",
+            )
         return CloudProbeResult(
             provider_status="error",
             key_source=key_source,
@@ -211,6 +262,19 @@ async def _do_probe(
             recovery_action="retry_or_fallback",
             detail=str(exc),
         )
+    except RuntimeError as exc:
+        # Wave 153: explicit catch для PaidGeminiGuardError (RuntimeError subclass).
+        if PaidGeminiGuardError is not None and isinstance(exc, PaidGeminiGuardError):
+            return CloudProbeResult(
+                provider_status="blocked",
+                key_source=key_source,
+                key_tier=key_tier,
+                semantic_error_code="blocked_by_guard",
+                recovery_action="use_vertex_or_disable_guard",
+                detail="paid_gemini_guard blocked probe (Wave 67)",
+            )
+        # Другие RuntimeError — не наша история, всплываем как есть.
+        raise
 
 
 async def probe_gemini_key(
@@ -218,7 +282,7 @@ async def probe_gemini_key(
     *,
     key_source: str,
     key_tier: str,
-    timeout: float = 12.0,
+    timeout: float = _PROBE_HTTPX_DEFAULT_TIMEOUT,
     model: str = DEFAULT_GEMINI_MODEL,
 ) -> CloudProbeResult:
     """
@@ -228,6 +292,10 @@ async def probe_gemini_key(
     - Оборачиваем весь probe в asyncio.wait_for(_PROBE_OUTER_TIMEOUT).
     - TimeoutError → probe_timeout (не network_error), кеш tier не засоряется.
     - Успешные результаты кешируются на _PROBE_CACHE_TTL секунд.
+
+    Wave 153: default timeout снижен с 12.0 до _PROBE_HTTPX_DEFAULT_TIMEOUT (5.0s).
+    paid_gemini_guard block mode → skip полностью (без HTTP), возвращаем
+    ``provider_status='blocked'`` сразу. Это устраняет 30s dashboard hang.
     """
     if not api_key:
         return CloudProbeResult(
@@ -246,6 +314,18 @@ async def probe_gemini_key(
             semantic_error_code="unsupported_key_type",
             recovery_action="replace_with_aistudio_key",
             detail="Ожидается API key формата AIza...",
+        )
+
+    # Wave 153: paid_gemini_guard блокирует AI Studio host — не дёргаем endpoint
+    # и не ждём _PROBE_OUTER_TIMEOUT. Возвращаем структурированный fallback.
+    if _paid_gemini_guard_blocks_probe(key_tier):
+        return CloudProbeResult(
+            provider_status="blocked",
+            key_source=key_source,
+            key_tier=key_tier,
+            semantic_error_code="blocked_by_guard",
+            recovery_action="use_vertex_or_disable_guard",
+            detail="paid_gemini_guard active (Wave 67): probe skipped to avoid dashboard hang",
         )
 
     # Проверяем кеш успешных результатов
