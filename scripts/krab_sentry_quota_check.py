@@ -16,6 +16,23 @@
 4. Output: JSON snapshot в stdout + log.
 5. При regression — write alert log + (опционально) Telegram DM owner.
 
+Usage:
+    # Ручной запуск (первый раз инициализирует baseline, далее compare):
+    venv/bin/python scripts/krab_sentry_quota_check.py
+
+    # Принудительный reset baseline (после крупного hygiene-фикса):
+    rm ~/.openclaw/krab_runtime_state/sentry_quota_baseline.json
+    venv/bin/python scripts/krab_sentry_quota_check.py
+
+    # Через LaunchAgent (ai.krab.sentry-quota-check, weekly Mon 10:00):
+    launchctl start ai.krab.sentry-quota-check
+
+Baseline format (sentry_quota_baseline.json):
+    {
+      "initialized_at": "2026-05-12T03:26:57.064073+00:00",  # ISO-8601 UTC
+      "total_events": 497                                     # int, sum(quantity) за 7d
+    }
+
 Env (из .env):
 - SENTRY_AUTH_TOKEN, SENTRY_ORG_SLUG (default po-zm),
 - KRAB_SENTRY_QUOTA_REGRESSION_THRESHOLD (default 0.20 = 20%),
