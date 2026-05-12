@@ -557,6 +557,7 @@ class LLMFlowMixin:
         timeout_error_was_sent = False
         _reaction_sent = False  # флаг: уже поставили ✅/❌ на исходное сообщение
         _agent_marked = False  # флаг: уже отметили agent_mode реакцией
+        _typing_indicator: Any | None = None  # Wave 173: human-like presence
 
         # Sentry span: трассируем end-to-end LLM flow (10% sampling в production)
         _sentry_span = None
@@ -733,6 +734,25 @@ class LLMFlowMixin:
                     system_prompt = system_prompt + "\n\n" + _humor_advice
             except Exception as _jc_exc:  # noqa: BLE001
                 logger.debug("joke_calibration_prompt_inject_failed", error=str(_jc_exc))
+
+        # Wave 173 (Session 48): human-like typing indicator вокруг LLM stream.
+        # Async context manager шлёт "Краб печатает..." каждые 4 сек пока LLM
+        # генерирует. Env gate `KRAB_TYPING_INDICATOR_ENABLED` (default 1) +
+        # per-chat blocklist `KRAB_TYPING_INDICATOR_BLOCKED_CHATS`. При disabled —
+        # no-op (existing `action_task` mechanism продолжает работать как fallback).
+        # Wired через `_enter_typing_indicator` чтобы не индентировать тысячу
+        # строк существующего LLM flow в `async with` блок.
+        try:
+            from .typing_indicator import TypingIndicator as _TypingIndicator  # noqa: PLC0415
+
+            _typing_indicator = _TypingIndicator(
+                getattr(self, "client", None) or getattr(self, "app", None),
+                getattr(getattr(message, "chat", None), "id", chat_id),
+            )
+            await _typing_indicator.__aenter__()
+        except Exception as _ti_exc:  # noqa: BLE001
+            logger.debug("typing_indicator_enter_failed", error=str(_ti_exc))
+            _typing_indicator = None
 
         # Wave 17-B (Phase C): engine dispatch за ENV gate.
         # KRAB_AGENT_ENGINE_DISPATCH_ENABLED=0 (default) → всегда OpenClaw (zero risk).
@@ -2314,6 +2334,12 @@ class LLMFlowMixin:
             action_stop_event.set()
             action_task.cancel()
             await asyncio.gather(action_task, return_exceptions=True)
+            # Wave 173: закрываем TypingIndicator (Wave 173). Шлёт ChatAction.CANCEL.
+            if _typing_indicator is not None:
+                try:
+                    await _typing_indicator.__aexit__(None, None, None)
+                except Exception as _ti_exc:  # noqa: BLE001
+                    logger.debug("typing_indicator_exit_failed", error=str(_ti_exc))
             # Снимаем регистрацию task у клиента: следующий flow запишет свой.
             if hasattr(openclaw_client, "register_current_request_task"):
                 try:
