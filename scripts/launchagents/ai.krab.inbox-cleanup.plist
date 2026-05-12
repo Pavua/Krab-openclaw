@@ -6,7 +6,7 @@
     <string>ai.krab.inbox-cleanup</string>
 
     <key>Comment</key>
-    <string>Wave 34-C: Ежедневная автозачистка stale open inbox items старше 7 дней (info_alert/weekly_digest/cron_acked/proactive_alert/auto_notification). Запускается каждый день в 04:00 UTC.</string>
+    <string>Wave 34-C + Wave 85: Ежедневная авточистка inbox в два этапа. Этап 1 (Wave 85): bulk-ack stale open proactive_action items старше INBOX_CLEANUP_BULK_ACK_HOURS (12h). Этап 2 (34-C): архивация open items старше INBOX_CLEANUP_MAX_AGE_DAYS (7d) из безопасных kinds. Запускается каждый день в 04:00.</string>
 
     <key>ProgramArguments</key>
     <array>
@@ -47,6 +47,12 @@
         <string>http://127.0.0.1:8080</string>
         <key>INBOX_CLEANUP_MAX_AGE_DAYS</key>
         <string>7</string>
+        <key>INBOX_CLEANUP_BULK_ACK_HOURS</key>
+        <string>12</string>
+        <key>INBOX_CLEANUP_BULK_ACK_KIND</key>
+        <string>proactive_action</string>
+        <key>INBOX_CLEANUP_BULK_ACK_ENABLED</key>
+        <string>1</string>
     </dict>
 </dict>
 </plist>
