@@ -96,11 +96,7 @@ def test_build_prompt_truncates_long_chunks():
 
 def _mock_gemini_response(text: str) -> MagicMock:
     """Возвращает мок httpx.Response с текстом от Gemini."""
-    resp_json = {
-        "candidates": [
-            {"content": {"parts": [{"text": text}]}}
-        ]
-    }
+    resp_json = {"candidates": [{"content": {"parts": [{"text": text}]}}]}
     mock_resp = MagicMock()
     mock_resp.json.return_value = resp_json
     mock_resp.raise_for_status = MagicMock()
@@ -108,8 +104,14 @@ def _mock_gemini_response(text: str) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_generate_returns_text():
-    """generate() возвращает текст из Gemini API."""
+async def test_generate_returns_text(monkeypatch):
+    """generate() возвращает текст из Gemini API через AI Studio fallback path.
+
+    Wave 66 (2026-05-12): generate() теперь сначала пробует Vertex (bonus credits),
+    fallback на AI Studio paid API. Этот test проверяет AI Studio path (legacy),
+    поэтому disable Vertex через env.
+    """
+    monkeypatch.setenv("KRAB_GEMINI_RERANK_VERTEX_ENABLED", "0")
     provider = GeminiRerankProvider(api_key="AIzaFAKE")
 
     mock_resp = _mock_gemini_response("[8, 5, 2]")
@@ -122,6 +124,58 @@ async def test_generate_returns_text():
         result = await provider.generate("some prompt")
 
     assert result == "[8, 5, 2]"
+
+
+@pytest.mark.asyncio
+async def test_generate_via_vertex_preferred_when_enabled(monkeypatch):
+    """Wave 66: при KRAB_GEMINI_RERANK_VERTEX_ENABLED=1 (default) сначала
+    пробуется Vertex. AI Studio httpx path не используется → не уходит paid API key.
+    """
+    monkeypatch.setenv("KRAB_GEMINI_RERANK_VERTEX_ENABLED", "1")
+    provider = GeminiRerankProvider(api_key="AIzaFAKE")
+
+    # Mock Vertex genai SDK call — НЕ паtchим httpx (он не должен быть вызван)
+    mock_httpx_client = AsyncMock()
+
+    with patch.object(
+        provider,
+        "_generate_via_vertex",
+        AsyncMock(return_value="[7, 4, 1]"),
+    ) as mock_vertex:
+        result = await provider.generate("test prompt")
+
+    assert result == "[7, 4, 1]"
+    mock_vertex.assert_awaited_once()
+    # httpx не должен быть вызван — Vertex отработал first
+    mock_httpx_client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_vertex_failure_falls_back_to_ai_studio(monkeypatch):
+    """Wave 66: если Vertex упал (SDK missing / ADC fail) — graceful fallback
+    на AI Studio paid path. Это safety net чтобы system не падал полностью.
+    """
+    monkeypatch.setenv("KRAB_GEMINI_RERANK_VERTEX_ENABLED", "1")
+    provider = GeminiRerankProvider(api_key="AIzaFAKE")
+
+    mock_resp = _mock_gemini_response("[3, 2, 1]")
+    mock_httpx_client = AsyncMock()
+    mock_httpx_client.__aenter__ = AsyncMock(return_value=mock_httpx_client)
+    mock_httpx_client.__aexit__ = AsyncMock(return_value=False)
+    mock_httpx_client.post = AsyncMock(return_value=mock_resp)
+
+    with patch.object(
+        provider,
+        "_generate_via_vertex",
+        AsyncMock(side_effect=RuntimeError("Vertex ADC missing")),
+    ):
+        with patch(
+            "src.core.gemini_rerank_provider.httpx.AsyncClient",
+            return_value=mock_httpx_client,
+        ):
+            result = await provider.generate("test prompt")
+
+    assert result == "[3, 2, 1]"
 
 
 # ---------------------------------------------------------------------------

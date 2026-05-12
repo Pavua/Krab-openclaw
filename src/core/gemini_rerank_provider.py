@@ -27,13 +27,21 @@ logger = logging.getLogger(__name__)
 
 # Модель для реранкинга: pro, не flash (пользовательский приоритет).
 # Wave 62-E (2026-05-11): был "gemini-3-pro-preview" — 404 в AI Studio v1beta direct API.
-# Gemini 3 PUBLIC_PREVIEW: доступна только через provider-prefixed route
-# (google-gemini-cli/gemini-3-pro-preview через OpenClaw), не через bare ID.
-# 9 errors/day в Sentry (PYTHON-FASTAPI-7M). Откатываемся на 2.5-pro
-# который GA в v1beta direct path. См. docs/VERTEX_MODEL_AVAILABILITY.md.
+# Wave 66 (2026-05-12): переключение AI Studio paid → Vertex AI (bonus credits).
+# До Wave 66: rerank делал per-chat-message запросы в paid AI Studio endpoint
+# `generativelanguage.googleapis.com/v1beta/models/...` с `GEMINI_API_KEY_PAID`.
+# Накатало ~€40 за неделю (Memory Phase 2 hybrid retrieval RRF+MMR fire'ит rerank
+# на каждое сообщение). Решение: использовать google.genai SDK в Vertex mode
+# (vertexai=True, project=caramel-anvil-492816-t5) → бонусный баланс €848 до 2027-03.
 _RERANK_MODEL = "gemini-2.5-pro"
-_GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _DEFAULT_TIMEOUT = 5.0
+_VERTEX_PROJECT_ENV = "KRAB_VERTEX_PROJECT"
+_VERTEX_LOCATION_ENV = "KRAB_VERTEX_REGION"
+_VERTEX_DEFAULT_PROJECT = "caramel-anvil-492816-t5"
+_VERTEX_DEFAULT_LOCATION = "global"
+# Legacy AI Studio direct endpoint — используется только если Vertex disabled
+# через `KRAB_GEMINI_RERANK_VERTEX_ENABLED=0` или Vertex unavailable (ADC missing).
+_GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 
 class GeminiRerankProvider:
@@ -64,12 +72,80 @@ class GeminiRerankProvider:
     async def generate(self, prompt: str) -> str:
         """Отправляет prompt в Gemini и возвращает текстовый ответ.
 
-        Throws: httpx.HTTPError, asyncio.TimeoutError — пусть обрабатывает caller.
+        Wave 66 (2026-05-12): preferred path — Vertex AI (bonus credits через ADC).
+        Fallback на AI Studio paid API только если Vertex disabled или unavailable.
+
+        Throws: httpx.HTTPError, asyncio.TimeoutError, RuntimeError — caller handles.
+        """
+        # Wave 66: try Vertex first (bonus credits).
+        vertex_enabled = os.environ.get(
+            "KRAB_GEMINI_RERANK_VERTEX_ENABLED", "1"
+        ).strip().lower() in ("1", "true", "yes", "on")
+        if vertex_enabled:
+            try:
+                return await self._generate_via_vertex(prompt)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "gemini_rerank_vertex_failed_falling_back_to_ai_studio",
+                    extra={"error": str(exc), "error_type": type(exc).__name__},
+                )
+        # Fallback: legacy AI Studio paid API path.
+        return await self._generate_via_ai_studio(prompt)
+
+    async def _generate_via_vertex(self, prompt: str) -> str:
+        """Вызов через google.genai SDK в Vertex mode (bonus credits).
+
+        Использует ADC + project=caramel-anvil-492816-t5, location=global.
+        """
+        import asyncio as _asyncio  # noqa: PLC0415
+
+        try:
+            from google import genai  # type: ignore  # noqa: PLC0415
+            from google.genai import types as genai_types  # type: ignore  # noqa: PLC0415
+        except ImportError as exc:
+            raise RuntimeError(f"google.genai SDK not available: {exc}") from exc
+
+        proj = os.environ.get(_VERTEX_PROJECT_ENV) or _VERTEX_DEFAULT_PROJECT
+        loc = os.environ.get(_VERTEX_LOCATION_ENV) or _VERTEX_DEFAULT_LOCATION
+
+        def _blocking_call() -> str:
+            # vertexai=True + project + location → Vertex AI (НЕ AI Studio)
+            client = genai.Client(vertexai=True, project=proj, location=loc)
+            config = genai_types.GenerateContentConfig(
+                max_output_tokens=256,
+                temperature=0.0,
+            )
+            response = client.models.generate_content(
+                model=self._model,
+                contents=prompt,
+                config=config,
+            )
+            try:
+                return response.text or ""
+            except Exception:  # noqa: BLE001
+                parts: list[str] = []
+                try:
+                    for candidate in response.candidates or []:
+                        for part in candidate.content.parts or []:
+                            if hasattr(part, "text") and part.text:
+                                parts.append(part.text)
+                except Exception:  # noqa: BLE001
+                    pass
+                return "".join(parts)
+
+        return await _asyncio.wait_for(
+            _asyncio.to_thread(_blocking_call),
+            timeout=self._timeout,
+        )
+
+    async def _generate_via_ai_studio(self, prompt: str) -> str:
+        """Fallback: legacy AI Studio paid API.
+
+        Используется только если Vertex disabled через env или Vertex SDK init упал.
         """
         url = f"{_GEMINI_API_BASE}/{self._model}:generateContent"
         body = {
             "contents": [{"parts": [{"text": prompt}]}],
-            # Ограничиваем вывод — нам нужен только JSON-массив.
             "generationConfig": {
                 "maxOutputTokens": 256,
                 "temperature": 0.0,
@@ -80,7 +156,6 @@ class GeminiRerankProvider:
             resp.raise_for_status()
             data = resp.json()
 
-        # Gemini response: candidates[0].content.parts[0].text
         try:
             text = data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError, TypeError) as exc:
