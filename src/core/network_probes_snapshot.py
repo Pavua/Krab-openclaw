@@ -152,5 +152,5 @@ def collect_network_probes_snapshot(userbot: Any, *, now: float | None = None) -
         "main_last_event_ago_sec": event_ago,
         "main_last_seen_update_id": last_update_id,
         "swarm_probes": swarm_probes,
-        "paid_gemini_guard": {"mode": _paid_gemini_guard_mode()},
+        "paid_gemini_guard": _paid_gemini_guard_section(),
     }
