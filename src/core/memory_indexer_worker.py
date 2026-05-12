@@ -628,7 +628,12 @@ class MemoryIndexerWorker:
                 pass
         except sqlite3.Error as exc:
             conn.rollback()
-            logger.error("memory_indexer_db_error", error=str(exc))
+            # Wave 174-A: transient SQLite WAL contention ("database is locked")
+            # обрабатывается retry на следующем flush cycle. logger.warning
+            # вместо error — не Sentry-bug, не блокирует прогресс indexer'а.
+            # Прецедент: Wave 41-O (openclaw 500), Wave 50-A (post-sleep reinit),
+            # Wave 170 (PaidGeminiGuard). Sentry issue PYTHON-FASTAPI-8E.
+            logger.warning("memory_indexer_db_error", error=str(exc))
             self._stats.bump_failed("db")
         finally:
             conn.close()
