@@ -34,6 +34,24 @@ venv/bin/python scripts/agent_tools/krab_send_dm.py \
 # Любой другой chat: добавь --allow-any
 ```
 
+### 2.1. `krab_father_reminder.py`
+
+Личный контур напоминаний отцу: приватный конфиг вне git, read-only
+iMessage-анализ, черновик и dry-run отправки. Реальная отправка требует
+явного `--confirm-send`.
+
+```bash
+venv/bin/python scripts/agent_tools/krab_father_reminder.py status
+venv/bin/python scripts/agent_tools/krab_father_reminder.py draft
+venv/bin/python scripts/agent_tools/krab_father_reminder.py send --channel telegram --dry-run
+```
+
+macOS one-click launcher:
+
+```bash
+./"Father Reminder Assistant.command"
+```
+
 ### 3. `krab_screenshot.py`
 
 Скриншот через `screencapture -x` (без shutter). Валидация: > 20KB и

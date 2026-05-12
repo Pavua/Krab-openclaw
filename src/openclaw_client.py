@@ -2203,6 +2203,22 @@ class OpenClawClient:
                 error=str(exc),
             )
 
+        # Wave 78 FinOps: surface tokens & cost в Prometheus.
+        try:
+            from .core.prometheus_metrics import (
+                _infer_provider_from_model,
+                record_completion_cost,
+            )
+
+            record_completion_cost(
+                provider=_infer_provider_from_model(model_id),
+                model=model_id,
+                prompt_tokens=int(normalized["prompt_tokens"]),
+                completion_tokens=int(normalized["completion_tokens"]),
+            )
+        except Exception:  # noqa: BLE001 — никогда не ломаем hot path
+            pass
+
     async def _openclaw_completion_once(
         self,
         *,

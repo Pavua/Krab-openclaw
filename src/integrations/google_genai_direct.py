@@ -237,6 +237,15 @@ async def complete_direct(
     _vertex_project = os.environ.get("KRAB_VERTEX_PROJECT") or "caramel-anvil-492816-t5"
     _vertex_location = os.environ.get("KRAB_VERTEX_REGION") or "global"
 
+    # Wave 78 FinOps: side-channel для usage_metadata из _blocking_complete.
+    # Closure-captured dict — заполняется внутри thread pool, читается после
+    # asyncio.to_thread complete для записи cost-метрик.
+    _usage_capture: dict[str, int] = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "thoughts_tokens": 0,
+    }
+
     def _blocking_complete() -> str:
         """Синхронный вызов генерации в thread pool."""
         # Wave 66-B: Vertex mode preferred (bonus credits через ADC), AI Studio
@@ -356,6 +365,36 @@ async def complete_direct(
                 text = response2.text or ""
             except Exception:  # noqa: BLE001
                 text = ""
+            # Wave 78: usage из retry response (перетирает initial — last wins)
+            try:
+                _um = getattr(response2, "usage_metadata", None)
+                if _um is not None:
+                    _usage_capture["prompt_tokens"] = int(
+                        getattr(_um, "prompt_token_count", 0) or 0
+                    )
+                    _usage_capture["completion_tokens"] = int(
+                        getattr(_um, "candidates_token_count", 0) or 0
+                    )
+                    _usage_capture["thoughts_tokens"] = int(
+                        getattr(_um, "thoughts_token_count", 0) or 0
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+            return text
+
+        # Wave 78: usage из initial response (если retry не понадобился).
+        try:
+            _um = getattr(response, "usage_metadata", None)
+            if _um is not None:
+                _usage_capture["prompt_tokens"] = int(getattr(_um, "prompt_token_count", 0) or 0)
+                _usage_capture["completion_tokens"] = int(
+                    getattr(_um, "candidates_token_count", 0) or 0
+                )
+                _usage_capture["thoughts_tokens"] = int(
+                    getattr(_um, "thoughts_token_count", 0) or 0
+                )
+        except Exception:  # noqa: BLE001
+            pass
 
         return text
 
@@ -463,6 +502,23 @@ async def complete_direct(
 
         _outcome = "success" if text.strip() else "empty"
         record_google_bypass_call(model=model, outcome=_outcome, latency_sec=_elapsed)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Wave 78 FinOps: surface token cost для google direct bypass.
+    # Provider — всегда 'google' (Vertex или AI Studio). model — оригинальный
+    # 'google/gemini-...' для совпадения с pricing table.
+    try:
+        from ..core.prometheus_metrics import record_completion_cost
+
+        if any(_usage_capture.values()):
+            record_completion_cost(
+                provider="google",
+                model=model,
+                prompt_tokens=_usage_capture["prompt_tokens"],
+                completion_tokens=_usage_capture["completion_tokens"],
+                thoughts_tokens=_usage_capture["thoughts_tokens"],
+            )
     except Exception:  # noqa: BLE001
         pass
 

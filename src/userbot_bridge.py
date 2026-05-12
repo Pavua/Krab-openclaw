@@ -2150,6 +2150,25 @@ class KraabUserbot(
                     error_type=type(exc).__name__,
                 )
 
+        # Wave 79: Krab Ear health probe — каждые 60s GET /health → Prometheus.
+        # Алертит на регрессии вида Session 40 (deadlock в SingleInstanceGuard).
+        if os.getenv("KRAB_EAR_PROBE_ENABLED", "1").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            try:
+                from src.core.krab_ear_health_probe import krab_ear_health_probe
+
+                krab_ear_health_probe.start()
+                logger.info("krab_ear_health_probe_bootstrap_done")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "krab_ear_health_probe_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
         # Reserve bot (Phase 2.1) — запускаем в фоне, не блокируем kraab_running.
         # ~2s MTProto handshake перенесён за critical path, startup экономит ~2s.
         async def _start_reserve_bot_bg() -> None:
