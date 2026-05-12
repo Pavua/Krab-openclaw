@@ -55,6 +55,40 @@ _AGENT_ENGINE_FALLBACK_COUNTER: dict[str, dict[str, int]] = {}
 # {engine: [total_latency_sec, count]}
 _AGENT_ENGINE_LATENCY_ACC: dict[str, list[float]] = {}
 
+# Wave 70: weakref на KraabUserbot для collector callback'ов, которые читают
+# `_last_dispatcher_tick_ts` / `_last_swarm_pts` при scrape. Hot-path избегает
+# import cycle (userbot_bridge → metrics). Регистрируется один раз из
+# bootstrap/runtime после kraab.start().
+import weakref as _weakref  # noqa: E402
+
+_USERBOT_REF: "_weakref.ReferenceType | None" = None
+
+
+def register_userbot_for_metrics(userbot: object) -> None:
+    """Регистрирует KraabUserbot для Wave 70 collector callbacks.
+
+    Хранится как weakref — не удерживает userbot от GC при shutdown.
+    Повторный вызов перезаписывает (после restart внутри процесса).
+    Не бросает.
+    """
+    global _USERBOT_REF
+    try:
+        _USERBOT_REF = _weakref.ref(userbot) if userbot is not None else None
+    except TypeError:
+        # Объект может не поддерживать weakref (mock без __weakref__).
+        _USERBOT_REF = None
+
+
+def _get_userbot_for_metrics() -> object | None:
+    """Возвращает userbot из weakref или None."""
+    ref = _USERBOT_REF
+    if ref is None:
+        return None
+    try:
+        return ref()
+    except Exception:  # noqa: BLE001
+        return None
+
 
 def inc_telegram_flood_wait(caller: str) -> None:
     """Инкремент krab_telegram_flood_wait_total{caller=...}.
@@ -1005,6 +1039,75 @@ def collect_metrics() -> str:
                     f'to_engine="{_sanitize_label(_ae_to)}"'
                 )
                 lines.append(f"krab_agent_engine_fallback_total{{{label_str}}} {_ae_cnt}")
+
+    # === Wave 70: dispatcher / swarm / paid Gemini guard probes ===
+    # Источник истины — `network_probes_snapshot.collect_network_probes_snapshot()`
+    # (Wave 65-K). Метрики обновляются on-scrape — никаких background loops,
+    # никаких race-conditions. Userbot ref берётся из weakref, который был
+    # зарегистрирован при старте kraab (см. register_userbot_for_metrics).
+    #
+    # Если userbot отсутствует (cold-boot до kraab_running, тесты) —
+    # экспонируем placeholder'ы с фиксированными значениями, чтобы alert
+    # rules не считались "no data".
+    try:
+        from src.core.network_probes_snapshot import collect_network_probes_snapshot
+
+        _ub = _get_userbot_for_metrics()
+        _snapshot = collect_network_probes_snapshot(_ub)
+
+        # krab_main_dispatcher_tick_ago_seconds: сколько секунд назад
+        # main dispatcher последний раз тикнул (Wave 63-C outcomes-not-heartbeats).
+        # None → -1 (alert MainDispatcherStarved triggers только на >0 значениях,
+        # placeholder -1 безопасен).
+        _tick_ago = _snapshot.get("main_dispatcher_tick_ago_sec")
+        _tick_ago_metric = -1.0 if _tick_ago is None else float(_tick_ago)
+        lines.append(
+            _format_metric(
+                "krab_main_dispatcher_tick_ago_seconds",
+                round(_tick_ago_metric, 3),
+                help_text=(
+                    "Wave 63-C: сколько секунд назад main dispatcher последний раз "
+                    "тикнул (-1 = userbot не зарегистрирован)"
+                ),
+            )
+        )
+
+        # krab_swarm_probe_ago_seconds{team}: per-team свежесть pts snapshot.
+        # Используется для split-brain detection в swarm team accounts.
+        lines.append(
+            "# HELP krab_swarm_probe_ago_seconds Wave 63-B: сколько секунд назад "
+            "swarm team pts последний раз обновился"
+        )
+        lines.append("# TYPE krab_swarm_probe_ago_seconds gauge")
+        _swarm_probes = _snapshot.get("swarm_probes") or {}
+        if not isinstance(_swarm_probes, dict) or not _swarm_probes:
+            lines.append('krab_swarm_probe_ago_seconds{team="none"} 0')
+        else:
+            for _team, _team_snap in _swarm_probes.items():
+                if not isinstance(_team_snap, dict):
+                    continue
+                _ago = _team_snap.get("ago_sec")
+                _ago_val = -1.0 if _ago is None else float(_ago)
+                _label = f'team="{_sanitize_label(str(_team)[:40])}"'
+                lines.append(f"krab_swarm_probe_ago_seconds{{{_label}}} {round(_ago_val, 3)}")
+
+        # krab_paid_gemini_guard_mode: enum-as-gauge (1=block, 0=warn, -1=off).
+        # Wave 67 hard runtime guard. Метрика хранит и numeric (для alerts)
+        # и label `mode` (для удобства dashboard'ов).
+        _guard_mode = str(_snapshot.get("paid_gemini_guard", {}).get("mode", "off"))
+        _mode_value = {"block": 1, "warn": 0, "off": -1}.get(_guard_mode, -1)
+        lines.append(
+            _format_metric(
+                "krab_paid_gemini_guard_mode",
+                _mode_value,
+                labels={"mode": _guard_mode},
+                help_text=(
+                    "Wave 67 guard mode: 1=block, 0=warn, -1=off (KRAB_BLOCK_PAID_GEMINI_AI_STUDIO)"
+                ),
+            )
+        )
+    except Exception:
+        pass
 
     # === Timestamps ===
     lines.append(

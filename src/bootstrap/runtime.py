@@ -379,6 +379,18 @@ async def run_app() -> None:
             logger.info("kraab_running")
         else:
             logger.warning("kraab_degraded_mode", **kraab_state)
+        # Wave 70: регистрируем userbot для Prometheus on-scrape collectors.
+        # weakref → не удерживает kraab от GC. Вызов идемпотентен.
+        try:
+            from ..core.prometheus_metrics import register_userbot_for_metrics
+
+            register_userbot_for_metrics(kraab)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "prometheus_userbot_register_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
         # Замеряем время запуска и сохраняем для /api/version.
         startup_time_sec = round(time.monotonic() - _startup_begin_ts, 2)
         logger.info("startup_complete", elapsed_sec=startup_time_sec)

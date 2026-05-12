@@ -180,3 +180,44 @@ groups:
         annotations:
           summary: "p95 response > 5000 chars — verbose drift detected"
           description: "LLM генерирует слишком длинные ответы (p95 > 5000 chars). Проверь промпт и system instructions. Model: {{ $labels.model }}."
+
+  # ── Wave 70: dispatcher / swarm / paid Gemini guard probes ─────────────
+  # Источник истины — /metrics endpoint (collect_metrics) + Wave 65-K snapshot.
+  - name: krab_wave70_probes
+    interval: 60s
+    rules:
+      - alert: MainDispatcherStarved
+        # Wave 63-C: main dispatcher не тикнул > 10 мин → возможен split-brain
+        # между Pyrofork polling и нашим dispatch loop. Filter -1 (placeholder
+        # для cold-boot до kraab_running).
+        expr: krab_main_dispatcher_tick_ago_seconds > 600
+        for: 2m
+        labels:
+          severity: warning
+          wave: "70"
+        annotations:
+          summary: "Main Krab dispatcher silent >10 min (possible split-brain)"
+          description: "krab_main_dispatcher_tick_ago_seconds = {{ $value }}s. Возможен split-brain между Pyrofork polling и dispatch loop. Проверь логи `dispatcher_tick`, перезапусти Krab если нужно."
+
+      - alert: SwarmTeamProbeStale
+        # Wave 63-B: swarm pts не обновлялся > 30 мин для команды.
+        expr: krab_swarm_probe_ago_seconds{team!="none"} > 1800
+        for: 5m
+        labels:
+          severity: info
+          wave: "70"
+        annotations:
+          summary: "Swarm team {{ $labels.team }} probe stale (>30 min)"
+          description: "krab_swarm_probe_ago_seconds{team={{ $labels.team }}} = {{ $value }}s. Возможна потеря updates у swarm bot account."
+
+      - alert: PaidGeminiGuardDisabled
+        # Wave 67: hard runtime guard должен быть в block (1) или warn (0).
+        # -1 = off → платный paid AI Studio endpoint доступен.
+        expr: krab_paid_gemini_guard_mode == -1
+        for: 5m
+        labels:
+          severity: warning
+          wave: "70"
+        annotations:
+          summary: "Paid Gemini guard is OFF — risk of accidental paid requests"
+          description: "KRAB_BLOCK_PAID_GEMINI_AI_STUDIO=off. Wave 67 hard guard disabled — paid AI Studio endpoint reachable. Verify это намеренно."
