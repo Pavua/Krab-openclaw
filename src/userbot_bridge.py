@@ -2131,6 +2131,25 @@ class KraabUserbot(
             _lm_idle_watcher.configure(model_manager)
             logger.info("lm_studio_idle_watcher_bootstrap_done")
 
+        # Wave 75: launchd health monitor — каждые 5 минут snapshot launchctl list,
+        # экспонируем krab_launchd_last_exit_status / krab_launchd_running.
+        if os.getenv("KRAB_LAUNCHD_HEALTH_MONITOR_ENABLED", "1").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            try:
+                from src.core.launchd_health_monitor import launchd_health_monitor
+
+                launchd_health_monitor.start()
+                logger.info("launchd_health_monitor_bootstrap_done")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "launchd_health_monitor_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
         # Reserve bot (Phase 2.1) — запускаем в фоне, не блокируем kraab_running.
         # ~2s MTProto handshake перенесён за critical path, startup экономит ~2s.
         async def _start_reserve_bot_bg() -> None:

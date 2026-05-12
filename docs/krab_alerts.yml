@@ -66,6 +66,17 @@ groups:
           summary: "Auto-restart attempts > 0.1/sec за 10 мин"
           description: "Service {{ $labels.service }} нестабилен — нужен manual investigation. Логи: `!log {{ $labels.service }}`."
 
+      # Wave 75: LaunchAgent exit status > 0 более 10 мин — service не возродился.
+      # Условие `> 0` отсекает нормальные SIGTERM/SIGKILL (отрицательные коды).
+      - alert: LaunchAgentFailed
+        expr: krab_launchd_last_exit_status > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LaunchAgent {{ $labels.label }} exit status = {{ $value }} (10+ min)"
+          description: "Service не успешен 10 минут. Проверь `launchctl list {{ $labels.label }}` и логи в ~/Library/Logs/. Если 78/126/127 — фиксь plist."
+
   # ── Engagement: бизнес-сигналы ──────────────────────────────────────────────
   - name: krab_engagement
     interval: 5m
