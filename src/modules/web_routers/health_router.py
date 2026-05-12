@@ -10,6 +10,8 @@ Health router — Phase 2 Wave X extraction (Session 25).
 - GET /api/ecosystem/health       — расширенный health 3-проектной экосистемы
 - GET /api/ecosystem/health/debug — raw collector output для diagnose
 - GET /api/ecosystem/health/export — экспорт ecosystem health в JSON file
+- GET /api/network/probes         — Wave 163: split-brain detection state +
+                                    pyrogram метрики (восстановлено после Session 47)
 
 Wave CC (Session 25): /api/health/deep extracted. Existing tests
 (``test_api_health_deep.py``, ``test_health_deep_session24.py``,
@@ -25,13 +27,17 @@ Wave CC (Session 25): /api/health/deep extracted. Existing tests
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
 
+from ...core.logger import get_logger
 from ._context import RouterContext
+
+logger = get_logger(__name__)
 
 
 def build_health_router(ctx: RouterContext) -> APIRouter:
@@ -255,5 +261,96 @@ def build_health_router(ctx: RouterContext) -> APIRouter:
             media_type="application/json",
             filename=out_path.name,
         )
+
+    # ── /api/network/probes ─────────────────────────────────────────────────
+    # Wave 163: восстановление endpoint после Session 47 refactor — внешние
+    # monitoring скрипты и Prometheus alerts по-прежнему опрашивают split-brain
+    # state. Возвращает live snapshot:
+    #   main_app.split_brain        — bool (последний get_state probe)
+    #   main_app.last_event_age_sec — int  (с момента последнего _process_message)
+    #   dispatcher_tick.starved     — bool (Wave 63-C staleness threshold)
+    #   pyrogram.disconnects_total  — int  (Wave 142 reconnect storm counter)
+    #   pyrogram.session_label      — str  (текущая active session label)
+
+    @router.get("/api/network/probes")
+    async def get_network_probes() -> dict:
+        """Wave 163: split-brain + pyrogram метрики для внешнего мониторинга.
+
+        Источники данных:
+        - userbot._last_telegram_event_ts / _last_dispatcher_tick_ts
+        - userbot._last_get_state_probe (если установлен network_watchdog)
+        - prometheus_metrics._PYROGRAM_DISCONNECTS_COUNTER / session label
+        - userbot.network_watchdog._check_dispatcher_starved (Wave 63-C)
+        """
+        now = time.time()
+        userbot = ctx.get_dep("kraab_userbot")
+
+        # ── main_app section ────────────────────────────────────────────────
+        last_event_ts = float(getattr(userbot, "_last_telegram_event_ts", 0.0) or 0.0)
+        last_event_age_sec: int = int(now - last_event_ts) if last_event_ts > 0 else -1
+        # split_brain: последний get_state probe пометил подозрение, либо
+        # network_watchdog выставил атрибут (Wave 63-A).
+        split_brain = False
+        try:
+            probe = getattr(userbot, "_last_get_state_probe", None)
+            if probe is not None:
+                split_brain = bool(getattr(probe, "split_brain_suspected", False))
+            else:
+                split_brain = bool(getattr(userbot, "_split_brain_suspected", False))
+        except Exception as exc:  # noqa: BLE001 — read-only endpoint, fail-open
+            logger.warning("network_probes_split_brain_read_failed", error=str(exc)[:200])
+            split_brain = False
+
+        # ── dispatcher_tick section ────────────────────────────────────────
+        dispatcher_starved = False
+        try:
+            # Используем общий helper из watchdog — единственный источник истины
+            # для staleness threshold (env KRAB_DISPATCHER_TICK_STALENESS_SEC).
+            from ...userbot.network_watchdog import _check_dispatcher_starved
+
+            if userbot is not None:
+                dispatcher_starved = bool(_check_dispatcher_starved(userbot, now=now))
+        except Exception as exc:  # noqa: BLE001 — fail-open, не ломаем endpoint
+            logger.warning("network_probes_dispatcher_check_failed", error=str(exc)[:200])
+            dispatcher_starved = False
+
+        last_dispatcher_tick_ts = float(getattr(userbot, "_last_dispatcher_tick_ts", 0.0) or 0.0)
+        dispatcher_tick_age_sec: int = (
+            int(now - last_dispatcher_tick_ts) if last_dispatcher_tick_ts > 0 else -1
+        )
+        dispatcher_tick_count = int(getattr(userbot, "_dispatcher_tick_count", 0) or 0)
+
+        # ── pyrogram section (Wave 142) ────────────────────────────────────
+        disconnects_total = 0
+        session_label = "unknown"
+        try:
+            from ...core.prometheus_metrics import (
+                _PYROGRAM_DISCONNECTS_COUNTER,
+                get_pyrogram_session_label,
+            )
+
+            disconnects_total = int(sum(_PYROGRAM_DISCONNECTS_COUNTER.values()))
+            session_label = str(get_pyrogram_session_label() or "unknown")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("network_probes_pyrogram_read_failed", error=str(exc)[:200])
+
+        return {
+            "ok": True,
+            "timestamp": int(now),
+            "main_app": {
+                "split_brain": split_brain,
+                "last_event_age_sec": last_event_age_sec,
+                "last_event_ts": last_event_ts,
+            },
+            "dispatcher_tick": {
+                "starved": dispatcher_starved,
+                "age_sec": dispatcher_tick_age_sec,
+                "count": dispatcher_tick_count,
+            },
+            "pyrogram": {
+                "disconnects_total": disconnects_total,
+                "session_label": session_label,
+            },
+        }
 
     return router
