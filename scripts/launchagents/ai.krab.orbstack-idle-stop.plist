@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.krab.orbstack-idle-stop</string>
+
+    <key>Comment</key>
+    <string>Wave 84: Останавливает OrbStack если простаивает > 1 часа и нет running containers. Default OFF (включается KRAB_ORBSTACK_IDLE_AUTO_STOP=1). Каждые 15 минут.</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/krab_orbstack_idle_stop.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/orbstack_idle_stop.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/orbstack_idle_stop.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>KRAB_ORBSTACK_IDLE_AUTO_STOP</key>
+        <string>0</string>
+    </dict>
+</dict>
+</plist>
