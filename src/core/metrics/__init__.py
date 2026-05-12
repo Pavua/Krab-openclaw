@@ -33,6 +33,13 @@ from .memory import (
     record_retrieval_duration,
 )
 
+# === pressure_aware (Wave 86) ===
+from .pressure_aware import (
+    _PRESSURE_AWARE_FALLBACK_COUNTER,
+    _pressure_aware_fallback_total,
+    inc_pressure_aware_fallback,
+)
+
 # === probes (Wave 70 weakref) ===
 from .probes import (
     _get_userbot_for_metrics,
@@ -175,6 +182,10 @@ __all__ = [
     "krab_completion_cost_eur_total",
     "krab_tokens_consumed_total",
     "record_completion_cost",
+    # pressure_aware (Wave 86)
+    "_PRESSURE_AWARE_FALLBACK_COUNTER",
+    "_pressure_aware_fallback_total",
+    "inc_pressure_aware_fallback",
     # collect
     "_format_metric",
     "_sanitize_label",

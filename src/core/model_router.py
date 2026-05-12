@@ -19,6 +19,7 @@ from .cloud_gateway import (
     verify_gemini_access as cloud_verify_gemini_access,
 )
 from .local_health import is_lm_studio_available
+from .pressure_aware_select import pressure_aware_model_select
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -79,7 +80,22 @@ class ModelRouter:
                             self.lm_studio_url,
                             client=self._local_http_client,
                         ):
-                            return "local"
+                            # Wave 86: memory-pressure pre-filter. Если RAM
+                            # критична — отбрасываем local и идём в cloud.
+                            cloud_default = (
+                                self.config_model
+                                if self.config_model and self.config_model != "auto"
+                                else DEFAULT_CLOUD_MODEL
+                            )
+                            adjusted = pressure_aware_model_select(
+                                "local",
+                                self._pressure_aware_candidates(),
+                                cloud_fallback=cloud_default,
+                            )
+                            if adjusted == "local":
+                                return "local"
+                            # Pressure forced cloud — выходим из локального цикла
+                            break
                     except Exception as e:
                         logger.debug(
                             "lm_studio_check_failed",
@@ -94,3 +110,13 @@ class ModelRouter:
             config_model=self.config_model,
             verify_fn=cloud_verify_gemini_access,
         )
+
+    def _pressure_aware_candidates(self) -> list[dict]:
+        """Wave 86: список candidate моделей для pressure-aware selection.
+
+        Стандартный путь пуст (size_gb для конкретной local модели здесь не
+        известен — это уровень ModelRouter). Подклассы / model_manager могут
+        переопределить через setter если потребуется выбирать самую маленькую
+        локальную из нескольких загруженных.
+        """
+        return []

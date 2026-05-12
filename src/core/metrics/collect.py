@@ -499,6 +499,36 @@ def collect_metrics() -> str:
     # === Wave 79: Krab Ear health probe ===
     lines.extend(_krab_ear.render_krab_ear_metrics(_format_metric, _sanitize_label))
 
+    # === Wave 86: pressure-aware select (krab_free_memory_gb + fallback counter) ===
+    try:
+        from ..pressure_aware_select import get_free_memory_gb as _free_gb_fn
+        from .pressure_aware import _PRESSURE_AWARE_FALLBACK_COUNTER
+
+        _free_gb = _free_gb_fn()
+        if _free_gb is not None:
+            lines.append(
+                _format_metric(
+                    "krab_free_memory_gb",
+                    "Wave 86: free memory snapshot (GB) — pressure-aware model select trigger",
+                    "gauge",
+                    float(_free_gb),
+                )
+            )
+        if _PRESSURE_AWARE_FALLBACK_COUNTER:
+            lines.append(
+                "# HELP krab_pressure_aware_fallback_total Wave 86: memory-pressure-driven model fallbacks"
+            )
+            lines.append("# TYPE krab_pressure_aware_fallback_total counter")
+            for (from_m, to_m, reason), cnt in _PRESSURE_AWARE_FALLBACK_COUNTER.items():
+                label_str = (
+                    f'from_model="{_sanitize_label(from_m)}",'
+                    f'to_model="{_sanitize_label(to_m)}",'
+                    f'reason="{_sanitize_label(reason)}"'
+                )
+                lines.append(f"krab_pressure_aware_fallback_total{{{label_str}}} {cnt}")
+    except Exception:  # noqa: BLE001
+        pass
+
     # === Timestamps ===
     lines.append(
         _format_metric(
