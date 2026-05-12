@@ -25,8 +25,18 @@ def _reset_snapshot():
     reset_snapshot_for_tests()
 
 
-def _make_probe(handler):
-    """Probe с MockTransport, который вызывает handler(request) -> Response."""
+def _make_probe(handler, monkeypatch=None):
+    """Probe с MockTransport, который вызывает handler(request) -> Response.
+
+    Wave 180: устанавливает KRAB_EAR_BACKEND_URL чтобы probe пошёл по HTTP fallback
+    (а не IPC). Без explicit env probe считает HTTP unconfigured и не вызывает
+    handler — это новое корректное поведение для KE = IPC-only.
+    Также форсит installed=True и socket_path в несуществующее место для IPC fail.
+    """
+    if monkeypatch is not None:
+        monkeypatch.setenv("KRAB_EAR_BACKEND_URL", "http://127.0.0.1:5005")
+    else:
+        os.environ["KRAB_EAR_BACKEND_URL"] = "http://127.0.0.1:5005"
     transport = httpx.MockTransport(handler)
 
     def factory() -> httpx.AsyncClient:
@@ -35,10 +45,15 @@ def _make_probe(handler):
     clock = [1_000_000.0]
     probe = KrabEarHealthProbe(
         backend_url="http://127.0.0.1:5005",
+        socket_path="/tmp/_wave180_nonexistent_socket_for_tests",
         interval_sec=60,
         http_client_factory=factory,
         now_fn=lambda: clock[0],
     )
+    # Wave 180: форсим installed=True (тесты не зависят от наличия KE на диске).
+    probe._installed = True
+    # Wave 180: HTTP fallback вызывается только если URL explicitly set.
+    probe._http_explicit = True
     return probe, clock
 
 
