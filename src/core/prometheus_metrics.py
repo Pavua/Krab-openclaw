@@ -256,10 +256,127 @@ try:
         ["k"],
         buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
     )
+    # Wave 74: Hybrid retrieval timing — фиксированные buckets под SLO
+    # post-Wave 66 (Vertex rerank). Phases: embedding/fts5/rrf/mmr/rerank/total.
+    _memory_retrieval_duration_seconds = _Histogram(
+        "krab_memory_retrieval_duration_seconds",
+        "Duration of Memory Phase 2 hybrid retrieval per phase",
+        ["phase"],
+        buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+    )
+    # Wave 74: Outcome counter — success/timeout/error per retrieval call.
+    _memory_retrieval_total = _Counter(
+        "krab_memory_retrieval_total",
+        "Memory Phase 2 retrieval calls by outcome",
+        ["outcome"],
+    )
 except Exception:  # noqa: BLE001 - prometheus_client optional
     _memory_retrieval_mode_total = None  # type: ignore[assignment]
     _memory_retrieval_latency_seconds = None  # type: ignore[assignment]
     _vec_query_duration_seconds = None  # type: ignore[assignment]
+    _memory_retrieval_duration_seconds = None  # type: ignore[assignment]
+    _memory_retrieval_total = None  # type: ignore[assignment]
+
+
+# Wave 74: helpers (silent no-op если prometheus_client недоступен).
+_RETRIEVAL_PHASE_ALIASES = {"fts": "fts5"}
+_RETRIEVAL_VALID_PHASES = frozenset({"embedding", "fts5", "vec", "rrf", "mmr", "rerank", "total"})
+_RETRIEVAL_VALID_OUTCOMES = frozenset({"success", "timeout", "error"})
+
+
+def record_retrieval_duration(phase: str, seconds: float) -> None:
+    """Wave 74: фиксирует latency phase. Legacy "fts" → "fts5". Best-effort."""
+    try:
+        canonical = _RETRIEVAL_PHASE_ALIASES.get(phase, phase)
+        if canonical not in _RETRIEVAL_VALID_PHASES:
+            return
+        if _memory_retrieval_duration_seconds is not None:
+            _memory_retrieval_duration_seconds.labels(phase=canonical).observe(seconds)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def inc_retrieval_outcome(outcome: str) -> None:
+    """Wave 74: инкрементирует krab_memory_retrieval_total{outcome=...}. Best-effort."""
+    try:
+        if outcome not in _RETRIEVAL_VALID_OUTCOMES:
+            return
+        if _memory_retrieval_total is not None:
+            _memory_retrieval_total.labels(outcome=outcome).inc()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# === Wave 73: Smart Message Routing 5-stage pipeline observability. ===
+try:
+    from prometheus_client import Counter as _CounterSR  # type: ignore[import-not-found]
+    from prometheus_client import Histogram as _HistogramSR  # type: ignore[import-not-found]
+
+    krab_smart_routing_decisions_total = _CounterSR(
+        "krab_smart_routing_decisions_total",
+        "Smart Routing 5-stage pipeline decisions by stage and outcome (Wave 73)",
+        ["stage", "outcome"],
+    )
+    krab_smart_routing_stage_duration_seconds = _HistogramSR(
+        "krab_smart_routing_stage_duration_seconds",
+        "Smart Routing per-stage duration (seconds)",
+        ["stage"],
+        buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+    )
+except Exception:  # noqa: BLE001
+    krab_smart_routing_decisions_total = None  # type: ignore[assignment]
+    krab_smart_routing_stage_duration_seconds = None  # type: ignore[assignment]
+
+
+_SMART_ROUTING_STAGES: frozenset[str] = frozenset(
+    {"hard_gate", "chat_policy", "regex", "llm_classifier", "feedback"}
+)
+_SMART_ROUTING_OUTCOMES: frozenset[str] = frozenset({"allow", "deny"})
+
+
+def record_smart_routing_decision(
+    stage: str,
+    outcome: str,
+    *,
+    duration_sec: float | None = None,
+) -> None:
+    """Wave 73: инкрементирует krab_smart_routing_decisions_total{stage, outcome}.
+
+    Fail-safe: невалидные значения → "unknown" (cardinality guard).
+    """
+    try:
+        s = stage if stage in _SMART_ROUTING_STAGES else "unknown"
+        o = outcome if outcome in _SMART_ROUTING_OUTCOMES else "unknown"
+        if krab_smart_routing_decisions_total is not None:
+            krab_smart_routing_decisions_total.labels(stage=s, outcome=o).inc()
+        if (
+            duration_sec is not None
+            and duration_sec >= 0
+            and krab_smart_routing_stage_duration_seconds is not None
+        ):
+            krab_smart_routing_stage_duration_seconds.labels(stage=s).observe(float(duration_sec))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+_DECISION_PATH_TO_STAGE: dict[str, str] = {
+    "hard_gate": "hard_gate",
+    "policy_silent": "chat_policy",
+    "regex_high": "regex",
+    "regex_low": "regex",
+    "media_present": "regex",
+    "regex_threshold_fallback": "regex",
+    "llm_yes": "llm_classifier",
+    "llm_no": "llm_classifier",
+    "llm_error_fallback": "feedback",
+}
+
+
+def map_smart_routing_path(decision_path: str, should_respond: bool) -> tuple[str, str]:
+    """Wave 73: decision_path + should_respond → (stage, outcome) для Prometheus."""
+    stage = _DECISION_PATH_TO_STAGE.get(decision_path, "unknown")
+    outcome = "allow" if should_respond else "deny"
+    return stage, outcome
 
 
 # === Feature K: Thread coherence metrics (observability-only). ===
@@ -1106,6 +1223,37 @@ def collect_metrics() -> str:
                 ),
             )
         )
+    except Exception:
+        pass
+
+    # === Wave 75: LaunchAgent health (ai.krab.* / ai.openclaw.* / com.krab.*) ===
+    # Snapshot обновляется фоновым LaunchdHealthMonitor каждые 5 минут.
+    # При cold-boot (snapshot пустой) экспонируем placeholder, чтобы alert
+    # `krab_launchd_last_exit_status > 0` не считался "no data".
+    try:
+        from src.core.launchd_health_monitor import get_snapshot as _launchd_get_snapshot
+
+        _launchd_snap = _launchd_get_snapshot()
+        lines.append(
+            "# HELP krab_launchd_last_exit_status Last exit status from launchctl list "
+            "(0=success, >0=failure, <0=SIGTERM/SIGKILL normal)"
+        )
+        lines.append("# TYPE krab_launchd_last_exit_status gauge")
+        lines.append(
+            "# HELP krab_launchd_running 1 if launchctl reports a PID for the label, 0 otherwise"
+        )
+        lines.append("# TYPE krab_launchd_running gauge")
+        if not _launchd_snap:
+            lines.append('krab_launchd_last_exit_status{label="none"} 0')
+            lines.append('krab_launchd_running{label="none"} 0')
+        else:
+            for _label, _data in _launchd_snap.items():
+                _label_safe = _sanitize_label(str(_label)[:80])
+                _exit = int(_data.get("exit_status", 0) or 0)
+                _pid = _data.get("pid")
+                _running = 1 if _pid is not None else 0
+                lines.append(f'krab_launchd_last_exit_status{{label="{_label_safe}"}} {_exit}')
+                lines.append(f'krab_launchd_running{{label="{_label_safe}"}} {_running}')
     except Exception:
         pass
 

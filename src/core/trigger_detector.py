@@ -409,6 +409,22 @@ _MEDIA_PRESENT_FLOOR = 0.55  # без caption — выше NORMAL threshold (0.5
 _MEDIA_WITH_CAPTION_FLOOR = 0.4  # с caption — borderline → LLM решит
 
 
+def _emit_smart_routing_metric(result: SmartTriggerResult) -> SmartTriggerResult:
+    """Wave 73: emit krab_smart_routing_decisions_total для каждого SmartTriggerResult.
+
+    Безопасно для hot path — record_smart_routing_decision fail-safe.
+    Возвращает result без изменений (для inline-обёртки на return).
+    """
+    try:
+        from .prometheus_metrics import map_smart_routing_path, record_smart_routing_decision
+
+        stage, outcome = map_smart_routing_path(result.decision_path, result.should_respond)
+        record_smart_routing_decision(stage, outcome)
+    except Exception:  # noqa: BLE001 — observability не должна ломать routing
+        pass
+    return result
+
+
 async def detect_smart_trigger(
     text: str,
     chat_id: str,
@@ -444,19 +460,23 @@ async def detect_smart_trigger(
 
     # Stage 1: Hard gates
     if has_command or has_explicit_mention or is_reply_to_me:
-        return SmartTriggerResult(
-            should_respond=True,
-            decision_path="hard_gate",
-            confidence=1.0,
+        return _emit_smart_routing_metric(
+            SmartTriggerResult(
+                should_respond=True,
+                decision_path="hard_gate",
+                confidence=1.0,
+            )
         )
 
     # Stage 2: Per-chat policy
     policy = policy_store.get_policy(chat_id)
     if policy.mode == ChatMode.SILENT:
-        return SmartTriggerResult(
-            should_respond=False,
-            decision_path="policy_silent",
-            confidence=1.0,
+        return _emit_smart_routing_metric(
+            SmartTriggerResult(
+                should_respond=False,
+                decision_path="policy_silent",
+                confidence=1.0,
+            )
         )
 
     # Stage 3: Regex fast filter
@@ -488,11 +508,13 @@ async def detect_smart_trigger(
 
     # High confidence regex score → respond
     if legacy.score >= 0.6 and legacy.trigger_type != TriggerType.NONE:
-        return SmartTriggerResult(
-            should_respond=True,
-            decision_path="regex_high",
-            confidence=legacy.score,
-            legacy_result=legacy,
+        return _emit_smart_routing_metric(
+            SmartTriggerResult(
+                should_respond=True,
+                decision_path="regex_high",
+                confidence=legacy.score,
+                legacy_result=legacy,
+            )
         )
 
     # Bug 11 (Session 28): media-aware short-circuit для media без caption.
@@ -505,11 +527,13 @@ async def detect_smart_trigger(
     if has_media and not has_caption_text:
         media_confidence = max(legacy.score, _MEDIA_PRESENT_FLOOR)
         # Уважаем per-chat threshold: CAUTIOUS (0.7) → media floor 0.55 не пройдёт.
-        return SmartTriggerResult(
-            should_respond=(media_confidence >= threshold),
-            decision_path="media_present",
-            confidence=media_confidence,
-            legacy_result=legacy,
+        return _emit_smart_routing_metric(
+            SmartTriggerResult(
+                should_respond=(media_confidence >= threshold),
+                decision_path="media_present",
+                confidence=media_confidence,
+                legacy_result=legacy,
+            )
         )
 
     # Very low score → drop без LLM
@@ -520,20 +544,24 @@ async def detect_smart_trigger(
         effective_low_score = max(effective_low_score, _MEDIA_WITH_CAPTION_FLOOR)
 
     if effective_low_score < 0.2:
-        return SmartTriggerResult(
-            should_respond=False,
-            decision_path="regex_low",
-            confidence=legacy.score,
-            legacy_result=legacy,
+        return _emit_smart_routing_metric(
+            SmartTriggerResult(
+                should_respond=False,
+                decision_path="regex_low",
+                confidence=legacy.score,
+                legacy_result=legacy,
+            )
         )
 
     # Stage 4: LLM intent (borderline 0.2-0.6)
     if llm_classifier is None:
-        return SmartTriggerResult(
-            should_respond=(legacy.score >= threshold),
-            decision_path="regex_threshold_fallback",
-            confidence=legacy.score,
-            legacy_result=legacy,
+        return _emit_smart_routing_metric(
+            SmartTriggerResult(
+                should_respond=(legacy.score >= threshold),
+                decision_path="regex_threshold_fallback",
+                confidence=legacy.score,
+                legacy_result=legacy,
+            )
         )
 
     try:
@@ -545,29 +573,35 @@ async def detect_smart_trigger(
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("smart_trigger_llm_error", chat_id=chat_id, error=str(exc))
-        return SmartTriggerResult(
-            should_respond=(legacy.score >= threshold),
-            decision_path="llm_error_fallback",
-            confidence=legacy.score,
-            legacy_result=legacy,
+        return _emit_smart_routing_metric(
+            SmartTriggerResult(
+                should_respond=(legacy.score >= threshold),
+                decision_path="llm_error_fallback",
+                confidence=legacy.score,
+                legacy_result=legacy,
+            )
         )
 
     if intent.error:
-        return SmartTriggerResult(
-            should_respond=(legacy.score >= threshold),
-            decision_path="llm_error_fallback",
-            confidence=legacy.score,
-            legacy_result=legacy,
-            intent_result=intent,
+        return _emit_smart_routing_metric(
+            SmartTriggerResult(
+                should_respond=(legacy.score >= threshold),
+                decision_path="llm_error_fallback",
+                confidence=legacy.score,
+                legacy_result=legacy,
+                intent_result=intent,
+            )
         )
 
     final_decision = intent.should_respond and intent.confidence >= threshold
-    return SmartTriggerResult(
-        should_respond=final_decision,
-        decision_path=f"llm_{'yes' if intent.should_respond else 'no'}",
-        confidence=intent.confidence,
-        legacy_result=legacy,
-        intent_result=intent,
+    return _emit_smart_routing_metric(
+        SmartTriggerResult(
+            should_respond=final_decision,
+            decision_path=f"llm_{'yes' if intent.should_respond else 'no'}",
+            confidence=intent.confidence,
+            legacy_result=legacy,
+            intent_result=intent,
+        )
     )
 
 

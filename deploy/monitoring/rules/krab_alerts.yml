@@ -221,3 +221,24 @@ groups:
         annotations:
           summary: "Paid Gemini guard is OFF — risk of accidental paid requests"
           description: "KRAB_BLOCK_PAID_GEMINI_AI_STUDIO=off. Wave 67 hard guard disabled — paid AI Studio endpoint reachable. Verify это намеренно."
+
+  # ── Wave 73: Smart Routing 5-stage observability ────────────────────────────
+  - name: krab_wave73_smart_routing
+    interval: 1m
+    rules:
+      - alert: SmartRoutingHighDenyRate
+        # Smart Routing deny rate — ESSENTIAL поведение (~95% сообщений в группах
+        # должны отбрасываться). Alert fires если deny rate > 95% за 15 мин
+        # на 30+ мин — baseline guard на регрессию (Krab стал слишком молчаливым
+        # либо counter rises unexpectedly).
+        expr: |
+          sum(rate(krab_smart_routing_decisions_total{outcome="deny"}[15m]))
+          /
+          sum(rate(krab_smart_routing_decisions_total[15m])) > 0.95
+        for: 30m
+        labels:
+          severity: info
+          wave: "73"
+        annotations:
+          summary: "Smart Routing deny rate > 95% for 30m"
+          description: "Wave 73 baseline guard — verify trigger_detector работает корректно."
