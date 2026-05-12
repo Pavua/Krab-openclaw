@@ -1094,4 +1094,20 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
             "chats": [c.to_dict() for c in results],
         }
 
+    # ── Wave 122: owner-panel audit log API ────────────────────────────────
+
+    @router.get("/api/admin/audit/recent")
+    async def admin_audit_recent(
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> dict:
+        """Wave 122: последние записи owner-panel audit log."""
+        from ..web_middleware.audit_logger import get_default_storage  # noqa: PLC0415
+
+        ctx.assert_write_access(x_krab_web_key, token)
+        storage = get_default_storage()
+        rows = storage.query_recent(limit=limit)
+        return {"ok": True, "count": len(rows), "items": rows}
+
     return router

@@ -334,7 +334,24 @@ class MCPClientManager:
     async def call_tool_unified(self, full_tool_name: str, arguments: Dict[str, Any]) -> str:
         """
         Вызывает инструмент по полному имени (server__tool) или нативному имени.
+
+        Wave 126: оборачиваем в ToolLatencyTimer для per-tool latency metrics.
         """
+        # Wave 126: timer контекст-менеджер фиксирует duration + outcome.
+        from .core.metrics.mcp_tools import ToolLatencyTimer
+
+        with ToolLatencyTimer(full_tool_name) as _timer:
+            try:
+                return await self._call_tool_unified_impl(full_tool_name, arguments)
+            except TimeoutError:
+                _timer.mark_timeout()
+                raise
+            except Exception:
+                _timer.mark_error()
+                raise
+
+    async def _call_tool_unified_impl(self, full_tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Внутренняя реализация call_tool_unified без timing-обвязки."""
         # Per-team allowlist guard: если активен swarm-контекст, проверяем что
         # tool разрешён команде. Silent strip + WARN + Prometheus метрика.
         try:

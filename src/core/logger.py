@@ -103,10 +103,17 @@ def setup_logger(level: str = "INFO") -> None:
         logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
+    # Шумные DeprecationWarning от pyrofork (forward_from / forward_sender_name /
+    # forward_from_chat) засоряют krab_launchd.out.log — глушим через фильтр.
+    from src.core.logging_filters import install_pyrogram_depr_filter  # noqa: PLC0415
+
+    pyrogram_depr_filter_installed = install_pyrogram_depr_filter() is not None
+
     structlog.get_logger(__name__).info(
         "logger_configured",
         message="structlog setup complete",
         log_file=str(log_file) if log_file else None,
+        pyrogram_depr_filter=pyrogram_depr_filter_installed,
     )
 
 

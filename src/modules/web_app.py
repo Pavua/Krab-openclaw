@@ -350,6 +350,7 @@ class WebApp:
         self._setup_basic_auth_middleware()
         self._setup_bcrypt_auth_middleware()
         self._setup_rate_limit_middleware()
+        self._setup_audit_log_middleware()
         # Hard-require SENTRY_WEBHOOK_SECRET: генерируем и persist-им в .env
         # при первом старте, чтобы /api/hooks/sentry никогда не работал
         # в "open" режиме (любой знающий URL не должен пройти HMAC).
@@ -495,6 +496,26 @@ class WebApp:
 
         self.app.add_middleware(RateLimitMiddleware)
         logger.info("rate_limit_middleware_enabled", source="env")
+
+    def _setup_audit_log_middleware(self) -> None:
+        """Wave 122: append-only audit log всех authenticated API requests.
+
+        Записываем method/path/status/auth_prefix/client_ip/duration_ms в
+        SQLite ~/.openclaw/krab_runtime_state/owner_panel_audit.db.
+        Default-ON, env-gate KRAB_OWNER_PANEL_AUDIT_ENABLED=0 для отключения.
+        Exempt: /metrics, /health, /healthz, /api/health/lite, /api/v1/health.
+        Порядок: ПОСЛЕ rate_limiter — audit видит финальный 429 status.
+        """
+        from .web_middleware.audit_logger import (
+            AuditLoggerMiddleware,
+            is_audit_log_enabled,
+        )
+
+        if not is_audit_log_enabled():
+            return
+
+        self.app.add_middleware(AuditLoggerMiddleware)
+        logger.info("audit_log_middleware_enabled", source="env")
 
     def _public_base_url(self) -> str:
         """Возвращает внешний base URL панели (delegates → _helpers)."""

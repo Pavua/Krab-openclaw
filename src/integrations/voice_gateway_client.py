@@ -17,6 +17,7 @@ from typing import Any, cast
 import httpx
 
 from ..core.logger import get_logger
+from ..core.metrics.voice_gateway import record_voice_request
 from ..core.voice_gateway_control_plane import VoiceGatewayControlPlane
 
 logger = get_logger(__name__)
@@ -559,19 +560,28 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
         Используется для озвучки LLM-подсказок (reasoning.suggestion)
         непосредственно в активную звонковую сессию.
         """
+        normalized_text = str(text).strip()
         payload = {
-            "text": str(text).strip(),
+            "text": normalized_text,
             "voice": str(voice).strip(),
             "style": str(style).strip(),
         }
+        chars = len(normalized_text)
+        started = time.monotonic()
+        # Wave 123: observability — outcome классифицируется по error/status_code.
         status_code, response_payload, error = await self._request_json(
             "POST",
             f"/v1/sessions/{session_id}/tts",
             json_payload=payload,
             timeout_sec=max(10.0, self.timeout_sec),
         )
+        duration = time.monotonic() - started
         if error or status_code != 200 or not isinstance(response_payload, dict):
+            err_lower = (error or "").lower()
+            outcome = "timeout" if ("timeout" in err_lower or "timed out" in err_lower) else "error"
+            record_voice_request(chars, outcome, duration)
             return self._error_payload(status_code, error, detail=response_payload)
+        record_voice_request(chars, "ok", duration)
         return {
             "ok": True,
             "session_id": session_id,
