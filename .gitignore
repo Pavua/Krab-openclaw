@@ -52,3 +52,4 @@ node_modules/
 .claude/
 docs/superpowers/
 uv.lock
+.env.backup_*
