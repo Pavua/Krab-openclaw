@@ -102,7 +102,12 @@ def _inc_mode(mode: str) -> None:
 
 
 def _observe_phase(phase: str, seconds: float) -> None:
-    """Observe латентность phase в histogram krab_memory_retrieval_latency_seconds.
+    """Observe латентность phase в histograms.
+
+    Параллельно пишет в две метрики:
+      * `krab_memory_retrieval_latency_seconds` (legacy, C6) — phase as-is;
+      * `krab_memory_retrieval_duration_seconds` (Wave 74) — phase mapped в
+        canonical имена (fts→fts5), bucket set под SLO post-Vertex rerank.
 
     Silent no-op если prometheus_client недоступен.
     """
@@ -113,6 +118,23 @@ def _observe_phase(phase: str, seconds: float) -> None:
             _memory_retrieval_latency_seconds.labels(phase=phase).observe(seconds)
     except Exception as exc:  # noqa: BLE001 - инструментация best-effort
         logger.debug("memory_retrieval_latency_metric_failed", phase=phase, error=str(exc))
+    # Wave 74: дублируем в новую histogram с canonical именами.
+    try:
+        from src.core.prometheus_metrics import record_retrieval_duration
+
+        record_retrieval_duration(phase, seconds)
+    except Exception as exc:  # noqa: BLE001 - инструментация best-effort
+        logger.debug("memory_retrieval_duration_metric_failed", phase=phase, error=str(exc))
+
+
+def _inc_outcome(outcome: str) -> None:
+    """Wave 74: фиксирует outcome retrieval (success/timeout/error). Best-effort."""
+    try:
+        from src.core.prometheus_metrics import inc_retrieval_outcome
+
+        inc_retrieval_outcome(outcome)
+    except Exception as exc:  # noqa: BLE001 - инструментация best-effort
+        logger.debug("memory_retrieval_outcome_metric_failed", outcome=outcome, error=str(exc))
 
 
 def _compute_mode(vec_hits: int, fts_hits: int) -> str:
@@ -341,14 +363,26 @@ class HybridRetriever:
         with _sentry_txn(op="memory.retrieval", name="hybrid_search"):
             _sentry_tag("chat_id", str(chat_id) if chat_id else "none")
             _sentry_tag("decay_mode", decay_mode)
-            return self._search_impl(
-                query=query,
-                chat_id=chat_id,
-                top_k=top_k,
-                with_context=with_context,
-                decay_mode=decay_mode,
-                owner_only=owner_only,
-            )
+            # Wave 74: outcome счётчик. Success на нормальный return;
+            # error на исключение из _search_impl. Timeout фиксируется
+            # вызывающим кодом, который ловит TimeoutError/CancelledError.
+            try:
+                result = self._search_impl(
+                    query=query,
+                    chat_id=chat_id,
+                    top_k=top_k,
+                    with_context=with_context,
+                    decay_mode=decay_mode,
+                    owner_only=owner_only,
+                )
+            except (TimeoutError, asyncio.TimeoutError):
+                _inc_outcome("timeout")
+                raise
+            except Exception:
+                _inc_outcome("error")
+                raise
+            _inc_outcome("success")
+            return result
 
     def _search_impl(
         self,
@@ -430,6 +464,7 @@ class HybridRetriever:
 
         # Fusion. FTS list всегда weight=1.0; vec list — env-настраиваемый вес
         # (C3 Memory Phase 2). Backward-compat: default weights → прежнее поведение.
+        _rrf_start = time.perf_counter()
         if vec_ids:
             fused = reciprocal_rank_fusion(
                 fts_ids,
@@ -439,6 +474,7 @@ class HybridRetriever:
             )
         else:
             fused = reciprocal_rank_fusion(fts_ids, k=self._rrf_k)
+        _observe_phase("rrf", time.perf_counter() - _rrf_start)
 
         # Записываем RRF scores для Prometheus percentiles.
         if fused:
@@ -459,8 +495,14 @@ class HybridRetriever:
             decay_fn=decay_fn,
         )
 
+        # Wave 74: rerank phase timing — оба opt-in блока (adaptive + LLM)
+        # под одним зонтом, т.к. они оба переупорядочивают results.
+        _rerank_start = time.perf_counter()
+        _rerank_invoked = False
+
         # Opt-in: адаптивный реранкинг (Phase 3). Безопасный fallback — existing pipeline.
         if os.getenv("MEMORY_ADAPTIVE_RERANK_ENABLED", "0") == "1" and results:
+            _rerank_invoked = True
             try:
                 chunks = [
                     {
@@ -500,6 +542,7 @@ class HybridRetriever:
         # Opt-in: LLM re-ranking финальная стадия (Chado §6 P1).
         # Wave 43-A: adaptive threshold — LLM пропускается при высокой/низкой уверенности.
         if os.getenv("KRAB_RAG_LLM_RERANK_ENABLED", "0") == "1" and results:
+            _rerank_invoked = True
             try:
                 from src.core.memory_llm_rerank import (  # lazy
                     Candidate,
@@ -546,6 +589,11 @@ class HybridRetriever:
                     error=str(exc),
                     fallback="pre_rerank_order",
                 )
+
+        # Wave 74: rerank phase timing — фиксируем только если хотя бы один из
+        # opt-in блоков (adaptive/LLM) был выполнен.
+        if _rerank_invoked:
+            _observe_phase("rerank", time.perf_counter() - _rerank_start)
 
         # C6: total latency + mode counter + structured summary log.
         total_elapsed = time.perf_counter() - _total_start
@@ -883,7 +931,10 @@ class HybridRetriever:
             self._query_vec_cache_hits += 1
             return cached
         # Miss: encode и положим в cache.
+        # Wave 74: embedding phase timing — только cache-miss путь (hit O(1)).
+        _emb_start = time.perf_counter()
         vec = model.encode([query])[0]  # type: ignore[attr-defined]
+        _observe_phase("embedding", time.perf_counter() - _emb_start)
         # tolist() — гарантированно serializable; для cosine MMR-cache
         # downstream будет .tolist() всё равно.
         try:

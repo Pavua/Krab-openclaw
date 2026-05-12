@@ -112,3 +112,14 @@ groups:
         annotations:
           summary: "Auto-restart attempts > 0.1/sec за 10 мин"
           description: "Service {{ $labels.service }} нестабилен — нужен manual investigation"
+
+      # Wave 74: Memory Phase 2 hybrid retrieval P95 > 5s — сигнал, что
+      # paid rerank (Vertex/Gemini) или vec scan деградируют.
+      - alert: MemoryRetrievalSlow
+        expr: histogram_quantile(0.95, rate(krab_memory_retrieval_duration_seconds_bucket{phase="total"}[5m])) > 5.0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory Phase 2 retrieval P95 > 5s"
+          description: "Hybrid retrieval (FTS5+vec+RRF+rerank) P95 latency exceeded 5s. Check rerank provider (Vertex/Gemini), vec scan latency, or Model2Vec embedder."
