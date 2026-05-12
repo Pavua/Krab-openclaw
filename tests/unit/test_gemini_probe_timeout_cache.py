@@ -42,8 +42,14 @@ def _ok_result(key_source: str = "test", key_tier: str = "free") -> CloudProbeRe
 
 
 @pytest.fixture(autouse=True)
-def clear_probe_cache() -> None:
-    """Очищаем кеш перед каждым тестом."""
+def clear_probe_cache(monkeypatch) -> None:
+    """Очищаем кеш перед каждым тестом + disable paid_gemini_guard.
+
+    Wave 153: default guard mode = block, иначе probe_gemini_key возвращает
+    blocked_by_guard вместо ожидаемого probe_timeout / cached / network_error.
+    Эти тесты проверяют именно non-blocked путь, поэтому явно гасим guard.
+    """
+    monkeypatch.setenv("KRAB_BLOCK_PAID_GEMINI_AI_STUDIO", "0")
     cloud_key_probe._probe_ok_cache.clear()
     yield
     cloud_key_probe._probe_ok_cache.clear()
