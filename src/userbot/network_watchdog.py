@@ -154,6 +154,42 @@ async def _probe_updates_via_get_state(
     )
 
 
+# ---------------------------------------------------------------------------
+# Wave 63-C: dispatcher tick staleness check
+# ---------------------------------------------------------------------------
+
+# Сколько секунд без вызова _process_message считаем "starved" dispatcher.
+# 10 минут — два heartbeat-цикла (4 мин × 2 + buffer); ловит ситуации когда
+# pts probe alive, но handler chain не работает (Pyrogram dispatcher dead,
+# updates parser стопится, или message loop wedged).
+_DISPATCHER_TICK_STALENESS_SEC: float = float(
+    os.environ.get("KRAB_DISPATCHER_TICK_STALENESS_SEC", "600")
+)
+
+
+def _check_dispatcher_starved(
+    owner: object,
+    *,
+    now: float | None = None,
+    staleness_sec: float | None = None,
+) -> bool:
+    """Wave 63-C: True если последний dispatcher tick старше staleness_sec.
+
+    Возвращает True (starved) только если ``_last_dispatcher_tick_ts`` явно
+    устарел. Если у owner нет атрибута (не bridge) — False (fail-open: probe
+    в swarm clients не должен фолзить из-за отсутствия инфраструктуры).
+
+    Cross-reference signal: вызывать после того как pts probe сказал "alive".
+    Stale tick + alive pts = новый split-brain pattern.
+    """
+    last_ts = getattr(owner, "_last_dispatcher_tick_ts", None)
+    if last_ts is None:
+        return False
+    threshold = _DISPATCHER_TICK_STALENESS_SEC if staleness_sec is None else staleness_sec
+    current = time.time() if now is None else now
+    return (current - float(last_ts)) >= threshold
+
+
 def _launchd_exit_78() -> None:
     """Trigger launchd-respawn через `os._exit(78)` (EX_CONFIG).
 
@@ -943,6 +979,29 @@ class NetworkWatchdogMixin:
                             error=str(exc)[:200],
                         )
                         probe = None
+
+                    # Wave 63-C: cross-reference сигнал. pts probe увидел
+                    # движение server pts, но _process_message не вызывался
+                    # давно → handler chain мёртв (network OK, dispatcher dead).
+                    # Логируем отдельно для ops-видимости; реакция остаётся за
+                    # split_brain_suspected ниже (consistent escalation).
+                    if (
+                        probe is not None
+                        and probe.alive
+                        and probe.server_pts_delta > 0
+                        and _check_dispatcher_starved(self)
+                    ):
+                        last_tick_ts = getattr(self, "_last_dispatcher_tick_ts", 0.0)
+                        logger.warning(
+                            "dispatcher_starved_detected",
+                            server_pts=probe.server_pts,
+                            server_pts_delta=probe.server_pts_delta,
+                            last_dispatcher_tick_ago_sec=round(
+                                time.time() - float(last_tick_ts), 1
+                            ),
+                            dispatcher_tick_count=getattr(self, "_dispatcher_tick_count", 0),
+                            staleness_threshold_sec=_DISPATCHER_TICK_STALENESS_SEC,
+                        )
 
                     if probe is not None and probe.split_brain_suspected:
                         logger.warning(

@@ -421,6 +421,12 @@ class KraabUserbot(
         # Сравниваем с предыдущим: server pts вырос + update_id frozen =
         # split-brain. Detect за 4 мин heartbeat-цикла вместо 93 мин silence-gate.
         self._last_server_pts: int = 0
+        # Wave 63-C: inline dispatcher tick — outcomes-not-heartbeats signal.
+        # Counter increments в _process_message (центральный funnel всех
+        # @on_message decorators). Stale ts при alive pts probe = новый
+        # split-brain pattern (network OK, dispatcher dead).
+        self._dispatcher_tick_count: int = 0
+        self._last_dispatcher_tick_ts: float = time.time()
         self._network_offline_monitor_task: Optional[asyncio.Task] = None
         # Runtime-состояние старта userbot для health/handoff и контролируемой деградации.
         self._startup_state = "initializing"
@@ -3489,6 +3495,12 @@ class KraabUserbot(
         """Главный обработчик входящих сообщений"""
         # Обновляем метку последнего TG-события для network offline monitor.
         self._last_telegram_event_ts = time.time()
+        # Wave 63-C: inline dispatcher tick. Каждый message handler входит сюда
+        # (центральный funnel для всех 50+ @on_message decorators). Counter
+        # фиксирует "outcomes": dispatcher жив ⇔ updates реально доходят до
+        # хэндлеров. Stale tick при alive pts probe = новый split-brain pattern.
+        self._dispatcher_tick_count += 1
+        self._last_dispatcher_tick_ts = time.time()
         # Wave 39-D: трекаем message.id как proxy для update_id.
         # message.id монотонно растёт (per-chat), служит сигналом живости
         # updates_subscriber. Обновляем только если новый id больше.
