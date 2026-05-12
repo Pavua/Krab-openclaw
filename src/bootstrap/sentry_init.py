@@ -53,11 +53,41 @@ _PII_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"https://[a-zA-Z0-9]{16,}@[a-zA-Z0-9]+\.ingest\.[a-z.]+/\d+"), "<SENTRY_DSN>"),
     # Bearer / OAuth header tokens
     (re.compile(r"(?i)bearer\s+[A-Za-z0-9_.\-=]{20,}"), "Bearer <TOKEN>"),
+    # Wave 102: email — ДО phone чтобы домен с цифрами не сматчился phone'ом.
+    (re.compile(r"[\w._%+-]+@[\w.-]+\.[A-Za-z]{2,}"), "<email>"),
+    # Wave 102: phone — international +XXX или local 10-15 digits.
+    (re.compile(r"\+?\d{10,15}"), "<phone>"),
 )
 # Маркер уже редактированной строки — для идемпотентности.
 _REDACTED_MARKER_RE: re.Pattern[str] = re.compile(
-    r"<(?:TG_BOT_TOKEN|GOOGLE_API_KEY|API_KEY|SENTRY_DSN|TOKEN)>"
+    r"<(?:TG_BOT_TOKEN|GOOGLE_API_KEY|API_KEY|SENTRY_DSN|TOKEN|email|phone|user_id)>"
 )
+
+# Wave 102: size caps + user_id allowlist для агрессивной редакции.
+_MESSAGE_MAX_LEN = 2000
+_EXTRA_PAYLOAD_MAX_LEN = 5000
+_USER_ID_EXTRA_KEYS: frozenset[str] = frozenset(
+    {"user_id", "from_id", "chat_id", "peer_id", "telegram_user_id", "tg_user_id", "sender_id"}
+)
+_USER_ID_DIGIT_RE = re.compile(r"(?<!\d)\d{5,}(?!\d)")
+
+
+def _redact_user_id_field(value: Any) -> Any:
+    """Wave 102: int ≥10000 → <user_id>, str digits substitute, else passthrough."""
+    if isinstance(value, int) and value >= 10000:
+        return "<user_id>"
+    if isinstance(value, str):
+        return _USER_ID_DIGIT_RE.sub("<user_id>", value)
+    return value
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    """Wave 102: truncate с marker'ом + tail для context (последние 64 char)."""
+    if not isinstance(value, str) or len(value) <= limit:
+        return value
+    head = value[: max(0, limit - 100)]
+    tail = value[-64:]
+    return f"{head}…<truncated {len(value)} chars>…{tail}"
 
 
 def _redact_string(s: str) -> str:
@@ -106,8 +136,23 @@ def _apply_pii_redaction(event: dict[str, Any]) -> None:
                     crumb["data"] = _redact_dict(crumb["data"])
         if isinstance(event.get("extra"), dict):
             event["extra"] = _redact_dict(event["extra"])
+            # Wave 102: aggressive user_id redact для extra/tags allowlist keys.
+            for k in list(event["extra"].keys()):
+                if k in _USER_ID_EXTRA_KEYS:
+                    event["extra"][k] = _redact_user_id_field(event["extra"][k])
+            # Wave 102: cap extra.payload (most common bloat source).
+            if isinstance(event["extra"].get("payload"), str):
+                event["extra"]["payload"] = _truncate_text(
+                    event["extra"]["payload"], _EXTRA_PAYLOAD_MAX_LEN
+                )
         if isinstance(event.get("tags"), dict):
             event["tags"] = _redact_dict(event["tags"])
+            for k in list(event["tags"].keys()):
+                if k in _USER_ID_EXTRA_KEYS:
+                    event["tags"][k] = _redact_user_id_field(event["tags"][k])
+        # Wave 102: cap top-level message.
+        if isinstance(event.get("message"), str):
+            event["message"] = _truncate_text(event["message"], _MESSAGE_MAX_LEN)
     except Exception:  # noqa: BLE001
         # Никогда не ломаем error reporting из-за бага в редакции.
         pass
