@@ -1,8 +1,32 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-05-04 (session 36)
+> Составлен: 2026-03-23 | Обновлён: 2026-05-12 (session 45)
 > Статус: Активная разработка
 > Владелец: По
+
+---
+
+## 📋 Session 45 (2026-05-11/12) — 25 коммитов, 3 paradigm shifts, billing leak fix, 7 Linear closed
+
+### Highlights
+- 3 paradigm shifts: «outcomes-not-heartbeats» (Wave 63-A pts probe, Wave 50-B OAuth refresh, Wave 65-D model preempt)
+- Wave 64: SQLite corruption recurring fix (journal_mode=DELETE + fullfsync)
+- Wave 66: emergency billing leak fix (€40/week paid AI Studio → Vertex bonus credits)
+- Linear: AGE-5/6/8/9/12/15/16 closed (all Krab-side urgent backlog)
+- Sentry quota saved: >1000 events/week stop firing
+
+### Backlog Session 46
+
+#### P0
+- **Anthropic Vertex quota approval**: pending Google Sales POC contact (Cases #70886393 + #70886496). Already submitted Contact Sales form 5-6 May, awaiting response. Wave 65-D preempts claude-sonnet-4-5 in meantime.
+- **Wave 67 hard paid Gemini guard** (in progress this session): defence-in-depth against future accidental paid leaks.
+
+#### P1
+- **AGE-14, AGE-10 (Krab Ear AppHang)** — separate repo, не в Krab scope
+- Memory pressure optimization (gemma idle unload running, OrbStack + Safari ещё держат RAM)
+
+#### P2 (architectural)
+- Wave 63-B/C/D follow-ups: dispatcher_tick hook, per-client probe (swarm), surgical recovery
 
 ---
 

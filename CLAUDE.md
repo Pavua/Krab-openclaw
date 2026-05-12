@@ -286,6 +286,11 @@ LOCAL_AUTOLOAD_FALLBACK_LIMIT=0      # 0=strict preferred (Wave 62 — было 
 KRAB_ANTHROPIC_VERTEX_DISABLED_MODELS=claude-sonnet-4-5  # preempt no-quota (Wave 65-D)
 KRAB_COEXIST_SWAP_WARN_GB=22         # swap warn threshold (Wave 65-E, logged only)
 KRAB_COEXIST_SWAP_THRESHOLD_GB=32    # swap critical (Wave 65-E, Telegram alert)
+KRAB_GEMINI_RERANK_VERTEX_ENABLED=1    # rerank через Vertex (Wave 66-A)
+KRAB_GOOGLE_DIRECT_VERTEX_PREFERRED=1  # google_direct Vertex mode (Wave 66-B)
+GEMINI_PAID_KEY_ENABLED=0              # safety belt (Wave 66-B)
+KRAB_VERTEX_PROJECT=caramel-anvil-492816-t5  # bonus credits project
+KRAB_VERTEX_REGION=global              # Vertex location
 ```
 
 ## Правила
@@ -348,6 +353,12 @@ Branch `main`. Все изменения deployed в production. **Самый р
 Все используют один принцип: **check outcomes, not process aliveness**.
 
 **Background agents used (11+ parallel)** — Sonnet only (Haiku context window не справился). Sentry triage / Linear / log scan / memory pressure / routines / AGE-15 research / AGE-8 fix / Wave 63-A / Wave 64 / cron jobs / Wave 65-C / Wave 65-F/G/H.
+
+**Wave 66 series (2 commits + 1 .env edit)** — emergency billing leak fix:
+* **66-A** (`1a1dc39`): `gemini_rerank_provider` Vertex mode preferred (was per-message paid AI Studio → €40/week). Fallback на AI Studio if Vertex unavailable.
+* **66-B** (`8f73871`): `google_genai_direct` (Wave 18-B) Vertex mode preferred (Gemma excluded — Vertex doesn't have). Plus `.env`: `GEMINI_PAID_KEY_ENABLED=1 → 0` safety belt.
+* Env: `KRAB_GEMINI_RERANK_VERTEX_ENABLED=1` (default ON), `KRAB_GOOGLE_DIRECT_VERTEX_PREFERRED=1` (default ON).
+* Эффект: future Gemini traffic полностью через caramel-anvil-492816-t5 bonus credits (€848 до 2027-03), no paid AI Studio leaks.
 
 ### Session 43+44 highlights (2026-05-09 → 2026-05-10 — Waves 44-Z, 45-*, 46-*, 47, 48-*, 49-*)
 
@@ -473,7 +484,7 @@ Empirical rule: sonnet — 200-300 word с TDD; haiku — < 100 word.
 | **Session 40 (07.05)** | **+30 SkillCurator analyzer + e2e fixes** (см. ниже) |
 | **Session 41 (09.05)** | **~12817 collected** (+115: Wave 37-41-O) |
 | **Session 43+44 (10.05)** | **13795/13916 collected** (+~377: Waves 44-Z, 45-*, 46-*, 47, 48-*, 49-*) |
-| **Session 45 (11→12.05)** | **~13900+ collected** (+~100 tests: Waves 62-65 + AGE-8/15/12/9/16 + 50-B). **17 commits**, **7 Linear issues closed**, **>1000 Sentry events/week** stop firing. 3 paradigm shifts: «outcomes-not-heartbeats» pattern (Wave 63-A/50-B/65-D/62-G). |
+| **Session 45 (11→12.05)** | **~13920+ collected** (+~120 tests: Waves 62-66 + AGE-8/15/12/9/16 + 50-B). **25 commits** (incl. Wave 66 billing leak fix), **7 Linear issues closed**, **>1000 Sentry events/week** stop firing. 3 paradigm shifts: «outcomes-not-heartbeats» pattern (Wave 63-A/50-B/65-D/62-G). Wave 66: €40/week paid AI Studio leak → Vertex bonus credits. |
 
 ### Session 40 highlights (07.05.2026 — runtime e2e + KE deadlock fix + ecosystem health)
 

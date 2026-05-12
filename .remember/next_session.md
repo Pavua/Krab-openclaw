@@ -4,13 +4,14 @@
 > Krab Ear имеет свой handoff в `/Users/pablito/Antigravity_AGENTS/Krab Ear/.remember/next_session.md`.
 > См. [docs/PROJECT_SEPARATION_GUIDE.md](../docs/PROJECT_SEPARATION_GUIDE.md).
 
-## TL;DR — Session 45 closed 2026-05-12 ~01:10, **22 commits**, 7 Linear closed, 3 paradigm shifts, >1000 Sentry events/week silenced
+## TL;DR — Session 45 closed 2026-05-12, **25+ commits** (incl. Wave 66-A/B + Wave 67 in progress), 7 Linear closed, 3 paradigm shifts, >1000 Sentry events/week silenced, billing leak fixed
 
 **FINAL STATE**:
-- **main HEAD**: `fab8319` Wave 65-F (conftest test artifact leak prevention)
+- **main HEAD**: `8f73871` Wave 66-B (google_genai_direct Vertex mode preferred — paid leak fix)
 - **Krab core**: alive, journal_mode=delete (all 5 sessions), `get_state_probe_enabled=True`
 - **Sentry quota saved**: **>1000 events/week** stop firing
 - **Linear**: 7 issues closed (AGE-5/6/8/9/12/15/16). Krab backlog: 0 open. Krab Ear AGE-14/10 — отдельный repo.
+- **Billing**: paid AI Studio leak stopped via Wave 66-A/B. Future Gemini traffic → caramel-anvil-492816-t5 bonus credits (€848 до 2027-03).
 
 ## 🎯 Heroic fixes (3 paradigm shifts) — «outcomes-not-heartbeats» pattern
 
@@ -40,6 +41,21 @@
 * `866359e` docs: CLAUDE.md Session 45 update
 * `6ba12e1` 65-H: Sentry-poll direct API (replace bash curl 15s timeout с httpx 30s + retries)
 * `fab8319` 65-F: conftest guard для test artifact leak (Session 39/40/44+ recurring pattern закрыт)
+
+## 🚨 Wave 66 — Billing leak fix (post Session 45)
+
+User notified that paid AI Studio API key tucked €40 за неделю. Two leak paths found:
+* `gemini_rerank_provider.py` (Memory Phase 2 hybrid retrieval per-message) — primary leak
+* `google_genai_direct.py` (Wave 18-B for google/*) — secondary leak
+
+Both fixed: preferred Vertex mode (vertexai=True + project=caramel-anvil-492816-t5).
+Safety belt: `GEMINI_PAID_KEY_ENABLED=0` в .env. Wave 67 in progress (hard runtime guard).
+
+Anthropic Vertex quota — pending Google Sales POC (Cases #70886393 + #70886496 still open).
+
+Commits:
+* `1a1dc39` Wave 66-A: gemini_rerank Vertex mode
+* `8f73871` Wave 66-B: google_genai_direct Vertex mode preferred
 
 ## Operational state
 
@@ -74,6 +90,9 @@ Lesson: **Sonnet for codebase context (200KB CLAUDE.md), Haiku only for one-shot
 ## Pending для Session 46
 
 ### Krab-side
+* **Wave 67 hard paid Gemini guard** (in progress) — defence-in-depth runtime check, прерывать любую попытку paid AI Studio с громким logger.error + Sentry alert. Закрытие гарантирует zero recurrence Wave 66 leak.
+* **Anthropic Vertex quota approval** — pending Google Sales POC contact (Cases #70886393 + #70886496). Submitted Contact Sales form 5-6 May, awaiting POC. Meanwhile Wave 65-D preempts claude-sonnet-4-5.
+* **Verify Wave 66 billing fix** — после restart Krab observe `vertex_mode=True` в gemini_rerank logs + zero hits на paid AI Studio endpoint в .env probe (24h window).
 * Wave 63-B/C/D: dispatcher_tick hook, per-client probe (swarm), surgical recovery (если Wave 63-A не покрыл всё)
 * AGE-13/AGE-11 — Low priority daily review test gaps (test coverage formal)
 * Verify Wave 64 reduces corruption recurrence (1-week observation window)
