@@ -40,6 +40,13 @@ from .memory import (
     record_retrieval_duration,
 )
 
+# === nlu_intent (Wave 135) ===
+from .nlu_intent import (
+    krab_nlu_commands_dispatched_total,
+    krab_nlu_confidence_score,
+    record_nlu_intent,
+)
+
 # === pressure_aware (Wave 86) ===
 from .pressure_aware import (
     _PRESSURE_AWARE_FALLBACK_COUNTER,
@@ -99,6 +106,15 @@ from .smart_routing import (
     krab_smart_routing_stage_duration_seconds,
     map_smart_routing_path,
     record_smart_routing_decision,
+)
+
+# === swarm_artifacts (Wave 134) ===
+from .swarm_artifacts import (
+    _SWARM_ARTIFACTS_SIZE_MB,
+    _SWARM_ARTIFACTS_TOTAL,
+    _swarm_artifacts_size_mb,
+    _swarm_artifacts_total,
+    set_swarm_artifacts_metrics,
 )
 
 # === telegram_rate (Wave 121) ===
@@ -204,10 +220,20 @@ __all__ = [
     "krab_completion_cost_eur_total",
     "krab_tokens_consumed_total",
     "record_completion_cost",
+    # nlu_intent (Wave 135)
+    "krab_nlu_commands_dispatched_total",
+    "krab_nlu_confidence_score",
+    "record_nlu_intent",
     # pressure_aware (Wave 86)
     "_PRESSURE_AWARE_FALLBACK_COUNTER",
     "_pressure_aware_fallback_total",
     "inc_pressure_aware_fallback",
+    # swarm_artifacts (Wave 134)
+    "_SWARM_ARTIFACTS_SIZE_MB",
+    "_SWARM_ARTIFACTS_TOTAL",
+    "_swarm_artifacts_size_mb",
+    "_swarm_artifacts_total",
+    "set_swarm_artifacts_metrics",
     # capability_cache_audit (Wave 129)
     "_CAPABILITY_CACHE_MISMATCH_COUNTER",
     "_capability_cache_mismatch_total",

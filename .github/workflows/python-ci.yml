@@ -42,8 +42,7 @@ jobs:
             'fastapi>=0.115.0' \
             'mcp>=1.0.0' \
             'sentry-sdk>=2.0.0' \
-            'psutil>=6.0.0' \
-            'pyyaml>=6.0'
+            'psutil>=6.0.0'
 
       - name: Ruff lint (src/ scripts/)
         run: ruff check src/ scripts/
