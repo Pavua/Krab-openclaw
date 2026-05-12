@@ -1110,4 +1110,317 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
         rows = storage.query_recent(limit=limit)
         return {"ok": True, "count": len(rows), "items": rows}
 
+    # ── Wave 146: Smart Routing 5-stage pipeline statistics ─────────────────
+
+    @router.get("/api/routing/stats")
+    async def routing_stats() -> dict:
+        """Wave 146: агрегированная статистика Smart Routing pipeline.
+
+        Читает live counter krab_smart_routing_decisions_total (Wave 73) и
+        выдаёт per-stage allow/deny counts + общий total. Endpoint используется
+        страницей /admin/routing для визуализации 5-stage pipeline.
+
+        Stages в фиксированном порядке:
+            hard_gate → chat_policy → regex → llm_classifier → feedback
+        """
+        return _build_routing_stats_payload()
+
+    # ── Wave 146: HTML страница визуализации Smart Routing ──────────────────
+
+    @router.get("/admin/routing")
+    async def admin_routing_page():  # type: ignore[no-untyped-def]
+        """Wave 146: HTML страница с per-stage allow/deny + pipeline flow."""
+        from fastapi.responses import HTMLResponse  # noqa: PLC0415
+
+        return HTMLResponse(_ROUTING_PAGE_HTML, headers={"Cache-Control": "no-store"})
+
     return router
+
+
+# ── Wave 146: helpers вне router-factory (для unit-тестируемости) ──────────
+
+
+_SMART_ROUTING_STAGES_ORDER: tuple[str, ...] = (
+    "hard_gate",
+    "chat_policy",
+    "regex",
+    "llm_classifier",
+    "feedback",
+)
+
+
+def _read_smart_routing_counter(stage: str, outcome: str) -> float:
+    """Wave 146: безопасно читает live значение Counter{stage,outcome}.
+
+    Возвращает 0.0 если prometheus_client недоступен или метрика не
+    инициализирована. Fail-safe — никогда не бросает в hot path.
+    """
+    try:
+        from src.core import prometheus_metrics as pm  # noqa: PLC0415
+
+        counter = getattr(pm, "krab_smart_routing_decisions_total", None)
+        if counter is None:
+            return 0.0
+        # prometheus_client Counter: .labels(...)._value.get() даёт текущее значение
+        return float(counter.labels(stage=stage, outcome=outcome)._value.get())
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _build_routing_stats_payload() -> dict[str, Any]:
+    """Wave 146: собирает payload для GET /api/routing/stats.
+
+    Структура:
+        {
+          "ok": true,
+          "stages": [
+            {"stage": "hard_gate", "allow_count": int, "deny_count": int,
+             "total": int, "allow_rate_pct": float},
+            ...
+          ],
+          "total_decisions": int,
+          "top_decisions_path": {
+              "winning_stage": "regex" | "hard_gate" | ...,
+              "winning_outcome": "allow" | "deny",
+              "winning_count": int,
+              "share_pct": float
+          }
+        }
+    """
+    stages_data: list[dict[str, Any]] = []
+    overall_total = 0
+    cells: list[tuple[str, str, int]] = []  # (stage, outcome, count)
+
+    for stage in _SMART_ROUTING_STAGES_ORDER:
+        allow_count = int(_read_smart_routing_counter(stage, "allow"))
+        deny_count = int(_read_smart_routing_counter(stage, "deny"))
+        total = allow_count + deny_count
+        overall_total += total
+        allow_rate_pct = round((allow_count / total * 100.0), 2) if total > 0 else 0.0
+        stages_data.append(
+            {
+                "stage": stage,
+                "allow_count": allow_count,
+                "deny_count": deny_count,
+                "total": total,
+                "allow_rate_pct": allow_rate_pct,
+            }
+        )
+        cells.append((stage, "allow", allow_count))
+        cells.append((stage, "deny", deny_count))
+
+    # top_decisions_path — cell (stage, outcome) с максимальным count.
+    top_payload: dict[str, Any] = {
+        "winning_stage": None,
+        "winning_outcome": None,
+        "winning_count": 0,
+        "share_pct": 0.0,
+    }
+    if overall_total > 0:
+        best_stage, best_outcome, best_count = max(cells, key=lambda c: c[2])
+        if best_count > 0:
+            top_payload = {
+                "winning_stage": best_stage,
+                "winning_outcome": best_outcome,
+                "winning_count": best_count,
+                "share_pct": round((best_count / overall_total * 100.0), 2),
+            }
+
+    return {
+        "ok": True,
+        "stages": stages_data,
+        "total_decisions": overall_total,
+        "top_decisions_path": top_payload,
+    }
+
+
+# ── Wave 146: HTML шаблон /admin/routing ────────────────────────────────────
+
+
+_ROUTING_PAGE_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Krab — Smart Routing</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --ok: #2ea043;
+    --warn: #d29922;
+    --err: #f85149;
+  }
+  body { background: var(--bg); color: var(--fg); margin: 0;
+         font: 14px -apple-system, BlinkMacSystemFont, sans-serif; }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--border);
+           display: flex; justify-content: space-between; align-items: center; }
+  h1 { margin: 0; font-size: 18px; }
+  nav.tabs a { color: var(--muted); text-decoration: none; margin-right: 18px;
+               font-size: 13px; padding-bottom: 3px; }
+  nav.tabs a:hover { color: var(--accent); }
+  nav.tabs a.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
+  main { padding: 24px; max-width: 1200px; margin: auto; }
+  .summary { background: var(--card); border: 1px solid var(--border);
+             border-radius: 8px; padding: 16px; margin-bottom: 20px;
+             display: flex; gap: 32px; flex-wrap: wrap; }
+  .stat { display: flex; flex-direction: column; }
+  .stat-label { color: var(--muted); font-size: 11px; text-transform: uppercase;
+                letter-spacing: 1px; margin-bottom: 4px; }
+  .stat-value { font-size: 24px; font-weight: 600; color: var(--accent); }
+  .pipeline { display: flex; align-items: stretch; gap: 0; margin-bottom: 24px;
+              flex-wrap: wrap; }
+  .stage-card { background: var(--card); border: 1px solid var(--border);
+                border-radius: 8px; padding: 14px 16px; min-width: 180px;
+                flex: 1 1 180px; position: relative; }
+  .stage-arrow { display: flex; align-items: center; padding: 0 6px;
+                 color: var(--muted); font-size: 18px; }
+  .stage-name { font-weight: 600; font-size: 13px; color: var(--accent);
+                text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .stage-total { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+  .bar-row { font-size: 11px; color: var(--muted); margin: 4px 0 2px; display: flex;
+             justify-content: space-between; }
+  .bar { height: 6px; background: var(--border); border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; transition: width 0.4s ease; }
+  .bar-fill.allow { background: var(--ok); }
+  .bar-fill.deny { background: var(--err); }
+  .b-allow { color: var(--ok); font-weight: 600; }
+  .b-deny  { color: var(--err); font-weight: 600; }
+  .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
+  .footer-note { color: var(--muted); font-size: 12px; margin-top: 18px; }
+  code { font-family: ui-monospace, monospace; font-size: 12px;
+         background: var(--card); padding: 2px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <div style="display:flex; align-items:center; gap:18px;">
+    <h1>Krab — Smart Routing</h1>
+    <nav class="tabs">
+      <a href="/admin/models">Models</a>
+      <a href="/admin/routing" class="active">Routing</a>
+    </nav>
+  </div>
+  <div style="color: var(--muted); font-size: 12px;">
+    Refresh: <span id="last-refresh">—</span>
+  </div>
+</header>
+<main>
+  <div class="summary">
+    <div class="stat">
+      <div class="stat-label">Total decisions</div>
+      <div class="stat-value" id="total-decisions">—</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Top path</div>
+      <div class="stat-value" id="top-path">—</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Top path share</div>
+      <div class="stat-value" id="top-share">—</div>
+    </div>
+  </div>
+  <div class="pipeline" id="pipeline"></div>
+  <div class="footer-note">
+    Wave 73 Prometheus counter <code>krab_smart_routing_decisions_total</code>.
+    Polling every 30s. Stages: hard_gate → chat_policy → regex → llm_classifier → feedback.
+  </div>
+</main>
+<script>
+'use strict';
+
+function el(tag, attrs, children) {
+  const node = document.createElement(tag);
+  if (attrs) {
+    for (const k in attrs) {
+      if (k === 'class') node.className = attrs[k];
+      else if (k === 'text') node.textContent = attrs[k];
+      else node.setAttribute(k, attrs[k]);
+    }
+  }
+  if (children) for (const c of children) if (c) node.appendChild(c);
+  return node;
+}
+
+function pct(v) { return (v == null) ? '—' : (v.toFixed(1) + '%'); }
+
+function clearNode(node) {
+  while (node.firstChild) node.removeChild(node.firstChild);
+}
+
+function renderStage(stage) {
+  const total = stage.total || 0;
+  const allowW = total > 0 ? (stage.allow_count / total * 100) : 0;
+  const denyW  = total > 0 ? (stage.deny_count  / total * 100) : 0;
+  const card = el('div', { class: 'stage-card' }, [
+    el('div', { class: 'stage-name', text: stage.stage }),
+    el('div', { class: 'stage-total', text: String(total) }),
+    el('div', { class: 'bar-row' }, [
+      el('span', { class: 'b-allow', text: 'allow ' + stage.allow_count }),
+      el('span', { text: pct(stage.allow_rate_pct) }),
+    ]),
+    el('div', { class: 'bar' }, [
+      el('div', { class: 'bar-fill allow', style: 'width:' + allowW + '%' }),
+    ]),
+    el('div', { class: 'bar-row' }, [
+      el('span', { class: 'b-deny', text: 'deny ' + stage.deny_count }),
+    ]),
+    el('div', { class: 'bar' }, [
+      el('div', { class: 'bar-fill deny', style: 'width:' + denyW + '%' }),
+    ]),
+  ]);
+  return card;
+}
+
+function renderPipeline(data) {
+  const root = document.getElementById('pipeline');
+  clearNode(root);
+  const stages = data.stages || [];
+  if (!stages.length) {
+    root.appendChild(el('div', { class: 'empty', text: 'no decisions recorded yet' }));
+    return;
+  }
+  stages.forEach((stage, i) => {
+    root.appendChild(renderStage(stage));
+    if (i < stages.length - 1) {
+      root.appendChild(el('div', { class: 'stage-arrow', text: '→' }));
+    }
+  });
+}
+
+function renderSummary(data) {
+  document.getElementById('total-decisions').textContent = String(data.total_decisions || 0);
+  const top = data.top_decisions_path || {};
+  if (top.winning_stage) {
+    document.getElementById('top-path').textContent =
+      top.winning_stage + ' / ' + top.winning_outcome;
+    document.getElementById('top-share').textContent = pct(top.share_pct);
+  } else {
+    document.getElementById('top-path').textContent = '—';
+    document.getElementById('top-share').textContent = '—';
+  }
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/routing/stats', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    renderSummary(data);
+    renderPipeline(data);
+    document.getElementById('last-refresh').textContent = new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('last-refresh').textContent = 'error: ' + e.message;
+  }
+}
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>
+"""

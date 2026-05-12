@@ -162,13 +162,37 @@ def _resolve_active_provider(model_id: str) -> str:
 
 
 def _format_history_entries(entries: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """Sanitize/copy history entries для UI."""
+    """Sanitize/copy history entries для UI (legacy black_box format).
+
+    Поддерживает два формата:
+    1. Wave 144 black_box: ``{timestamp, from, to, actor}``.
+    2. Wave 145 ``model_switch_history``: ``{ts, by, from_provider, from_model,
+       to_provider, to_model, reason, success}`` — конвертируется в UI shape.
+    """
     if not entries:
         return []
     safe: list[dict[str, Any]] = []
     for entry in entries[-10:]:
         if not isinstance(entry, dict):
             continue
+        # Wave 145 формат — компактный display string собирается на сервере.
+        if "ts" in entry or "to_model" in entry:
+            from_part = (
+                str(entry.get("from_model") or "") or str(entry.get("from_provider") or "") or "?"
+            )
+            to_part = str(entry.get("to_model") or "") or str(entry.get("to_provider") or "") or "?"
+            safe.append(
+                {
+                    "timestamp": str(entry.get("ts") or ""),
+                    "from": from_part,
+                    "to": to_part,
+                    "actor": str(entry.get("by") or "unknown"),
+                    "reason": str(entry.get("reason") or ""),
+                    "success": bool(entry.get("success", True)),
+                }
+            )
+            continue
+        # Legacy black_box формат.
         safe.append(
             {
                 "timestamp": str(entry.get("timestamp") or ""),
@@ -178,6 +202,38 @@ def _format_history_entries(entries: list[dict[str, Any]] | None) -> list[dict[s
             }
         )
     return safe
+
+
+def _log_history_entry(
+    *,
+    by: str,
+    from_provider: str,
+    from_model: str,
+    to_provider: str,
+    to_model: str,
+    reason: str,
+    success: bool,
+) -> None:
+    """Wave 145: записывает switch в persistent history.
+
+    Best-effort — любые ошибки store глотаются (logger.warning внутри store),
+    чтобы failure в history не блокировал успешный switch.
+    """
+    try:
+        from src.core.model_switch_history import model_switch_history
+
+        model_switch_history.log_switch(
+            by=by,
+            from_provider=from_provider,
+            from_model=from_model,
+            to_provider=to_provider,
+            to_model=to_model,
+            reason=reason,
+            success=success,
+        )
+    except Exception:  # noqa: BLE001
+        # log_switch уже warning'ил внутри. Игнорируем чтобы UI не упал.
+        pass
 
 
 # ── Main factory ────────────────────────────────────────────────────────────
@@ -277,15 +333,26 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
 
         providers.append(lm_section)
 
-        # --- History (если черный ящик доступен) --------------------------
+        # --- History (Wave 145: persistent JSON store) --------------------
+        # Приоритет: model_switch_history (структурированный schema) →
+        # fallback на legacy black_box.tail_events если history пуст
+        # (даёт прогрев новой странички миграционной historie из BlackBox).
         history_entries: list[dict[str, Any]] = []
         try:
-            black_box = ctx.get_dep("black_box")
-            if black_box is not None and hasattr(black_box, "tail_events"):
-                events = black_box.tail_events(kind="model_switch", limit=10) or []
-                history_entries = _format_history_entries(list(events))
+            from src.core.model_switch_history import model_switch_history
+
+            raw_history = model_switch_history.to_json_safe(limit=10)
+            history_entries = _format_history_entries(list(raw_history))
         except Exception:  # noqa: BLE001
             history_entries = []
+        if not history_entries:
+            try:
+                black_box = ctx.get_dep("black_box")
+                if black_box is not None and hasattr(black_box, "tail_events"):
+                    events = black_box.tail_events(kind="model_switch", limit=10) or []
+                    history_entries = _format_history_entries(list(events))
+            except Exception:  # noqa: BLE001
+                history_entries = []
 
         return {
             "ok": True,
@@ -313,12 +380,18 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
 
         provider = str(payload.get("provider") or "").strip()
         model = str(payload.get("model") or "").strip()
+        reason = str(payload.get("reason") or "").strip()
+        by = str(payload.get("by") or "owner_panel").strip() or "owner_panel"
 
         if not provider and not model:
             raise HTTPException(
                 status_code=400,
                 detail="provider_or_model_required",
             )
+
+        # Снимаем previous state ДО switch чтобы записать в history.
+        previous_model = str(getattr(_mm, "active_model_id", "") or "")
+        previous_provider = _resolve_active_provider(previous_model)
 
         # Простейшая валидация против известного реестра + LM Studio probe.
         if model:
@@ -342,6 +415,7 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
                         detail=f"model_unknown:{model}",
                     )
 
+        switch_success = False
         try:
             if model:
                 _mm.set_model(model)
@@ -355,7 +429,18 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
                     )
                 _mm.set_provider(lowered)
                 action = "set_provider"
+            switch_success = True
         except ValueError as exc:
+            # Wave 145: даже при failure пишем в history для диагностики.
+            _log_history_entry(
+                by=by,
+                from_provider=previous_provider,
+                from_model=previous_model,
+                to_provider=provider or _resolve_active_provider(model),
+                to_model=model,
+                reason=reason or f"value_error:{exc}",
+                success=False,
+            )
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         black_box = ctx.get_dep("black_box")
@@ -369,6 +454,17 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
                 pass
 
         active = str(getattr(_mm, "active_model_id", model or provider) or "")
+        # Wave 145: persistent history log с фактическим active id (после
+        # set_model active = model, после set_provider = "mode:cloud" и т.п.).
+        _log_history_entry(
+            by=by,
+            from_provider=previous_provider,
+            from_model=previous_model,
+            to_provider=provider or _resolve_active_provider(active),
+            to_model=model or active,
+            reason=reason or f"action={action}",
+            success=switch_success,
+        )
         return {
             "ok": True,
             "action": action,
@@ -512,6 +608,10 @@ _MODELS_PAGE_HTML = """<!DOCTYPE html>
   header { padding: 16px 24px; border-bottom: 1px solid var(--border);
            display: flex; justify-content: space-between; align-items: center; }
   h1 { margin: 0; font-size: 18px; }
+  nav.tabs a { color: var(--muted); text-decoration: none; margin-right: 18px;
+               font-size: 13px; padding-bottom: 3px; }
+  nav.tabs a:hover { color: var(--accent); }
+  nav.tabs a.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
   main { padding: 24px; max-width: 1200px; margin: auto; }
   .current { background: var(--card); border: 1px solid var(--border);
              border-radius: 8px; padding: 16px; margin-bottom: 24px; }
@@ -564,7 +664,13 @@ _MODELS_PAGE_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <h1>Krab — Model Picker</h1>
+  <div style="display:flex; align-items:center; gap:18px;">
+    <h1>Krab — Model Picker</h1>
+    <nav class="tabs">
+      <a href="/admin/models" class="active">Models</a>
+      <a href="/admin/routing">Routing</a>
+    </nav>
+  </div>
   <div style="color: var(--muted); font-size: 12px;">
     Refresh: <span id="last-refresh">—</span>
   </div>
@@ -728,10 +834,21 @@ async function refresh() {
     if (hist.length === 0) {
       histBox.appendChild(el('div', { class: 'empty', text: 'No recent switches' }));
     } else {
-      for (const h of hist) {
-        const text = (h.timestamp || '') + ' — ' + (h.from || '?') + ' → ' + (h.to || '?')
-                   + ' (' + (h.actor || 'unknown') + ')';
-        histBox.appendChild(el('div', { class: 'history-item', text }));
+      // Newest first для UI — server возвращает FIFO chronological order.
+      const sorted = hist.slice().reverse();
+      for (const h of sorted) {
+        const ts = h.timestamp || '';
+        const arrow = (h.from || '?') + ' → ' + (h.to || '?');
+        const actor = h.actor || 'unknown';
+        const item = el('div', { class: 'history-item' });
+        const okMark = (h.success === false) ? '❌ ' : '';
+        item.appendChild(document.createTextNode(okMark + ts + ' — '));
+        item.appendChild(el('code', { text: arrow }));
+        item.appendChild(document.createTextNode(' by ' + actor));
+        if (h.reason) {
+          item.appendChild(document.createTextNode(' [' + h.reason + ']'));
+        }
+        histBox.appendChild(item);
       }
     }
     document.getElementById('last-refresh').textContent = new Date().toLocaleTimeString();
