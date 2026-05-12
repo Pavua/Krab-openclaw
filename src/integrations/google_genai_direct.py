@@ -227,10 +227,48 @@ async def complete_direct(
         contents_count=len(contents),
     )
 
+    # Wave 66-B (2026-05-12): determine client mode — Vertex (bonus credits)
+    # preferred, AI Studio paid only fallback when Vertex unavailable or model
+    # is Gemma (Vertex doesn't have Gemma models, AI Studio free tier OK там).
+    _vertex_preferred = os.environ.get(
+        "KRAB_GOOGLE_DIRECT_VERTEX_PREFERRED", "1"
+    ).strip().lower() in ("1", "true", "yes", "on")
+    _use_vertex = _vertex_preferred and not is_gemma_model(model)
+    _vertex_project = os.environ.get("KRAB_VERTEX_PROJECT") or "caramel-anvil-492816-t5"
+    _vertex_location = os.environ.get("KRAB_VERTEX_REGION") or "global"
+
     def _blocking_complete() -> str:
         """Синхронный вызов генерации в thread pool."""
-        # Новый google-genai SDK: google.genai.Client
-        client = genai.Client(api_key=resolved_key)
+        # Wave 66-B: Vertex mode preferred (bonus credits через ADC), AI Studio
+        # paid path только fallback для Gemma или когда Vertex unavailable.
+        # До Wave 66-B все google/* models шли через paid AI Studio →
+        # ~€40/week на paid balance юзера. ADC creds: ~/.config/gcloud/...
+        if _use_vertex:
+            try:
+                client = genai.Client(
+                    vertexai=True,
+                    project=_vertex_project,
+                    location=_vertex_location,
+                )
+                logger.info(
+                    "google_genai_direct_vertex_mode_engaged",
+                    model=model_id,
+                    project=_vertex_project,
+                    location=_vertex_location,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Vertex init упал (ADC missing / project misconfig) — fallback
+                # на AI Studio paid path. Логируем чтобы owner мог reagrovat.
+                logger.warning(
+                    "google_genai_direct_vertex_init_failed_falling_back_to_ai_studio",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    model=model_id,
+                )
+                client = genai.Client(api_key=resolved_key)
+        else:
+            # AI Studio path: Gemma models или vertex_preferred=0 (override).
+            client = genai.Client(api_key=resolved_key)
 
         # Wave 18-H fix: GenerateContentConfig принимает плоские поля (max_output_tokens,
         # system_instruction), а не вложенный generation_config — старый pattern из
