@@ -529,6 +529,24 @@ def collect_metrics() -> str:
     except Exception:  # noqa: BLE001
         pass
 
+    # === Wave 121: Telegram FloodWait Gauge (refresh expired + render) ===
+    try:
+        from .telegram_rate import refresh_telegram_rate_limited_active
+
+        active_snapshot = refresh_telegram_rate_limited_active()
+        if active_snapshot:
+            lines.append(
+                "# HELP krab_telegram_rate_limited_active "
+                "Wave 121: 1 пока FloodWait deadline в будущем"
+            )
+            lines.append("# TYPE krab_telegram_rate_limited_active gauge")
+            for caller, value in active_snapshot.items():
+                lines.append(
+                    f'krab_telegram_rate_limited_active{{caller="{_sanitize_label(caller)}"}} {value}'
+                )
+    except Exception:  # noqa: BLE001
+        pass
+
     # === Timestamps ===
     lines.append(
         _format_metric(

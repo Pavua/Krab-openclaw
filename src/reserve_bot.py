@@ -86,6 +86,13 @@ def _record_flood_wait(wait_seconds: int, caller: str) -> None:
             _flood_wait_counter.labels(caller=caller).inc()
         except Exception as exc:  # noqa: BLE001
             logger.debug("reserve_bot_flood_metric_failed", error=str(exc))
+    # Wave 121: Histogram duration + active Gauge
+    try:
+        from src.core.prometheus_metrics import observe_telegram_flood_wait
+
+        observe_telegram_flood_wait(caller, float(wait_seconds))
+    except Exception:  # noqa: BLE001
+        pass
     state = _load_flood_state()
     prev_attempts = int(state.get("attempts", 0)) + 1
     next_allowed = time.time() + wait_seconds

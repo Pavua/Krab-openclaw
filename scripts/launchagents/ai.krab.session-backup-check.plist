@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Wave 118: Session backup integrity check (LaunchAgent)
+
+        Weekly Pyrofork session-specific check для data/sessions/*.session*.bak.*
+        Понедельник 04:30 — после nightly maintenance, до cron schedule audit
+        (Mon 11:00). Дополняет Wave 105 general backup verify (Sat 05:00).
+
+        Install:
+          launchctl bootstrap gui/501 \
+            /Users/pablito/Antigravity_AGENTS/Краб/scripts/launchagents/ai.krab.session-backup-check.plist
+    -->
+    <key>Label</key>
+    <string>ai.krab.session-backup-check</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/krab_session_backup_check.py</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>1</integer>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/session_backup_check.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/session_backup_check.err.log</string>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

@@ -66,11 +66,13 @@ def safe_handler(func):
             )
             _error_counts["FloodWait"] = _error_counts.get("FloodWait", 0) + 1
             _RECENT_ERROR_TS.append(time.time())
-            # Prometheus: krab_telegram_flood_wait_total{caller=<handler>}.
+            # Prometheus: Wave 121 — Histogram duration + active Gauge.
+            # observe_telegram_flood_wait также вызывает legacy inc_telegram_flood_wait
+            # для backwards compat.
             try:
-                from src.core.prometheus_metrics import inc_telegram_flood_wait
+                from src.core.prometheus_metrics import observe_telegram_flood_wait
 
-                inc_telegram_flood_wait(func.__name__)
+                observe_telegram_flood_wait(func.__name__, float(wait_time))
             except Exception:  # noqa: BLE001 — metrics не должны ломать handler
                 pass
             await asyncio.sleep(wait_time)

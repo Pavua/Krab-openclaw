@@ -94,6 +94,21 @@ from .smart_routing import (
     record_smart_routing_decision,
 )
 
+# === telegram_rate (Wave 121) ===
+from .telegram_rate import (
+    _RATE_LIMIT_DEADLINES as _TELEGRAM_RATE_LIMIT_DEADLINES,  # test alias
+)
+from .telegram_rate import (
+    _flood_wait_duration_seconds as _telegram_flood_wait_duration_seconds,
+)
+from .telegram_rate import (
+    _rate_limited_active as _telegram_rate_limited_active,
+)
+from .telegram_rate import (
+    observe_telegram_flood_wait,
+    refresh_telegram_rate_limited_active,
+)
+
 # === thread_coherence (Feature K) ===
 from .thread_coherence import (
     _thread_coherence_drift_total,
@@ -186,6 +201,12 @@ __all__ = [
     "_PRESSURE_AWARE_FALLBACK_COUNTER",
     "_pressure_aware_fallback_total",
     "inc_pressure_aware_fallback",
+    # telegram_rate (Wave 121)
+    "_TELEGRAM_RATE_LIMIT_DEADLINES",
+    "_telegram_flood_wait_duration_seconds",
+    "_telegram_rate_limited_active",
+    "observe_telegram_flood_wait",
+    "refresh_telegram_rate_limited_active",
     # collect
     "_format_metric",
     "_sanitize_label",

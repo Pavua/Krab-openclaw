@@ -392,3 +392,51 @@ groups:
         labels: {severity: critical, wave: "111"}
         annotations:
           summary: "Disk {{ $labels.mount }} > 95% used — DB corruption risk"
+
+  # ── Wave 118: Session backup integrity ──────────────────────────────────────
+  - name: krab_wave118_session_backup
+    interval: 5m
+    rules:
+      - alert: SessionBackupCorrupt
+        # Wave 118: weekly check (Mon 04:30) — Pyrofork session backups, у
+        # которых таблица `sessions` (auth key) не читается. >0 = emergency
+        # restore путь сломан, нужен manual fix или копия из state snapshot.
+        expr: krab_session_backup_corrupt_count > 0
+        for: 1h
+        labels: {severity: critical, wave: "118"}
+        annotations:
+          summary: "Session backup corruption detected ({{ $value }} файла)"
+          description: "Wave 118 weekly check нашёл corrupted Pyrofork session backups (data/sessions/*.session*.bak.*). Запусти `venv/bin/python scripts/krab_session_backup_check.py` для деталей. Auth key неперезаписан → emergency restore невозможен из этих backups."
+
+  # ── Wave 118: Session backup integrity ──────────────────────────────────────
+  - name: krab_wave118_backup
+    interval: 5m
+    rules:
+      - alert: SessionBackupCorrupt
+        expr: krab_session_backup_corrupt_count > 0
+        for: 1h
+        labels: {severity: critical, wave: "118"}
+        annotations:
+          summary: "Session backup corrupted — review data/sessions/*.bak.*"
+
+  # ── Wave 119: Long sleep detect ─────────────────────────────────────────────
+  - name: krab_wave119_idle
+    interval: 5m
+    rules:
+      - alert: LongSleepDetected
+        expr: increase(krab_idle_wake_gap_seconds_bucket{le="14400"}[1h]) > 0
+        for: 1m
+        labels: {severity: info, wave: "119"}
+        annotations:
+          summary: "Krab detected long sleep gap (>4h)"
+
+  # ── Wave 121: Telegram rate limited extended ────────────────────────────────
+  - name: krab_wave121_telegram_rate
+    interval: 1m
+    rules:
+      - alert: TelegramRateLimitedExtended
+        expr: krab_telegram_rate_limited_active == 1
+        for: 30m
+        labels: {severity: warning, wave: "121"}
+        annotations:
+          summary: "Telegram FloodWait active >30m for caller {{ $labels.caller }}"
