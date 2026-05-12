@@ -385,6 +385,12 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>DB</h2>
                 <p>SQLite БД: размер, integrity_check,<br>WAL checkpoint и VACUUM actions.</p>
             </a>
+
+            <a href="/admin/network" class="card" style="animation-delay: 0.9s;">
+                <div class="emoji">🛰️</div>
+                <h2>Network</h2>
+                <p>MTProto session, DC, heartbeat, FloodWait,<br>ping и DNS-диагностика.</p>
+            </a>
         </div>
 
         <footer>

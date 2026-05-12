@@ -8968,6 +8968,9 @@ class WebApp:
         from .web_routers.models_admin_router import (  # noqa: PLC0415
             build_models_admin_router,
         )
+        from .web_routers.network_admin_router import (  # noqa: PLC0415
+            build_network_admin_router,
+        )
         from .web_routers.sentry_admin_router import (  # noqa: PLC0415
             build_sentry_admin_router,
         )
@@ -8985,6 +8988,7 @@ class WebApp:
             build_sentry_admin_router,
             build_logs_admin_router,
             build_db_admin_router,
+            build_network_admin_router,  # Wave 179: /admin/network
         ):
             try:
                 self.app.include_router(builder(self._make_router_context()))
