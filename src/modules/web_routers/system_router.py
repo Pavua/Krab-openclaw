@@ -59,6 +59,7 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
         """Единый summary endpoint — полное состояние Краба одним запросом."""
         from ...config import config
         from ...core.cost_analytics import cost_analytics as _ca
+        from ...core.network_probes_snapshot import collect_network_probes_snapshot
         from ...core.silence_mode import silence_manager
         from ...core.swarm_task_board import swarm_task_board
         from ...core.swarm_team_listener import is_listeners_enabled
@@ -97,6 +98,8 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
             },
             "silence": silence_manager.status(),
             "notify_enabled": bool(getattr(config, "TOOL_NARRATION_ENABLED", True)),
+            # Wave 65-K: snapshot Wave 63 probe state для proactive observability.
+            "network_probes": collect_network_probes_snapshot(kraab),
         }
 
     # ── /api/dashboard/summary ──────────────────────────────────────────────
@@ -179,6 +182,23 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
             "capability_voice_disallowed": voice_disallowed,
             "capability_slow_mode": slow_mode,
         }
+
+    # ── /api/network/probes (Wave 65-K) ─────────────────────────────────────
+
+    @router.get("/api/network/probes")
+    async def network_probes() -> dict:
+        """Wave 65-K: snapshot Wave 63 probe state (dispatcher/swarm/guard).
+
+        Используется внешним watchdog/observability для проактивного
+        обнаружения dispatcher starvation, swarm pts split-brain и paid
+        Gemini guard mode. fail-open: при отсутствии userbot возвращается
+        ``available=False`` без ошибки.
+        """
+        from ...core.network_probes_snapshot import collect_network_probes_snapshot
+
+        kraab = ctx.get_dep("kraab_userbot")
+        snapshot = collect_network_probes_snapshot(kraab)
+        return {"ok": True, "probes": snapshot}
 
     # ── /api/system/diagnostics ─────────────────────────────────────────────
 
