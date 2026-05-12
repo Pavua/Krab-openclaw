@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.krab.memory-prune-orphans</string>
+
+    <key>Comment</key>
+    <string>Wave 90: Monthly pruning orphan-chunks из archive.db. Dry-run по умолчанию; --apply через KRAB_MEMORY_PRUNE_APPLY=1.</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/krab_memory_prune_orphans.py</string>
+        <string>--threshold-days</string>
+        <string>180</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Day</key>
+        <integer>1</integer>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/memory_prune.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/memory_prune.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>KRAB_MEMORY_PRUNE_APPLY</key>
+        <string>0</string>
+    </dict>
+</dict>
+</plist>
