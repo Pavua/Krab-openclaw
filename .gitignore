@@ -5,6 +5,7 @@
 
 # Environments
 .env
+.env.bak.*
 .venv/
 venv/
 env/
