@@ -22,6 +22,7 @@ import structlog
 
 from ..config import config
 from ..core.access_control import get_effective_owner_label
+from ..integrations.paid_gemini_guard import register_paid_gemini_guard
 from ..model_manager import model_manager
 from ..openclaw_client import openclaw_client
 from ..userbot_bridge import KraabUserbot, _telegram_send_queue
@@ -235,6 +236,12 @@ async def run_app() -> None:
     """
     global startup_time_sec
     _startup_begin_ts = time.monotonic()
+
+    # Wave 67: hard runtime guard для paid AI Studio Gemini requests.
+    # Ставится ДО любых других HTTP-инициализаций, чтобы все последующие
+    # httpx.AsyncClient/Client инстансы получили event_hook автоматически.
+    # Env: KRAB_BLOCK_PAID_GEMINI_AI_STUDIO=1 (default block) | warn | 0.
+    register_paid_gemini_guard()
 
     print(f"""
     🦀 KRAB USERBOT STARTED 🦀
