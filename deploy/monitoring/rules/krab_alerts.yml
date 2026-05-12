@@ -291,6 +291,22 @@ groups:
           summary: "LaunchAgent {{ $labels.label }} exit status = {{ $value }} (10+ min)"
           description: "Cron job failed. Check logs/{{ $labels.label }}.{out,err}.log."
 
+  # ── Wave 88: cron schedule consistency ──────────────────────────────────────
+  - name: krab_wave88_cron_schedule
+    interval: 5m
+    rules:
+      - alert: CronScheduleStale
+        # Wave 88: log mtime > 2× expected interval (или log отсутствует).
+        # Снимок обновляется weekly LaunchAgent ai.krab.cron-schedule-audit.
+        expr: krab_cron_schedule_stale > 0
+        for: 1h
+        labels:
+          severity: info
+          wave: "88"
+        annotations:
+          summary: "Cron LaunchAgent {{ $labels.label }} schedule stale"
+          description: "Wave 88 audit видит, что log файл {{ $labels.label }} не обновлялся дольше 2× expected interval. Возможно cron не запускался. Проверь launchctl list grep {{ $labels.label }} и ~/.openclaw/krab_runtime_state/cron_schedule_audit.json."
+
   # ── Wave 79: Krab Ear backend health probe ──────────────────────────────────
   - name: krab_wave79_krab_ear
     interval: 1m
