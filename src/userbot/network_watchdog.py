@@ -166,6 +166,18 @@ _DISPATCHER_TICK_STALENESS_SEC: float = float(
     os.environ.get("KRAB_DISPATCHER_TICK_STALENESS_SEC", "600")
 )
 
+# Wave 63-D: surgical recovery для main kraab при dispatcher_starved.
+# Default OFF — observability-only mode для сбора production data о
+# false-positive rate ПЕРЕД auto-recovery. User включает = 1 в .env когда
+# уверен. Throttle — минимальный интервал между попытками recovery (10 мин
+# default), защищает от tight loop при persistent starvation.
+_DISPATCHER_RECOVERY_ENABLED: bool = (
+    os.environ.get("KRAB_DISPATCHER_RECOVERY_ENABLED", "0").strip() == "1"
+)
+_DISPATCHER_RECOVERY_MIN_INTERVAL_SEC: float = float(
+    os.environ.get("KRAB_DISPATCHER_RECOVERY_MIN_INTERVAL_SEC", "600")
+)
+
 
 def _check_dispatcher_starved(
     owner: object,
@@ -601,6 +613,66 @@ class NetworkWatchdogMixin:
             logger.warning("pyrofork_reconnect_strategy2_failed", error=str(_e))
             return False
 
+    async def _attempt_dispatcher_recovery(self) -> None:
+        """Wave 63-D: surgical recovery main kraab client при dispatcher_starved.
+
+        Гейт `KRAB_DISPATCHER_RECOVERY_ENABLED` (default 0): пока observability-
+        only mode. При =1 — invoke `_try_reconnect_pyrofork(self.client)` с
+        throttle `KRAB_DISPATCHER_RECOVERY_MIN_INTERVAL_SEC` (default 600s).
+
+        Swarm clients и openclaw остаются нетронутыми → zero-downtime для
+        остальных компонентов.
+        """
+        if not _DISPATCHER_RECOVERY_ENABLED:
+            logger.warning(
+                "dispatcher_starved_recovery_skipped",
+                reason="disabled",
+            )
+            return
+
+        now = time.time()
+        last_ts = getattr(self, "_last_dispatcher_recovery_ts", 0.0) or 0.0
+        elapsed = now - float(last_ts)
+        if elapsed < _DISPATCHER_RECOVERY_MIN_INTERVAL_SEC:
+            logger.warning(
+                "dispatcher_starved_recovery_skipped",
+                reason="throttled",
+                elapsed_sec=round(elapsed, 1),
+                min_interval_sec=_DISPATCHER_RECOVERY_MIN_INTERVAL_SEC,
+            )
+            return
+
+        self._last_dispatcher_recovery_ts = now
+        client = getattr(self, "client", None)
+        if client is None:
+            logger.warning(
+                "dispatcher_starved_recovery_skipped",
+                reason="no_client",
+            )
+            return
+
+        logger.warning(
+            "dispatcher_starved_recovery_attempt",
+            min_interval_sec=_DISPATCHER_RECOVERY_MIN_INTERVAL_SEC,
+        )
+        try:
+            ok = await self._try_reconnect_pyrofork(client)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "dispatcher_starved_recovery_exception",
+                error=str(exc)[:200],
+                error_type=type(exc).__name__,
+            )
+            return
+
+        if ok:
+            logger.info("dispatcher_starved_recovery_ok")
+            # Сбрасываем silence-timer чтобы heartbeat не считал tick немедленно
+            # stale (свежий reconnect → reset event budget).
+            self._last_telegram_event_ts = time.time()
+        else:
+            logger.warning("dispatcher_starved_recovery_failed")
+
     @staticmethod
     async def _probe_telegram_dc(timeout: float = 5.0) -> bool:
         """
@@ -1002,6 +1074,8 @@ class NetworkWatchdogMixin:
                             dispatcher_tick_count=getattr(self, "_dispatcher_tick_count", 0),
                             staleness_threshold_sec=_DISPATCHER_TICK_STALENESS_SEC,
                         )
+                        # Wave 63-D: surgical recovery (main kraab only).
+                        await self._attempt_dispatcher_recovery()
 
                     if probe is not None and probe.split_brain_suspected:
                         logger.warning(
