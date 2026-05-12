@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-krab_memory_prune_orphans.py — Wave 90: pruning orphan-чанков из archive.db.
+krab_memory_prune_orphans.py — Wave 90 + Wave 161: pruning orphan-чанков из archive.db.
 
 Цель: чаты, которые давно неактивны (Krab покинул группу, чат архивирован, контакт
 удалён), оставляют после себя messages/chunks/vec_chunks bloat. Скрипт находит
@@ -13,14 +13,23 @@ krab_memory_prune_orphans.py — Wave 90: pruning orphan-чанков из archi
 last_indexed_at из таблицы `chats` НЕ годится — он показывает время bootstrap'а,
 а не активность чата (см. Wave 90 investigation).
 
+Wave 161 — batched DELETE:
+    Wave 90 ran single `DELETE ... WHERE chat_id IN (...)` inside one transaction;
+    on prod это блокировало 2 часа (193K messages + 21K chunks + CASCADE + vec_chunks).
+    Теперь удаляем per chat_id, commit'имся каждые `COMMIT_EVERY` чатов, и
+    останавливаемся по `--max-batch-time-sec`. VACUUM выключен по умолчанию.
+
 Использование:
     venv/bin/python scripts/krab_memory_prune_orphans.py             # dry-run, JSON
     venv/bin/python scripts/krab_memory_prune_orphans.py --threshold-days 365
-    venv/bin/python scripts/krab_memory_prune_orphans.py --apply     # реально удаляет
+    venv/bin/python scripts/krab_memory_prune_orphans.py --commit-each-chat
+    venv/bin/python scripts/krab_memory_prune_orphans.py --commit-each-chat --vacuum
+    venv/bin/python scripts/krab_memory_prune_orphans.py --apply  # = --commit-each-chat (compat)
 
 Safety:
-    --apply создаёт backup `archive.db.pre-prune-<ts>` ПЕРЕД любым DELETE.
-    KRAB_MEMORY_PRUNE_APPLY=1 (env) эквивалентно --apply (для plist).
+    --commit-each-chat создаёт backup `archive.db.pre-prune-<ts>` ПЕРЕД любым DELETE.
+    KRAB_MEMORY_PRUNE_APPLY=1 (env) эквивалентно --commit-each-chat (для plist).
+    Прерывание по timeout сохраняет progress (последний commit).
 
 State:
     Persist последнего audit в `~/.openclaw/krab_runtime_state/memory_prune_state.json`.
@@ -34,8 +43,9 @@ import os
 import shutil
 import sqlite3
 import sys
+import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -43,11 +53,25 @@ from typing import Any
 DEFAULT_ARCHIVE_DB = Path("~/.openclaw/krab_memory/archive.db").expanduser()
 DEFAULT_STATE_FILE = Path("~/.openclaw/krab_runtime_state/memory_prune_state.json").expanduser()
 DEFAULT_THRESHOLD_DAYS = 180
+DEFAULT_MAX_BATCH_TIME_SEC = 1800  # 30 минут hard cap
+COMMIT_EVERY_N_CHATS = 10  # commit прогресса каждые N чатов
 
 
 # ---------------------------------------------------------------------------
 # Pure helpers (тестируемые отдельно).
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PruneOutcome:
+    """Низкоуровневый результат apply_prune: сколько успели до timeout."""
+
+    deleted_messages: int
+    deleted_chunks: int
+    processed_chats: int
+    remaining_chats: list[str] = field(default_factory=list)
+    timed_out: bool = False
+    elapsed_sec: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -64,6 +88,13 @@ class OrphanReport:
     applied: bool
     backup_path: str | None
     audit_ts: str
+    # Wave 161 — batched run telemetry.
+    processed_chats: int = 0
+    remaining_chats: int = 0
+    timed_out: bool = False
+    elapsed_sec: float = 0.0
+    max_batch_time_sec: int = 0
+    vacuumed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -149,35 +180,64 @@ def make_backup(db_path: Path, *, now_fn: Callable[[], datetime] = _now_utc) -> 
     return target
 
 
-def apply_prune(conn: sqlite3.Connection, orphan_chat_ids: list[str]) -> tuple[int, int]:
-    """Удаляет данные orphan-чатов. Возвращает `(deleted_messages, deleted_chunks)`.
+def apply_prune(
+    conn: sqlite3.Connection,
+    orphan_chat_ids: list[str],
+    *,
+    max_batch_time_sec: int = DEFAULT_MAX_BATCH_TIME_SEC,
+    commit_every: int = COMMIT_EVERY_N_CHATS,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+    progress_fn: Callable[[int, str, int, int], None] | None = None,
+) -> PruneOutcome:
+    """Удаляет данные orphan-чатов **per chat_id**, commit'ясь каждые `commit_every`.
 
-    Полагается на `ON DELETE CASCADE` в схеме: удаление из `chats` каскадно
-    очищает `messages`, `chunks`, `chunk_messages`, `indexer_state`.
-    `vec_chunks` (vec0) каскад не поддерживает — очищаем явно.
+    Wave 161: одна большая транзакция блокировала прод на 2 часа. Теперь:
+      - DELETE per chat_id (vec_chunks → chunks → messages → chats).
+      - `conn.commit()` каждые `commit_every` чатов = progress visible/recoverable.
+      - Hard timeout `max_batch_time_sec` — оставшиеся чаты возвращаем как
+        `remaining_chats` для следующего запуска. Прогресс сохранён последним
+        commit'ом.
+      - FK CASCADE мы НЕ используем — явные DELETE дают предсказуемый порядок
+        и понятный rowcount per table.
+
+    Returns:
+        `PruneOutcome` с deleted counters, processed/remaining chats и timeout flag.
     """
 
     if not orphan_chat_ids:
-        return 0, 0
+        return PruneOutcome(0, 0, 0, [], False, 0.0)
 
-    placeholders = ",".join("?" for _ in orphan_chat_ids)
-    # Сначала собираем chunks.id (rowid) для vec_chunks cleanup.
-    chunk_ids = [
-        row[0]
-        for row in conn.execute(
-            f"SELECT id FROM chunks WHERE chat_id IN ({placeholders})",
-            orphan_chat_ids,
-        ).fetchall()
-    ]
-    msg_count_row = conn.execute(
-        f"SELECT COUNT(*) FROM messages WHERE chat_id IN ({placeholders})",
-        orphan_chat_ids,
-    ).fetchone()
-    msg_count = int(msg_count_row[0]) if msg_count_row else 0
-
+    started = monotonic_fn()
     conn.execute("PRAGMA foreign_keys = ON")
-    with conn:  # транзакция
+    # Открытие транзакции отложим до первого DELETE per-chat (autocommit chunks).
+
+    total_deleted_msgs = 0
+    total_deleted_chunks = 0
+    processed = 0
+    remaining: list[str] = []
+
+    for idx, chat_id in enumerate(orphan_chat_ids):
+        if monotonic_fn() - started >= max_batch_time_sec:
+            # Не хватило времени — оставшиеся пушаем в remaining_chats.
+            remaining = list(orphan_chat_ids[idx:])
+            break
+
+        # Сначала собираем chunks.id для vec_chunks cleanup в текущем чате.
+        chunk_ids = [
+            row[0]
+            for row in conn.execute(
+                "SELECT id FROM chunks WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchall()
+        ]
+        msg_count_row = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE chat_id = ?",
+            (chat_id,),
+        ).fetchone()
+        chat_msg_count = int(msg_count_row[0]) if msg_count_row else 0
+
         if chunk_ids:
+            # vec_chunks (vec0) cleanup. В тестах extension не загружен — swallow.
             id_ph = ",".join("?" for _ in chunk_ids)
             try:
                 conn.execute(
@@ -185,23 +245,36 @@ def apply_prune(conn: sqlite3.Connection, orphan_chat_ids: list[str]) -> tuple[i
                     chunk_ids,
                 )
             except sqlite3.OperationalError:
-                # vec0 extension не загружена в тестах — pas grave.
                 pass
-        # Удаляем из chats — каскадом упадут messages/chunks/chunk_messages.
-        conn.execute(
-            f"DELETE FROM chats WHERE chat_id IN ({placeholders})",
-            orphan_chat_ids,
-        )
-        # Defensive: сообщения без записи в chats (orphan на orphan).
-        conn.execute(
-            f"DELETE FROM messages WHERE chat_id IN ({placeholders})",
-            orphan_chat_ids,
-        )
-        conn.execute(
-            f"DELETE FROM chunks WHERE chat_id IN ({placeholders})",
-            orphan_chat_ids,
-        )
-    return msg_count, len(chunk_ids)
+
+        # Порядок важен: chunks/messages → chats (FK target).
+        conn.execute("DELETE FROM chunks WHERE chat_id = ?", (chat_id,))
+        conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
+        conn.execute("DELETE FROM chats WHERE chat_id = ?", (chat_id,))
+
+        total_deleted_msgs += chat_msg_count
+        total_deleted_chunks += len(chunk_ids)
+        processed += 1
+
+        if progress_fn is not None:
+            progress_fn(processed, chat_id, total_deleted_msgs, total_deleted_chunks)
+
+        # Commit прогресса каждые N чатов — durable savepoint.
+        if processed % commit_every == 0:
+            conn.commit()
+
+    # Финальный commit для остатка.
+    conn.commit()
+
+    elapsed = monotonic_fn() - started
+    return PruneOutcome(
+        deleted_messages=total_deleted_msgs,
+        deleted_chunks=total_deleted_chunks,
+        processed_chats=processed,
+        remaining_chats=remaining,
+        timed_out=bool(remaining),
+        elapsed_sec=round(elapsed, 3),
+    )
 
 
 def persist_state(state_path: Path, report: OrphanReport) -> None:
@@ -226,8 +299,12 @@ def run_audit(
     apply: bool,
     state_path: Path,
     now_fn: Callable[[], datetime] = _now_utc,
+    max_batch_time_sec: int = DEFAULT_MAX_BATCH_TIME_SEC,
+    vacuum: bool = False,
+    commit_every: int = COMMIT_EVERY_N_CHATS,
+    monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> OrphanReport:
-    """End-to-end: detect → estimate → (optional) apply → persist."""
+    """End-to-end: detect → estimate → (optional) apply batched → persist."""
 
     if not db_path.exists():
         raise FileNotFoundError(f"archive.db not found: {db_path}")
@@ -240,12 +317,24 @@ def run_audit(
         conn.close()
 
     backup_path: Path | None = None
+    outcome = PruneOutcome(0, 0, 0, [], False, 0.0)
+    vacuumed = False
+
     if apply and orphans:
         backup_path = make_backup(db_path, now_fn=now_fn)
         conn = sqlite3.connect(str(db_path))
         try:
-            apply_prune(conn, orphans)
-            conn.execute("VACUUM")
+            outcome = apply_prune(
+                conn,
+                orphans,
+                max_batch_time_sec=max_batch_time_sec,
+                commit_every=commit_every,
+                monotonic_fn=monotonic_fn,
+            )
+            # VACUUM — opt-in (медленная и блокирует на огромных БД).
+            if vacuum and not outcome.timed_out:
+                conn.execute("VACUUM")
+                vacuumed = True
         finally:
             conn.close()
 
@@ -260,6 +349,12 @@ def run_audit(
         applied=bool(apply and orphans),
         backup_path=str(backup_path) if backup_path else None,
         audit_ts=now_fn().isoformat(),
+        processed_chats=outcome.processed_chats,
+        remaining_chats=len(outcome.remaining_chats),
+        timed_out=outcome.timed_out,
+        elapsed_sec=outcome.elapsed_sec,
+        max_batch_time_sec=max_batch_time_sec if apply else 0,
+        vacuumed=vacuumed,
     )
     persist_state(state_path, report)
     return report
@@ -271,22 +366,46 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE_FILE)
     parser.add_argument("--threshold-days", type=int, default=DEFAULT_THRESHOLD_DAYS)
     parser.add_argument(
+        "--commit-each-chat",
+        action="store_true",
+        help="Реально удалить orphan-данные per chat_id с commit'ом прогресса (Wave 161).",
+    )
+    parser.add_argument(
         "--apply",
         action="store_true",
-        help="Реально удалить orphan-данные (по умолчанию dry-run).",
+        help="Backwards-compat алиас для --commit-each-chat.",
+    )
+    parser.add_argument(
+        "--max-batch-time-sec",
+        type=int,
+        default=int(
+            os.environ.get("KRAB_MEMORY_PRUNE_MAX_BATCH_SEC", str(DEFAULT_MAX_BATCH_TIME_SEC))
+        ),
+        help=(
+            "Hard timeout на apply фазу (default 1800 = 30min). "
+            "При превышении оставшиеся orphan'ы сохраняются в state и "
+            "обрабатываются следующим запуском."
+        ),
+    )
+    parser.add_argument(
+        "--vacuum",
+        action="store_true",
+        help="Запустить VACUUM после успешного prune (медленно, off by default).",
     )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    apply = args.apply or os.environ.get("KRAB_MEMORY_PRUNE_APPLY") == "1"
+    apply = args.commit_each_chat or args.apply or os.environ.get("KRAB_MEMORY_PRUNE_APPLY") == "1"
     try:
         report = run_audit(
             args.db,
             threshold_days=args.threshold_days,
             apply=apply,
             state_path=args.state,
+            max_batch_time_sec=args.max_batch_time_sec,
+            vacuum=args.vacuum,
         )
     except FileNotFoundError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)

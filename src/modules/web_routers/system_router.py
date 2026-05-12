@@ -35,6 +35,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 
 from ._context import RouterContext
 
@@ -102,13 +103,21 @@ def _build_routing_stats_payload() -> dict[str, Any]:
             top_count = deny
             top_stage = stage
             top_outcome = "deny"
-    top_path: dict[str, Any] = {}
     if top_stage and total_decisions > 0:
-        top_path = {
+        top_path: dict[str, Any] = {
             "winning_stage": top_stage,
             "winning_outcome": top_outcome,
             "winning_count": top_count,
-            "share_pct": round(top_count / total_decisions * 100.0, 1),
+            "share_pct": round(top_count / total_decisions * 100.0, 2),
+        }
+    else:
+        # Wave 146: явный пустой контракт (winning_stage=None) — UI и тесты
+        # ожидают ключи даже при отсутствии данных.
+        top_path = {
+            "winning_stage": None,
+            "winning_outcome": None,
+            "winning_count": 0,
+            "share_pct": 0.0,
         }
     return {
         "ok": True,
@@ -127,6 +136,15 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
     async def routing_stats() -> dict:
         """Wave 146: live aggregation Smart Routing 5-stage counter."""
         return _build_routing_stats_payload()
+
+    # Wave 160: HTML страница 5-stage pipeline visualisation.
+    @router.get("/admin/routing", response_class=HTMLResponse)
+    async def admin_routing_page() -> HTMLResponse:
+        """HTML страница для Smart Routing 5-stage pipeline (polling 30s)."""
+        return HTMLResponse(
+            _ROUTING_PAGE_HTML,
+            headers={"Cache-Control": "no-store"},
+        )
 
     # ── /api/runtime/operator-profile ───────────────────────────────────────
 
@@ -1149,3 +1167,216 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
         return {"ok": True, "count": len(rows), "items": rows}
 
     return router
+
+
+# ── Inline HTML template — Wave 160 /admin/routing ──────────────────────────
+# Self-contained страница: 5 cards (по stage), polling /api/routing/stats каждые
+# 30s. Values рисуются через .textContent / DOM API (XSS-safe) аналогично
+# Wave 144 /admin/models. Nav tabs синхронны с models page.
+
+_ROUTING_PAGE_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Krab — Smart Routing</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --ok: #2ea043;
+    --warn: #d29922;
+    --err: #f85149;
+  }
+  body { background: var(--bg); color: var(--fg); margin: 0;
+         font: 14px -apple-system, BlinkMacSystemFont, sans-serif; }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--border);
+           display: flex; justify-content: space-between; align-items: center; }
+  h1 { margin: 0; font-size: 18px; }
+  nav.tabs a { color: var(--muted); text-decoration: none; margin-right: 18px;
+               font-size: 13px; padding-bottom: 3px; }
+  nav.tabs a:hover { color: var(--accent); }
+  nav.tabs a.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
+  main { padding: 24px; max-width: 1200px; margin: auto; }
+  .summary { background: var(--card); border: 1px solid var(--border);
+             border-radius: 8px; padding: 16px; margin-bottom: 24px;
+             display: flex; gap: 32px; flex-wrap: wrap; }
+  .summary-item { display: flex; flex-direction: column; gap: 4px; }
+  .summary-label { color: var(--muted); font-size: 11px; text-transform: uppercase;
+                   letter-spacing: 1px; }
+  .summary-value { font-size: 22px; font-weight: 600; color: var(--accent); }
+  .stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px; }
+  .stage { background: var(--card); border: 1px solid var(--border);
+           border-radius: 8px; padding: 16px; }
+  .stage-name { font-weight: 600; font-size: 15px; margin-bottom: 4px; color: var(--accent); }
+  .stage-total { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+             font-size: 12px; }
+  .bar-label { width: 40px; color: var(--muted); }
+  .bar-bg { flex: 1; height: 8px; background: rgba(139,148,158,0.15);
+            border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; transition: width 0.4s ease; }
+  .bar-fill.allow { background: var(--ok); }
+  .bar-fill.deny { background: var(--err); }
+  .bar-count { width: 60px; text-align: right; color: var(--fg);
+               font-family: ui-monospace, monospace; }
+  .stage-allow-rate { margin-top: 8px; color: var(--muted); font-size: 11px;
+                      text-transform: uppercase; letter-spacing: 1px; }
+  .footer-note { color: var(--muted); font-size: 12px; margin-top: 24px;
+                 line-height: 1.6; }
+  .footer-note code { background: var(--card); padding: 1px 6px; border-radius: 3px;
+                       font-family: ui-monospace, monospace; }
+  .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div style="display:flex; align-items:center; gap:18px;">
+    <h1>Krab — Smart Routing</h1>
+    <nav class="tabs">
+      <a href="/admin/models">Models</a>
+      <a href="/admin/routing" class="active">Routing</a>
+      <a href="/admin/swarm">Swarm</a>
+      <a href="/admin/costs">Costs</a>
+      <a href="/admin/ecosystem">Ecosystem</a>
+      <a href="/admin/inbox">Inbox</a>
+    </nav>
+  </div>
+  <div style="color: var(--muted); font-size: 12px;">
+    Refresh: <span id="last-refresh">—</span>
+  </div>
+</header>
+<main>
+  <div class="summary">
+    <div class="summary-item">
+      <div class="summary-label">Total decisions</div>
+      <div class="summary-value" id="total-decisions">—</div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-label">Top stage</div>
+      <div class="summary-value" id="top-stage">—</div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-label">Top outcome</div>
+      <div class="summary-value" id="top-outcome">—</div>
+    </div>
+    <div class="summary-item">
+      <div class="summary-label">Share</div>
+      <div class="summary-value" id="top-share">—</div>
+    </div>
+  </div>
+  <div class="stages" id="stages"></div>
+  <div class="footer-note">
+    Smart Routing 5-stage pipeline:
+    <code>hard_gate</code> → <code>chat_policy</code> → <code>regex</code> →
+    <code>llm_classifier</code> → <code>feedback</code>.
+    Источник данных: <code>GET /api/routing/stats</code> (live из Prometheus counter
+    <code>krab_smart_routing_decisions_total</code>). Polling каждые 30s.
+  </div>
+</main>
+<script>
+'use strict';
+
+function el(tag, attrs, children) {
+  const node = document.createElement(tag);
+  if (attrs) {
+    for (const k in attrs) {
+      if (k === 'class') node.className = attrs[k];
+      else if (k === 'text') node.textContent = attrs[k];
+      else if (k === 'style') node.setAttribute('style', attrs[k]);
+      else node.setAttribute(k, attrs[k]);
+    }
+  }
+  if (children) {
+    for (const c of children) {
+      if (c) node.appendChild(c);
+    }
+  }
+  return node;
+}
+
+function renderStageCard(stage) {
+  const card = el('div', { class: 'stage' });
+  card.appendChild(el('div', { class: 'stage-name', text: stage.stage }));
+  card.appendChild(el('div', { class: 'stage-total',
+                               text: 'Total: ' + (stage.total || 0) }));
+
+  const allowMax = Math.max(stage.allow_count || 0, stage.deny_count || 0, 1);
+  const allowPct = ((stage.allow_count || 0) / allowMax) * 100;
+  const denyPct = ((stage.deny_count || 0) / allowMax) * 100;
+
+  // allow row
+  const allowRow = el('div', { class: 'bar-row' });
+  allowRow.appendChild(el('div', { class: 'bar-label', text: 'allow' }));
+  const allowBg = el('div', { class: 'bar-bg' });
+  allowBg.appendChild(el('div', {
+    class: 'bar-fill allow',
+    style: 'width: ' + allowPct.toFixed(1) + '%;',
+  }));
+  allowRow.appendChild(allowBg);
+  allowRow.appendChild(el('div', { class: 'bar-count',
+                                   text: String(stage.allow_count || 0) }));
+  card.appendChild(allowRow);
+
+  // deny row
+  const denyRow = el('div', { class: 'bar-row' });
+  denyRow.appendChild(el('div', { class: 'bar-label', text: 'deny' }));
+  const denyBg = el('div', { class: 'bar-bg' });
+  denyBg.appendChild(el('div', {
+    class: 'bar-fill deny',
+    style: 'width: ' + denyPct.toFixed(1) + '%;',
+  }));
+  denyRow.appendChild(denyBg);
+  denyRow.appendChild(el('div', { class: 'bar-count',
+                                  text: String(stage.deny_count || 0) }));
+  card.appendChild(denyRow);
+
+  const rate = (stage.allow_rate_pct || 0).toFixed(1);
+  card.appendChild(el('div', { class: 'stage-allow-rate',
+                                text: 'allow rate: ' + rate + '%' }));
+  return card;
+}
+
+async function refresh() {
+  try {
+    const resp = await fetch('/api/routing/stats');
+    const data = await resp.json();
+    if (!data || data.ok === false) {
+      return;
+    }
+    document.getElementById('total-decisions').textContent = String(data.total_decisions || 0);
+    const top = data.top_decisions_path || {};
+    document.getElementById('top-stage').textContent = top.winning_stage || '—';
+    document.getElementById('top-outcome').textContent = top.winning_outcome || '—';
+    const sharePct = (top.share_pct === undefined || top.share_pct === null)
+      ? '—'
+      : (top.share_pct.toFixed ? top.share_pct.toFixed(1) : top.share_pct) + '%';
+    document.getElementById('top-share').textContent = sharePct;
+
+    const box = document.getElementById('stages');
+    box.textContent = '';
+    const stages = data.stages || [];
+    if (stages.length === 0) {
+      box.appendChild(el('div', { class: 'empty', text: 'No data yet' }));
+    } else {
+      for (const s of stages) {
+        box.appendChild(renderStageCard(s));
+      }
+    }
+    document.getElementById('last-refresh').textContent = new Date().toLocaleTimeString();
+  } catch (exc) {
+    // Тихий fail — следующий tick попробует снова.
+  }
+}
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>
+"""
