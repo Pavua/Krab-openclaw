@@ -1020,7 +1020,12 @@ class ModelManager:
                 logger.info("loading_model_start", model=model_id)
                 ok = await self._do_load_model(model_id, size_gb)
                 if not ok:
-                    logger.error("load_failed", model=model_id)
+                    # Wave 174-B: LM Studio load_failed handled через retry/fallback
+                    # (caller переключает на cloud routing / другую local модель,
+                    # _exclude_local_model уже выставил cooldown). logger.warning
+                    # вместо error — не Sentry-bug. Прецедент: Wave 41-O,
+                    # Wave 50-A, Wave 170. Sentry issues PYTHON-FASTAPI-8B/8C.
+                    logger.warning("lm_studio_load_failed", model=model_id)
                     return False
 
             verify_timeout_sec = float(getattr(config, "LOCAL_POST_LOAD_VERIFY_SEC", 90.0))
