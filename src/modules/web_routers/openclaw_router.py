@@ -718,6 +718,12 @@ def build_openclaw_router(ctx: RouterContext) -> APIRouter:
         """Проверка cloud-провайдеров OpenClaw с классификацией ошибок ключей/API.
 
         Зеркалирует ``WebApp._openclaw_cloud_diagnostics_impl`` (web_app.py).
+
+        Wave 150: оборачиваем downstream probe в try/except. После Wave 67
+        hard guard ``paid_gemini_guard`` блокирует AI Studio HTTP-запросы и
+        кидает ``PaidGeminiGuardError`` прямо из httpx hook'а внутри
+        ``probe_gemini_key``. Раньше это всплывало как 500. Теперь
+        возвращаем структурированный response с ``available=False``.
         """
         openclaw = ctx.get_dep("openclaw_client")
         if not openclaw:
@@ -731,7 +737,14 @@ def build_openclaw_router(ctx: RouterContext) -> APIRouter:
             providers_list = [item.strip().lower() for item in raw.split(",") if item.strip()]
             if not providers_list:
                 providers_list = None
-        report = await openclaw.get_cloud_provider_diagnostics(providers=providers_list)
+        try:
+            report = await openclaw.get_cloud_provider_diagnostics(providers=providers_list)
+        except Exception as exc:  # noqa: BLE001 — downstream может бросать что угодно (Wave 67 guard, httpx ConnectError, и т.д.)
+            return {
+                "available": False,
+                "error": f"{type(exc).__name__}: {exc}"[:500],
+                "error_type": type(exc).__name__,
+            }
         return {"available": True, "report": report}
 
     # ---------- GET /api/openclaw/cloud (Wave KK) -------------------------

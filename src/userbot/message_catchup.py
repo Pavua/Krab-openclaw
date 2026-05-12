@@ -104,6 +104,20 @@ def _resolve_state_path() -> Path:
     return base_dir / _DEFAULT_STATE_FILENAME
 
 
+def _resolve_history_path() -> Path:
+    """Wave 150: путь к ``catchup_history.jsonl`` для observability tab.
+
+    Зеркалирует resolve в ``src.core.health_detail_collector`` чтобы
+    обновлять файл в одном месте. Используется
+    ``observability_router.list_catchup_history`` для tail последних записей.
+    """
+    base_dir = Path(
+        os.environ.get("KRAB_RUNTIME_STATE_DIR")
+        or str(Path.home() / ".openclaw" / "krab_runtime_state")
+    ).expanduser()
+    return base_dir / "catchup_history.jsonl"
+
+
 def _resolve_max_lookback(default: int = 20) -> int:
     """Лимит лукапа в get_chat_history. Env override ``KRAB_STARTUP_CATCHUP_LIMIT``."""
     raw = os.environ.get("KRAB_STARTUP_CATCHUP_LIMIT", "").strip()
