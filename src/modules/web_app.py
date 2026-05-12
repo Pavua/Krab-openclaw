@@ -9224,6 +9224,14 @@ class WebApp:
 
         self.app.include_router(_build_agent_engine_metrics(self._make_router_context()))
 
+        # Wave 144 (Session 53) — visual model picker UI на :8080.
+        # GET /admin/models + /api/models/registry + POST /api/admin/model/switch.
+        from .web_routers.models_admin_router import (
+            build_models_admin_router as _build_models_admin,
+        )
+
+        self.app.include_router(_build_models_admin(self._make_router_context()))
+
         # ── Chat Window Manager endpoints ────────────────────────────────────
 
     async def start(self):
