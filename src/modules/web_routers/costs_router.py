@@ -88,6 +88,17 @@ def build_costs_router(ctx: RouterContext) -> APIRouter:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    @router.get("/api/cost/budget")
+    async def get_cost_budget_wave93() -> dict:
+        """Wave 93: daily/weekly EUR budget status + thresholds."""
+        try:
+            from ...core.cost_budget import cost_budget_monitor as _cbm
+
+            status = _cbm.evaluate_budget_status()
+            return {"ok": True, "budget": status.to_dict()}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
+
     @router.get("/api/costs/history")
     async def get_costs_history(limit: int = 20, channel: str = "") -> dict:
         """История вызовов модели: последние N записей, опционально фильтр по channel."""

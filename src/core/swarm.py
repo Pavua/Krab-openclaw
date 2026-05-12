@@ -376,6 +376,24 @@ class AgentRoom:
             except Exception:  # noqa: BLE001
                 _pending_round_id = None  # не блокируем раунд при ошибке
 
+        # Wave 89: persistent activity log + Prometheus метрики.
+        # Только top-level раунды (depth=0) — делегированные не логируем отдельно,
+        # они учитываются через свой основной round вызывающей команды.
+        _activity_id: int | None = None
+        if _team_name and _depth == 0:
+            try:
+                from .swarm_activity_log import swarm_activity_log  # noqa: PLC0415
+
+                _activity_id = swarm_activity_log.log_swarm_start(_team_name, topic)
+            except Exception:  # noqa: BLE001
+                _activity_id = None
+            try:
+                from .metrics.swarm import record_swarm_run_started  # noqa: PLC0415
+
+                record_swarm_run_started(_team_name)
+            except Exception:  # noqa: BLE001
+                pass
+
         try:
             for role_idx, role in enumerate(self.roles):
                 name = str(role.get("name", "agent"))
@@ -527,6 +545,31 @@ class AgentRoom:
                     swarm_pending_store.mark_round_failed(_pending_round_id, str(_round_exc))
                 except Exception:  # noqa: BLE001
                     pass
+            # Wave 89: activity log + metrics (failed)
+            if _activity_id is not None or (_team_name and _depth == 0):
+                _duration_sec_fail = time.monotonic() - t0
+                try:
+                    from .swarm_activity_log import swarm_activity_log  # noqa: PLC0415
+
+                    swarm_activity_log.log_swarm_complete(
+                        _activity_id,
+                        status="failed",
+                        latency_ms=int(_duration_sec_fail * 1000),
+                        artifact_ref=None,
+                        errors=[str(_round_exc)],
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    from .metrics.swarm import record_swarm_run_finished  # noqa: PLC0415
+
+                    record_swarm_run_finished(
+                        team=_team_name or "unknown",
+                        status="failed",
+                        duration_seconds=_duration_sec_fail,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             raise
 
         header = f"🐝 **Swarm Room: {topic}**\n\n"
@@ -661,6 +704,31 @@ class AgentRoom:
                     )
 
         logger.info("agent_room_round_completed", topic=topic, delegations=len(delegation_results))
+        # Wave 89: activity log + metrics (success)
+        if _team_name and _depth == 0:
+            _duration_sec_ok = time.monotonic() - t0
+            try:
+                from .swarm_activity_log import swarm_activity_log  # noqa: PLC0415
+
+                swarm_activity_log.log_swarm_complete(
+                    _activity_id,
+                    status="done",
+                    latency_ms=int(_duration_sec_ok * 1000),
+                    artifact_ref=None,
+                    errors=None,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                from .metrics.swarm import record_swarm_run_finished  # noqa: PLC0415
+
+                record_swarm_run_finished(
+                    team=_team_name,
+                    status="done",
+                    duration_seconds=_duration_sec_ok,
+                )
+            except Exception:  # noqa: BLE001
+                pass
         # Завершаем single-round сессию если была зарегистрирована
         if _single_round_sid is not None:
             _get_swarm_progress().record_round_done(_single_round_sid)

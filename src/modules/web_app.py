@@ -349,6 +349,7 @@ class WebApp:
         self._vg_subscriber: VoiceGatewayEventSubscriber | None = None
         self._setup_basic_auth_middleware()
         self._setup_bcrypt_auth_middleware()
+        self._setup_rate_limit_middleware()
         # Hard-require SENTRY_WEBHOOK_SECRET: генерируем и persist-им в .env
         # при первом старте, чтобы /api/hooks/sentry никогда не работал
         # в "open" режиме (любой знающий URL не должен пройти HMAC).
@@ -472,6 +473,28 @@ class WebApp:
 
         self.app.add_middleware(BcryptAuthMiddleware)
         logger.info("Bcrypt auth middleware активирован", username=_username)
+
+    def _setup_rate_limit_middleware(self) -> None:
+        """Wave 96: per-IP token-bucket rate-limiter для owner-панели.
+
+        Активируется ``KRAB_RATE_LIMIT_ENABLED=1`` (default OFF — backward-compat).
+        Параметры:
+            KRAB_RATE_LIMIT_RPM=60          — лимит запросов/мин на ключ
+            KRAB_RATE_LIMIT_BURST=10        — capacity bucket'а
+            KRAB_RATE_LIMIT_KEY_TTL_SEC=600 — TTL idle-ключа
+
+        Exempt: /health, /healthz, /metrics, /api/health/lite, /api/v1/health.
+        """
+        from .web_middleware.rate_limiter import (
+            RateLimitMiddleware,
+            is_rate_limit_enabled,
+        )
+
+        if not is_rate_limit_enabled():
+            return
+
+        self.app.add_middleware(RateLimitMiddleware)
+        logger.info("rate_limit_middleware_enabled", source="env")
 
     def _public_base_url(self) -> str:
         """Возвращает внешний base URL панели (delegates → _helpers)."""
@@ -8799,7 +8822,7 @@ class WebApp:
                     for _mod in (
                         "src.core.proactive_watch",  # krab_error_digest_fired_total
                         "src.core.swarm_tool_allowlist",  # krab_swarm_tool_blocked_total
-                        "src.core.prometheus_metrics",  # memory retrieval + google bypass + Wave 51-A
+                        "src.core.prometheus_metrics",  # memory retrieval + google bypass
                         "src.core.auto_restart_policy",  # krab_auto_restart_attempts_total
                         "src.core.llm_latency_tracker",  # krab_llm_route_latency_seconds
                         "src.integrations.google_genai_direct",  # krab_google_direct_bypass_*

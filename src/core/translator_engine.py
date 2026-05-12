@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .translation_cache import translation_cache
+
 if TYPE_CHECKING:
     from ..openclaw_client import OpenClawClient
 
@@ -84,6 +86,22 @@ async def translate_text(
     )
 
     start = time.monotonic()
+
+    # Wave 95: content-hash cache — на повторяющиеся phrases экономим LLM-вызов.
+    # Cache lookup делаем ДО session clear / API call. Если hit — возвращаем
+    # сразу, model_id маркируем как "translation_cache" чтобы было видно в stats.
+    cached = translation_cache.lookup(text, tgt_lang)
+    if cached is not None:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        return TranslationResult(
+            original=text,
+            translated=cached,
+            src_lang=src_lang,
+            tgt_lang=tgt_lang,
+            latency_ms=elapsed_ms,
+            model_id="translation_cache",
+        )
+
     chunks: list[str] = []
 
     # Предварительно очищаем session чтобы не тратить время на history lookup
@@ -122,6 +140,14 @@ async def translate_text(
         openclaw_client.clear_session(chat_id)
     except Exception:
         pass
+
+    # Wave 95: сохраняем successful translation в content-hash cache.
+    if translated:
+        try:
+            translation_cache.store(text, tgt_lang, translated)
+        except Exception:
+            # Cache write не должен влиять на translator response.
+            pass
 
     return TranslationResult(
         original=text,

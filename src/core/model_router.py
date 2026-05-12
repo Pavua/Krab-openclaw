@@ -20,6 +20,7 @@ from .cloud_gateway import (
 )
 from .local_health import is_lm_studio_available
 from .pressure_aware_select import pressure_aware_model_select
+from .provider_quarantine import provider_quarantine
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -71,7 +72,27 @@ class ModelRouter:
                 verify_fn=cloud_verify_gemini_access,
             )
 
-        # Сначала пробуем локаль по цепочке
+        # Wave 94/97: skip local loop если провайдер в quarantine.
+        # Env-gate default-ON, но fail-safe: ошибка quarantine-cache не блокирует routing.
+        import os as _os  # noqa: PLC0415
+
+        _quarantine_enabled = _os.getenv("KRAB_PROVIDER_QUARANTINE_ENABLED", "1").strip() != "0"
+        _local_quarantined = False
+        if _quarantine_enabled:
+            try:
+                _local_quarantined = provider_quarantine.is_provider_quarantined("local")
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("provider_quarantine_check_failed", error=str(exc))
+        if _local_quarantined:
+            logger.info("model_router_local_skipped_quarantine")
+            return await get_best_cloud_model(
+                self.gemini_api_key,
+                self._cloud_http_client,
+                config_model=self.config_model,
+                verify_fn=cloud_verify_gemini_access,
+            )
+
+        # Сначала пробуем локаль по цепочке (если не в quarantine — проверено выше)
         for model_id in self.fallback_chain:
             if "local" in model_id.lower() or "mlx" in model_id.lower():
                 if self.lm_studio_url:

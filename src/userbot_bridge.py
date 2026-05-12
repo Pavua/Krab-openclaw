@@ -1678,6 +1678,36 @@ class KraabUserbot(
             chat_capability_cache.configure_default_path(
                 _runtime_state_dir / "chat_capability_cache.json"
             )
+            # Wave 95: content-hash translation cache (Gemini quota saver).
+            try:
+                from .core.translation_cache import (  # noqa: PLC0415
+                    translation_cache as _translation_cache_singleton,
+                )
+
+                _translation_cache_singleton.configure_default_path(
+                    _runtime_state_dir / "translation_cache.json"
+                )
+            except Exception as _tc_exc:  # noqa: BLE001
+                logger.warning(
+                    "translation_cache_bootstrap_failed",
+                    error=str(_tc_exc),
+                    error_type=type(_tc_exc).__name__,
+                )
+            # Wave 94: provider quarantine persistent state.
+            try:
+                from .core.provider_quarantine import (  # noqa: PLC0415
+                    provider_quarantine as _pq_singleton,
+                )
+
+                _pq_singleton.configure_default_path(
+                    _runtime_state_dir / "provider_quarantine.json"
+                )
+            except Exception as _pq_exc:  # noqa: BLE001
+                logger.warning(
+                    "provider_quarantine_bootstrap_failed",
+                    error=str(_pq_exc),
+                    error_type=type(_pq_exc).__name__,
+                )
             # Wave 22-H: async-ified JSON loads для больших state-файлов.
             # Singleton уже загрузил state при import; здесь перечитываем
             # в thread, чтобы event-loop не тормозил на 100+ items.
@@ -1698,6 +1728,19 @@ class KraabUserbot(
             except Exception as _exc:  # noqa: BLE001
                 logger.warning(
                     "swarm_state_async_bootstrap_failed",
+                    error=str(_exc),
+                    error_type=type(_exc).__name__,
+                )
+            # Wave 89: persistent activity log для swarm-запусков.
+            try:
+                from .core.swarm_activity_log import (  # noqa: PLC0415
+                    swarm_activity_log as _sal_singleton,
+                )
+
+                _sal_singleton.configure_default_path(_runtime_state_dir / "swarm_activity.db")
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning(
+                    "swarm_activity_log_bootstrap_failed",
                     error=str(_exc),
                     error_type=type(_exc).__name__,
                 )
@@ -1862,6 +1905,48 @@ class KraabUserbot(
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "joke_calibration_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+            # Wave 97: wire Wave 89/94/95 singletons на дефолтные пути.
+            try:
+                from .core.swarm_activity_log import (  # noqa: PLC0415
+                    swarm_activity_log as _swarm_activity_log,
+                )
+
+                _swarm_activity_log.configure_default_path(_runtime_state_dir / "swarm_activity.db")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "swarm_activity_log_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            try:
+                from .core.translation_cache import (  # noqa: PLC0415
+                    translation_cache as _translation_cache,
+                )
+
+                _translation_cache.configure_default_path(
+                    _runtime_state_dir / "translation_cache.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "translation_cache_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            try:
+                from .core.provider_quarantine import (  # noqa: PLC0415
+                    provider_quarantine as _provider_quarantine,
+                )
+
+                _provider_quarantine.configure_default_path(
+                    _runtime_state_dir / "provider_quarantine.json"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "provider_quarantine_bootstrap_failed",
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
@@ -2125,6 +2210,41 @@ class KraabUserbot(
         if os.getenv("CHAT_BAN_PERIODIC_CLEANUP_ENABLED", "1") == "1":
             asyncio.create_task(chat_ban_cache.periodic_cleanup(interval_seconds=300))
             logger.info("chat_ban_periodic_cleanup_started", interval_sec=300)
+
+        # Wave 93/97: cost budget monitor loop — default-ON (observability-only,
+        # шлёт alert только при ok→warning|critical транзиции).
+        if os.getenv("KRAB_COST_BUDGET_MONITOR_ENABLED", "1").strip() != "0":
+            try:
+                from .core.cost_budget import cost_budget_monitor  # noqa: PLC0415
+
+                async def _cost_budget_notifier(text: str) -> None:
+                    """Шлёт alert владельцу через owner_notify_target."""
+                    try:
+                        target = getattr(self, "_owner_notify_target", None)
+                        if not target or self.client is None:
+                            return
+                        await self.client.send_message(target, text)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "cost_budget_notifier_send_failed",
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                        )
+
+                asyncio.create_task(
+                    cost_budget_monitor.run_loop(
+                        interval_sec=300,
+                        notifier=_cost_budget_notifier,
+                    ),
+                    name="cost_budget_monitor",
+                )
+                logger.info("cost_budget_monitor_started", interval_sec=300)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "cost_budget_monitor_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
 
         # Wave 29-RR: LM Studio idle watcher — выгружает модель после N сек простоя
         if os.getenv("LM_STUDIO_IDLE_WATCHER_ENABLED", "1").strip().lower() in ("1", "true", "yes"):
