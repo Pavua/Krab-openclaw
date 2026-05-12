@@ -127,6 +127,17 @@ _CLOUD_PROVIDERS: list[dict[str, Any]] = [
             ("google-gemini-cli/gemini-2.5-flash", "Gemini 2.5 Flash (CLI)"),
         ],
     },
+    {
+        "id": "mlx-local-kv4",
+        "label": "MLX KV4 (Local :8088)",
+        "type": "local",
+        "models": [
+            ("mlx-local-kv4/gemma-4-26b", "Gemma-4-26B-A4B Heretic (Baseline)"),
+            ("mlx-local-kv4/qwen3-4b-kv4", "Qwen3-4B Huihui (KV4, 105 tok/s)"),
+            ("mlx-local-kv4/qwen3-14b-kv4", "Qwen3-14B Huihui v2 (KV4, 41.5 tok/s)"),
+            ("mlx-local-kv4/llama-3.3-8b-kv4", "Llama-3.3-8B Abl 128K (KV4, 39.5 tok/s)"),
+        ],
+    },
 ]
 
 
