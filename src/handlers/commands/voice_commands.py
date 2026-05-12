@@ -310,60 +310,73 @@ async def handle_tts(bot: "KraabUserbot", message: Message) -> None:
         aiff_path = os.path.join(tmpdir, "speech.aiff")
         ogg_path = os.path.join(tmpdir, "speech.ogg")
 
+        # Wave 181: «Краб записывает голосовое...» на всё время TTS pipeline.
+        # При KRAB_TYPING_INDICATOR_ENABLED=0 — no-op (см. typing_indicator.py).
         try:
-            # Step 1: macOS say -> AIFF
-            say_proc = await asyncio.create_subprocess_exec(
-                "/usr/bin/say",
-                "-v",
-                voice_name,
-                "-o",
-                aiff_path,
-                text,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-                env=clean_subprocess_env(),
-            )
-            await say_proc.wait()
-            if say_proc.returncode != 0:
-                logger.error("tts_say_failed", voice=voice_name, returncode=say_proc.returncode)
-                raise UserInputError(
-                    user_message=f"❌ macOS say завершился с ошибкой (код {say_proc.returncode})."
+            from ...userbot.typing_indicator import recording_voice  # noqa: PLC0415
+
+            _voice_indicator_cm: Any = recording_voice(bot.client, message.chat.id)
+        except Exception:  # noqa: BLE001
+            # Fail-safe: если import упал — продолжаем без indicator'а.
+            from contextlib import nullcontext  # noqa: PLC0415
+
+            _voice_indicator_cm = nullcontext()
+
+        try:
+            async with _voice_indicator_cm:
+                # Step 1: macOS say -> AIFF
+                say_proc = await asyncio.create_subprocess_exec(
+                    "/usr/bin/say",
+                    "-v",
+                    voice_name,
+                    "-o",
+                    aiff_path,
+                    text,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    env=clean_subprocess_env(),
                 )
+                await say_proc.wait()
+                if say_proc.returncode != 0:
+                    logger.error("tts_say_failed", voice=voice_name, returncode=say_proc.returncode)
+                    raise UserInputError(
+                        user_message=f"❌ macOS say завершился с ошибкой (код {say_proc.returncode})."
+                    )
 
-            # Step 2: AIFF -> OGG/Opus (Telegram voice message)
-            ffmpeg_proc = await asyncio.create_subprocess_exec(
-                "ffmpeg",
-                "-y",
-                "-i",
-                aiff_path,
-                "-c:a",
-                "libopus",
-                "-b:a",
-                "32k",
-                "-vbr",
-                "on",
-                "-compression_level",
-                "10",
-                ogg_path,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-                env=clean_subprocess_env(),
-            )
-            await ffmpeg_proc.wait()
+                # Step 2: AIFF -> OGG/Opus (Telegram voice message)
+                ffmpeg_proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    aiff_path,
+                    "-c:a",
+                    "libopus",
+                    "-b:a",
+                    "32k",
+                    "-vbr",
+                    "on",
+                    "-compression_level",
+                    "10",
+                    ogg_path,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    env=clean_subprocess_env(),
+                )
+                await ffmpeg_proc.wait()
 
-            if not os.path.exists(ogg_path) or os.path.getsize(ogg_path) == 0:
-                logger.error("tts_ffmpeg_failed", aiff=aiff_path, ogg=ogg_path)
-                raise UserInputError(user_message="❌ ffmpeg не смог конвертировать аудио.")
+                if not os.path.exists(ogg_path) or os.path.getsize(ogg_path) == 0:
+                    logger.error("tts_ffmpeg_failed", aiff=aiff_path, ogg=ogg_path)
+                    raise UserInputError(user_message="❌ ffmpeg не смог конвертировать аудио.")
 
-            # Step 3: send voice message
-            logger.info(
-                "tts_sending_voice",
-                lang=lang,
-                voice=voice_name,
-                text_len=len(text),
-                ogg_size=os.path.getsize(ogg_path),
-            )
-            await bot.client.send_voice(message.chat.id, ogg_path)
+                # Step 3: send voice message
+                logger.info(
+                    "tts_sending_voice",
+                    lang=lang,
+                    voice=voice_name,
+                    text_len=len(text),
+                    ogg_size=os.path.getsize(ogg_path),
+                )
+                await bot.client.send_voice(message.chat.id, ogg_path)
 
         except UserInputError:
             raise
