@@ -361,6 +361,18 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>Inbox</h2>
                 <p>Входящие элементы с фильтрами, расширяемыми карточками и bulk-ack.</p>
             </a>
+
+            <a href="/admin/cron" class="card" style="animation-delay: 0.5s;">
+                <div class="emoji">⏱️</div>
+                <h2>Cron</h2>
+                <p>Статус launchd-агентов:<br>schedule, last_run, trigger/pause/resume.</p>
+            </a>
+
+            <a href="/admin/sentry" class="card" style="animation-delay: 0.6s;">
+                <div class="emoji">🛡️</div>
+                <h2>Sentry</h2>
+                <p>События, квота и unresolved issues<br>с one-click resolve.</p>
+            </a>
         </div>
 
         <footer>
