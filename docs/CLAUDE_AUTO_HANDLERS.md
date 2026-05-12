@@ -1,9 +1,9 @@
-# Auto-generated handlers (180 handle_* функций)
+# Auto-generated handlers (181 handle_* функций)
 
 Phase 2 Waves 1-18 + Session 35-38. Модули в `src/handlers/commands/` (24 файла):
 text_utils / chat / scheduler / voice / memory / social / ai / swarm / translator / system / admin / cli / fileio / group_admin / content / state / observability / memory_admin / policy / _shared / engine_commands / curator_commands + `src/handlers/command_handlers.py`
 
-Обновлено: auto-refresh (10.05.2026). Актуальный счётчик:
+Обновлено: auto-refresh (12.05.2026). Актуальный счётчик:
 ```bash
 grep -hE "^async def handle_" src/handlers/commands/*.py src/handlers/command_handlers.py | sort -u | wc -l
 ```
@@ -138,6 +138,7 @@ grep -hE "^async def handle_" src/handlers/commands/*.py src/handlers/command_ha
 `!rm_remind`
 `!role`
 `!routes`
+`!routing`
 `!run`
 `!say`
 `!schedule`

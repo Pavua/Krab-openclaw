@@ -1,7 +1,7 @@
-# Auto-generated endpoints (290 routes)
+# Auto-generated endpoints (291 routes)
 
 **29 routers** в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern.
-Обновлено: auto-refresh (10.05.2026). Live проверить: `GET /api/endpoints`
+Обновлено: auto-refresh (12.05.2026). Live проверить: `GET /api/endpoints`
 
 | Endpoint | Метод |
 |----------|-------|
@@ -104,6 +104,7 @@
 | `/api/model/status` | GET |
 | `/api/model/switch` | POST |
 | `/api/mood/{chat_id}` | GET |
+| `/api/network/probes` | GET |
 | `/api/notifications/count` | GET |
 | `/api/notify` | POST |
 | `/api/notify/status` | GET |
