@@ -238,6 +238,33 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc), "servers": {}}
 
+    # ── /api/cron/history (Wave 115) ────────────────────────────────────────
+
+    @router.get("/api/cron/history")
+    async def cron_history(
+        label: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=1000),
+        stats: bool = Query(default=False),
+    ) -> dict:
+        """Wave 115: историческое окно cron-запусков (LaunchAgent invocations)."""
+        try:
+            from ...core.cron_history_log import (  # noqa: PLC0415
+                cron_history_log as _chl,
+            )
+
+            if stats:
+                rows = _chl.stats_by_label()
+                return {"ok": True, "mode": "stats", "count": len(rows), "rows": rows}
+            rows = _chl.query_recent(label=label, limit=limit)
+            return {"ok": True, "mode": "recent", "count": len(rows), "rows": rows}
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+                "rows": [],
+            }
+
     # ── /api/system/diagnostics ─────────────────────────────────────────────
 
     @router.get("/api/system/diagnostics")

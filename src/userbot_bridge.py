@@ -1708,6 +1708,19 @@ class KraabUserbot(
                     error=str(_pq_exc),
                     error_type=type(_pq_exc).__name__,
                 )
+            # Wave 108: moderation audit log persistent storage (sqlite).
+            try:
+                from .core.moderation_audit_log import (  # noqa: PLC0415
+                    moderation_audit_log as _mal_singleton,
+                )
+
+                _mal_singleton.configure_default_path(_runtime_state_dir / "moderation_audit.db")
+            except Exception as _mal_exc:  # noqa: BLE001
+                logger.warning(
+                    "moderation_audit_log_bootstrap_failed",
+                    error=str(_mal_exc),
+                    error_type=type(_mal_exc).__name__,
+                )
             # Wave 22-H: async-ified JSON loads для больших state-файлов.
             # Singleton уже загрузил state при import; здесь перечитываем
             # в thread, чтобы event-loop не тормозил на 100+ items.
@@ -1752,6 +1765,23 @@ class KraabUserbot(
             # чтобы сразу заметить broken state, а не warning в потоке.
             logger.error(
                 "chat_state_caches_bootstrap_failed",
+                error=str(_exc),
+                error_type=type(_exc).__name__,
+            )
+
+        # Wave 106: SIGUSR1 → reload_safe_env (whitelisted env hot-reload).
+        # Не критично — non-POSIX / non-main thread вернут False без шума.
+        try:
+            from .core.env_hot_reload import install_sigusr1_handler  # noqa: PLC0415
+
+            _sigusr1_installed = install_sigusr1_handler()
+            logger.info(
+                "env_hot_reload_sigusr1_bootstrap",
+                installed=_sigusr1_installed,
+            )
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning(
+                "env_hot_reload_sigusr1_bootstrap_failed",
                 error=str(_exc),
                 error_type=type(_exc).__name__,
             )
@@ -2266,6 +2296,45 @@ class KraabUserbot(
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "launchd_health_monitor_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+        # Wave 109: MCP health probe — фоновый цикл периодических проверок MCP.
+        if os.getenv("KRAB_MCP_HEALTH_PROBE_ENABLED", "1").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            try:
+                from src.core.mcp_health_probe import mcp_health_probe
+
+                mcp_health_probe.start_background()
+                logger.info("mcp_health_probe_bootstrap_done")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "mcp_health_probe_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+        # Wave 111: disk space monitor — периодический snapshot mount points → Prometheus.
+        if os.getenv("KRAB_DISK_SPACE_MONITOR_ENABLED", "1").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            try:
+                from src.core.disk_space_monitor import disk_space_monitor_loop
+
+                asyncio.create_task(
+                    disk_space_monitor_loop(),
+                    name="krab_disk_space_monitor",
+                )
+                logger.info("disk_space_monitor_bootstrap_done")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "disk_space_monitor_bootstrap_failed",
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )

@@ -59,6 +59,30 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+# Wave 116: Prometheus instrumentation для startup catchup.
+# Import fail-safe: при отсутствии модуля helpers становятся no-op.
+try:
+    from ..core.metrics.catchup import (
+        mark_catchup_completed,
+        record_catchup_age,
+        record_catchup_failure,
+        record_catchup_message,
+    )
+except Exception:  # noqa: BLE001 - metrics optional
+
+    def record_catchup_message(*_a, **_kw) -> None:  # type: ignore[misc]
+        pass
+
+    def record_catchup_age(*_a, **_kw) -> None:  # type: ignore[misc]
+        pass
+
+    def mark_catchup_completed(*_a, **_kw) -> None:  # type: ignore[misc]
+        pass
+
+    def record_catchup_failure(*_a, **_kw) -> None:  # type: ignore[misc]
+        pass
+
+
 if TYPE_CHECKING:
     from pyrogram import Client
 
@@ -66,100 +90,6 @@ logger = structlog.get_logger("Krab.userbot.message_catchup")
 
 # Дефолтный путь — consistent с другими krab_runtime_state/*.json.
 _DEFAULT_STATE_FILENAME = "last_seen_messages.json"
-
-# Wave 52-G: history файл — JSONL append-only, FIFO max 100 entries.
-_DEFAULT_HISTORY_FILENAME = "catchup_history.jsonl"
-_CATCHUP_HISTORY_MAX_ENTRIES = 100
-
-
-def _resolve_history_path() -> Path:
-    """Путь к JSONL файлу истории catchup-сессий (Wave 52-G)."""
-    base_dir = Path(
-        os.environ.get("KRAB_RUNTIME_STATE_DIR")
-        or str(Path.home() / ".openclaw" / "krab_runtime_state")
-    ).expanduser()
-    return base_dir / _DEFAULT_HISTORY_FILENAME
-
-
-def _record_catchup_history(
-    *,
-    started_at: float,
-    completed_at: float,
-    target_count: int,
-    per_chat_stats: list[dict[str, Any]],
-) -> None:
-    """Wave 52-G: persist одну запись о завершении catchup-сессии.
-
-    Защищено от ошибок ФС: при любой OSError только warning, без raise.
-    После append проверяет длину файла; если > _CATCHUP_HISTORY_MAX_ENTRIES —
-    тримит до последних N (FIFO).
-    """
-    try:
-        path = _resolve_history_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Aggregate totals из per_chat_stats.
-        total_caught = 0
-        total_skipped = 0
-        for s in per_chat_stats:
-            try:
-                total_caught += int(s.get("caught_up", 0) or 0)
-                total_skipped += int(s.get("skipped_self", 0) or 0)
-            except (TypeError, ValueError):
-                continue
-
-        entry: dict[str, Any] = {
-            "started_at_utc": datetime.fromtimestamp(started_at, tz=timezone.utc).isoformat(),
-            "completed_at_utc": datetime.fromtimestamp(completed_at, tz=timezone.utc).isoformat(),
-            "duration_sec": round(max(0.0, completed_at - started_at), 3),
-            "target_count": int(target_count),
-            "total_caught_up": total_caught,
-            "total_skipped_self": total_skipped,
-            "by_chat": per_chat_stats,
-        }
-
-        line = json.dumps(entry, ensure_ascii=False)
-        # Append + fsync.
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-            f.flush()
-            try:
-                os.fsync(f.fileno())
-            except OSError:
-                pass
-
-        # Trim FIFO до последних _CATCHUP_HISTORY_MAX_ENTRIES.
-        try:
-            with open(path, encoding="utf-8") as f:
-                lines = f.readlines()
-            if len(lines) > _CATCHUP_HISTORY_MAX_ENTRIES:
-                tail = lines[-_CATCHUP_HISTORY_MAX_ENTRIES:]
-                tmp_fd, tmp_path = tempfile.mkstemp(
-                    prefix=".catchup_history_",
-                    suffix=".jsonl.tmp",
-                    dir=str(path.parent),
-                )
-                try:
-                    with os.fdopen(tmp_fd, "w", encoding="utf-8") as tf:
-                        tf.writelines(tail)
-                    os.replace(tmp_path, path)
-                except OSError:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-                    raise
-        except OSError as exc:
-            logger.warning("catchup_history_trim_failed", error=str(exc))
-    except OSError as exc:
-        logger.warning("catchup_history_record_failed", error=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        # Не валим catchup, пишем warning.
-        logger.warning(
-            "catchup_history_record_unexpected",
-            error=str(exc),
-            error_type=type(exc).__name__,
-        )
 
 
 def _resolve_state_path() -> Path:
@@ -505,6 +435,7 @@ class MessageCatchupMixin:
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            record_catchup_failure("fetch")
             return zero
 
         if not history:
@@ -546,12 +477,26 @@ class MessageCatchupMixin:
                 if mid > max_id:
                     max_id = mid
                 skipped_self += 1
+                record_catchup_message(chat_id, "skipped")
                 continue
+            # Wave 116: возраст сообщения в момент replay для histogram.
+            try:
+                msg_date = getattr(msg, "date", None)
+                if msg_date is not None:
+                    if hasattr(msg_date, "timestamp"):
+                        msg_ts = float(msg_date.timestamp())
+                    else:
+                        msg_ts = float(msg_date)
+                    age = max(0.0, time.time() - msg_ts)
+                    record_catchup_age(chat_id, age)
+            except Exception:  # noqa: BLE001 - возраст не критичен
+                pass
             try:
                 await self._process_message(msg)
                 replayed += 1
                 if mid > max_id:
                     max_id = mid
+                record_catchup_message(chat_id, "processed")
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "startup_catchup_replay_failed",
@@ -559,6 +504,8 @@ class MessageCatchupMixin:
                     msg_id=mid,
                     error=str(exc),
                 )
+                record_catchup_message(chat_id, "error")
+                record_catchup_failure("replay")
                 # Продолжаем — один битый msg не блокирует остальные.
 
         if max_id > last_seen_id:
@@ -613,17 +560,8 @@ class MessageCatchupMixin:
         """
         result: dict[int, int] = {}
         targets = self._resolve_catchup_target_chats()
-        # Wave 52-G: фиксируем wall-clock начала.
-        started_at = time.time()
         if not targets:
             logger.info("startup_catchup_skipped", reason="no_targets")
-            # Wave 52-G: записываем даже пустую сессию (нулевые таргеты).
-            _record_catchup_history(
-                started_at=started_at,
-                completed_at=time.time(),
-                target_count=0,
-                per_chat_stats=[],
-            )
             return result
 
         # Семафор ограничивает параллельные get_chat_history (Telegram rate-limit).
@@ -652,19 +590,12 @@ class MessageCatchupMixin:
                     error=str(res),
                     error_type=type(res).__name__,
                 )
-                # Wave 51-A: prometheus counter — alert при > 3/час.
-                try:
-                    from src.core.prometheus_metrics import record_startup_catchup_chat_failed
-
-                    record_startup_catchup_chat_failed(chat_id=cid)
-                except Exception:  # noqa: BLE001
-                    pass
+                record_catchup_failure("chat")
                 per_chat_stats.append(
                     {
                         "chat_id": cid,
                         "caught_up": 0,
                         "skipped_self": 0,
-                        "history_size": 0,
                         "error": str(res),
                     }
                 )
@@ -672,7 +603,6 @@ class MessageCatchupMixin:
             else:
                 caught = int(res.get("caught_up", 0))
                 skipped = int(res.get("skipped_self", 0))
-                history_size = int(res.get("history_size", 0))
                 total_caught_up += caught
                 total_skipped_self += skipped
                 result[cid] = caught
@@ -681,8 +611,6 @@ class MessageCatchupMixin:
                         "chat_id": cid,
                         "caught_up": caught,
                         "skipped_self": skipped,
-                        "history_size": history_size,
-                        "error": None,
                     }
                 )
 
@@ -694,13 +622,8 @@ class MessageCatchupMixin:
             target_count=len(targets),
             concurrency=concurrency,
         )
-        # Wave 52-G: persist history (defensive — никогда не прерывает catchup).
-        _record_catchup_history(
-            started_at=started_at,
-            completed_at=time.time(),
-            target_count=len(targets),
-            per_chat_stats=per_chat_stats,
-        )
+        # Wave 116: Gauge на момент успешного завершения multi-chat catchup'а.
+        mark_catchup_completed(time.time())
         return result
 
     async def _run_startup_catchup_safe(self) -> None:
@@ -720,3 +643,4 @@ class MessageCatchupMixin:
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            record_catchup_failure("unexpected")
