@@ -160,6 +160,17 @@ from .token_cost import (
     record_completion_cost,
 )
 
+# === typing_indicator (Wave 177) ===
+from .typing_indicator import (
+    krab_typing_indicator_cancelled_total,
+    krab_typing_indicator_duration_seconds,
+    krab_typing_indicator_floodwait_total,
+    krab_typing_indicator_started_total,
+    record_typing_cancelled,
+    record_typing_floodwait,
+    record_typing_started,
+)
+
 # === voice_stt (Wave 138) ===
 from .voice_stt import (
     krab_voice_stt_cost_eur_total,
@@ -247,6 +258,14 @@ __all__ = [
     "krab_voice_stt_duration_seconds",
     "krab_voice_stt_total",
     "record_voice_stt",
+    # typing_indicator (Wave 177)
+    "krab_typing_indicator_cancelled_total",
+    "krab_typing_indicator_duration_seconds",
+    "krab_typing_indicator_floodwait_total",
+    "krab_typing_indicator_started_total",
+    "record_typing_cancelled",
+    "record_typing_floodwait",
+    "record_typing_started",
     # pressure_aware (Wave 86)
     "_PRESSURE_AWARE_FALLBACK_COUNTER",
     "_pressure_aware_fallback_total",

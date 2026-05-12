@@ -44,11 +44,48 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import time
 from typing import Any
 
 from ..core.logger import get_logger
+from ..core.metrics.typing_indicator import (
+    record_typing_cancelled,
+    record_typing_floodwait,
+    record_typing_started,
+)
 
 logger = get_logger(__name__)
+
+
+# Маппинг pyrogram.enums.ChatAction → метрический label (Wave 177).
+# Резолвится lazily через `_action_label()` — без жёсткого pyrogram import.
+_ACTION_LABEL_BY_NAME: dict[str, str] = {
+    "TYPING": "typing",
+    "RECORD_AUDIO": "recording_voice",
+    "RECORD_VOICE": "recording_voice",
+    "UPLOAD_AUDIO": "recording_voice",
+    "UPLOAD_VOICE": "recording_voice",
+    "UPLOAD_PHOTO": "upload_photo",
+    "UPLOAD_DOCUMENT": "upload_doc",
+}
+
+
+def _action_label(action: Any) -> str:
+    """Извлечь канонический label для метрики из ChatAction enum / fallback."""
+    try:
+        name = getattr(action, "name", None) or str(action).rsplit(".", 1)[-1]
+        return _ACTION_LABEL_BY_NAME.get(name.upper(), "unknown")
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _is_flood_wait(exc: BaseException) -> bool:
+    """Грубая проверка на FloodWait — без import pyrogram.errors на module level."""
+    try:
+        cls_name = type(exc).__name__
+        return cls_name == "FloodWait"
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +155,9 @@ async def _keep_alive_loop(
                 await client.send_chat_action(chat_id, action)
             except Exception as exc:  # noqa: BLE001
                 # FloodWait / network — best-effort: лог и продолжаем.
+                # Wave 177: FloodWait отдельно учитываем в метрике.
+                if _is_flood_wait(exc):
+                    record_typing_floodwait(chat_id)
                 logger.warning(
                     "typing_indicator_send_failed",
                     chat_id=str(chat_id),
@@ -177,6 +217,9 @@ class TypingIndicator:
         self._interval_sec = interval_sec
         self._task: asyncio.Task[None] | None = None
         self._stop_event: asyncio.Event | None = None
+        # Wave 177: трекинг для метрик — start ts + active flag.
+        self._started_at: float | None = None
+        self._metric_started: bool = False
 
         # Effective enabled: явный override > env gate > blocklist.
         if enabled is None:
@@ -218,6 +261,10 @@ class TypingIndicator:
                 interval_sec=self._interval_sec,
             )
         )
+        # Wave 177: started → метрики.
+        self._started_at = time.monotonic()
+        self._metric_started = True
+        record_typing_started(_action_label(self._action))
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
@@ -229,6 +276,29 @@ class TypingIndicator:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
+
+        # Wave 177: завершение → reason + duration histogram.
+        # Reason определяется по типу исключения тела блока:
+        #   - None                       → success
+        #   - asyncio.CancelledError     → timeout (внешний kill — LLM idle gate)
+        #   - FloodWait                  → floodwait
+        #   - прочее                     → error
+        if self._metric_started:
+            duration_sec = 0.0
+            if self._started_at is not None:
+                duration_sec = max(0.0, time.monotonic() - self._started_at)
+
+            if exc_type is None:
+                reason = "success"
+            elif exc is not None and _is_flood_wait(exc):
+                reason = "floodwait"
+            elif exc_type is asyncio.CancelledError or (
+                exc is not None and isinstance(exc, asyncio.CancelledError)
+            ):
+                reason = "timeout"
+            else:
+                reason = "error"
+            record_typing_cancelled(reason, duration_sec)
         # Не возвращаем True — exceptions из body пробрасываем.
 
 

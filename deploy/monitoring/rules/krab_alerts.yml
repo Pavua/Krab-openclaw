@@ -552,3 +552,18 @@ groups:
         labels: {severity: info, wave: "143"}
         annotations:
           summary: "Handoff auto-export timeouts > rate 0.005/sec за 1h"
+
+  # ── Wave 177: typing indicator FloodWait observability ──────────────────────
+  - name: krab_wave177_typing_indicator
+    interval: 1m
+    rules:
+      - alert: KrabTypingIndicatorFloodWaitHigh
+        # Wave 177: send_chat_action FloodWait спайки.
+        # > 10/min (= 10/60 sec) на 5 мин → indicator упирается в rate-limit Telegram.
+        # Возможен too aggressive interval или одновременные indicator'ы во многих чатах.
+        expr: rate(krab_typing_indicator_floodwait_total[5m]) > (10 / 60)
+        for: 5m
+        labels: {severity: warning, wave: "177"}
+        annotations:
+          summary: "Typing indicator FloodWait > 10/min за 5m"
+          description: "send_chat_action упирается в Telegram FloodWait. Проверь интервал keep-alive и кол-во активных indicator'ов. См. src/userbot/typing_indicator.py."
