@@ -362,6 +362,16 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     "paid_gemini_guard_triggered",
     "telegram_session_zombie_escalation",
     "macos_post_sleep_reinit_failed",
+    # Wave 174 (13.05.2026): downgrade-pattern markers — events продолжали
+    # утекать из старых релизов даже после downgrade на logger.warning.
+    # memory_indexer_db_error: transient WAL contention, retry handled
+    #   (см. src/core/memory_indexer_worker.py:631 — Wave 174-A).
+    #   Sentry issue PYTHON-FASTAPI-8E.
+    # lm_studio_load_failed: handled через _exclude_local_model + fallback chain
+    #   (см. src/model_manager.py:1023 — Wave 174-B).
+    #   Sentry issues PYTHON-FASTAPI-8B/8C.
+    "memory_indexer_db_error",
+    "lm_studio_load_failed",
 )
 
 
