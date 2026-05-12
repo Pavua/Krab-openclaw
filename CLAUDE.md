@@ -225,6 +225,7 @@ src/
 | MCP p0lrd | 8012 | `com.krab.mcp-p0lrd` |
 | MCP Hammerspoon | 8013 | `com.krab.mcp-hammerspoon` |
 | Inbox watcher | — | `ai.krab.inbox-watcher` |
+| Backup retention sweep (Wave 172) | — | `ai.krab.backup-retention` (daily 03:00) |
 
 MCP серверы — SSE транспорт. Claude Desktop подключается через `npx mcp-remote` proxy.
 Plists: `scripts/launchagents/`

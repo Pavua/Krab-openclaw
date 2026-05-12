@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Wave 172: backup retention sweep (LaunchAgent)
+
+        Daily 03:00 — после ai.krab.db-backup-daily (02:00) и workspace_backup
+        (03:07 запускается из maintenance), но до большинства утренних задач.
+
+        Подметает:
+          - ~/.openclaw/krab_memory/backups/    (DB snapshots, keep 3 / 7d)
+          - ~/.openclaw/backups/workspace/      (tarballs, keep 3 / 14d)
+          - ~/.openclaw/backups/YYYY-MM-DD/     (dated dirs, keep 3 / 14d)
+
+        Install:
+          launchctl bootstrap gui/501 \
+            /Users/pablito/Antigravity_AGENTS/Краб/scripts/launchagents/ai.krab.backup-retention.plist
+    -->
+    <key>Label</key>
+    <string>ai.krab.backup-retention</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/krab_backup_retention_sweep.py</string>
+        <string>--json</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/backup_retention.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб/logs/backup_retention.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>KRAB_BACKUP_RETENTION_KEEP_RECENT</key>
+        <string>3</string>
+        <key>KRAB_BACKUP_RETENTION_MAX_AGE_DAYS</key>
+        <string>14</string>
+    </dict>
+</dict>
+</plist>
