@@ -322,3 +322,73 @@ groups:
         annotations:
           summary: "Krab Ear backend unresponsive ({{ $value }} consecutive failures)"
           description: "KE /health probe failing for 5+ минут. Проверь Krab Ear процесс, launchctl list grep krab-ear, backend на :5005."
+
+  # ── Wave 105: Backup integrity verification ─────────────────────────────────
+  - name: krab_wave105_backup_verify
+    interval: 5m
+    rules:
+      - alert: BackupCorruption
+        # Wave 105: weekly verify (Sun 05:00) выставляет Gauge corrupt_count.
+        # > 0 = sqlite integrity_check failed или SHA256/stat ошибка для
+        # session/state/memory archive backup. Backup непригоден для restore.
+        expr: krab_backup_corrupt_count > 0
+        for: 10m
+        labels:
+          severity: critical
+          wave: "105"
+        annotations:
+          summary: "Backup corruption detected ({{ $value }} files)"
+          description: "См. `~/.openclaw/krab_runtime_state/backup_verify_log.json`. Запусти `venv/bin/python scripts/krab_backup_verify.py` для деталей; восстанови из older snapshot."
+
+  # ── Wave 108: Moderation audit observability ────────────────────────────────
+  - name: krab_wave108_moderation
+    interval: 5m
+    rules:
+      - alert: HighModerationActivity
+        expr: rate(krab_moderation_actions_total[1h]) > 0.05
+        for: 30m
+        labels: {severity: info, wave: "108"}
+        annotations:
+          summary: "High moderation actions rate (>3/hour for 30m)"
+          description: "May indicate spam wave или incorrect ACL state."
+
+  # ── Wave 109: MCP server health ─────────────────────────────────────────────
+  - name: krab_wave109_mcp
+    interval: 1m
+    rules:
+      - alert: MCPServerDown
+        expr: krab_mcp_server_alive == 0
+        for: 15m
+        labels: {severity: warning, wave: "109"}
+        annotations:
+          summary: "MCP server {{ $labels.server }} down for 15m"
+          description: "Tool calls к этому MCP вернут ошибку. Restart MCP server."
+
+  # ── Wave 110: Dependency vuln scan ──────────────────────────────────────────
+  - name: krab_wave110_dep_audit
+    interval: 5m
+    rules:
+      - alert: CriticalDependencyVuln
+        expr: krab_dependency_vulns_total{severity="critical"} > 0
+        for: 1h
+        labels: {severity: critical, wave: "110"}
+        annotations:
+          summary: "Critical CVE в зависимости Krab"
+          description: "Run: venv/bin/pip-audit | grep CRITICAL"
+
+  # ── Wave 111: Disk space ────────────────────────────────────────────────────
+  - name: krab_wave111_disk
+    interval: 1m
+    rules:
+      - alert: DiskSpaceLow
+        expr: krab_disk_used_pct > 90
+        for: 10m
+        labels: {severity: warning, wave: "111"}
+        annotations:
+          summary: "Disk {{ $labels.mount }} > 90% used"
+      - alert: DiskSpaceCritical
+        expr: krab_disk_used_pct > 95
+        for: 5m
+        labels: {severity: critical, wave: "111"}
+        annotations:
+          summary: "Disk {{ $labels.mount }} > 95% used — DB corruption risk"

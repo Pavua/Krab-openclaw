@@ -210,6 +210,21 @@ class ChatBanCache:
             error_code=normalized_code,
             cooldown_hours=cooldown_hours,
         )
+        # Wave 108: append-only audit log. Best-effort, ошибки молчим.
+        try:
+            from .moderation_audit_log import moderation_audit_log  # noqa: PLC0415
+
+            moderation_audit_log.log_action(
+                target,
+                "krab_banned_in_chat",
+                reason=normalized_code,
+                context={
+                    "cooldown_hours": cooldown_hours,
+                    "source": "chat_ban_cache.mark_banned",
+                },
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def sweep_expired(self) -> int:
         """Синхронный sweep: удаляет все истёкшие записи из памяти и диска.
@@ -271,6 +286,17 @@ class ChatBanCache:
             del self._entries[target]
             self._persist_to_disk()
         logger.info("chat_ban_cache_cleared", chat_id=target)
+        # Wave 108: audit log unban.
+        try:
+            from .moderation_audit_log import moderation_audit_log  # noqa: PLC0415
+
+            moderation_audit_log.log_action(
+                target,
+                "krab_unbanned_in_chat",
+                context={"source": "chat_ban_cache.clear"},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return True
 
     def list_entries(self) -> list[dict[str, Any]]:

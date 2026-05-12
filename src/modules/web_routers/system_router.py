@@ -200,6 +200,44 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
         snapshot = collect_network_probes_snapshot(kraab)
         return {"ok": True, "probes": snapshot}
 
+    # ── /api/moderation/audit (Wave 108) ────────────────────────────────────
+
+    @router.get("/api/moderation/audit")
+    async def moderation_audit(
+        chat_id: str | None = Query(default=None),
+        action: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=1000),
+    ) -> dict:
+        """Wave 108: append-only audit log модерационных действий."""
+        try:
+            from ...core.moderation_audit_log import (  # noqa: PLC0415
+                moderation_audit_log as _mal,
+            )
+
+            rows = _mal.query_recent(chat_id=chat_id, action=action, limit=limit)
+            return {"ok": True, "count": len(rows), "rows": rows}
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+                "rows": [],
+            }
+
+    # ── /api/mcp/health (Wave 109) ──────────────────────────────────────────
+
+    @router.get("/api/mcp/health")
+    async def mcp_health() -> dict:
+        """Wave 109: snapshot all MCP server probe state."""
+        try:
+            from ...core.mcp_health_probe import (  # noqa: PLC0415
+                mcp_health_probe as _mhp,
+            )
+
+            return {"ok": True, "servers": _mhp.get_snapshot()}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc), "servers": {}}
+
     # ── /api/system/diagnostics ─────────────────────────────────────────────
 
     @router.get("/api/system/diagnostics")
@@ -975,6 +1013,58 @@ def build_system_router(ctx: RouterContext) -> APIRouter:
             "action": "restart_userbot",
             "before": before_state,
             "after": after_state,
+        }
+
+    # ── /api/admin/env/reload (Wave 106) ────────────────────────────────────
+
+    @router.post("/api/admin/env/reload")
+    async def admin_env_reload(
+        payload: dict = Body(default_factory=dict),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict:
+        """Wave 106: hot-reload whitelisted env vars из .env без рестарта.
+
+        Owner-only; читает .env (или payload.dotenv_path) и обновляет
+        os.environ только для SAFE_RELOAD_ENV_VARS. Возвращает diff.
+        """
+        ctx.assert_write_access(x_krab_web_key, token)
+        from src.core.env_hot_reload import reload_safe_env  # noqa: PLC0415
+
+        data = payload or {}
+        dotenv_path = str(data.get("dotenv_path") or "").strip() or None
+        result = reload_safe_env(dotenv_path=dotenv_path)
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=500,
+                detail=f"env_reload_failed: {result.get('error', 'unknown')}",
+            )
+        return result
+
+    # ── /api/chat/{chat_id}/heat & /api/chats/heat/top10 (Wave 103) ─────────
+
+    @router.get("/api/chat/{chat_id}/heat")
+    async def chat_heat(chat_id: str, window_minutes: int = Query(1440, ge=5, le=10080)) -> dict:
+        """Wave 103: heat score (0..1) для чата + декомпозиция факторов."""
+        from src.core.chat_heat_score import compute_chat_heat  # noqa: PLC0415
+
+        comp = compute_chat_heat(chat_id, window_minutes=window_minutes)
+        return {"ok": True, "heat": comp.to_dict()}
+
+    @router.get("/api/chats/heat/top10")
+    async def chats_heat_top10(
+        limit: int = Query(10, ge=1, le=50),
+        window_minutes: int = Query(1440, ge=5, le=10080),
+    ) -> dict:
+        """Wave 103: top-N чатов по heat score за окно."""
+        from src.core.chat_heat_score import top_chats_by_heat  # noqa: PLC0415
+
+        results = top_chats_by_heat(limit=limit, window_minutes=window_minutes)
+        return {
+            "ok": True,
+            "count": len(results),
+            "window_minutes": window_minutes,
+            "chats": [c.to_dict() for c in results],
         }
 
     return router
