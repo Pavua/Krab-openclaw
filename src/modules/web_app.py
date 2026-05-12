@@ -8944,6 +8944,41 @@ class WebApp:
 
         self.app.include_router(_build_system_router(self._make_router_context()))
 
+        # Wave 144/146/152/155/156/157: admin UI pages (model picker / routing /
+        # swarm / costs / ecosystem / inbox dashboards).
+        from .web_routers.costs_admin_router import (  # noqa: PLC0415
+            build_costs_admin_router,
+        )
+        from .web_routers.ecosystem_admin_router import (  # noqa: PLC0415
+            build_ecosystem_admin_router,
+        )
+        from .web_routers.inbox_admin_router import (  # noqa: PLC0415
+            build_inbox_admin_router,
+        )
+        from .web_routers.models_admin_router import (  # noqa: PLC0415
+            build_models_admin_router,
+        )
+        from .web_routers.swarm_admin_router import (  # noqa: PLC0415
+            build_swarm_admin_router,
+        )
+
+        for builder in (
+            build_models_admin_router,
+            build_swarm_admin_router,
+            build_costs_admin_router,
+            build_inbox_admin_router,
+            build_ecosystem_admin_router,
+        ):
+            try:
+                self.app.include_router(builder(self._make_router_context()))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "admin_router_include_failed",
+                    builder=getattr(builder, "__name__", str(builder)),
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
         from .web_routers.commands_router import router as _commands_router
 
         self.app.include_router(_commands_router)
