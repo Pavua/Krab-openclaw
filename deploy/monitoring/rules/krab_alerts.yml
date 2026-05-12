@@ -242,3 +242,34 @@ groups:
         annotations:
           summary: "Smart Routing deny rate > 95% for 30m"
           description: "Wave 73 baseline guard — verify trigger_detector работает корректно."
+
+  # ── Wave 74: Memory Phase 2 hybrid retrieval timing ─────────────────────────
+  - name: krab_wave74_memory
+    interval: 1m
+    rules:
+      - alert: MemoryRetrievalSlow
+        # Wave 74: P95 retrieval > 5s означает degradation post-Vertex switch
+        # (Wave 66 переключил rerank → Vertex; budget total ~2.5s typical).
+        expr: histogram_quantile(0.95, rate(krab_memory_retrieval_duration_seconds_bucket{phase="total"}[5m])) > 5.0
+        for: 10m
+        labels:
+          severity: warning
+          wave: "74"
+        annotations:
+          summary: "Memory Phase 2 retrieval P95 > 5s (10 min)"
+          description: "Hybrid retrieval (RRF+MMR+rerank) slow. Check Vertex latency или Gemini rerank quota throttle."
+
+  # ── Wave 75: launchd cron health ────────────────────────────────────────────
+  - name: krab_wave75_launchd
+    interval: 1m
+    rules:
+      - alert: LaunchAgentFailed
+        # Wave 75: cron job exit > 0 (positive = error, negative = signal terminate which is normal).
+        expr: krab_launchd_last_exit_status > 0
+        for: 10m
+        labels:
+          severity: warning
+          wave: "75"
+        annotations:
+          summary: "LaunchAgent {{ $labels.label }} exit status = {{ $value }} (10+ min)"
+          description: "Cron job failed. Check logs/{{ $labels.label }}.{out,err}.log."
