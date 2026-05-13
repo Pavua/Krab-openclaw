@@ -135,15 +135,31 @@ async def _fetch_one(
 async def _gather_all(
     base_url: str = _DEFAULT_PANEL_BASE,
     timeout: float = DEFAULT_TIMEOUT_SEC,
+    app: Any = None,
 ) -> dict[str, dict[str, Any]]:
     """Fan-out fetch всех _AGGREGATED_ENDPOINTS параллельно.
 
     Возвращает dict ``{name: raw_payload_or_skeleton}`` — fail-soft, никогда
     не raises. Все таймауты/HTTPError изолированы в ``_fetch_one``.
+
+    Wave 186-fix: если ``app`` передан (FastAPI instance) — используем
+    ``httpx.ASGITransport`` для in-process вызовов без loopback. Это
+    обходит uvicorn single-worker self-call deadlock, когда handler
+    дёргает свой же сервер через 127.0.0.1.
     """
     result: dict[str, dict[str, Any]] = {}
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        tasks = [_fetch_one(client, base_url, path) for _, path in _AGGREGATED_ENDPOINTS]
+    if app is not None:
+        transport = httpx.ASGITransport(app=app)
+        client_kwargs: dict[str, Any] = {
+            "transport": transport,
+            "base_url": "http://owner-panel.local",
+            "timeout": timeout,
+        }
+    else:
+        client_kwargs = {"timeout": timeout}
+    async with httpx.AsyncClient(**client_kwargs) as client:
+        effective_base = "" if app is not None else base_url
+        tasks = [_fetch_one(client, effective_base, path) for _, path in _AGGREGATED_ENDPOINTS]
         responses = await asyncio.gather(*tasks, return_exceptions=True)
 
     for (name, path), raw in zip(_AGGREGATED_ENDPOINTS, responses, strict=False):
@@ -366,12 +382,18 @@ def _build_dashboard_payload(raw: dict[str, dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-async def _collect_dashboard(base_url: str = _DEFAULT_PANEL_BASE) -> dict[str, Any]:
-    """Public-ish wrapper: cache check → gather → build payload → cache put."""
+async def _collect_dashboard(
+    base_url: str = _DEFAULT_PANEL_BASE,
+    app: Any = None,
+) -> dict[str, Any]:
+    """Public-ish wrapper: cache check → gather → build payload → cache put.
+
+    Wave 186-fix: пробрасывает FastAPI app в _gather_all для ASGITransport.
+    """
     cached = _cache_get()
     if cached is not None:
         return cached
-    raw = await _gather_all(base_url=base_url)
+    raw = await _gather_all(base_url=base_url, app=app)
     payload = _build_dashboard_payload(raw)
     _cache_put(payload)
     return payload
@@ -617,9 +639,13 @@ def build_health_dashboard_router(ctx: RouterContext) -> APIRouter:
 
     @router.get("/api/admin/health/dashboard")
     async def health_dashboard() -> JSONResponse:
-        """JSON aggregated state. Cached 10s (см. CACHE_TTL_SEC)."""
+        """JSON aggregated state. Cached 10s (см. CACHE_TTL_SEC).
+
+        Wave 186-fix: используем ctx.app для ASGITransport in-process вызовов
+        (обход uvicorn single-worker self-call deadlock).
+        """
         try:
-            payload = await _collect_dashboard()
+            payload = await _collect_dashboard(app=ctx.app)
         except Exception as exc:  # noqa: BLE001
             logger.warning("health_dashboard_failed", error=str(exc))
             return JSONResponse(

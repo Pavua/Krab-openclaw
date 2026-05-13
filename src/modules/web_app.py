@@ -1098,6 +1098,9 @@ class WebApp:
             default_port=self.port,
             boot_ts_holder=self._boot_ts_holder,
             runtime_lite_provider=self._collect_runtime_lite_snapshot,
+            # Wave 186-fix: пробрасываем FastAPI app для in-process httpx
+            # вызовов через ASGITransport (health_dashboard self-calls).
+            app=self.app,
         )
 
     @staticmethod

@@ -54,6 +54,9 @@ class RouterContext:
     # ``self._collect_runtime_lite_snapshot`` для сохранения исходного
     # контракта endpoint'ов.
     runtime_lite_provider: Optional[Callable[[], Awaitable[dict[str, Any]]]] = None
+    # Wave 186-fix: ссылка на FastAPI app для httpx.ASGITransport (in-process
+    # self-calls без loopback deadlock в health_dashboard_router).
+    app: Optional[Any] = None
 
     def get_dep(self, name: str, default: Any = None) -> Any:
         """Удобный alias для self.deps.get(name, default)."""
