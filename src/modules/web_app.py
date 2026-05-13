@@ -8962,6 +8962,9 @@ class WebApp:
         from .web_routers.ecosystem_admin_router import (  # noqa: PLC0415
             build_ecosystem_admin_router,
         )
+        from .web_routers.env_admin_router import (  # noqa: PLC0415
+            build_env_admin_router,
+        )
         from .web_routers.health_dashboard_router import (  # noqa: PLC0415
             build_health_dashboard_router,
         )
@@ -9008,6 +9011,7 @@ class WebApp:
             build_memory_admin_router,  # Wave 184: /admin/memory
             build_health_dashboard_router,  # Wave 186: /admin/health unified
             build_help_admin_router,  # Wave 187: /admin/help index page
+            build_env_admin_router,  # Wave 189: /admin/env read-only env dashboard
         ):
             try:
                 self.app.include_router(builder(self._make_router_context()))

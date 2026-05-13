@@ -415,6 +415,12 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>Help</h2>
                 <p>Индекс всех admin-страниц:<br>назначение, endpoints, recent changes.</p>
             </a>
+
+            <a href="/admin/env" class="card" style="animation-delay: 1.4s;">
+                <div class="emoji">⚙️</div>
+                <h2>Env</h2>
+                <p>Read-only env dashboard:<br>KRAB_* vars с автомаскировкой секретов.</p>
+            </a>
         </div>
 
         <footer>
