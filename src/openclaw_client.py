@@ -3083,7 +3083,42 @@ class OpenClawClient:
             }
 
         runtime_primary = str(get_runtime_primary_model() or "").strip()
-        force_cloud_probe = not runtime_primary.lower().startswith("lmstudio/")
+        # Wave 248: если оператор включил KRAB_ACTIVE_MODEL_OVERRIDES_RUNTIME=1
+        # и выбрал primary в /admin/models — преемптим OpenClaw runtime decision.
+        # Для locally-routed моделей (mlx-local-kv4/*, lm-studio/*) force_cloud
+        # должен быть False, иначе warmup probe залогирует ложный cloud-route и
+        # пользователь увидит `codex-cli/gpt-5.5` вместо своего mlx-local-kv4/*.
+        # OpenClaw runtime state НЕ меняем — это RotorQuant domain.
+        from src.core.active_model_routing import (  # noqa: PLC0415 - lazy
+            get_effective_primary_for_warmup,
+        )
+
+        effective_primary, override_engaged = get_effective_primary_for_warmup(runtime_primary)
+        if override_engaged:
+            try:
+                from src.core.metrics.active_model_routing import (  # noqa: PLC0415
+                    inc_active_model_override_engaged,
+                )
+
+                inc_active_model_override_engaged(
+                    picked_model=effective_primary,
+                    context="warmup",
+                )
+            except Exception:  # noqa: BLE001 - метрика best-effort
+                pass
+            logger.info(
+                "runtime_route_warmup_override_engaged",
+                runtime_primary=runtime_primary,
+                effective_primary=effective_primary,
+            )
+        _norm_primary = effective_primary.lower()
+        _is_local_primary = (
+            _norm_primary.startswith("lmstudio/")
+            or _norm_primary.startswith("lm-studio")
+            or _norm_primary.startswith("mlx-local-kv4/")
+            or _norm_primary.startswith("local/")
+        )
+        force_cloud_probe = not _is_local_primary
         probe_chat_id = "__runtime_route_warmup__"
         preview_parts: list[str] = []
 

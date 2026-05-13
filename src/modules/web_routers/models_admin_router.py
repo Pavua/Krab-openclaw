@@ -794,6 +794,26 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
             "used_reasoning_fallback": used_reasoning_fallback,
         }
 
+    # ---------- GET /api/admin/routing-active ---------------------------------
+    @router.get("/api/admin/routing-active")
+    async def admin_routing_active() -> dict[str, Any]:
+        """Wave 244+248: snapshot фактического routing.
+
+        Возвращает три источника правды одним запросом:
+        - ``picked`` — что выбрано в /admin/models (active_model.json);
+        - ``will_send_to`` — куда Krab будет слать (mlx-local/lm-studio/gateway);
+        - ``actually_used`` — что реально использовалось в последнем LLM
+          запросе (post-Gateway pick);
+        - ``warnings`` — человекочитаемые предупреждения (cloud routing,
+          mismatch picked vs actually_used).
+
+        Используется debug page `/admin/why-this-model` и Wave 248 sanity
+        check «реально ли Krab respects user pick».
+        """
+        from src.core.routing_transparency import get_actual_routing_state
+
+        return get_actual_routing_state()
+
     # ---------- GET /admin/models ---------------------------------------------
     @router.get("/admin/models", response_class=HTMLResponse)
     async def admin_models_page() -> HTMLResponse:

@@ -59,6 +59,15 @@ STATE_PATH: Path = Path.home() / ".openclaw" / "krab_runtime_state" / "active_mo
 # ENV override — если задан и не пуст, имеет приоритет над файлом.
 ENV_VAR = "KRAB_PRIMARY_MODEL_ID"
 
+# Wave 248: ENV-флаг "Krab side preemption of OpenClaw runtime routing".
+# Когда `KRAB_ACTIVE_MODEL_OVERRIDES_RUNTIME=1` — Krab игнорирует решение
+# `runtime_route_warmup` (которое читает `~/.openclaw/openclaw.json` primary,
+# обычно `codex-cli/gpt-5.5` с force_cloud=True) и использует picked-модель
+# из `active_model.json` как effective primary для warmup probe + последующих
+# рутингов. Это НЕ меняет OpenClaw runtime state (RotorQuant domain) —
+# только Krab side behavior.
+OVERRIDE_ENV_VAR = "KRAB_ACTIVE_MODEL_OVERRIDES_RUNTIME"
+
 # Префиксы / маркеры backend'ов
 _MLX_LOCAL_PREFIX = "mlx-local-kv4/"
 _OPENCLAW_PREFIX = "openclaw"  # `openclaw` или `openclaw/main`
@@ -315,6 +324,39 @@ def set_active_model(
     return payload
 
 
+def is_runtime_override_enabled() -> bool:
+    """Wave 248: True если ``KRAB_ACTIVE_MODEL_OVERRIDES_RUNTIME=1``.
+
+    Принимает любое истинное значение (1/true/yes/on, регистронезависимо).
+    Default — False, поведение совместимо с pre-248 (runtime route truth).
+    """
+    raw = (os.getenv(OVERRIDE_ENV_VAR) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def get_effective_primary_for_warmup(runtime_primary: str) -> tuple[str, bool]:
+    """Wave 248: возвращает ``(effective_primary, override_engaged)``.
+
+    Логика:
+    - если ``KRAB_ACTIVE_MODEL_OVERRIDES_RUNTIME=0`` (default) — возвращаем
+      ``(runtime_primary, False)``;
+    - если override enabled и в ``active_model.json`` есть picked-модель —
+      возвращаем ``(picked, True)``;
+    - если override enabled, но active_model отсутствует (owner ещё ни разу
+      не выбирал) — возвращаем ``(runtime_primary, False)``: нечего
+      перевыбирать, fallback на runtime truth.
+
+    Caller (warmup_runtime_route и т.д.) использует effective_primary
+    для расчёта force_cloud_probe.
+    """
+    if not is_runtime_override_enabled():
+        return runtime_primary, False
+    picked = get_active_model_id()
+    if not picked:
+        return runtime_primary, False
+    return picked, True
+
+
 def is_mlx_local_model(model_id: Optional[str]) -> bool:
     """True если id похож на mlx-local backend (`mlx-local-kv4/*`)."""
     if not model_id:
@@ -375,12 +417,15 @@ def resolve_active_target(
 
 __all__ = [
     "ENV_VAR",
+    "OVERRIDE_ENV_VAR",
     "STATE_PATH",
     "get_active_model_id",
     "get_active_model_id_async",
+    "get_effective_primary_for_warmup",
     "invalidate_cache",
     "is_mlx_local_model",
     "is_openclaw_model",
+    "is_runtime_override_enabled",
     "resolve_active_target",
     "resolve_active_target_async",
     "set_active_model",

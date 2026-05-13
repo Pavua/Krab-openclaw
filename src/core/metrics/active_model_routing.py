@@ -33,15 +33,30 @@ try:
         # 10ms = cold/iCloud, 100ms = degraded, 1s = критический freeze.
         buckets=(0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0),
     )
+    # Wave 248: фиксируем сколько раз Krab преемптил OpenClaw runtime
+    # routing decision за счёт KRAB_ACTIVE_MODEL_OVERRIDES_RUNTIME=1.
+    _active_model_override_engaged_total = _CounterActiveModelSwitches(
+        "krab_active_model_override_engaged_total",
+        (
+            "Wave 248: Krab преемптил OpenClaw runtime routing решение "
+            "за счёт KRAB_ACTIVE_MODEL_OVERRIDES_RUNTIME=1 + picked-модели "
+            "в active_model.json. Label `picked_model` — что Krab подставил."
+        ),
+        ["picked_model", "context"],
+    )
 except Exception:  # noqa: BLE001 - prometheus_client опционален
     _active_model_switches_total = None  # type: ignore[assignment]
     _active_model_resolve_duration = None  # type: ignore[assignment]
+    _active_model_override_engaged_total = None  # type: ignore[assignment]
 
 # In-memory счётчик (fallback + удобный pull для тестов).
 _ACTIVE_MODEL_SWITCH_COUNTER: dict[tuple[str, str], int] = {}
 
 # In-memory pull последних observation'ов (fallback + тесты).
 _ACTIVE_MODEL_RESOLVE_OBSERVATIONS: list[tuple[str, float]] = []
+
+# Wave 248: in-memory счётчик override-событий (fallback + тесты).
+_ACTIVE_MODEL_OVERRIDE_COUNTER: dict[tuple[str, str], int] = {}
 
 
 def inc_active_model_switch(*, from_model: str, to_model: str) -> None:
@@ -77,11 +92,33 @@ def observe_resolve_duration(seconds: float, *, source: str = "file") -> None:
         pass
 
 
+def inc_active_model_override_engaged(*, picked_model: str, context: str = "warmup") -> None:
+    """Wave 248: фиксирует событие преемпции OpenClaw runtime routing.
+
+    ``picked_model`` — что Krab использовал вместо runtime primary.
+    ``context`` ∈ {"warmup", "completion", ...} — где именно сработал override.
+    Best-effort, не бросает.
+    """
+    try:
+        key = (str(picked_model or "-"), str(context or "-"))
+        _ACTIVE_MODEL_OVERRIDE_COUNTER[key] = _ACTIVE_MODEL_OVERRIDE_COUNTER.get(key, 0) + 1
+        if _active_model_override_engaged_total is not None:
+            _active_model_override_engaged_total.labels(
+                picked_model=key[0],
+                context=key[1],
+            ).inc()
+    except Exception:  # noqa: BLE001 - инструментация best-effort
+        pass
+
+
 __all__ = [
+    "_ACTIVE_MODEL_OVERRIDE_COUNTER",
     "_ACTIVE_MODEL_RESOLVE_OBSERVATIONS",
     "_ACTIVE_MODEL_SWITCH_COUNTER",
+    "_active_model_override_engaged_total",
     "_active_model_resolve_duration",
     "_active_model_switches_total",
+    "inc_active_model_override_engaged",
     "inc_active_model_switch",
     "observe_resolve_duration",
 ]
