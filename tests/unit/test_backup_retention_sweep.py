@@ -67,10 +67,16 @@ def _fake_home(tmp_path: Path) -> Path:
 
 
 class TestBuildDefaultTargets:
-    def test_three_targets(self, tmp_path: Path) -> None:
+    def test_four_targets(self, tmp_path: Path) -> None:
+        # Wave 191: добавлена 4-я цель openclaw_config_backups.
         targets = sweep_mod.build_default_targets(home=tmp_path)
         names = [t.name for t in targets]
-        assert names == ["krab_memory_backups", "workspace_tarballs", "dated_backup_dirs"]
+        assert names == [
+            "krab_memory_backups",
+            "workspace_tarballs",
+            "dated_backup_dirs",
+            "openclaw_config_backups",
+        ]
 
     def test_default_policies(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # Снимаем env-переменные если установлены
@@ -80,10 +86,12 @@ class TestBuildDefaultTargets:
 
         by_name = {t.name: t for t in targets}
         assert by_name["krab_memory_backups"].keep_recent == 3
-        # DB snapshots: 7 дней (особый дефолт)
-        assert by_name["krab_memory_backups"].max_age_days == 7
+        # Wave 191: harmonized с остальными — 14 дней (раньше было 7).
+        assert by_name["krab_memory_backups"].max_age_days == 14
         assert by_name["workspace_tarballs"].max_age_days == 14
         assert by_name["dated_backup_dirs"].max_age_days == 14
+        assert by_name["openclaw_config_backups"].max_age_days == 14
+        assert by_name["openclaw_config_backups"].keep_recent == 3
 
     def test_env_override_keep_recent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("KRAB_BACKUP_RETENTION_KEEP_RECENT", "5")
@@ -302,7 +310,7 @@ class TestSweepTargetDirs:
 
 
 class TestRunSweepEndToEnd:
-    def test_all_three_targets(self, tmp_path: Path) -> None:
+    def test_all_four_targets(self, tmp_path: Path) -> None:
         home = _fake_home(tmp_path)
         openclaw = home / ".openclaw"
 
@@ -331,17 +339,33 @@ class TestRunSweepEndToEnd:
             d = openclaw / "backups" / f"2026-04-{15 + i:02d}"
             _make_dir(d, file_sizes=[400], mtime=_ts_days_ago(20 + i))
 
+        # 4. Wave 191: openclaw config bak-файлы в корне .openclaw/
+        #    5 файлов старых → 3 keep, 2 remove.
+        for i in range(5):
+            _make_file(
+                openclaw / f"openclaw.json.bak_2026050{i}_010101",
+                size=100,
+                mtime=_ts_days_ago(20 + i),
+            )
+        # Активный openclaw.json НЕ должен попасть в подметание (нет суффикса
+        # .bak* — но защита от опечатки в name_filter тоже есть).
+        active = _make_file(openclaw / "openclaw.json", size=999, mtime=_ts_days_ago(1))
+
         targets = sweep_mod.build_default_targets(home=home)
         summary = sweep_mod.run_sweep(targets=targets, dry_run=False)
 
-        assert summary["total_removed"] == 6  # 2 per target × 3 targets
+        assert summary["total_removed"] == 8  # 2 per target × 4 targets
         by_name = {t["name"]: t for t in summary["targets"]}
         assert by_name["krab_memory_backups"]["removed_count"] == 2
         assert by_name["workspace_tarballs"]["removed_count"] == 2
         assert by_name["dated_backup_dirs"]["removed_count"] == 2
+        assert by_name["openclaw_config_backups"]["removed_count"] == 2
 
-        # bytes_freed сумма
-        assert summary["total_bytes_freed"] == (200 * 2) + (300 * 2) + (400 * 2)
+        # bytes_freed сумма (включая 4-ю цель: 100×2)
+        assert summary["total_bytes_freed"] == (200 * 2) + (300 * 2) + (400 * 2) + (100 * 2)
+
+        # Активный openclaw.json — нетронут.
+        assert active.exists()
 
     def test_dry_run_summary(self, tmp_path: Path) -> None:
         home = _fake_home(tmp_path)
@@ -362,16 +386,133 @@ class TestRunSweepEndToEnd:
         assert len(list(mem_dir.iterdir())) == 5
 
     def test_missing_dirs_graceful(self, tmp_path: Path) -> None:
-        """Если все три цели отсутствуют — sweep успешно завершается без ошибок."""
+        """Если backup-папки отсутствуют — sweep успешно завершается без ошибок."""
         home = _fake_home(tmp_path)  # только пустой .openclaw
         targets = sweep_mod.build_default_targets(home=home)
         summary = sweep_mod.run_sweep(targets=targets, dry_run=False)
 
         assert summary["total_removed"] == 0
         assert summary["total_bytes_freed"] == 0
+        # Первые 3 цели — отдельные папки, их нет.
+        # 4-я цель (openclaw_config_backups) — это сам ~/.openclaw, он СОЗДАН
+        # _fake_home, но пустой → exists=True, но 0 совпадений по name_filter.
+        by_name = {t["name"]: t for t in summary["targets"]}
+        assert by_name["krab_memory_backups"]["exists"] is False
+        assert by_name["workspace_tarballs"]["exists"] is False
+        assert by_name["dated_backup_dirs"]["exists"] is False
+        assert by_name["openclaw_config_backups"]["exists"] is True
         for t in summary["targets"]:
-            assert t["exists"] is False
             assert t["error"] is None
+            assert t["removed_count"] == 0
+
+
+# ── Wave 191: openclaw_config_backups 4-я цель ────────────────────────────────
+
+
+class TestOpenclawConfigBackups:
+    """Тесты для 4-й цели sweeper'а — openclaw config bak-файлов."""
+
+    def _build_target(self, openclaw_dir: Path) -> sweep_mod.RetentionTarget:
+        """Достаёт 4-ю цель из дефолтной конфигурации."""
+        home = openclaw_dir.parent
+        targets = sweep_mod.build_default_targets(home=home)
+        return next(t for t in targets if t.name == "openclaw_config_backups")
+
+    def test_matches_bak_variants(self, tmp_path: Path) -> None:
+        """name_filter должен ловить все варианты openclaw.json.bak* + openclaw.backup_*.json."""
+        openclaw = tmp_path / ".openclaw"
+        openclaw.mkdir()
+
+        target = self._build_target(openclaw)
+        f = target.name_filter
+        assert f is not None
+
+        # Должны матчиться:
+        assert f("openclaw.json.bak") is True
+        assert f("openclaw.json.bak.1") is True
+        assert f("openclaw.json.bak-1777760013") is True
+        assert f("openclaw.json.bak-nightly-20260506-0300") is True
+        assert f("openclaw.json.bak_20260302_003107") is True
+        assert f("openclaw.json.bak_session27_1777247341") is True
+        assert f("openclaw.json.bak_webui_runtime_20260422_170824Z") is True
+        assert f("openclaw.backup_20260513_012039.json") is True
+        assert f("openclaw.backup_T_20260513_013245.json") is True
+
+        # НЕ должны матчиться (защищаем активный конфиг и посторонние файлы):
+        assert f("openclaw.json") is False
+        assert f("openclaw.db") is False
+        assert f("config.json") is False
+        assert f("gateway.log") is False
+        assert f("openclaw copy.json") is False  # копия от пользователя, не бэкап
+
+    def test_old_bak_files_removed(self, tmp_path: Path) -> None:
+        """Старые bak-файлы (> max_age_days) подметаются, top-N свежих остаются."""
+        openclaw = tmp_path / ".openclaw"
+        openclaw.mkdir()
+
+        # 6 старых .bak файлов + 2 свежих
+        for i in range(6):
+            _make_file(
+                openclaw / f"openclaw.json.bak_2026020{i}_010101",
+                size=50,
+                mtime=_ts_days_ago(30 + i),
+            )
+        for i in range(2):
+            _make_file(
+                openclaw / f"openclaw.json.bak_2026051{i}_010101",
+                size=50,
+                mtime=_ts_days_ago(1 + i),
+            )
+
+        # Активный конфиг + случайный файл — не трогаются.
+        active = _make_file(openclaw / "openclaw.json", size=999)
+        gateway_log = _make_file(openclaw / "gateway.log", size=100)
+
+        target = self._build_target(openclaw)
+        report = sweep_mod.sweep_target(target, dry_run=False)
+
+        # keep_recent=3, max_age_days=14:
+        # 2 свежих (1d, 2d) — kept by age. 1 старый (30d) — kept by top-N.
+        # 5 старых (31d..35d) — удалены.
+        assert len(report.removed) == 5
+        assert active.exists()
+        assert gateway_log.exists()
+
+    def test_backup_json_variant(self, tmp_path: Path) -> None:
+        """Файлы openclaw.backup_*.json подметаются по другой ветке filter."""
+        openclaw = tmp_path / ".openclaw"
+        openclaw.mkdir()
+
+        for i in range(5):
+            _make_file(
+                openclaw / f"openclaw.backup_2026050{i}_010101.json",
+                size=200,
+                mtime=_ts_days_ago(20 + i),
+            )
+
+        target = self._build_target(openclaw)
+        report = sweep_mod.sweep_target(target, dry_run=False)
+
+        # 5 файлов, все старые → keep top-3, remove 2.
+        assert len(report.kept) == 3
+        assert len(report.removed) == 2
+        assert report.bytes_freed == 400  # 200 × 2
+
+    def test_active_openclaw_json_never_swept(self, tmp_path: Path) -> None:
+        """Активный openclaw.json НИКОГДА не подметается, даже если он старый."""
+        openclaw = tmp_path / ".openclaw"
+        openclaw.mkdir()
+
+        # Очень старый активный конфиг
+        active = _make_file(openclaw / "openclaw.json", size=500, mtime=_ts_days_ago(365))
+
+        target = self._build_target(openclaw)
+        report = sweep_mod.sweep_target(target, dry_run=False)
+
+        # name_filter отверг → активный конфиг даже не попадает в kept/removed.
+        assert active.exists()
+        assert all("openclaw.json" not in r["path"] or ".bak" in r["path"]
+                   for r in report.removed)
 
 
 # ── CLI smoke ──────────────────────────────────────────────────────────────────

@@ -3,15 +3,17 @@
 <plist version="1.0">
 <dict>
     <!--
-        Wave 172: backup retention sweep (LaunchAgent)
+        Wave 172 + Wave 191: backup retention sweep (LaunchAgent)
 
         Daily 03:00 — после ai.krab.db-backup-daily (02:00) и workspace_backup
         (03:07 запускается из maintenance), но до большинства утренних задач.
 
-        Подметает:
-          - ~/.openclaw/krab_memory/backups/    (DB snapshots, keep 3 / 7d)
-          - ~/.openclaw/backups/workspace/      (tarballs, keep 3 / 14d)
-          - ~/.openclaw/backups/YYYY-MM-DD/     (dated dirs, keep 3 / 14d)
+        Подметает (все цели: keep_recent=3, max_age_days=14 через env):
+          - ~/.openclaw/krab_memory/backups/    (DB snapshots, archive-*.db)
+          - ~/.openclaw/backups/workspace/      (tarballs, workspace_*.tar.gz)
+          - ~/.openclaw/backups/YYYY-MM-DD/     (dated dirs)
+          - ~/.openclaw/openclaw.json.bak* +
+            ~/.openclaw/openclaw.backup_*.json  (config snapshots, Wave 191)
 
         Install:
           launchctl bootstrap gui/501 \

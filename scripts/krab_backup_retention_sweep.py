@@ -2,14 +2,16 @@
 # -*- coding: utf-8 -*-
 """
 Wave 172: backup retention sweep.
+Wave 191: добавлена 4-я цель — openclaw config bak-файлы в корне ~/.openclaw/
+          + harmonized max_age_days=14 для krab_memory/backups (было 7).
 
-Обобщённый sweeper для трёх backup-папок, которые накапливались без retention
-до Wave 171 (8 ГБ освободили вручную):
+Обобщённый sweeper для backup-папок и файлов, которые накапливались без
+retention до Wave 171 (8 ГБ освободили вручную):
 
 1. ~/.openclaw/krab_memory/backups/         — daily archive.db snapshots
    (от ai.krab.db-backup-daily через krab_db_backup.py копия)
    Files: archive-YYYYMMDD.db (~500 МБ каждый)
-   Policy: keep_recent=3, max_age_days=7
+   Policy: keep_recent=3, max_age_days=14 (Wave 191; раньше 7)
 
 2. ~/.openclaw/backups/workspace/           — daily workspace tarballs
    (от workspace_backup.sh)
@@ -20,6 +22,12 @@ Wave 172: backup retention sweep.
    (от krab_db_backup.py)
    Dirs: 2026-MM-DD/ (~200 МБ каждый)
    Policy: keep_recent=3, max_age_days=14
+
+4. ~/.openclaw/*.bak* + *.backup_*.json     — конфиг-снапшоты OpenClaw
+   (от openclaw runtime auto-backup на каждый запуск/изменение)
+   Files: openclaw.json.bak*, openclaw.backup_*.json (~30 КБ каждый,
+   но накапливаются сотнями за месяцы)
+   Policy: keep_recent=3, max_age_days=14 (Wave 191)
 
 Дополняет Wave 18-A (cleanup_old_backups для session-backups).
 
@@ -138,15 +146,12 @@ def _env_int(name: str, default: int) -> int:
 
 
 def build_default_targets(home: Path | None = None) -> list[RetentionTarget]:
-    """Базовая конфигурация: три цели, описанные в docstring модуля."""
+    """Базовая конфигурация: 4 цели, описанные в docstring модуля."""
     home = home or Path.home()
     openclaw = home / ".openclaw"
 
-    # Env-overrides применяются к ВСЕМ целям — но max_age_days для DB snapshots
-    # принудительно остаётся коротким (7) если override не задан, потому что
-    # каждый файл ~500 МБ.
+    # Env-overrides применяются к ВСЕМ целям (общий keep_recent + max_age_days).
     env_keep = _env_int("KRAB_BACKUP_RETENTION_KEEP_RECENT", DEFAULT_KEEP_RECENT)
-    env_age_set = "KRAB_BACKUP_RETENTION_MAX_AGE_DAYS" in os.environ
     env_age = _env_int("KRAB_BACKUP_RETENTION_MAX_AGE_DAYS", DEFAULT_MAX_AGE_DAYS)
 
     return [
@@ -154,8 +159,8 @@ def build_default_targets(home: Path | None = None) -> list[RetentionTarget]:
             name="krab_memory_backups",
             path=openclaw / "krab_memory" / "backups",
             keep_recent=env_keep,
-            # Для огромных DB snapshots: 7 дней по умолчанию (тяжелее workspace).
-            max_age_days=env_age if env_age_set else 7,
+            # Wave 191: harmonized с остальными целями (раньше было 7).
+            max_age_days=env_age,
             entry_kind="file",
             # archive-YYYYMMDD.db
             name_filter=lambda n: n.startswith("archive-") and n.endswith(".db"),
@@ -175,6 +180,22 @@ def build_default_targets(home: Path | None = None) -> list[RetentionTarget]:
             keep_recent=env_keep,
             max_age_days=env_age,
             entry_kind="dir",
+        ),
+        # Wave 191: 4-я цель — openclaw config-снапшоты в корне ~/.openclaw/.
+        # Накапливаются от runtime auto-backup при каждом изменении конфига.
+        # Имена: openclaw.json.bak*, openclaw.backup_*.json (всегда в корне).
+        RetentionTarget(
+            name="openclaw_config_backups",
+            path=openclaw,
+            keep_recent=env_keep,
+            max_age_days=env_age,
+            entry_kind="file",
+            name_filter=lambda n: (
+                # openclaw.json.bak, .bak.1, .bak-1777760013, .bak_20260302_*, etc.
+                (n.startswith("openclaw.json.bak") and n != "openclaw.json")
+                # openclaw.backup_20260513_012039.json, openclaw.backup_T_*.json
+                or (n.startswith("openclaw.backup_") and n.endswith(".json"))
+            ),
         ),
     ]
 
@@ -380,7 +401,7 @@ def run_sweep(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Wave 172: retention sweep для krab_memory/backups + workspace + dated dirs",
+        description="Wave 172+191: retention sweep для krab_memory/backups + workspace + dated dirs + openclaw config bak",
     )
     parser.add_argument(
         "--dry-run",
