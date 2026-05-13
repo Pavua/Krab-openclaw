@@ -8995,6 +8995,9 @@ class WebApp:
         from .web_routers.network_admin_router import (  # noqa: PLC0415
             build_network_admin_router,
         )
+        from .web_routers.reactions_admin_router import (  # noqa: PLC0415
+            build_reactions_admin_router,
+        )
         from .web_routers.scheduler_admin_router import (  # noqa: PLC0415
             build_scheduler_admin_router,
         )
@@ -9006,6 +9009,9 @@ class WebApp:
         )
         from .web_routers.skills_admin_router import (  # noqa: PLC0415
             build_skills_admin_router,
+        )
+        from .web_routers.snapshots_admin_router import (  # noqa: PLC0415
+            build_snapshots_admin_router,
         )
         from .web_routers.swarm_admin_router import (  # noqa: PLC0415
             build_swarm_admin_router,
@@ -9048,6 +9054,8 @@ class WebApp:
             build_translator_admin_router,  # Wave 216: /admin/translator state
             build_scheduler_admin_router,  # Wave 218: /admin/scheduler jobs
             build_captcha_admin_router,  # Wave 220: /admin/captcha spam guard
+            build_snapshots_admin_router,  # Wave 226: /admin/snapshots browser
+            build_reactions_admin_router,  # Wave 227: /admin/reactions rules editor
         ):
             try:
                 self.app.include_router(builder(self._make_router_context()))

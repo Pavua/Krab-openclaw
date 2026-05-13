@@ -475,6 +475,18 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>Captcha</h2>
                 <p>Spam guard: recent catches,<br>whitelist, global ban list.</p>
             </a>
+
+            <a href="/admin/snapshots" class="card" style="animation-delay: 2.4s;">
+                <div class="emoji">📸</div>
+                <h2>Snapshots</h2>
+                <p>State snapshots (Wave 49-F):<br>browse, preview, trigger, download.</p>
+            </a>
+
+            <a href="/admin/reactions" class="card" style="animation-delay: 2.5s;">
+                <div class="emoji">👍</div>
+                <h2>Reactions</h2>
+                <p>Auto-reaction rules editor:<br>pattern → emoji, history, stats.</p>
+            </a>
         </div>
 
         <footer>
