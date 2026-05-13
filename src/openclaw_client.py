@@ -193,6 +193,75 @@ def _supports_vision(model: str) -> bool:
     return any(p in model_lower for p in _VISION_CAPABLE_PATTERNS)
 
 
+# Wave 221: MLX local backend (mlx_lm.server) на :8088 по умолчанию
+# включает thinking-mode для Gemma — реальный ответ попадает в
+# `message.reasoning`, а `message.content` остаётся пустым. Нам нужно:
+# (A) отключать thinking через `chat_template_args.enable_thinking = false`,
+# (B) если бэкенд всё-таки вернул reasoning без content — читать его как fallback.
+_MLX_LOCAL_URL_MARKER = ":8088"
+_MLX_LOCAL_MODEL_PREFIX = "mlx-local-kv4/"
+
+
+def _is_mlx_local_target(*, base_url: str | None, model_id: str | None) -> bool:
+    """True если запрос адресован MLX local backend (mlx_lm.server :8088).
+
+    Эвристика: URL содержит `:8088` ЛИБО model_id начинается с `mlx-local-kv4/`.
+    Безопасно: даже false-positive просто добавит игнорируемый
+    `chat_template_args` — параметр mlx_lm-specific.
+    """
+    url = (base_url or "").lower()
+    model = (model_id or "").lower()
+    if _MLX_LOCAL_URL_MARKER in url:
+        return True
+    if model.startswith(_MLX_LOCAL_MODEL_PREFIX):
+        return True
+    return False
+
+
+def _apply_mlx_disable_thinking(payload: dict[str, Any]) -> dict[str, Any]:
+    """Добавляет `chat_template_args.enable_thinking = false` в тело запроса.
+
+    mlx_lm.server-specific параметр; другие OpenAI-compat сервера его
+    игнорируют. Мутирует и возвращает тот же dict.
+    """
+    args = payload.get("chat_template_args")
+    if not isinstance(args, dict):
+        args = {}
+    args["enable_thinking"] = False
+    payload["chat_template_args"] = args
+    return payload
+
+
+def extract_message_text(
+    message_obj: dict[str, Any],
+    *,
+    model_id: str | None = None,
+    logger_=None,
+) -> str:
+    """Достаёт текст ответа: `content` приоритет, `reasoning` — fallback.
+
+    Wave 221: для MLX local backend в режиме thinking реальный ответ может
+    оказаться в `message.reasoning`, а `content` будет пустым. Если так —
+    логируем warning и возвращаем reasoning.
+    """
+    content = message_obj.get("content") or ""
+    if isinstance(content, str) and content.strip():
+        return content
+    reasoning = message_obj.get("reasoning") or ""
+    if isinstance(reasoning, str) and reasoning.strip():
+        if logger_ is not None:
+            try:
+                logger_.warning(
+                    "mlx_local_thinking_fallback",
+                    model=model_id,
+                    reasoning_len=len(reasoning),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        return reasoning
+    return content if isinstance(content, str) else ""
+
+
 def parse_tool_calls_executed(response_dict: Any) -> list[dict[str, Any]]:
     """Извлечь и нормализовать `tool_calls_executed` из ответа OpenClaw.
 
@@ -2284,6 +2353,12 @@ class OpenClawClient:
             # Совместимый лимит длины ответа для OpenAI-совместимых /v1/chat/completions.
             payload["max_tokens"] = max_output_tokens
 
+        # Wave 221: для MLX local backend (mlx_lm.server :8088) отключаем
+        # thinking-режим Gemma, иначе ответ попадает в message.reasoning
+        # вместо message.content и Краб видит пустую строку.
+        if _is_mlx_local_target(base_url=self.base_url, model_id=model_id):
+            _apply_mlx_disable_thinking(payload)
+
         full_response = ""
         usage_snapshot: dict[str, int] | None = None
         retry_after_token_refresh = False
@@ -2457,7 +2532,13 @@ class OpenClawClient:
 
         choices = data.get("choices") or [{}]
         message_obj = choices[0].get("message") or {}
-        full_response = message_obj.get("content", "") or ""
+        # Wave 221: defensive fallback — если content пуст, читаем reasoning
+        # (актуально для MLX local + Gemma thinking).
+        full_response = extract_message_text(
+            message_obj,
+            model_id=model_id,
+            logger_=logger,
+        )
         tool_calls = message_obj.get("tool_calls")
 
         # Обработка tool_calls
@@ -2780,11 +2861,17 @@ class OpenClawClient:
                 }
                 if isinstance(max_output_tokens, int) and max_output_tokens > 0:
                     payload["max_tokens"] = max_output_tokens
+                # Wave 221: если LM_STUDIO_URL смотрит на MLX local :8088
+                # либо модель — `mlx-local-kv4/*`, отключаем thinking.
+                _lm_base = str(config.LM_STUDIO_URL or "").rstrip("/")
+                if _is_mlx_local_target(base_url=_lm_base, model_id=_compat_model):
+                    _apply_mlx_disable_thinking(payload)
                 resp = await client.post("/v1/chat/completions", json=payload)
                 if resp.status_code != 200:
                     return None
                 data = resp.json()
-                content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+                _msg = (data.get("choices") or [{}])[0].get("message") or {}
+                content = extract_message_text(_msg, model_id=_compat_model, logger_=logger)
                 semantic = self._detect_semantic_error(content)
                 if semantic:
                     return None
