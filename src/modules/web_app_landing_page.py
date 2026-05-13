@@ -487,6 +487,12 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>Reactions</h2>
                 <p>Auto-reaction rules editor:<br>pattern → emoji, history, stats.</p>
             </a>
+
+            <a href="/admin/spawn" class="card" style="animation-delay: 2.6s;">
+                <div class="emoji">🚀</div>
+                <h2>Spawn</h2>
+                <p>Quick task spawner:<br>backend selector + history.</p>
+            </a>
         </div>
 
         <footer>
