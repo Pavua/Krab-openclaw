@@ -1779,7 +1779,17 @@ async def handle_log(bot: "KraabUserbot", message: Message) -> None:
     async def _send_log_document(filepath: pathlib.Path, caption: str) -> None:
         """Отправляет документ лога в правильный чат."""
         target = _log_target or message.chat.id
-        await bot.client.send_document(target, str(filepath), caption=caption)
+        # Wave 211: «загружает файл...» indicator на время аплоада лога.
+        try:
+            from ...userbot.typing_indicator import uploading_document  # noqa: PLC0415
+
+            _log_doc_cm: Any = uploading_document(bot.client, target)
+        except Exception:  # noqa: BLE001
+            from contextlib import nullcontext  # noqa: PLC0415
+
+            _log_doc_cm = nullcontext()
+        async with _log_doc_cm:
+            await bot.client.send_document(target, str(filepath), caption=caption)
 
     # Лог-файл должен существовать
     if not log_path.exists():

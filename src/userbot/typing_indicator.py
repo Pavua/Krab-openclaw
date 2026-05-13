@@ -67,6 +67,7 @@ _ACTION_LABEL_BY_NAME: dict[str, str] = {
     "UPLOAD_VOICE": "recording_voice",
     "UPLOAD_PHOTO": "upload_photo",
     "UPLOAD_DOCUMENT": "upload_doc",
+    "UPLOAD_VIDEO": "upload_video",
 }
 
 
@@ -351,6 +352,17 @@ def uploading_document(client: Any, chat_id: int | str, **kwargs: Any) -> Typing
     return TypingIndicator(client, chat_id, action=action, **kwargs)
 
 
+def uploading_video(client: Any, chat_id: int | str, **kwargs: Any) -> TypingIndicator:
+    """`async with uploading_video(client, chat_id):` — «загружает видео» (Wave 211)."""
+    try:
+        from pyrogram.enums import ChatAction  # noqa: PLC0415
+
+        action = ChatAction.UPLOAD_VIDEO
+    except Exception:  # noqa: BLE001
+        action = None
+    return TypingIndicator(client, chat_id, action=action, **kwargs)
+
+
 __all__ = [
     "TypingIndicator",
     "is_enabled_for_chat",
@@ -358,4 +370,5 @@ __all__ = [
     "text_typing",
     "uploading_document",
     "uploading_photo",
+    "uploading_video",
 ]

@@ -64,7 +64,7 @@ except Exception:  # noqa: BLE001 — slim env без prometheus_client
 
 
 # Допустимые action / reason — лишние нормализуются в «unknown» / «error».
-_ALLOWED_ACTIONS = {"typing", "recording_voice", "upload_photo", "upload_doc"}
+_ALLOWED_ACTIONS = {"typing", "recording_voice", "upload_photo", "upload_doc", "upload_video"}
 _ALLOWED_REASONS = {"success", "error", "timeout", "floodwait"}
 
 

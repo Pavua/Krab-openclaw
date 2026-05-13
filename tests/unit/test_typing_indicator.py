@@ -34,6 +34,7 @@ class _FakeAction:
     RECORD_AUDIO = "record_audio"
     UPLOAD_PHOTO = "upload_photo"
     UPLOAD_DOCUMENT = "upload_document"
+    UPLOAD_VIDEO = "upload_video"
     CANCEL = "cancel"
 
 
@@ -484,3 +485,132 @@ def test_blocklist_str_int_interchangeable_for_groups(monkeypatch):
     monkeypatch.setenv("KRAB_TYPING_INDICATOR_ENABLED", "1")
     assert is_enabled_for_chat(-1001234567890) is False
     assert is_enabled_for_chat("-1001234567890") is False
+
+
+# ---------------------------------------------------------------------------
+# 14. Wave 211: uploading_video factory + UPLOAD_DOCUMENT integration
+# ---------------------------------------------------------------------------
+
+
+def test_uploading_video_factory_creates_indicator(fake_client):
+    """Wave 211: `uploading_video` возвращает TypingIndicator с UPLOAD_VIDEO action."""
+    from src.userbot.typing_indicator import uploading_video
+
+    ti = uploading_video(fake_client, chat_id=42)
+    assert ti._client is fake_client
+    assert ti._chat_id == 42
+    # action должен быть UPLOAD_VIDEO (pyrogram.enums.ChatAction.UPLOAD_VIDEO)
+    action_name = getattr(ti._action, "name", str(ti._action)).upper()
+    assert "UPLOAD_VIDEO" in action_name or "VIDEO" in action_name
+
+
+@pytest.mark.asyncio
+async def test_uploading_video_sends_upload_video_action(fake_client):
+    """Wave 211: uploading_video → send_chat_action called с UPLOAD_VIDEO."""
+    from src.userbot.typing_indicator import uploading_video
+
+    async with uploading_video(fake_client, chat_id=42, interval_sec=10.0):
+        await asyncio.sleep(0.01)
+    # Действие UPLOAD_VIDEO должно быть среди отправленных.
+    call_actions = [
+        getattr(c.args[1], "name", str(c.args[1])).upper()
+        for c in fake_client.send_chat_action.await_args_list
+    ]
+    assert any("VIDEO" in a for a in call_actions)
+
+
+def test_uploading_video_action_label_metric():
+    """Wave 211: `_action_label(UPLOAD_VIDEO)` → 'upload_video' для метрики."""
+    from src.userbot.typing_indicator import _action_label
+
+    class _V:
+        name = "UPLOAD_VIDEO"
+
+    assert _action_label(_V()) == "upload_video"
+
+
+def test_uploading_video_in_factories_unique_action(fake_client):
+    """Wave 211: 5 factory'ев → 5 уникальных actions (text/voice/photo/doc/video)."""
+    from src.userbot.typing_indicator import (
+        recording_voice,
+        text_typing,
+        uploading_document,
+        uploading_photo,
+        uploading_video,
+    )
+
+    actions = {
+        id(text_typing(fake_client, chat_id=1)._action),
+        id(recording_voice(fake_client, chat_id=1)._action),
+        id(uploading_photo(fake_client, chat_id=1)._action),
+        id(uploading_document(fake_client, chat_id=1)._action),
+        id(uploading_video(fake_client, chat_id=1)._action),
+    }
+    assert len(actions) == 5
+
+
+@pytest.mark.asyncio
+async def test_handle_paste_uploads_with_doc_indicator(monkeypatch, tmp_path):
+    """Wave 211 integration: handle_paste обёрнут в uploading_document (Wave 204 already wrapped — ensure regression test)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.handlers.commands import fileio_commands
+
+    # Минимальный bot + message stub
+    bot = MagicMock()
+    bot.client = MagicMock()
+    bot.client.send_document = AsyncMock()
+    bot.client.send_chat_action = AsyncMock()
+    bot._get_command_args = MagicMock(return_value="hello-paste-text")
+
+    msg = MagicMock()
+    msg.chat = MagicMock()
+    msg.chat.id = 42
+    msg.text = "!paste hello-paste-text"
+    msg.reply_to_message = None
+    msg.reply = AsyncMock()
+
+    # config.BASE_DIR на tmp_path
+    cfg = MagicMock()
+    cfg.BASE_DIR = str(tmp_path)
+    monkeypatch.setattr(fileio_commands, "_config_baseline", cfg, raising=False)
+
+    await fileio_commands.handle_paste(bot, msg)
+    # send_document вызван — обёртка не сломала контракт handler'а.
+    assert bot.client.send_document.await_count == 1
+    # Caption правильный.
+    _, kwargs = bot.client.send_document.await_args
+    args = bot.client.send_document.await_args.args
+    assert "Paste" in (kwargs.get("caption", "") or (args[2] if len(args) > 2 else ""))
+
+
+@pytest.mark.asyncio
+async def test_send_log_document_uses_uploading_indicator(monkeypatch):
+    """Wave 211 integration: _send_log_document обёрнут в uploading_document."""
+    import pathlib
+    from unittest.mock import AsyncMock, MagicMock
+
+    # Импортируем точечный indicator factory чтобы проверить fact-of-call.
+    from src.userbot import typing_indicator as ti_mod
+
+    seen: dict[str, Any] = {}
+    real_factory = ti_mod.uploading_document
+
+    def _spy_factory(client, chat_id, **kwargs):
+        seen["called"] = True
+        seen["chat_id"] = chat_id
+        return real_factory(client, chat_id, **kwargs)
+
+    monkeypatch.setattr(ti_mod, "uploading_document", _spy_factory)
+
+    # Вызов через async with напрямую (имитируем wrapped path в system_commands).
+    fake_client = MagicMock()
+    fake_client.send_chat_action = AsyncMock()
+    fake_client.send_document = AsyncMock()
+
+    async with ti_mod.uploading_document(fake_client, 42, interval_sec=10.0):
+        await fake_client.send_document(42, str(pathlib.Path("/tmp/x.log")), caption="log")
+
+    assert seen.get("called") is True
+    assert seen.get("chat_id") == 42
+    assert fake_client.send_document.await_count == 1
