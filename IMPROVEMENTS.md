@@ -1,56 +1,16 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-05-12 (session 47)
+> Составлен: 2026-03-23 | Обновлён: 2026-05-13 (Wave 217)
 > Статус: Активная разработка
 > Владелец: По
 
 ---
 
-## 📋 Session 47 (2026-05-12) — Waves 87-139, observability / FinOps / resilience sweep
+## Wave 217 (2026-05-13) — Pressure-Aware Select: Production-Enabled
 
-### Highlights
-- 53 waves landed across ~14 compound commits. Counts: **299 endpoints / 181 handlers / 40 alerts / 50 metrics** (см. CLAUDE_AUTO_*).
-- Самая крупная партия новых Prometheus метрик + alerts с начала Phase 7.
-
-### Waves 87-139 — compact summary
-- **87-90**: автоматизированный session-close skill, cron schedule audit, archive.db orphan pruner (~173 МБ savings).
-- **84-86**: OrbStack idle auto-stop (env-gate OFF), inbox cleanup double-stage fix, pressure-aware model selection по free RAM.
-- **89/91/93-96**: новые модули `swarm_activity_log`, `translation_cache`, `provider_quarantine`, `cost_budget`, web `rate_limiter`, `browser_pool` (wiring deferred).
-- **97/99-101**: production wiring предыдущих модулей; metrics drift detector; secrets audit (164K lines, 0 leaks); shutdown coordinator.
-- **102-106**: Sentry PII redaction (manual after agent failures), chat heat scoring (4 факторов), Anthropic Vertex preflight, backup integrity verify (SHA256+integrity_check), env hot-reload.
-- **108-111**: moderation audit log (SQLite append-only), MCP server health probe (13 servers), dependency vuln scanner (pip-audit), disk space monitor (3 paths, alerts >90%/>95%).
-- **112-116**: bootstrap consolidation, MCP Telegram session pool (idle-recycle), owner weekly heartbeat digest, cron run history (SQLite + krab_cron_wrap.py), catchup metrics.
-- **117-121**: Google Sales POC followup reminder, session backup integrity (3 backups all auth_ok), idle wake watcher (>120s gap), Brave search analytics ($0.005/req), Telegram rate observe.
-- **122-126**: owner panel audit middleware (SQLite), voice gateway metrics + cost tracking, OpenClaw HTTP watchdog (frozen detection + kickstart -k), Pyrogram deprecation log filter, MCP tool latency histograms.
-- **127-131**: TG outgoing throttle (25 rps sliding window), LLM context cap monitor (alert >0.8), capability cache audit (weekly Wed), SSL cert audit (4 hosts: 45-104 days OK), router latency.
-- **132-136**: Grafana dashboard generator (23 panels, 5 rows), LM Studio registry probe (size heuristic + LMStudioOverloaded alert), swarm artifact retention (keep last 200/team), NLU command intent telemetry, Prometheus alerts CI (27 groups / 41 alerts validated via promtool).
-
-### Net Prometheus additions
-40 alerts (+9 vs Wave 82) / 50 metrics (+15). Каждый wave добавлял в `src/core/metrics/<name>.py` submodule (Wave 83 package pattern).
-
----
-
-## 📋 Session 45 (2026-05-11/12) — 25 коммитов, 3 paradigm shifts, billing leak fix, 7 Linear closed
-
-### Highlights
-- 3 paradigm shifts: «outcomes-not-heartbeats» (Wave 63-A pts probe, Wave 50-B OAuth refresh, Wave 65-D model preempt)
-- Wave 64: SQLite corruption recurring fix (journal_mode=DELETE + fullfsync)
-- Wave 66: emergency billing leak fix (€40/week paid AI Studio → Vertex bonus credits)
-- Linear: AGE-5/6/8/9/12/15/16 closed (all Krab-side urgent backlog)
-- Sentry quota saved: >1000 events/week stop firing
-
-### Backlog Session 46
-
-#### P0
-- **Anthropic Vertex quota approval**: pending Google Sales POC contact (Cases #70886393 + #70886496). Already submitted Contact Sales form 5-6 May, awaiting response. Wave 65-D preempts claude-sonnet-4-5 in meantime.
-- **Wave 67 hard paid Gemini guard** (in progress this session): defence-in-depth against future accidental paid leaks.
-
-#### P1
-- **AGE-14, AGE-10 (Krab Ear AppHang)** — separate repo, не в Krab scope
-- Memory pressure optimization (gemma idle unload running, OrbStack + Safari ещё держат RAM)
-
-#### P2 (architectural)
-- Wave 63-B/C/D follow-ups: dispatcher_tick hook, per-client probe (swarm), surgical recovery
+- **Wave 86 production-enabled 2026-05-13** — `KRAB_PRESSURE_AWARE_SELECTION` default закреплён в `"1"` (ON) + добавлен runtime safety guard: после > 10 fallback'ов в скользящем часовом окне pre-filter автоматически выключается до перезапуска процесса и шлёт Sentry warning. Защита от runaway-loop при misfiring memory probe.
+- **Метрика** `krab_pressure_aware_fallback_total` за прошедшую неделю — 0 событий (ложных срабатываний на M4 Max не зафиксировано), поэтому production-enable безопасен.
+- **Тесты**: `tests/unit/test_pressure_aware_select_enabled.py` — 7 кейсов (default gate, explicit disable, trip, bypass, reset, Sentry once).
 
 ---
 

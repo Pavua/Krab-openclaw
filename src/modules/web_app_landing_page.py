@@ -451,6 +451,30 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>Typing</h2>
                 <p>Typing indicator metrics: per-action,<br>FloodWait, duration histogram.</p>
             </a>
+
+            <a href="/admin/whitelist" class="card" style="animation-delay: 2.0s;">
+                <div class="emoji">🛂</div>
+                <h2>Whitelist</h2>
+                <p>ACL editor: authorized users, banned<br>chats, voice-blocked lists.</p>
+            </a>
+
+            <a href="/admin/translator" class="card" style="animation-delay: 2.1s;">
+                <div class="emoji">🌐</div>
+                <h2>Translator</h2>
+                <p>Engine state: active sessions,<br>config, mobile onboarding.</p>
+            </a>
+
+            <a href="/admin/scheduler" class="card" style="animation-delay: 2.2s;">
+                <div class="emoji">📅</div>
+                <h2>Scheduler</h2>
+                <p>Scheduled messages + swarm jobs:<br>list, countdown, cancel.</p>
+            </a>
+
+            <a href="/admin/captcha" class="card" style="animation-delay: 2.3s;">
+                <div class="emoji">🛡️</div>
+                <h2>Captcha</h2>
+                <p>Spam guard: recent catches,<br>whitelist, global ban list.</p>
+            </a>
         </div>
 
         <footer>

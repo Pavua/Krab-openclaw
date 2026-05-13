@@ -10,15 +10,23 @@ Pre-filter перед стандартным выбором ModelRouter / provid
 free_memory_gb < SOFT_THRESHOLD — предпочитаем самую маленькую local модель;
 если < HARD_THRESHOLD — local запрещён, fallback на cloud.
 
-Env-gate: KRAB_PRESSURE_AWARE_SELECTION=1 (default ON). Установка "0"/"false"
-полностью обходит pre-filter.
+Env-gate: KRAB_PRESSURE_AWARE_SELECTION=1 (default ON, Wave 217 — production).
+Установка "0"/"false" полностью обходит pre-filter.
+
+Wave 217 safety: если pressure detection срабатывает > MAX_FALLBACKS_PER_HOUR
+(default 10) подряд за час — авто-выключаем pre-filter и шлём Sentry warning.
+Это защищает от runaway-loop при misfiring (например, при поломке psutil
+или нестабильном vm_stat). Перезапуск процесса сбрасывает auto-disable.
 """
 
 from __future__ import annotations
 
 import os
 import subprocess
-from typing import Iterable, Optional
+import threading
+import time
+from collections import deque
+from typing import Deque, Iterable, Optional
 
 import structlog
 
@@ -34,11 +42,93 @@ HARD_PRESSURE_GB = 2.0
 
 _CLOUD_SENTINEL = "__cloud__"
 
+# Wave 217: runtime safety — auto-disable при шквале fallback'ов.
+# Сторожевое окно — 1 час; лимит — 10 fallback'ов в окне.
+MAX_FALLBACKS_PER_HOUR = 10
+SAFETY_WINDOW_SECONDS = 3600.0
+
+# Глобальное in-process состояние safety guard. Лочим словарь, чтобы
+# многопоточные вызовы (pyrogram update handlers + background tasks)
+# не гонялись за deque/флагом.
+_safety_lock = threading.Lock()
+_fallback_timestamps: Deque[float] = deque()
+_auto_disabled: bool = False
+_auto_disabled_at: Optional[float] = None
+_auto_disable_reason: Optional[str] = None
+
 
 def _env_enabled() -> bool:
     """Возвращает True если KRAB_PRESSURE_AWARE_SELECTION включён (default ON)."""
     raw = os.getenv("KRAB_PRESSURE_AWARE_SELECTION", "1").strip().lower()
     return raw not in ("0", "false", "no", "off", "")
+
+
+def _safety_guard_active() -> bool:
+    """Wave 217: True если runtime safety auto-disabled pre-filter."""
+    with _safety_lock:
+        return _auto_disabled
+
+
+def reset_safety_guard() -> None:
+    """Wave 217: сброс state guard (для тестов и /admin reset)."""
+    global _auto_disabled, _auto_disabled_at, _auto_disable_reason
+    with _safety_lock:
+        _fallback_timestamps.clear()
+        _auto_disabled = False
+        _auto_disabled_at = None
+        _auto_disable_reason = None
+
+
+def _record_fallback_and_check_safety(*, from_model: str, to_model: str, reason: str) -> None:
+    """
+    Wave 217: фиксируем fallback в скользящем окне и при превышении лимита
+    включаем auto-disable + шлём Sentry warning. Best-effort — никогда
+    не бросаем наружу.
+    """
+    global _auto_disabled, _auto_disabled_at, _auto_disable_reason
+
+    now = time.monotonic()
+    trip = False
+    count_in_window = 0
+
+    with _safety_lock:
+        if _auto_disabled:
+            return
+        _fallback_timestamps.append(now)
+        # выкидываем устаревшие записи из окна
+        cutoff = now - SAFETY_WINDOW_SECONDS
+        while _fallback_timestamps and _fallback_timestamps[0] < cutoff:
+            _fallback_timestamps.popleft()
+        count_in_window = len(_fallback_timestamps)
+        if count_in_window > MAX_FALLBACKS_PER_HOUR:
+            _auto_disabled = True
+            _auto_disabled_at = now
+            _auto_disable_reason = (
+                f"runaway: {count_in_window} fallbacks in {SAFETY_WINDOW_SECONDS:.0f}s"
+            )
+            trip = True
+
+    if not trip:
+        return
+
+    # Логирование + Sentry — вне лока, чтобы не блокировать другие потоки.
+    logger.error(
+        "pressure_aware_auto_disabled",
+        count=count_in_window,
+        window_seconds=SAFETY_WINDOW_SECONDS,
+        last_from=from_model,
+        last_to=to_model,
+        last_reason=reason,
+    )
+    try:
+        import sentry_sdk
+
+        sentry_sdk.capture_message(
+            "Wave 217: pressure_aware_select auto-disabled (runaway fallbacks)",
+            level="warning",
+        )
+    except Exception:  # noqa: BLE001 — sentry опционален
+        pass
 
 
 def get_free_memory_gb() -> Optional[float]:
@@ -131,6 +221,11 @@ def pressure_aware_model_select(
     if not _env_enabled():
         return preferred_model
 
+    # Wave 217: runtime safety — если guard сработал, обходим pre-filter
+    # (до перезапуска процесса).
+    if _safety_guard_active():
+        return preferred_model
+
     free_gb = free_gb_override if free_gb_override is not None else get_free_memory_gb()
     if free_gb is None:
         # Не удалось измерить — не блокируем выбор
@@ -152,6 +247,11 @@ def pressure_aware_model_select(
                 reason="hard_pressure",
             )
             inc_pressure_aware_fallback(
+                from_model=preferred_model,
+                to_model=cloud_fallback,
+                reason="hard_pressure",
+            )
+            _record_fallback_and_check_safety(
                 from_model=preferred_model,
                 to_model=cloud_fallback,
                 reason="hard_pressure",
@@ -193,6 +293,11 @@ def pressure_aware_model_select(
                     to_model=smallest,
                     reason="soft_pressure",
                 )
+                _record_fallback_and_check_safety(
+                    from_model=preferred_model,
+                    to_model=smallest,
+                    reason="soft_pressure",
+                )
                 return smallest
         else:
             # Нет local candidates с известным размером — fallback на cloud
@@ -204,6 +309,11 @@ def pressure_aware_model_select(
                 reason="soft_no_candidates",
             )
             inc_pressure_aware_fallback(
+                from_model=preferred_model,
+                to_model=cloud_fallback,
+                reason="soft_no_candidates",
+            )
+            _record_fallback_and_check_safety(
                 from_model=preferred_model,
                 to_model=cloud_fallback,
                 reason="soft_no_candidates",

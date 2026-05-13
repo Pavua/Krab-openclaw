@@ -8953,6 +8953,9 @@ class WebApp:
         from .web_routers.aliases_admin_router import (  # noqa: PLC0415
             build_aliases_admin_router,
         )
+        from .web_routers.captcha_admin_router import (  # noqa: PLC0415
+            build_captcha_admin_router,
+        )
         from .web_routers.commands_admin_router import (  # noqa: PLC0415
             build_commands_admin_router,
         )
@@ -8992,6 +8995,9 @@ class WebApp:
         from .web_routers.network_admin_router import (  # noqa: PLC0415
             build_network_admin_router,
         )
+        from .web_routers.scheduler_admin_router import (  # noqa: PLC0415
+            build_scheduler_admin_router,
+        )
         from .web_routers.sentry_admin_router import (  # noqa: PLC0415
             build_sentry_admin_router,
         )
@@ -9004,11 +9010,17 @@ class WebApp:
         from .web_routers.swarm_admin_router import (  # noqa: PLC0415
             build_swarm_admin_router,
         )
+        from .web_routers.translator_admin_router import (  # noqa: PLC0415
+            build_translator_admin_router,
+        )
         from .web_routers.typing_admin_router import (  # noqa: PLC0415
             build_typing_admin_router,
         )
         from .web_routers.voice_admin_router import (  # noqa: PLC0415
             build_voice_admin_router,
+        )
+        from .web_routers.whitelist_admin_router import (  # noqa: PLC0415
+            build_whitelist_admin_router,
         )
 
         for builder in (
@@ -9032,6 +9044,10 @@ class WebApp:
             build_silence_admin_router,  # Wave 199: /admin/silence per-chat editor
             build_aliases_admin_router,  # Wave 200: /admin/aliases command aliases
             build_typing_admin_router,  # Wave 207: /admin/typing indicator metrics
+            build_whitelist_admin_router,  # Wave 215: /admin/whitelist ACL editor
+            build_translator_admin_router,  # Wave 216: /admin/translator state
+            build_scheduler_admin_router,  # Wave 218: /admin/scheduler jobs
+            build_captcha_admin_router,  # Wave 220: /admin/captcha spam guard
         ):
             try:
                 self.app.include_router(builder(self._make_router_context()))
