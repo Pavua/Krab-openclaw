@@ -69,30 +69,131 @@ class AuditFinding:
 # Dimension 1: Process health
 # ---------------------------------------------------------------------------
 
+# Wave 196: launchctl — authoritative source для LaunchAgent state.
+# Канонический label Krab core process.
+_KRAB_CORE_LABEL = "ai.krab.core"
 
-async def audit_process_health() -> AuditFinding:
-    """Проверка uptime Krab-процесса и количества живых LaunchAgent daemon'ов."""
+
+def _check_krab_via_launchctl() -> tuple[str, int | None, str]:
+    """Спрашиваем launchctl про состояние ai.krab.core.
+
+    Returns:
+        (state, pid, raw_line)
+        state ∈ {"running", "loaded_idle", "not_loaded", "error"}
+        pid — int если PID present, иначе None
+        raw_line — сырая строка из launchctl list (или сообщение об ошибке)
+    """
+    try:
+        result = subprocess.run(
+            ["launchctl", "list"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (subprocess.SubprocessError, OSError, FileNotFoundError) as exc:
+        return ("error", None, f"launchctl failed: {exc}")
+
+    if result.returncode != 0:
+        return ("error", None, f"launchctl exit={result.returncode}")
+
+    # Формат: PID\tEXIT\tLABEL — точное совпадение по последнему полю
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 3 or parts[-1] != _KRAB_CORE_LABEL:
+            continue
+        pid_field = parts[0]
+        if pid_field == "-":
+            # Loaded, но сейчас не запущен (cron-style либо crash)
+            return ("loaded_idle", None, line.strip())
+        try:
+            pid = int(pid_field)
+        except ValueError:
+            return ("error", None, f"bad pid field: {pid_field!r}")
+        return ("running", pid, line.strip())
+
+    return ("not_loaded", None, "")
+
+
+def _check_krab_via_psutil() -> int | None:
+    """Fallback: ищем процесс с cmdline содержащим python + src.main / userbot_bridge.
+
+    Returns: pid или None.
+    """
     try:
         import psutil
     except ImportError:
-        return AuditFinding("Process", "warn", "psutil not installed — cannot check")
+        return None
 
-    # Ищем Krab-процесс по cmdline
-    krab_pids: list[int] = []
     for p in psutil.process_iter(["cmdline"]):
         try:
             cmdline = p.info.get("cmdline") or []
-            if any(
-                "userbot_bridge" in c or "src/main.py" in c or "krab_main" in c for c in cmdline
-            ):
-                krab_pids.append(p.pid)
+            joined = " ".join(cmdline)
+            # python -m src.main | src/main.py | userbot_bridge | krab_main
+            has_python = any("python" in c.lower() for c in cmdline)
+            has_krab_module = (
+                "src.main" in joined
+                or "src/main.py" in joined
+                or "userbot_bridge" in joined
+                or "krab_main" in joined
+            )
+            if has_python and has_krab_module:
+                return p.pid
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
+    return None
 
-    if not krab_pids:
-        return AuditFinding("Process", "critical", "Krab process не найден — возможно упал!")
 
-    uptime_sec = time.time() - psutil.Process(krab_pids[0]).create_time()
+async def audit_process_health() -> AuditFinding:
+    """Проверка uptime Krab-процесса и количества живых LaunchAgent daemon'ов.
+
+    Wave 196: launchctl — authoritative для определения жив ли core.
+    psutil — fallback, если launchctl недоступен.
+    """
+    # 1. Authoritative check через launchctl
+    state, pid, raw = _check_krab_via_launchctl()
+
+    if state == "running" and pid is not None:
+        krab_pid = pid
+    elif state in ("loaded_idle", "not_loaded"):
+        # Точно не запущен — авторитетно от launchd
+        return AuditFinding(
+            "Process",
+            "critical",
+            f"Krab not running (launchctl: {state})",
+            f"label={_KRAB_CORE_LABEL}, raw={raw or '<not in launchctl list>'}",
+        )
+    else:
+        # launchctl недоступен — fallback на psutil
+        fallback_pid = _check_krab_via_psutil()
+        if fallback_pid is None:
+            return AuditFinding(
+                "Process",
+                "critical",
+                f"Krab not running (launchctl: {state}, psutil: not found)",
+                raw,
+            )
+        krab_pid = fallback_pid
+
+    # 2. Uptime через psutil (нужен для отображения)
+    try:
+        import psutil
+    except ImportError:
+        return AuditFinding(
+            "Process",
+            "ok",
+            f"Krab running (pid={krab_pid}), psutil not installed — uptime unavailable",
+        )
+
+    try:
+        uptime_sec = time.time() - psutil.Process(krab_pid).create_time()
+    except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+        # Между launchctl check и psutil.Process процесс исчез
+        return AuditFinding(
+            "Process",
+            "warn",
+            f"Krab pid={krab_pid} disappeared between checks",
+            str(exc),
+        )
     uptime_h = uptime_sec / 3600
 
     # Wave 40-A-fix-3: правильная интерпретация launchctl list output

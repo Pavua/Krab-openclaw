@@ -57,6 +57,38 @@ _LABEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 # Whitelist префиксов label (защита от ../../ и unrelated labels).
 _ALLOWED_LABEL_PREFIXES = ("ai.krab.", "ai.openclaw.", "com.krab.")
 
+# Wave 195: каноничные state/output-файлы для известных агентов.
+# Используются как fallback-сигнал свежести когда health_watcher не пишет
+# per-label last_run, а stdout/stderr-лог обнуляется/архивируется.
+# Пути расширяются через ``os.path.expanduser``.
+_AGENT_OUTPUT_HINTS: dict[str, list[str]] = {
+    "ai.krab.quota-history": ["~/.openclaw/krab_runtime_state/quota_history.jsonl"],
+    "ai.krab.sentry-poll": ["~/.openclaw/krab_runtime_state/sentry_poll_state.json"],
+    "ai.krab.sentry-quota-check": [
+        "~/.openclaw/krab_runtime_state/sentry_quota_baseline.json",
+        "~/.openclaw/krab_runtime_state/sentry_quota_check.log",
+    ],
+    "ai.krab.sentry-stale-resolver": [
+        "~/.openclaw/krab_runtime_state/sentry_auto_resolve.log",
+        "~/.openclaw/krab_runtime_state/sentry_resolver.log",
+    ],
+    "ai.krab.inbox-watcher": ["~/.openclaw/krab_runtime_state/inbox_state.json"],
+    "ai.krab.coexistence-monitor": [
+        "~/.openclaw/krab_runtime_state/coexistence_alert_state.json",
+        "~/.openclaw/krab_runtime_state/coexistence_monitor.log",
+    ],
+    "ai.krab.oauth-resync": ["~/.openclaw/krab_runtime_state/oauth_resync.log"],
+    "ai.krab.leak-monitor": [
+        "~/.openclaw/krab_runtime_state/leak_monitor_stats.json",
+        "~/.openclaw/krab_runtime_state/leak_monitor.log",
+    ],
+    "ai.krab.daily-maintenance": ["~/.openclaw/krab_runtime_state/daily_maintenance.json"],
+    "ai.krab.bypass-perf-alert": ["~/.openclaw/krab_runtime_state/bypass_perf_alert_last.json"],
+    "ai.krab.backend-log-scanner": ["~/.openclaw/krab_runtime_state/backend_scan.json"],
+    "ai.krab.gcp-quota-poc-watcher": ["~/.openclaw/krab_runtime_state/codex_quota_state.json"],
+    "ai.krab.health-watcher": ["~/.openclaw/krab_runtime_state/health_watcher.json"],
+}
+
 
 def _validate_label(label: str) -> str:
     """Sanitize/validate label перед использованием в launchctl."""
@@ -216,6 +248,115 @@ def _read_log_file_mtime(plist_data: dict[str, Any]) -> tuple[float | None, str 
     return _mtime_or_none(Path(stdout_path)), stdout_path
 
 
+def _resolve_health_watcher_last_run(label: str, health_state: dict[str, Any]) -> float | None:
+    """Wave 195: достаём last_run_ts для конкретного label из health_watcher.json.
+
+    Поддерживаем несколько форматов: ``last_runs[label]``, ``agents[label]``,
+    либо top-level ``label`` → ``{last_run_ts: ...}``. Возвращаем None если
+    нет per-label данных (typical case 13.05.2026 — health_watcher пишет
+    только panel/gateway counters без per-label timestamps).
+    """
+    candidates_root: list[Any] = [
+        health_state.get("last_runs"),
+        health_state.get("agents"),
+        health_state.get("labels"),
+        health_state,  # fallback на top-level
+    ]
+    for root in candidates_root:
+        if not isinstance(root, dict):
+            continue
+        entry = root.get(label)
+        if isinstance(entry, dict):
+            ts = entry.get("last_run_ts") or entry.get("last_run")
+            if isinstance(ts, (int, float)) and ts > 0:
+                return float(ts)
+            # ISO-строка?
+            if isinstance(ts, str) and ts:
+                try:
+                    import datetime as _dt
+
+                    dt = _dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    return dt.timestamp()
+                except (ValueError, TypeError):
+                    pass
+        elif isinstance(entry, (int, float)) and entry > 0:
+            return float(entry)
+    return None
+
+
+def _collect_hint_mtimes(label: str) -> list[tuple[float, str]]:
+    """Wave 195: mtime всех известных state-файлов для label.
+
+    Возвращает список ``(mtime, path)`` (только existing, отсортирован
+    по убыванию mtime — freshest первый).
+    """
+    hints = _AGENT_OUTPUT_HINTS.get(label, [])
+    found: list[tuple[float, str]] = []
+    for raw in hints:
+        try:
+            path = Path(os.path.expanduser(raw))
+        except (TypeError, ValueError):
+            continue
+        mtime = _mtime_or_none(path)
+        if mtime is not None:
+            found.append((mtime, str(path)))
+    found.sort(key=lambda x: x[0], reverse=True)
+    return found
+
+
+def _pick_freshest_last_run(
+    *,
+    label: str,
+    health_state: dict[str, Any],
+    plist_data: dict[str, Any],
+) -> tuple[float | None, str | None, str | None]:
+    """Wave 195: выбирает freshest сигнал last_run среди:
+
+    1. ``health_watcher.json[label].last_run_ts`` — primary (если есть).
+    2. ``StandardOutPath`` mtime — stdout-лог LaunchAgent.
+    3. ``StandardErrorPath`` mtime — stderr-лог LaunchAgent.
+    4. ``_AGENT_OUTPUT_HINTS[label]`` — каноничные state-файлы агента.
+
+    Возвращает ``(ts, source_name, source_path)``. ``source_name`` ∈
+    ``{"health_watcher", "stdout_log", "stderr_log", "hint_file", None}``.
+    Корневая логика бага Wave 195: ранее код доверял либо health_watcher
+    (без per-label данных), либо ТОЛЬКО mtime stdout-лога — оба могут
+    устаревать на дни. Теперь берём MAX из всех 4 источников.
+    """
+    candidates: list[tuple[float, str, str | None]] = []
+
+    # 1) health_watcher.json per-label (primary signal).
+    hw_ts = _resolve_health_watcher_last_run(label, health_state)
+    if hw_ts is not None:
+        candidates.append((hw_ts, "health_watcher", None))
+
+    # 2) StandardOutPath mtime.
+    stdout_raw = plist_data.get("StandardOutPath")
+    if isinstance(stdout_raw, str):
+        m = _mtime_or_none(Path(stdout_raw))
+        if m is not None:
+            candidates.append((m, "stdout_log", stdout_raw))
+
+    # 3) StandardErrorPath mtime.
+    stderr_raw = plist_data.get("StandardErrorPath")
+    if isinstance(stderr_raw, str):
+        m = _mtime_or_none(Path(stderr_raw))
+        if m is not None:
+            candidates.append((m, "stderr_log", stderr_raw))
+
+    # 4) Hint-файлы (state OUTPUT files, не логи).
+    for hint_mtime, hint_path in _collect_hint_mtimes(label):
+        candidates.append((hint_mtime, "hint_file", hint_path))
+
+    if not candidates:
+        return None, None, None
+
+    # Выбираем freshest (max mtime).
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    best_ts, best_src, best_path = candidates[0]
+    return best_ts, best_src, best_path
+
+
 def _enumerate_agents() -> list[dict[str, Any]]:
     """Главная функция: enumerate все LaunchAgents Krab+OpenClaw."""
     listing = _run_launchctl(["list"])
@@ -269,13 +410,29 @@ def _enumerate_agents() -> list[dict[str, Any]]:
         pid = state.get("pid")
         exit_code = state.get("exit_code")
 
-        # Если процесс запущен (pid != None и != -) — last_run ~= now
+        # Wave 195: freshest сигнал среди health_watcher / stdout / stderr / hint-files.
+        # Если процесс runs прямо сейчас (pid != -) — last_run ~= now (наивысший приоритет).
+        resolved_ts, resolved_src, resolved_path = _pick_freshest_last_run(
+            label=label,
+            health_state=health_state,
+            plist_data=plist_data,
+        )
         if pid:
-            last_run_ts: float | None = time.time()
-            last_run_source = "running"
+            # Running процесс — это самый свежий сигнал, но сохраняем resolved
+            # как baseline если он свежее (например, скрипт пишет state и завершается).
+            now_ts = time.time()
+            if resolved_ts is None or now_ts >= resolved_ts:
+                last_run_ts: float | None = now_ts
+                last_run_source = "running"
+            else:
+                last_run_ts = resolved_ts
+                last_run_source = resolved_src or "running"
+        elif resolved_ts is not None:
+            last_run_ts = resolved_ts
+            last_run_source = resolved_src or "unknown"
         else:
-            last_run_ts = log_mtime
-            last_run_source = "log_mtime" if log_mtime else "unknown"
+            last_run_ts = None
+            last_run_source = "unknown"
 
         agents.append(
             {
@@ -287,6 +444,7 @@ def _enumerate_agents() -> list[dict[str, Any]]:
                 "exit_code": exit_code,
                 "last_run_ts": last_run_ts,
                 "last_run_source": last_run_source,
+                "last_run_source_path": resolved_path,
                 "last_run_iso": (
                     time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(last_run_ts))
                     if last_run_ts

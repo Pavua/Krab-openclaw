@@ -427,6 +427,24 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>Commands</h2>
                 <p>162 Telegram-команды: search, фильтр<br>по категории, usage stats и aliases.</p>
             </a>
+
+            <a href="/admin/skills" class="card" style="animation-delay: 1.6s;">
+                <div class="emoji">🧩</div>
+                <h2>Skills</h2>
+                <p>Browser src/skills/* модулей:<br>файлы, public funcs, curator reports.</p>
+            </a>
+
+            <a href="/admin/silence" class="card" style="animation-delay: 1.7s;">
+                <div class="emoji">🔇</div>
+                <h2>Silence</h2>
+                <p>Per-chat silence mode + расписание:<br>list active, add/remove mutes.</p>
+            </a>
+
+            <a href="/admin/aliases" class="card" style="animation-delay: 1.8s;">
+                <div class="emoji">🏷️</div>
+                <h2>Aliases</h2>
+                <p>Editor алиасов команд: добавить,<br>удалить, conflict-check vs registry.</p>
+            </a>
         </div>
 
         <footer>

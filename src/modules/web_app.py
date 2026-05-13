@@ -8950,6 +8950,9 @@ class WebApp:
         # Wave 144/146/152/155/156/157/164/165/169/176: admin UI pages (model
         # picker / routing / swarm / costs / ecosystem / inbox / cron / sentry
         # / logs / db).
+        from .web_routers.aliases_admin_router import (  # noqa: PLC0415
+            build_aliases_admin_router,
+        )
         from .web_routers.commands_admin_router import (  # noqa: PLC0415
             build_commands_admin_router,
         )
@@ -8992,6 +8995,12 @@ class WebApp:
         from .web_routers.sentry_admin_router import (  # noqa: PLC0415
             build_sentry_admin_router,
         )
+        from .web_routers.silence_admin_router import (  # noqa: PLC0415
+            build_silence_admin_router,
+        )
+        from .web_routers.skills_admin_router import (  # noqa: PLC0415
+            build_skills_admin_router,
+        )
         from .web_routers.swarm_admin_router import (  # noqa: PLC0415
             build_swarm_admin_router,
         )
@@ -9016,6 +9025,9 @@ class WebApp:
             build_help_admin_router,  # Wave 187: /admin/help index page
             build_env_admin_router,  # Wave 189: /admin/env read-only env dashboard
             build_commands_admin_router,  # Wave 190: /admin/commands registry+usage
+            build_skills_admin_router,  # Wave 198: /admin/skills package browser
+            build_silence_admin_router,  # Wave 199: /admin/silence per-chat editor
+            build_aliases_admin_router,  # Wave 200: /admin/aliases command aliases
         ):
             try:
                 self.app.include_router(builder(self._make_router_context()))

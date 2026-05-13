@@ -74,10 +74,11 @@ async def test_process_health_krab_running():
     mock_psutil.NoSuchProcess = Exception
     mock_psutil.AccessDenied = Exception
 
-    # launchctl возвращает 3 активных daemon'а
+    # launchctl возвращает 3 активных daemon'а, включая ai.krab.core с pid
     launchctl_out = "12345\t0\tai.krab.core\n12346\t0\tai.krab.inbox-watcher\n12347\t0\tai.krab.gateway-watchdog\n"
     mock_result = MagicMock()
     mock_result.stdout = launchctl_out
+    mock_result.returncode = 0
 
     with patch.dict("sys.modules", {"psutil": mock_psutil}):
         with patch("subprocess.run", return_value=mock_result):
@@ -89,17 +90,25 @@ async def test_process_health_krab_running():
 
 @pytest.mark.asyncio
 async def test_process_health_krab_not_running():
-    """Если krab процесс не найден → critical."""
+    """Если krab процесс не найден (launchctl loaded_idle) → critical."""
+    # launchctl говорит: ai.krab.core loaded но без pid (state=loaded_idle)
+    launchctl_out = "-\t0\tai.krab.core\n12346\t0\tai.krab.inbox-watcher\n"
+    mock_result = MagicMock()
+    mock_result.stdout = launchctl_out
+    mock_result.returncode = 0
+
     mock_psutil = MagicMock()
     mock_psutil.process_iter.return_value = []
     mock_psutil.NoSuchProcess = Exception
     mock_psutil.AccessDenied = Exception
 
     with patch.dict("sys.modules", {"psutil": mock_psutil}):
-        finding = await audit_process_health()
+        with patch("subprocess.run", return_value=mock_result):
+            finding = await audit_process_health()
 
     assert finding.status == "critical"
-    assert "не найден" in finding.summary
+    assert "not running" in finding.summary
+    assert "loaded_idle" in finding.summary
 
 
 # ---------------------------------------------------------------------------
@@ -131,10 +140,13 @@ async def test_db_integrity_all_ok(tmp_path):
 
             # Мокаем Path.exists() чтобы DB пути "существовали"
             with patch.object(Path, "exists", return_value=True):
-                with patch("sqlite3.connect", return_value=MagicMock(
-                    execute=lambda q: MagicMock(fetchone=lambda: ("ok",)),
-                    close=lambda: None,
-                )):
+                with patch(
+                    "sqlite3.connect",
+                    return_value=MagicMock(
+                        execute=lambda q: MagicMock(fetchone=lambda: ("ok",)),
+                        close=lambda: None,
+                    ),
+                ):
                     finding = await audit_database_integrity()
 
     # С реальными DBs или моком — результат должен быть ok или warn (нет файлов)
@@ -286,7 +298,9 @@ async def test_run_full_audit_no_telegram_if_all_ok():
 
     def mock_urlopen(req, timeout=None):
         sent_calls.append(req)
-        return MagicMock(__enter__=lambda s: s, __exit__=MagicMock(return_value=False), read=lambda: b"{}")
+        return MagicMock(
+            __enter__=lambda s: s, __exit__=MagicMock(return_value=False), read=lambda: b"{}"
+        )
 
     with patch(
         "src.core.nightly_self_audit.audit_process_health",
@@ -343,8 +357,10 @@ async def test_run_full_audit_sends_telegram_if_warn():
     class MockResponse:
         def read(self):
             return b"{}"
+
         def __enter__(self):
             return self
+
         def __exit__(self, *args):
             return False
 
