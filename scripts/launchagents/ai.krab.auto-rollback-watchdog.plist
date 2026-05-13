@@ -23,8 +23,9 @@
     <key>StartInterval</key>
     <integer>60</integer>
 
+    <!-- Wave 206: RunAtLoad=true — скрипт сам early-exit если не enabled -->
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
 
     <key>WorkingDirectory</key>
     <string>/Users/pablito/Antigravity_AGENTS/Краб</string>

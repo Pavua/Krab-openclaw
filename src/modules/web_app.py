@@ -9004,6 +9004,9 @@ class WebApp:
         from .web_routers.swarm_admin_router import (  # noqa: PLC0415
             build_swarm_admin_router,
         )
+        from .web_routers.typing_admin_router import (  # noqa: PLC0415
+            build_typing_admin_router,
+        )
         from .web_routers.voice_admin_router import (  # noqa: PLC0415
             build_voice_admin_router,
         )
@@ -9028,6 +9031,7 @@ class WebApp:
             build_skills_admin_router,  # Wave 198: /admin/skills package browser
             build_silence_admin_router,  # Wave 199: /admin/silence per-chat editor
             build_aliases_admin_router,  # Wave 200: /admin/aliases command aliases
+            build_typing_admin_router,  # Wave 207: /admin/typing indicator metrics
         ):
             try:
                 self.app.include_router(builder(self._make_router_context()))

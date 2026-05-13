@@ -33,7 +33,8 @@
         <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
 
+    <!-- Wave 206: RunAtLoad=true для первого снимка сразу при bootstrap -->
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
 </dict>
 </plist>

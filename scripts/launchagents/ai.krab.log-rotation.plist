@@ -23,8 +23,9 @@
     <key>KeepAlive</key>
     <false/>
 
+    <!-- Wave 206: RunAtLoad=true — log rotation идемпотентна и безопасна на bootstrap -->
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
 
     <key>StandardOutPath</key>
     <string>/tmp/krab_log_rotation.log</string>

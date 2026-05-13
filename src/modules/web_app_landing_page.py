@@ -445,6 +445,12 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>Aliases</h2>
                 <p>Editor алиасов команд: добавить,<br>удалить, conflict-check vs registry.</p>
             </a>
+
+            <a href="/admin/typing" class="card" style="animation-delay: 1.9s;">
+                <div class="emoji">⌨️</div>
+                <h2>Typing</h2>
+                <p>Typing indicator metrics: per-action,<br>FloodWait, duration histogram.</p>
+            </a>
         </div>
 
         <footer>

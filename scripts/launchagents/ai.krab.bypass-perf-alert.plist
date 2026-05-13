@@ -31,8 +31,9 @@
     <key>StartInterval</key>
     <integer>900</integer>
 
+    <!-- Wave 206: RunAtLoad=true для первой проверки сразу при bootstrap (дебаунс защитит от спама) -->
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
 
     <key>WorkingDirectory</key>
     <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
