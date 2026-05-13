@@ -310,10 +310,38 @@ KRAB_VERTEX_REGION=global              # Vertex location
 ## Phase 7 статус
 
 - **Phase 7: 100%**, Memory Phase 2: **LIVE** (`KRAB_RAG_PHASE2_ENABLED=1`)
-- **15141/15264 тестов collected** (Session 48, 13.05.2026)
-- **318 API endpoints** (live: `/api/endpoints`), 181 handlers, 162 registered commands (172+ с алиасами), 42 alerts / 52 metrics
+- **15141/15264 тестов collected** (Session 48, 13–14.05.2026)
+- **380 API endpoints** (live: `/api/endpoints`), 181 handlers, 162 registered commands (172+ с алиасами), 43 alerts / 53 metrics
+- **25+ admin pages** (было 6) — /admin/skills, /silence, /aliases, /typing, /whitelist, /translator, /scheduler, /captcha, /snapshots, /reactions и др.
+- **~70+ commits в Session 48** (13.05 → 14.05.2026, Waves 163 → 225+)
 
 ## Session highlights (последние)
+
+### Session 48 highlights (2026-05-13 → 2026-05-14 — Waves 163 → 225+, ~70+ commits, admin pages massive)
+
+Branch `main`. Сессия admin-панели: 6 → **25+ admin pages**, +20 endpoints (360 → 380),
++1 alert / +1 metric. Параллельная координация с RotorQuant (Wave 221/222/223/225 MLX
+local integration). Wave 143 фактически закрылся в Session 47 — здесь не учитывается.
+
+**Wave 163** — `/api/network/probes` restored с split-brain + Pyrogram метриками.
+**Wave 164–200+** — 14 новых admin pages: skills / silence / aliases / typing / whitelist /
+translator / scheduler / captcha (+ позже snapshots / reactions). Unified pattern: каждая
+страница имеет `/admin/<name>` + `/api/admin/<name>/*` группу.
+**Wave 173** — typing indicator factories (text / voice / photo / document / video).
+**Wave 180** — KrabEar IPC probe fix (deadlock на socket connect).
+**Wave 186** — `/admin/health` unified + ASGITransport pattern для testing.
+**Wave 193** — AGE-17 `subprocess.run` fix (env=clean_subprocess_env() пропускался).
+**Wave 195** — `cron_admin.last_run` fix (был null после рестарта).
+**Wave 196** — nightly-audit launchctl detection (skip если plist отсутствует).
+**Wave 197** — MLX timeout mitigation для slow first-token.
+**Wave 203** — Sentry dSYM upload для KrabEar (symbolicated crashes).
+**Wave 205** — memory leak detector (snapshot diff + top-N allocators).
+**Wave 209** — plist validator (XML well-formedness + required keys).
+**Wave 213** — fix 3 broken plists (missing `KeepAlive` / typos).
+**Wave 217** — pressure-aware select enabled в production (CPU/memory load shaping).
+**Wave 221/222/223/225** — MLX local integration (RotorQuant coordination): Gemma
+`enable_thinking=false` + reasoning fallback, `KRAB_LONG_CONTEXT_PROVIDER` routing
+opt-in, MLX local model id alias module.
 
 ### Session 45 highlights (2026-05-11 → 12 — Waves 62-65, 17 commits, self-healing milestones)
 
