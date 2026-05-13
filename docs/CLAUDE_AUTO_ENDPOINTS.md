@@ -1,4 +1,4 @@
-# Auto-generated endpoints (318 routes)
+# Auto-generated endpoints (349 routes)
 
 **29 routers** в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern.
 Обновлено: auto-refresh (13.05.2026). Live проверить: `GET /api/endpoints`
@@ -6,27 +6,58 @@
 | Endpoint | Метод |
 |----------|-------|
 | `/` | GET |
+| `/admin/commands` | GET |
 | `/admin/costs` | GET |
 | `/admin/cron` | GET |
+| `/admin/db` | GET |
 | `/admin/ecosystem` | GET |
+| `/admin/env` | GET |
+| `/admin/health` | GET |
+| `/admin/help` | GET |
 | `/admin/inbox` | GET |
+| `/admin/logs` | GET |
+| `/admin/memory` | GET |
 | `/admin/models` | GET |
+| `/admin/network` | GET |
 | `/admin/routing` | GET |
 | `/admin/sentry` | GET |
 | `/admin/swarm` | GET |
+| `/admin/voice` | GET |
 | `/api/admin/audit/recent` | GET |
+| `/api/admin/commands/list` | GET |
+| `/api/admin/commands/usage_summary` | GET |
 | `/api/admin/costs/dashboard` | GET |
 | `/api/admin/cron/list` | GET |
 | `/api/admin/cron/{label}/pause` | POST |
 | `/api/admin/cron/{label}/resume` | POST |
 | `/api/admin/cron/{label}/trigger` | POST |
+| `/api/admin/db/list` | GET |
+| `/api/admin/db/{db_name:path}/checkpoint` | POST |
+| `/api/admin/db/{db_name:path}/integrity` | POST |
+| `/api/admin/db/{db_name:path}/tables` | GET |
+| `/api/admin/db/{db_name:path}/vacuum` | POST |
 | `/api/admin/ecosystem/dashboard` | GET |
+| `/api/admin/env/list` | GET |
 | `/api/admin/env/reload` | POST |
+| `/api/admin/health/dashboard` | GET |
+| `/api/admin/help/pages` | GET |
 | `/api/admin/inbox/dashboard` | GET |
+| `/api/admin/logs/download` | GET |
+| `/api/admin/logs/tail` | GET |
+| `/api/admin/memory/recent` | GET |
+| `/api/admin/memory/search` | POST |
+| `/api/admin/memory/stats` | GET |
 | `/api/admin/model/switch` | POST |
+| `/api/admin/network/dns_check` | POST |
+| `/api/admin/network/ping` | POST |
+| `/api/admin/network/status` | GET |
 | `/api/admin/sentry/dashboard` | GET |
 | `/api/admin/sentry/issue/{issue_id}/resolve` | POST |
 | `/api/admin/swarm/dashboard` | GET |
+| `/api/admin/voice/restart_ear` | POST |
+| `/api/admin/voice/restart_gateway` | POST |
+| `/api/admin/voice/status` | GET |
+| `/api/admin/voice/test_tts` | POST |
 | `/api/agent-engine/comparison` | GET |
 | `/api/agent-engine/dispatch-status` | GET |
 | `/api/agent-engine/runs` | GET |

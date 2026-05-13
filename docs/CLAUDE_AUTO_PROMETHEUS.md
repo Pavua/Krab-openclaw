@@ -1,12 +1,12 @@
-# Auto-generated Prometheus (42 алертов, 52 метрик)
+# Auto-generated Prometheus (43 алертов, 53 метрик)
 
 Обновлено: auto-refresh (13.05.2026). Конфиг: `scripts/prometheus/`
 
-## Alerts (42)
+## Alerts (43)
 
-`BackupCorruption`, `CapabilityCacheStale`, `CodexQuotaExhaustedAlert`, `CriticalDependencyVuln`, `CronScheduleStale`, `DiskSpaceCritical`, `DiskSpaceLow`, `FallbackChainExhaustedAlert`, `HandoffExportTimeoutChronic`, `HighHourlyTokenCost`, `HighModerationActivity`, `HighPanelErrorRate`, `KrabArchiveDBLarge`, `KrabArchiveGrowingFast`, `KrabAutoRestartSpiking`, `KrabEarDown`, `KrabInjectionSpike`, `KrabLLMRouteDown`, `KrabMemoryValidatorOverload`, `KrabMetricsStale`, `LLMContextNearCap`, `LMStudioOverloaded`, `LaunchAgentFailed`, `LongChainAdvanceAlert`, `LongSleepDetected`, `MCPServerDown`, `MainDispatcherStarved`, `MemoryRetrievalSlow`, `MultiChatCatchupFailedAlert`, `OpenClawGatewayDown`, `PaidGeminiGuardDisabled`, `ProviderTimeoutHighAlert`, `PyrogramReconnectStorm`, `ResponseSizeAnomalyAlert`, `RouteSwitchHighFrequencyAlert`, `SSLCertExpiringSoon`, `SessionBackupCorrupt`, `SlowMCPTool`, `SmartRoutingHighDenyRate`, `StateSnapshotFailedAlert`, `SwarmTeamProbeStale`, `TelegramRateLimitedExtended`
+`BackupCorruption`, `CapabilityCacheStale`, `CodexQuotaExhaustedAlert`, `CriticalDependencyVuln`, `CronScheduleStale`, `DiskSpaceCritical`, `DiskSpaceLow`, `FallbackChainExhaustedAlert`, `HandoffExportTimeoutChronic`, `HighHourlyTokenCost`, `HighModerationActivity`, `HighPanelErrorRate`, `KrabArchiveDBLarge`, `KrabArchiveGrowingFast`, `KrabAutoRestartSpiking`, `KrabEarDown`, `KrabInjectionSpike`, `KrabLLMRouteDown`, `KrabMemoryValidatorOverload`, `KrabMetricsStale`, `KrabTypingIndicatorFloodWaitHigh`, `LLMContextNearCap`, `LMStudioOverloaded`, `LaunchAgentFailed`, `LongChainAdvanceAlert`, `LongSleepDetected`, `MCPServerDown`, `MainDispatcherStarved`, `MemoryRetrievalSlow`, `MultiChatCatchupFailedAlert`, `OpenClawGatewayDown`, `PaidGeminiGuardDisabled`, `ProviderTimeoutHighAlert`, `PyrogramReconnectStorm`, `ResponseSizeAnomalyAlert`, `RouteSwitchHighFrequencyAlert`, `SSLCertExpiringSoon`, `SessionBackupCorrupt`, `SlowMCPTool`, `SmartRoutingHighDenyRate`, `StateSnapshotFailedAlert`, `SwarmTeamProbeStale`, `TelegramRateLimitedExtended`
 
-## Metrics (52)
+## Metrics (53)
 
 `krab_alerts`,
 `krab_archive_db_size_bytes`,
@@ -58,5 +58,6 @@
 `krab_swarm_probe_ago_seconds`,
 `krab_telegram_rate_limited_active`,
 `krab_tokens_consumed_total`,
+`krab_typing_indicator_floodwait_total`,
 `krab_wave`,
 `krab_wave_`,
