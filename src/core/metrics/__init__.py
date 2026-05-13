@@ -47,6 +47,13 @@ from .memory import (
     record_retrieval_duration,
 )
 
+# === mlx_local_aliases (Wave 225) ===
+from .mlx_local_aliases import (
+    _MLX_LOCAL_ALIAS_COUNTER,
+    _mlx_local_alias_resolved_total,
+    inc_mlx_local_alias_resolved,
+)
+
 # === nlu_intent (Wave 135) ===
 from .nlu_intent import (
     krab_nlu_commands_dispatched_total,
@@ -281,6 +288,10 @@ __all__ = [
     "_MLX_LOCAL_ROUTING_COUNTER",
     "_mlx_local_routing_total",
     "inc_mlx_local_routing",
+    # mlx_local_aliases (Wave 225)
+    "_MLX_LOCAL_ALIAS_COUNTER",
+    "_mlx_local_alias_resolved_total",
+    "inc_mlx_local_alias_resolved",
     # swarm_artifacts (Wave 134)
     "_SWARM_ARTIFACTS_SIZE_MB",
     "_SWARM_ARTIFACTS_TOTAL",

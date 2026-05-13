@@ -232,6 +232,66 @@ def _apply_mlx_disable_thinking(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _resolve_mlx_local_model_in_payload(
+    payload: dict[str, Any],
+    *,
+    base_url: str | None,
+) -> None:
+    """Wave 225: подменить ``payload["model"]`` коротким id на полный путь
+    каталога модели, если запрос уходит на локальный MLX backend.
+
+    `mlx_lm.server` отдаёт в `/v1/models` абсолютный путь до каталога модели
+    (например, `/Volumes/4TB SSD/.../gemma-4-26B-A4B-it-OptiQ-4bit`), и при
+    `model="mlx-local-kv4/gemma-4-26b"` возвращает 404. Резолвер из
+    `src.core.mlx_local_aliases` сопоставляет короткие id с реальными путями.
+
+    Метрика `krab_mlx_local_alias_resolved_total{result}` фиксирует исход:
+    - hit         — alias найден, payload переписан
+    - miss        — backend MLX local, но alias не нашёлся
+    - passthrough — backend не MLX local, alias не применяем
+    """
+    from src.core.metrics.mlx_local_aliases import (  # noqa: PLC0415
+        inc_mlx_local_alias_resolved,
+    )
+    from src.core.mlx_local_aliases import (  # noqa: PLC0415 - lazy import hot-path
+        is_mlx_local_target,
+        resolve_mlx_local_alias,
+    )
+
+    original = payload.get("model")
+    if not isinstance(original, str) or not original:
+        return
+
+    # Если target — не MLX local, resolver вернёт original без подмены.
+    if not is_mlx_local_target(base_url):
+        inc_mlx_local_alias_resolved(result="passthrough")
+        return
+
+    resolved = resolve_mlx_local_alias(original, target_url=base_url)
+    if resolved and resolved != original:
+        payload["model"] = resolved
+        inc_mlx_local_alias_resolved(result="hit")
+        try:
+            logger.debug(
+                "mlx_local_alias_wired",
+                short=original,
+                full=resolved,
+                base_url=base_url,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        inc_mlx_local_alias_resolved(result="miss")
+        try:
+            logger.warning(
+                "mlx_local_alias_missing",
+                model=original,
+                base_url=base_url,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def extract_message_text(
     message_obj: dict[str, Any],
     *,
@@ -2356,7 +2416,10 @@ class OpenClawClient:
         # Wave 221: для MLX local backend (mlx_lm.server :8088) отключаем
         # thinking-режим Gemma, иначе ответ попадает в message.reasoning
         # вместо message.content и Краб видит пустую строку.
+        # Wave 225: до отправки подменяем короткий id модели на полный путь,
+        # который ожидает `mlx_lm.server` (alias-резолвер из mlx_local_aliases).
         if _is_mlx_local_target(base_url=self.base_url, model_id=model_id):
+            _resolve_mlx_local_model_in_payload(payload, base_url=self.base_url)
             _apply_mlx_disable_thinking(payload)
 
         full_response = ""
@@ -2863,8 +2926,11 @@ class OpenClawClient:
                     payload["max_tokens"] = max_output_tokens
                 # Wave 221: если LM_STUDIO_URL смотрит на MLX local :8088
                 # либо модель — `mlx-local-kv4/*`, отключаем thinking.
+                # Wave 225: + alias-резолвер короткий id → полный путь модели
+                # (без этого `mlx_lm.server` отвечает 404 на `model=mlx-local-kv4/*`).
                 _lm_base = str(config.LM_STUDIO_URL or "").rstrip("/")
                 if _is_mlx_local_target(base_url=_lm_base, model_id=_compat_model):
+                    _resolve_mlx_local_model_in_payload(payload, base_url=_lm_base)
                     _apply_mlx_disable_thinking(payload)
                 resp = await client.post("/v1/chat/completions", json=payload)
                 if resp.status_code != 200:
