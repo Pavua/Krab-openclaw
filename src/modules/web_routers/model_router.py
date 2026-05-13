@@ -923,4 +923,118 @@ def build_model_router(ctx: RouterContext) -> APIRouter:
             "available": sum(1 for a in accounts if a.get("available") and a.get("logged_in")),
         }
 
+    # ---------- Wave 249: wire models_admin_router (Wave 244 endpoint) ----
+    # ``models_admin_router`` исторически (Wave 224) не был зарегистрирован
+    # ни в одном из include_router в ``web_app.py`` — из-за этого Wave 244
+    # ``/api/admin/routing-active`` отдавал 404. Подключаем его как
+    # sub-router здесь, чтобы не трогать ``web_app.py`` (composition pattern).
+    try:
+        from .models_admin_router import build_models_admin_router  # noqa: PLC0415
+
+        router.include_router(build_models_admin_router(ctx))
+    except Exception:  # noqa: BLE001  pragma: no cover
+        # graceful: если models_admin_router сломан — model_router всё
+        # равно должен подняться (catalog/apply/status критичнее).
+        pass
+
+    # ---------- Wave 249: GET /admin/models HTML page --------------------
+    # Минимальная страница со встроенной панелью "Куда реально пойдёт
+    # запрос?" — fetch'ит ``/api/admin/routing-active`` каждые 10 секунд
+    # и показывает picked/will_send_to/actually_used breakdown.
+    #
+    # Полный model picker UI остаётся за Wave 144 (отдельные страницы);
+    # этот route отдаёт лёгкий standalone debug панель.
+    @router.get("/admin/models")
+    async def admin_models_page() -> Any:
+        """Wave 249: страница transparency-панели routing.
+
+        Read-only HTML — auth не требуется (как и сам endpoint). Polling
+        каждые 10 секунд через fetch к ``/api/admin/routing-active``.
+
+        DOM construction идёт через ``textContent`` (без innerHTML), чтобы
+        исключить XSS даже при компрометации /api/admin/routing-active.
+        """
+        from fastapi.responses import HTMLResponse  # noqa: PLC0415
+
+        html = """<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"/>
+<title>Krab — Admin Models / Routing Transparency</title>
+<style>
+ body{font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;margin:0;padding:24px;background:#0e0f12;color:#e6e6e6;}
+ h1{margin:0 0 8px;font-size:20px;}
+ .sub{color:#888;margin-bottom:24px;}
+ .panel{background:#16181d;border:1px solid #2a2d35;border-radius:8px;padding:16px;margin-bottom:16px;}
+ .panel h2{margin:0 0 12px;font-size:15px;color:#7fb3ff;}
+ .row{display:flex;gap:8px;margin:4px 0;}
+ .k{color:#888;min-width:140px;}
+ .v{color:#e6e6e6;font-family:ui-monospace,monospace;word-break:break-all;}
+ .warn{color:#ffb454;background:#2a2117;padding:8px 12px;border-left:3px solid #ffb454;margin:6px 0;border-radius:4px;}
+ .ok{color:#7fff7f;} .err{color:#ff7f7f;}
+ .stamp{color:#555;font-size:12px;margin-top:8px;}
+</style></head>
+<body>
+<h1>Куда реально пойдёт запрос?</h1>
+<div class="sub">Wave 249 transparency panel — refresh каждые 10 секунд.</div>
+<div id="root">Загрузка...</div>
+<script>
+function el(tag, cls, text){
+  var e = document.createElement(tag);
+  if(cls) e.className = cls;
+  if(text !== undefined && text !== null) e.textContent = String(text);
+  return e;
+}
+function row(parent, k, v){
+  var r = el('div','row');
+  r.appendChild(el('div','k', k));
+  r.appendChild(el('div','v', (v===null||v===undefined||v==='') ? '—' : v));
+  parent.appendChild(r);
+}
+function panel(title){
+  var p = el('div','panel');
+  p.appendChild(el('h2', null, title));
+  return p;
+}
+function render(d){
+  var root = document.getElementById('root');
+  while(root.firstChild) root.removeChild(root.firstChild);
+  if(!d.ok){
+    var er = el('div','panel err','Ошибка: '+(d.error||'unknown'));
+    root.appendChild(er);
+    return;
+  }
+  var p = d.picked||{}, w = d.will_send_to||{}, a = d.actually_used||{};
+  var p1 = panel('1. Picked (owner choice via /admin/models)');
+  row(p1,'model', p.model); row(p1,'switched_by', p.switched_by);
+  row(p1,'switched_at', p.switched_at); row(p1,'reason', p.reason);
+  root.appendChild(p1);
+  var p2 = panel('2. Will send to (Krab HTTP resolve)');
+  row(p2,'resolution', w.resolution); row(p2,'backend_kind', w.backend_kind);
+  row(p2,'backend_url', w.backend_url); row(p2,'note', w.note);
+  root.appendChild(p2);
+  var p3 = panel('3. Actually used (last LLM call)');
+  row(p3,'model', a.model); row(p3,'provider', a.provider);
+  row(p3,'channel', a.channel); row(p3,'status', a.status); row(p3,'at', a.at);
+  root.appendChild(p3);
+  (d.warnings||[]).forEach(function(t){
+    root.appendChild(el('div','warn', t));
+  });
+  root.appendChild(el('div','stamp','Обновлено: '+ new Date().toISOString()));
+}
+async function refresh(){
+  try{
+    var r = await fetch('/api/admin/routing-active', {cache:'no-store'});
+    var d = await r.json();
+    render(d);
+  }catch(e){
+    var root = document.getElementById('root');
+    while(root.firstChild) root.removeChild(root.firstChild);
+    root.appendChild(el('div','panel err','Fetch failed: '+e));
+  }
+}
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body></html>"""
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
     return router

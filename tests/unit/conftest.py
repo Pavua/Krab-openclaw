@@ -180,6 +180,19 @@ def _isolate_persistent_runtime_state(
     except Exception:  # noqa: BLE001
         pass
 
+    # 7. Wave 246: active_model.json — production file owner Primary choice.
+    # Hot-path `_openclaw_completion_once` теперь читает его как fallback'у
+    # источник правды. На dev машине файл существует с реальным выбором
+    # owner'а — unit-тесты, которые мокают только ``get_best_model``, увидят
+    # реальный active_id и сломают assertion'ы. Redirect модуль-level
+    # `_ACTIVE_MODEL_PATH` на пустой tmp file.
+    try:
+        from src.core import active_model_routing as _amr
+
+        monkeypatch.setattr(_amr, "_ACTIVE_MODEL_PATH", tmp_root / "active_model.json")
+    except Exception:  # noqa: BLE001
+        pass
+
     yield
 
     # Post-test: ещё раз чистим LRU чтобы следующий test видел пустой cache
