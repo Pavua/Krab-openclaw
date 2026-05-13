@@ -589,4 +589,5 @@ LLM analyzer читает swarm_artifacts/ + текущий prompt → пред�
 - `.remember/next_session.md` — handoff следующей сессии
 - `docs/SMART_ROUTING_DESIGN.md` — Smart Routing spec (319 LOC)
 - `docs/CHERRY_STUDIO_SETUP.md` — конфигурация Cherry Studio (3 backends)
+- `docs/CHERRY_STUDIO_MCP_SETUP.md` — Cherry Studio native MCP integration (Wave 238)
 - Memory: `~/.claude/projects/-Users-pablito-Antigravity-AGENTS-----/memory/`

@@ -8986,6 +8986,9 @@ class WebApp:
         from .web_routers.logs_admin_router import (  # noqa: PLC0415
             build_logs_admin_router,
         )
+        from .web_routers.mcp_gateway_router import (  # noqa: PLC0415
+            build_mcp_gateway_router,
+        )
         from .web_routers.memory_admin_router import (  # noqa: PLC0415
             build_memory_admin_router,
         )
@@ -9060,6 +9063,7 @@ class WebApp:
             build_snapshots_admin_router,  # Wave 226: /admin/snapshots browser
             build_reactions_admin_router,  # Wave 227: /admin/reactions rules editor
             build_spawn_admin_router,  # Wave 234: /admin/spawn quick task spawner
+            build_mcp_gateway_router,  # Wave 236: MCP gateway (Cherry Studio)
         ):
             try:
                 self.app.include_router(builder(self._make_router_context()))

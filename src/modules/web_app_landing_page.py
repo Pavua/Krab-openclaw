@@ -493,6 +493,12 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>Spawn</h2>
                 <p>Quick task spawner:<br>backend selector + history.</p>
             </a>
+
+            <a href="/admin/mcp" class="card" style="animation-delay: 2.7s;">
+                <div class="emoji">🔌</div>
+                <h2>MCP Gateway</h2>
+                <p>Krab tools как MCP server<br>(Cherry Studio / IDE / Claude Desktop).</p>
+            </a>
         </div>
 
         <footer>
