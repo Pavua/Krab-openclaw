@@ -464,7 +464,9 @@ def build_voice_admin_router(ctx: RouterContext) -> APIRouter:
             voice_gateway = {"alive": False, "error": str(exc)}
 
         try:
-            krab_ear = _collect_krab_ear_state()
+            # AGE-17 fix: _collect_krab_ear_state делает pgrep subprocess.run —
+            # выносим в threadpool чтобы не блокировать event loop (Wave 193).
+            krab_ear = await asyncio.to_thread(_collect_krab_ear_state)
         except Exception as exc:  # noqa: BLE001
             _logger.error("voice_admin.ear_state_failed", error=str(exc))
             krab_ear = {"installed": None, "error": str(exc)}
@@ -504,7 +506,8 @@ def build_voice_admin_router(ctx: RouterContext) -> APIRouter:
         ctx.assert_write_access_fn(x_krab_web_key, token)
         label = _RESTART_LABELS["gateway"]
         uid = os.getuid()
-        result = _run_launchctl(["kickstart", "-k", f"gui/{uid}/{label}"])
+        # AGE-17 fix: launchctl subprocess.run в threadpool (Wave 193).
+        result = await asyncio.to_thread(_run_launchctl, ["kickstart", "-k", f"gui/{uid}/{label}"])
         _logger.info(
             "voice_admin.restart_gateway",
             label=label,
@@ -528,7 +531,8 @@ def build_voice_admin_router(ctx: RouterContext) -> APIRouter:
         ctx.assert_write_access_fn(x_krab_web_key, token)
         label = _RESTART_LABELS["ear"]
         uid = os.getuid()
-        result = _run_launchctl(["kickstart", "-k", f"gui/{uid}/{label}"])
+        # AGE-17 fix: launchctl subprocess.run в threadpool (Wave 193).
+        result = await asyncio.to_thread(_run_launchctl, ["kickstart", "-k", f"gui/{uid}/{label}"])
         _logger.info(
             "voice_admin.restart_ear",
             label=label,

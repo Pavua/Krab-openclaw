@@ -18,6 +18,7 @@ Endpoints (READY):
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -308,7 +309,9 @@ def build_help_admin_router(ctx: RouterContext) -> APIRouter:  # noqa: ARG001
             "ok": True,
             "count": len(_ADMIN_PAGES),
             "pages": _ADMIN_PAGES,
-            "recent_waves": _git_recent_waves(limit=10),
+            # AGE-17 fix: _git_recent_waves вызывает subprocess.run —
+            # выносим в threadpool (Wave 193).
+            "recent_waves": await asyncio.to_thread(_git_recent_waves, limit=10),
         }
 
     # ── GET /admin/help — HTML index page ───────────────────────────────────
