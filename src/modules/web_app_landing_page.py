@@ -391,6 +391,18 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>Network</h2>
                 <p>MTProto session, DC, heartbeat, FloodWait,<br>ping и DNS-диагностика.</p>
             </a>
+
+            <a href="/admin/voice" class="card" style="animation-delay: 1.0s;">
+                <div class="emoji">🎙️</div>
+                <h2>Voice</h2>
+                <p>TTS state, Voice Gateway, Krab Ear,<br>STT cost и restart actions.</p>
+            </a>
+
+            <a href="/admin/memory" class="card" style="animation-delay: 1.1s;">
+                <div class="emoji">🧠</div>
+                <h2>Memory</h2>
+                <p>RAG: archive.db rows, vec health,<br>retrieval metrics и search interface.</p>
+            </a>
         </div>
 
         <footer>

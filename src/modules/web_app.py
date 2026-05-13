@@ -8965,6 +8965,9 @@ class WebApp:
         from .web_routers.logs_admin_router import (  # noqa: PLC0415
             build_logs_admin_router,
         )
+        from .web_routers.memory_admin_router import (  # noqa: PLC0415
+            build_memory_admin_router,
+        )
         from .web_routers.models_admin_router import (  # noqa: PLC0415
             build_models_admin_router,
         )
@@ -8976,6 +8979,9 @@ class WebApp:
         )
         from .web_routers.swarm_admin_router import (  # noqa: PLC0415
             build_swarm_admin_router,
+        )
+        from .web_routers.voice_admin_router import (  # noqa: PLC0415
+            build_voice_admin_router,
         )
 
         for builder in (
@@ -8989,6 +8995,8 @@ class WebApp:
             build_logs_admin_router,
             build_db_admin_router,
             build_network_admin_router,  # Wave 179: /admin/network
+            build_voice_admin_router,  # Wave 183: /admin/voice
+            build_memory_admin_router,  # Wave 184: /admin/memory
         ):
             try:
                 self.app.include_router(builder(self._make_router_context()))
