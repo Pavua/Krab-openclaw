@@ -176,7 +176,31 @@ cp -r ~/Library/Application\ Support/CherryStudio ~/cherry_studio_backup_$(date 
 - **Context window:** MLX OptiQ — 128k, LM Studio Gemma-4-e4b — 32k, OpenClaw → зависит от routed модели (Gemini 3 Pro = 2M).
 - **Tool-call формат:** OpenClaw возвращает в OpenAI tool_calls schema, Cherry Studio парсит корректно. Direct backend'ы — нет.
 
-## 8. Troubleshooting checklist
+## 8. Helper-скрипт (Wave 242)
+
+Если лень руками всё прописывать — есть генератор:
+
+```bash
+# Опросить все 3 backend и показать таблицу моделей
+venv/bin/python scripts/krab_cherry_studio_helper.py --list-all-models
+
+# Сгенерировать JSON snippet для Cherry Studio (4 провайдера) и сохранить
+venv/bin/python scripts/krab_cherry_studio_helper.py --export-cherry-config
+
+# С кастомным путём
+venv/bin/python scripts/krab_cherry_studio_helper.py --export-cherry-config \
+    --save-to ~/Desktop/cherry.json
+```
+
+Что делает:
+- Опрашивает `:1234/v1/models` (LM Studio), `:8088/v1/models` (MLX direct), `:18789/v1/models` (OpenClaw).
+- Формирует Cherry Studio-friendly JSON с 4 провайдерами: **Krab MCP Gateway**, **MLX Direct**, **LM Studio Sync**, **OpenClaw Smart**.
+- Дефолтный save path: `~/.openclaw/krab_runtime_state/cherry_studio_config.json`.
+- Если backend оффлайн — помечается как `offline:<ErrType>`, скрипт не падает.
+
+В Cherry Studio: открой JSON → скопируй секцию providers[N] → Add Custom Provider → вставь поля вручную. Для **LM Studio Sync** Cherry Studio умеет **Sync** кнопку — она подтянет все 80+ моделей автоматически (выгоднее чем ручной ввод каждой).
+
+## 9. Troubleshooting checklist
 
 1. Endpoint отвечает на `curl /v1/models`?
 2. API key прописан корректно (без trailing whitespace)?

@@ -92,9 +92,28 @@ def _load_env_aliases() -> dict[str, str]:
 
 
 def get_alias_map() -> dict[str, str]:
-    """Возвращает effective alias-map: defaults + ENV override (ENV приоритет)."""
+    """Возвращает effective alias-map: defaults + ENV override (ENV приоритет).
+
+    Wave 240: дополнительно merge'им discovery aliases (live :8088 → full
+    paths). Discovery вызывается lazy: если модуль discovery недоступен или
+    падает — silent fallback к defaults+ENV (старое поведение).
+    """
     merged = dict(_DEFAULT_ALIASES)
     merged.update(_load_env_aliases())
+    # Wave 240: late-bind discovery, чтобы избежать circular import.
+    # Discovery сам имеет cache 30s, так что вызов дёшев.
+    try:
+        from src.core.mlx_local_discovery import (  # noqa: PLC0415
+            discover_mlx_local_models,
+        )
+
+        for entry in discover_mlx_local_models():
+            short = entry.get("id")
+            full = entry.get("full_path")
+            if short and full:
+                merged[short] = full
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("mlx_local_aliases_discovery_skipped", error=str(exc))
     return merged
 
 
