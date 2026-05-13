@@ -2413,13 +2413,31 @@ class OpenClawClient:
             # Совместимый лимит длины ответа для OpenAI-совместимых /v1/chat/completions.
             payload["max_tokens"] = max_output_tokens
 
+        # Wave 230: если оператор через `/admin/models` выбрал primary модель,
+        # перенаправляем запрос на соответствующий backend (mlx-local-kv4/* → :8088,
+        # openclaw/* → gateway, прочее → текущий cloud). Если ничего не выбрано —
+        # remains как было (gateway + payload["model"]="openclaw").
+        from src.core.active_model_routing import (  # noqa: PLC0415 - lazy
+            get_active_model_id,
+            resolve_active_target,
+        )
+
+        _request_base_url = self.base_url
+        _active_model = get_active_model_id()
+        if _active_model:
+            _request_base_url, _override_model = resolve_active_target(
+                default_base_url=self.base_url,
+                default_model=str(payload.get("model") or "openclaw"),
+            )
+            payload["model"] = _override_model
+
         # Wave 221: для MLX local backend (mlx_lm.server :8088) отключаем
         # thinking-режим Gemma, иначе ответ попадает в message.reasoning
         # вместо message.content и Краб видит пустую строку.
         # Wave 225: до отправки подменяем короткий id модели на полный путь,
         # который ожидает `mlx_lm.server` (alias-резолвер из mlx_local_aliases).
-        if _is_mlx_local_target(base_url=self.base_url, model_id=model_id):
-            _resolve_mlx_local_model_in_payload(payload, base_url=self.base_url)
+        if _is_mlx_local_target(base_url=_request_base_url, model_id=model_id):
+            _resolve_mlx_local_model_in_payload(payload, base_url=_request_base_url)
             _apply_mlx_disable_thinking(payload)
 
         full_response = ""
@@ -2478,7 +2496,8 @@ class OpenClawClient:
                 request_id=_extra_headers.get("X-Request-ID") if _extra_headers else None,
             ):
                 response = await self._http_client.post(
-                    f"{self.base_url}/v1/chat/completions",
+                    # Wave 230: target URL может быть overridden на mlx-local :8088.
+                    f"{_request_base_url}/v1/chat/completions",
                     json=payload,
                     timeout=request_timeout,
                     headers=_extra_headers,
