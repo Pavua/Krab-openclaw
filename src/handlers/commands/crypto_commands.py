@@ -162,18 +162,29 @@ async def handle_qr(bot: "KraabUserbot", message: Message) -> None:
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="krab_qr_")
     os.close(tmp_fd)
 
+    # Wave 204: «Краб загружает фото...» на время генерации QR + аплоада.
     try:
-        qr = segno.make(text, error="m")
-        # scale=10 → ~350px при версии 1; border=4 — стандартный quiet zone
-        qr.save(tmp_path, kind="png", scale=10, border=4)
+        from ...userbot.typing_indicator import uploading_photo  # noqa: PLC0415
 
-        caption = f"📷 QR: `{text[:80]}{'...' if len(text) > 80 else ''}`"
-        await bot.client.send_photo(
-            chat_id=message.chat.id,
-            photo=tmp_path,
-            caption=caption,
-            reply_to_message_id=message.id,
-        )
+        _photo_indicator_cm: Any = uploading_photo(bot.client, message.chat.id)
+    except Exception:  # noqa: BLE001
+        from contextlib import nullcontext  # noqa: PLC0415
+
+        _photo_indicator_cm = nullcontext()
+
+    try:
+        async with _photo_indicator_cm:
+            qr = segno.make(text, error="m")
+            # scale=10 → ~350px при версии 1; border=4 — стандартный quiet zone
+            qr.save(tmp_path, kind="png", scale=10, border=4)
+
+            caption = f"📷 QR: `{text[:80]}{'...' if len(text) > 80 else ''}`"
+            await bot.client.send_photo(
+                chat_id=message.chat.id,
+                photo=tmp_path,
+                caption=caption,
+                reply_to_message_id=message.id,
+            )
     finally:
         # Удаляем временный файл в любом случае
         if os.path.exists(tmp_path):

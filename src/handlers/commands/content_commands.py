@@ -15,7 +15,7 @@ import datetime
 import json
 import pathlib
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pyrogram.types import Message
 
@@ -559,12 +559,23 @@ async def handle_media(bot: "object", message: Message) -> None:
             size_str = f"{sz / 1024:.1f} МБ" if sz >= 1024 else f"{sz:.1f} КБ"
             caption = f"📥 `{file_name}` · {size_str}"
 
-            await bot.client.send_document(
-                message.chat.id,
-                str(tmp_path),
-                caption=caption,
-                reply_to_message_id=message.id,
-            )
+            # Wave 204: «загружает файл...» на время uploadа.
+            try:
+                from ...userbot.typing_indicator import uploading_document  # noqa: PLC0415
+
+                _doc_indicator_cm: Any = uploading_document(bot.client, message.chat.id)
+            except Exception:  # noqa: BLE001
+                from contextlib import nullcontext  # noqa: PLC0415
+
+                _doc_indicator_cm = nullcontext()
+
+            async with _doc_indicator_cm:
+                await bot.client.send_document(
+                    message.chat.id,
+                    str(tmp_path),
+                    caption=caption,
+                    reply_to_message_id=message.id,
+                )
             try:
                 await status_msg.delete()
             except Exception:  # noqa: BLE001
@@ -1460,12 +1471,23 @@ async def handle_backup(bot: "object", message: Message) -> None:
             if skipped:
                 caption_lines.append(f"Пропущено (нет): {', '.join(skipped)}")
 
-            await bot.client.send_document(
-                chat_id=message.chat.id,
-                document=str(archive_path),
-                caption="\n".join(caption_lines),
-                reply_to_message_id=message.id,
-            )
+            # Wave 204: «загружает файл...» на время отправки backup.
+            try:
+                from ...userbot.typing_indicator import uploading_document  # noqa: PLC0415
+
+                _bkp_indicator_cm: Any = uploading_document(bot.client, message.chat.id)
+            except Exception:  # noqa: BLE001
+                from contextlib import nullcontext  # noqa: PLC0415
+
+                _bkp_indicator_cm = nullcontext()
+
+            async with _bkp_indicator_cm:
+                await bot.client.send_document(
+                    chat_id=message.chat.id,
+                    document=str(archive_path),
+                    caption="\n".join(caption_lines),
+                    reply_to_message_id=message.id,
+                )
             await status_msg.delete()
 
     except Exception as exc:  # noqa: BLE001

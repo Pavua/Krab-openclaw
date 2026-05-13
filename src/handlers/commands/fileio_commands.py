@@ -226,13 +226,24 @@ async def handle_paste(bot: "KraabUserbot", message: Message) -> None:
     tmpdir.mkdir(parents=True, exist_ok=True)
     filepath = tmpdir / filename
 
+    # Wave 204: «загружает файл...» на время аплоада.
+    try:
+        from ...userbot.typing_indicator import uploading_document  # noqa: PLC0415
+
+        _paste_indicator_cm: Any = uploading_document(bot.client, message.chat.id)
+    except Exception:  # noqa: BLE001
+        from contextlib import nullcontext  # noqa: PLC0415
+
+        _paste_indicator_cm = nullcontext()
+
     try:
         filepath.write_text(text, encoding="utf-8")
-        await bot.client.send_document(
-            message.chat.id,
-            str(filepath),
-            caption="📋 Paste",
-        )
+        async with _paste_indicator_cm:
+            await bot.client.send_document(
+                message.chat.id,
+                str(filepath),
+                caption="📋 Paste",
+            )
     except (OSError, IOError) as e:
         await message.reply(f"❌ Ошибка создания paste: {e}")
     finally:
@@ -313,15 +324,26 @@ async def handle_export(bot: "KraabUserbot", message: Message) -> None:
         await status_msg.edit(f"❌ Ошибка записи файла: {str(exc)[:200]}")
         return
 
+    # Wave 204: «загружает файл...» на время отправки экспорта.
+    try:
+        from ...userbot.typing_indicator import uploading_document  # noqa: PLC0415
+
+        _exp_indicator_cm: Any = uploading_document(bot.client, chat_id)
+    except Exception:  # noqa: BLE001
+        from contextlib import nullcontext  # noqa: PLC0415
+
+        _exp_indicator_cm = nullcontext()
+
     # Отправляем файл в чат
     try:
-        await bot.client.send_document(
-            chat_id=chat_id,
-            document=str(file_path),
-            caption=(
-                f"📄 Экспорт чата «{chat_title}»\nСообщений: {len(raw_msgs)}\nФайл: `{filename}`"
-            ),
-        )
+        async with _exp_indicator_cm:
+            await bot.client.send_document(
+                chat_id=chat_id,
+                document=str(file_path),
+                caption=(
+                    f"📄 Экспорт чата «{chat_title}»\nСообщений: {len(raw_msgs)}\nФайл: `{filename}`"
+                ),
+            )
         await status_msg.delete()
     except Exception as exc:
         logger.exception("handle_export: ошибка отправки документа")
