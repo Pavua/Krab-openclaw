@@ -1,12 +1,13 @@
-# Auto-generated endpoints (360 routes)
+# Auto-generated endpoints (380 routes)
 
 **29 routers** в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern.
-Обновлено: auto-refresh (13.05.2026). Live проверить: `GET /api/endpoints`
+Обновлено: auto-refresh (14.05.2026). Live проверить: `GET /api/endpoints`
 
 | Endpoint | Метод |
 |----------|-------|
 | `/` | GET |
 | `/admin/aliases` | GET |
+| `/admin/captcha` | GET |
 | `/admin/commands` | GET |
 | `/admin/costs` | GET |
 | `/admin/cron` | GET |
@@ -21,15 +22,25 @@
 | `/admin/models` | GET |
 | `/admin/network` | GET |
 | `/admin/routing` | GET |
+| `/admin/scheduler` | GET |
 | `/admin/sentry` | GET |
 | `/admin/silence` | GET |
 | `/admin/skills` | GET |
 | `/admin/swarm` | GET |
+| `/admin/translator` | GET |
+| `/admin/typing` | GET |
 | `/admin/voice` | GET |
+| `/admin/whitelist` | GET |
 | `/api/admin/aliases/add` | POST |
 | `/api/admin/aliases/list` | GET |
 | `/api/admin/aliases/remove` | POST |
 | `/api/admin/audit/recent` | GET |
+| `/api/admin/captcha/ban/{user_id}` | POST |
+| `/api/admin/captcha/list` | GET |
+| `/api/admin/captcha/reset/{chat_id}` | POST |
+| `/api/admin/captcha/unban/{user_id}` | POST |
+| `/api/admin/captcha/whitelist/add` | POST |
+| `/api/admin/captcha/whitelist/remove` | POST |
 | `/api/admin/commands/list` | GET |
 | `/api/admin/commands/usage_summary` | GET |
 | `/api/admin/costs/dashboard` | GET |
@@ -57,6 +68,8 @@
 | `/api/admin/network/dns_check` | POST |
 | `/api/admin/network/ping` | POST |
 | `/api/admin/network/status` | GET |
+| `/api/admin/scheduler/cancel/{record_id}` | POST |
+| `/api/admin/scheduler/list` | GET |
 | `/api/admin/sentry/dashboard` | GET |
 | `/api/admin/sentry/issue/{issue_id}/resolve` | POST |
 | `/api/admin/silence/add` | POST |
@@ -65,10 +78,17 @@
 | `/api/admin/skills/list` | GET |
 | `/api/admin/skills/{name}/curator_reports` | GET |
 | `/api/admin/swarm/dashboard` | GET |
+| `/api/admin/translator/state` | GET |
+| `/api/admin/typing/stats` | GET |
 | `/api/admin/voice/restart_ear` | POST |
 | `/api/admin/voice/restart_gateway` | POST |
 | `/api/admin/voice/status` | GET |
 | `/api/admin/voice/test_tts` | POST |
+| `/api/admin/whitelist/add_user` | POST |
+| `/api/admin/whitelist/block_chat` | POST |
+| `/api/admin/whitelist/list` | GET |
+| `/api/admin/whitelist/remove_user` | POST |
+| `/api/admin/whitelist/unblock_chat` | POST |
 | `/api/agent-engine/comparison` | GET |
 | `/api/agent-engine/dispatch-status` | GET |
 | `/api/agent-engine/runs` | GET |
