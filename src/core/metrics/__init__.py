@@ -29,6 +29,13 @@ from .google_bypass import (
     record_google_bypass_call,
 )
 
+# === long_context_routing (Wave 223) ===
+from .long_context_routing import (
+    _MLX_LOCAL_ROUTING_COUNTER,
+    _mlx_local_routing_total,
+    inc_mlx_local_routing,
+)
+
 # === memory (Wave 22 + Wave 74 retrieval) ===
 from .memory import (
     _memory_retrieval_duration_seconds,
@@ -270,6 +277,10 @@ __all__ = [
     "_PRESSURE_AWARE_FALLBACK_COUNTER",
     "_pressure_aware_fallback_total",
     "inc_pressure_aware_fallback",
+    # long_context_routing (Wave 223)
+    "_MLX_LOCAL_ROUTING_COUNTER",
+    "_mlx_local_routing_total",
+    "inc_mlx_local_routing",
     # swarm_artifacts (Wave 134)
     "_SWARM_ARTIFACTS_SIZE_MB",
     "_SWARM_ARTIFACTS_TOTAL",

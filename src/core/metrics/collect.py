@@ -529,6 +529,22 @@ def collect_metrics() -> str:
     except Exception:  # noqa: BLE001
         pass
 
+    # === Wave 223: long-context routing decisions (MLX local) ===
+    try:
+        from .long_context_routing import _MLX_LOCAL_ROUTING_COUNTER
+
+        if _MLX_LOCAL_ROUTING_COUNTER:
+            lines.append(
+                "# HELP krab_mlx_local_routing_total Wave 223: routing decisions to local MLX (long context / task type)"
+            )
+            lines.append("# TYPE krab_mlx_local_routing_total counter")
+            for reason, cnt in _MLX_LOCAL_ROUTING_COUNTER.items():
+                lines.append(
+                    f'krab_mlx_local_routing_total{{reason="{_sanitize_label(reason)}"}} {cnt}'
+                )
+    except Exception:  # noqa: BLE001
+        pass
+
     # === Wave 121: Telegram FloodWait Gauge (refresh expired + render) ===
     try:
         from .telegram_rate import refresh_telegram_rate_limited_active
