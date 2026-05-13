@@ -25,6 +25,8 @@ Endpoint'ы:
 - GET  /api/models/registry        — provider-grouped реестр + health.
 - POST /api/admin/model/switch     — body ``{provider, model}``; auth через
                                      ``ctx.assert_write_access``.
+- POST /api/admin/model/test_ping  — Wave 232: реальный probe (latency,
+                                     tokens/sec, reasoning fallback).
 - GET  /admin/models                — HTML страница (inline).
 
 Контракт ``/api/models/registry``::
@@ -69,13 +71,53 @@ Endpoint'ы:
 
 from __future__ import annotations
 
+import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Body, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from ._context import RouterContext
+
+# Wave 232 (replay of deferred Wave 224): real probe endpoint POST
+# /api/admin/model/test_ping — посылает реальный chat-completion запрос
+# `{"role":"user","content":"ping"}, max_tokens=5` и возвращает latency,
+# tokens/sec, response preview. Реюзает helpers из openclaw_client
+# (_is_mlx_local_target, _apply_mlx_disable_thinking, extract_message_text,
+# _resolve_mlx_local_model_in_payload — Wave 221/222/225) — не дублируем.
+
+# Дефолтные URL'ы бэкендов по провайдерам. mlx-local-kv4 ходит напрямую
+# в `mlx_lm.server` :8088; всё остальное — через OpenClaw Gateway :18789
+# (он сам маршрутизирует через agents.defaults). Можно override env'ом
+# `KRAB_TEST_PING_<PROVIDER>_URL` (provider id с заменой `-` → `_`).
+_DEFAULT_MLX_LOCAL_URL = "http://127.0.0.1:8088"
+
+
+def _resolve_backend_url_for_provider(provider_id: str) -> str:
+    """Возвращает базовый URL backend'а для test_ping.
+
+    Логика:
+    - ENV ``KRAB_TEST_PING_<PROVIDER>_URL`` (provider id uppercased + `_`) —
+      приоритет, любая модель этого провайдера пойдёт туда.
+    - ``mlx-local-kv4`` → ``MLX_LOCAL_KV4_URL`` env или ``:8088``.
+    - Иначе — gateway ``config.OPENCLAW_URL`` (gateway сам разруливает routing).
+    """
+    pid = (provider_id or "").strip().lower()
+    env_key = "KRAB_TEST_PING_" + pid.upper().replace("-", "_") + "_URL"
+    override = (os.getenv(env_key) or "").strip()
+    if override:
+        return override.rstrip("/")
+    if pid == "mlx-local-kv4":
+        return (os.getenv("MLX_LOCAL_KV4_URL") or _DEFAULT_MLX_LOCAL_URL).rstrip("/")
+    # Cloud / CLI провайдеры — через Gateway. Импорт лениво чтобы тесты могли
+    # patch'ить config.OPENCLAW_URL до создания клиента.
+    from src.config import config as _cfg
+
+    return str(getattr(_cfg, "OPENCLAW_URL", "http://127.0.0.1:18789")).rstrip("/")
+
 
 # ── Static provider/model catalog ───────────────────────────────────────────
 
@@ -441,6 +483,36 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
                 _mm.set_provider(lowered)
                 action = "set_provider"
             switch_success = True
+
+            # Wave 230: фиксируем выбор в `active_model.json` + Prometheus
+            # counter. Этот файл читается OpenClawClient на каждый запрос
+            # (TTL 30s) и определяет, идём ли мы в gateway или в MLX :8088.
+            # set_provider (auto/local/cloud) не пишем — это режим, а не
+            # конкретная модель; routing активируется только для set_model.
+            if model:
+                try:
+                    from src.core.active_model_routing import (  # noqa: PLC0415
+                        set_active_model,
+                    )
+                    from src.core.metrics.active_model_routing import (  # noqa: PLC0415
+                        inc_active_model_switch,
+                    )
+
+                    set_active_model(model, by=by, reason=reason or action)
+                    inc_active_model_switch(
+                        from_model=previous_model or "-",
+                        to_model=model,
+                    )
+                except Exception as _exc:  # noqa: BLE001 - best-effort persist
+                    # Не валим switch если запись упала: state в model_manager
+                    # уже обновлён через _mm.set_model выше.
+                    import structlog as _structlog  # noqa: PLC0415
+
+                    _structlog.get_logger(__name__).warning(
+                        "active_model_persist_failed",
+                        model=model,
+                        error=str(_exc),
+                    )
         except ValueError as exc:
             # Wave 145: даже при failure пишем в history для диагностики.
             _log_history_entry(
@@ -482,6 +554,209 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
             "provider": provider,
             "model": model,
             "active": active,
+        }
+
+    # ---------- POST /api/admin/model/test_ping -------------------------------
+    @router.post("/api/admin/model/test_ping")
+    async def admin_model_test_ping(
+        payload: dict = Body(default_factory=dict),
+        model_id_q: str = Query(default="", alias="model_id"),
+        x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        token: str = Query(default=""),
+    ) -> dict[str, Any]:
+        """Wave 232: реальный probe — посылает `ping` в backend модели.
+
+        Контракт:
+        - Body ``{"model_id": "<full id>"}`` или query ``?model_id=...``.
+        - Резолвит провайдера по prefix, выбирает backend URL (mlx-local → :8088,
+          остальное — Gateway). Применяет MLX alias + ``enable_thinking=false``
+          через существующие helpers из ``openclaw_client``.
+        - Отправляет `messages=[user:"ping"], max_tokens=5`, ждёт ответ,
+          измеряет latency и оценивает tokens / tokens-per-sec.
+        - Возвращает ``{ok, model_id, resolved_url, resolved_model, latency_ms,
+          response_chars, response_preview, tokens_estimated,
+          tokens_per_sec_estimated, used_reasoning_fallback}``.
+        - На ошибках backend возвращает HTTP 500 c ``stage`` ∈
+          {connect, http_error, parse}.
+        """
+        ctx.assert_write_access(x_krab_web_key, token)
+
+        # Резолв model_id (body приоритет, fallback на query).
+        model_id = str(payload.get("model_id") or "").strip()
+        if not model_id and model_id_q:
+            model_id = str(model_id_q).strip()
+        if not model_id:
+            raise HTTPException(status_code=400, detail="model_id_required")
+
+        # Provider lookup. mlx-local-kv4 — по prefix; для остальных матчим по
+        # known prefixes в _CLOUD_PROVIDERS. Если ни одно не совпало — 500
+        # unsupported_provider (по спеке).
+        provider_id = ""
+        if "/" in model_id:
+            prefix = model_id.split("/", 1)[0]
+            known_prefixes = {p["id"] for p in _CLOUD_PROVIDERS}
+            if prefix in known_prefixes:
+                provider_id = prefix
+        if not provider_id:
+            raise HTTPException(
+                status_code=500,
+                detail=f"unsupported_provider:{model_id}",
+            )
+
+        # Импортируем helpers лениво (chunk imports — паттерн всего файла).
+        from src.core.logger import get_logger as _get_logger
+        from src.openclaw_client import (
+            _apply_mlx_disable_thinking,
+            _is_mlx_local_target,
+            _resolve_mlx_local_model_in_payload,
+            extract_message_text,
+        )
+
+        _logger = _get_logger(__name__)
+
+        backend_url = _resolve_backend_url_for_provider(provider_id)
+
+        # Сборка payload. Структура соответствует OpenAI-compat
+        # `/v1/chat/completions`. Только обязательные поля + max_tokens=5.
+        request_payload: dict[str, Any] = {
+            "model": model_id,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 5,
+            "stream": False,
+        }
+
+        # MLX local — применяем alias resolve + disable thinking. Wave 225 фикс
+        # делает это идемпотентным: для не-MLX target alias_resolve вернёт
+        # passthrough (модель не меняется).
+        if _is_mlx_local_target(base_url=backend_url, model_id=model_id):
+            _resolve_mlx_local_model_in_payload(request_payload, base_url=backend_url)
+            _apply_mlx_disable_thinking(request_payload)
+
+        resolved_model = str(request_payload.get("model") or model_id)
+
+        # Auth header: для gateway — Bearer token из config, для прямого MLX —
+        # просто без Authorization (mlx_lm.server open).
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        try:
+            from src.config import config as _cfg
+
+            if provider_id != "mlx-local-kv4":
+                tok = str(getattr(_cfg, "OPENCLAW_TOKEN", "") or "")
+                if tok:
+                    headers["Authorization"] = f"Bearer {tok}"
+                    headers["x-openclaw-scopes"] = "operator.write,operator.read"
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Реальный probe. Timeout 30s — обычно ping < 2s, но cloud cold-start
+        # может занять до 10s.
+        t0 = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                try:
+                    resp = await client.post(
+                        f"{backend_url}/v1/chat/completions",
+                        json=request_payload,
+                        headers=headers,
+                    )
+                except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                    raise HTTPException(
+                        status_code=500,
+                        detail={
+                            "stage": "connect",
+                            "model_id": model_id,
+                            "resolved_url": backend_url,
+                            "error": str(exc),
+                        },
+                    ) from exc
+                except httpx.HTTPError as exc:
+                    raise HTTPException(
+                        status_code=500,
+                        detail={
+                            "stage": "request",
+                            "model_id": model_id,
+                            "resolved_url": backend_url,
+                            "error": str(exc),
+                        },
+                    ) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "stage": "connect",
+                    "model_id": model_id,
+                    "resolved_url": backend_url,
+                    "error": str(exc),
+                },
+            ) from exc
+
+        latency_ms = int((time.monotonic() - t0) * 1000)
+
+        if resp.status_code != 200:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "stage": "http_error",
+                    "model_id": model_id,
+                    "resolved_url": backend_url,
+                    "status": resp.status_code,
+                    "body": resp.text[:400],
+                },
+            )
+
+        try:
+            data = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "stage": "parse",
+                    "model_id": model_id,
+                    "resolved_url": backend_url,
+                    "error": str(exc),
+                    "body": resp.text[:400],
+                },
+            ) from exc
+
+        # Парсинг ответа. Используем общий extract_message_text (Wave 221) —
+        # он сам fallback'ит на reasoning если content пуст.
+        choices = data.get("choices") or [{}]
+        first = choices[0] if isinstance(choices, list) and choices else {}
+        msg_obj = first.get("message") or {}
+        content_raw = msg_obj.get("content") or ""
+        used_reasoning_fallback = False
+        response_text = extract_message_text(msg_obj, model_id=model_id, logger_=_logger)
+        # Если content был пуст, но extract_message_text вернул что-то — это
+        # значит мы попали на reasoning fallback.
+        if not (isinstance(content_raw, str) and content_raw.strip()) and response_text:
+            used_reasoning_fallback = True
+
+        # Token estimate: предпочитаем usage из ответа, fallback — ~4 chars/token.
+        usage = data.get("usage") or {}
+        completion_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+        if isinstance(completion_tokens, int) and completion_tokens > 0:
+            tokens_estimated = completion_tokens
+        else:
+            tokens_estimated = max(1, len(response_text or "") // 4)
+
+        tokens_per_sec = 0.0
+        if latency_ms > 0:
+            tokens_per_sec = round(tokens_estimated * 1000.0 / latency_ms, 2)
+
+        return {
+            "ok": True,
+            "model_id": model_id,
+            "resolved_url": backend_url,
+            "resolved_model": resolved_model,
+            "provider": provider_id,
+            "latency_ms": latency_ms,
+            "response_chars": len(response_text or ""),
+            "response_preview": (response_text or "")[:120],
+            "tokens_estimated": tokens_estimated,
+            "tokens_per_sec_estimated": tokens_per_sec,
+            "used_reasoning_fallback": used_reasoning_fallback,
         }
 
     # ---------- GET /admin/models ---------------------------------------------
