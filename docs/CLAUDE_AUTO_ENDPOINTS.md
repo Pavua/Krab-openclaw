@@ -1,4 +1,4 @@
-# Auto-generated endpoints (349 routes)
+# Auto-generated endpoints (360 routes)
 
 **29 routers** в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern.
 Обновлено: auto-refresh (13.05.2026). Live проверить: `GET /api/endpoints`
@@ -6,6 +6,7 @@
 | Endpoint | Метод |
 |----------|-------|
 | `/` | GET |
+| `/admin/aliases` | GET |
 | `/admin/commands` | GET |
 | `/admin/costs` | GET |
 | `/admin/cron` | GET |
@@ -21,8 +22,13 @@
 | `/admin/network` | GET |
 | `/admin/routing` | GET |
 | `/admin/sentry` | GET |
+| `/admin/silence` | GET |
+| `/admin/skills` | GET |
 | `/admin/swarm` | GET |
 | `/admin/voice` | GET |
+| `/api/admin/aliases/add` | POST |
+| `/api/admin/aliases/list` | GET |
+| `/api/admin/aliases/remove` | POST |
 | `/api/admin/audit/recent` | GET |
 | `/api/admin/commands/list` | GET |
 | `/api/admin/commands/usage_summary` | GET |
@@ -53,6 +59,11 @@
 | `/api/admin/network/status` | GET |
 | `/api/admin/sentry/dashboard` | GET |
 | `/api/admin/sentry/issue/{issue_id}/resolve` | POST |
+| `/api/admin/silence/add` | POST |
+| `/api/admin/silence/list` | GET |
+| `/api/admin/silence/remove` | POST |
+| `/api/admin/skills/list` | GET |
+| `/api/admin/skills/{name}/curator_reports` | GET |
 | `/api/admin/swarm/dashboard` | GET |
 | `/api/admin/voice/restart_ear` | POST |
 | `/api/admin/voice/restart_gateway` | POST |
