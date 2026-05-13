@@ -94,6 +94,7 @@ from ._context import RouterContext
 # (он сам маршрутизирует через agents.defaults). Можно override env'ом
 # `KRAB_TEST_PING_<PROVIDER>_URL` (provider id с заменой `-` → `_`).
 _DEFAULT_MLX_LOCAL_URL = "http://127.0.0.1:8088"
+_DEFAULT_LM_STUDIO_URL = "http://127.0.0.1:1234"
 
 
 def _resolve_backend_url_for_provider(provider_id: str) -> str:
@@ -103,6 +104,7 @@ def _resolve_backend_url_for_provider(provider_id: str) -> str:
     - ENV ``KRAB_TEST_PING_<PROVIDER>_URL`` (provider id uppercased + `_`) —
       приоритет, любая модель этого провайдера пойдёт туда.
     - ``mlx-local-kv4`` → ``MLX_LOCAL_KV4_URL`` env или ``:8088``.
+    - ``lm-studio-local`` (Wave 239) → ``LM_STUDIO_URL`` env или ``:1234``.
     - Иначе — gateway ``config.OPENCLAW_URL`` (gateway сам разруливает routing).
     """
     pid = (provider_id or "").strip().lower()
@@ -112,6 +114,8 @@ def _resolve_backend_url_for_provider(provider_id: str) -> str:
         return override.rstrip("/")
     if pid == "mlx-local-kv4":
         return (os.getenv("MLX_LOCAL_KV4_URL") or _DEFAULT_MLX_LOCAL_URL).rstrip("/")
+    if pid == "lm-studio-local":
+        return (os.getenv("LM_STUDIO_URL") or _DEFAULT_LM_STUDIO_URL).rstrip("/")
     # Cloud / CLI провайдеры — через Gateway. Импорт лениво чтобы тесты могли
     # patch'ить config.OPENCLAW_URL до создания клиента.
     from src.config import config as _cfg
@@ -349,6 +353,15 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
         # --- LM Studio live probe -----------------------------------------
         lm_section = await _build_lm_studio_section(ctx, active_model=active_model)
 
+        # Wave 239: dynamic LM Studio autodiscovery — все ~85 моделей из
+        # /v1/models. Кладётся ОТДЕЛЬНОЙ provider-секцией с prefix
+        # ``lm-studio-local/`` (не путать с legacy ``lm-studio`` секцией
+        # которая показывает только loaded из runtime truth).
+        lm_local_dynamic_section = await _build_lm_studio_local_dynamic_section(
+            active_model=active_model,
+            configured_primary=configured_primary,
+        )
+
         # --- Cloud providers ----------------------------------------------
         providers: list[dict[str, Any]] = []
         for prov in _CLOUD_PROVIDERS:
@@ -385,6 +398,10 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
             )
 
         providers.append(lm_section)
+        # Wave 239: insert dynamic LM Studio block если discovery вернул
+        # хоть одну модель (если пусто — не засоряем UI пустой секцией).
+        if lm_local_dynamic_section is not None and lm_local_dynamic_section.get("models"):
+            providers.append(lm_local_dynamic_section)
 
         # --- History (Wave 145: persistent JSON store) --------------------
         # Приоритет: model_switch_history (структурированный schema) →
@@ -457,6 +474,10 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
                 if "/" in model:
                     prefix = model.split("/", 1)[0]
                     known_prefixes = {p["id"] for p in _CLOUD_PROVIDERS}
+                    # Wave 239: LM Studio autodiscovery prefix отдельно
+                    # whitelisted (он не в _CLOUD_PROVIDERS, чтобы не
+                    # дублировать статический список).
+                    known_prefixes.add("lm-studio-local")
                     if prefix not in known_prefixes:
                         raise HTTPException(
                             status_code=400,
@@ -591,10 +612,12 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
         # Provider lookup. mlx-local-kv4 — по prefix; для остальных матчим по
         # known prefixes в _CLOUD_PROVIDERS. Если ни одно не совпало — 500
         # unsupported_provider (по спеке).
+        # Wave 239: ``lm-studio-local/`` — допустим (autodiscovery picker).
         provider_id = ""
         if "/" in model_id:
             prefix = model_id.split("/", 1)[0]
             known_prefixes = {p["id"] for p in _CLOUD_PROVIDERS}
+            known_prefixes.add("lm-studio-local")
             if prefix in known_prefixes:
                 provider_id = prefix
         if not provider_id:
@@ -632,15 +655,27 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
             _resolve_mlx_local_model_in_payload(request_payload, base_url=backend_url)
             _apply_mlx_disable_thinking(request_payload)
 
+        # Wave 239: для ``lm-studio-local/`` сносим prefix → LM Studio
+        # ожидает чистый short_id в payload["model"].
+        if provider_id == "lm-studio-local":
+            from src.core.lm_studio_aliases import strip_lm_studio_local_prefix
+
+            request_payload["model"] = strip_lm_studio_local_prefix(model_id)
+
         resolved_model = str(request_payload.get("model") or model_id)
 
         # Auth header: для gateway — Bearer token из config, для прямого MLX —
-        # просто без Authorization (mlx_lm.server open).
+        # просто без Authorization (mlx_lm.server open). LM Studio (Wave 239)
+        # — Bearer LM_STUDIO_API_KEY если задан.
         headers: dict[str, str] = {"Content-Type": "application/json"}
         try:
             from src.config import config as _cfg
 
-            if provider_id != "mlx-local-kv4":
+            if provider_id == "lm-studio-local":
+                from src.core.lm_studio_auth import build_lm_studio_auth_headers
+
+                headers.update(build_lm_studio_auth_headers())
+            elif provider_id != "mlx-local-kv4":
                 tok = str(getattr(_cfg, "OPENCLAW_TOKEN", "") or "")
                 if tok:
                     headers["Authorization"] = f"Bearer {tok}"
@@ -792,6 +827,49 @@ async def _list_lm_studio_models(ctx: RouterContext) -> list[dict[str, Any]]:
     if active and active not in loaded:
         loaded.append(active)
     return [{"id": mid, "loaded": True, "active": mid == active} for mid in loaded]
+
+
+async def _build_lm_studio_local_dynamic_section(
+    *,
+    active_model: str,
+    configured_primary: str,
+) -> dict[str, Any] | None:
+    """Wave 239: динамическая provider-секция с автодискаверингом LM Studio.
+
+    Все LLM-модели из ``GET /v1/models`` (~85 шт.) отдаются с prefix
+    ``lm-studio-local/<short_name>`` и actions ``[set_primary, test_ping]``.
+    На любую ошибку discovery (timeout/refused/401) возвращает секцию с
+    пустым ``models=[]`` — вызывающий код её игнорирует.
+    """
+    from src.core.lm_studio_discovery import discover_lm_studio_models
+
+    raw_models = await discover_lm_studio_models()
+    models: list[dict[str, Any]] = []
+    for entry in raw_models:
+        short = str(entry.get("id") or "").strip()
+        if not short:
+            continue
+        full_id = f"lm-studio-local/{short}"
+        is_active = bool(active_model and full_id == active_model) or bool(
+            configured_primary and full_id == configured_primary
+        )
+        models.append(
+            {
+                "id": full_id,
+                "label": str(entry.get("label") or short),
+                "status": "available",
+                "status_detail": (f"owned_by={entry.get('owned_by') or '—'} (LM Studio :1234)"),
+                "is_active": is_active,
+                "actions": ["set_primary", "test_ping"],
+            }
+        )
+    return {
+        "id": "lm-studio-local",
+        "label": "LM Studio (Local :1234, autodiscovered)",
+        "type": "local",
+        "available": bool(models),
+        "models": models,
+    }
 
 
 async def _build_lm_studio_section(ctx: RouterContext, *, active_model: str) -> dict[str, Any]:

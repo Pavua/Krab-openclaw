@@ -413,6 +413,7 @@ class ModelManager:
         local_provider_prefixes = (
             "lmstudio/",
             "local/",
+            "lm-studio-local/",  # Wave 239: LM Studio autodiscovery picker
         )
         cli_backend_prefixes = (
             "codex-cli/",

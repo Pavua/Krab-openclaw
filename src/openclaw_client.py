@@ -2189,9 +2189,13 @@ class OpenClawClient:
         # Wave 62: LM Studio API expects raw model ID (`gemma-4-26b-a4b-it-optiq`),
         # not provider-namespaced `lmstudio/gemma-...`. Strip the prefix here so
         # routing layer can keep `lmstudio/` tag for `is_local_model()` typing.
+        # Wave 239: добавлен ``lm-studio-local/`` — prefix из admin picker
+        # (autodiscovery), short_name после слэша = реальный id в LM Studio.
         normalized_model = str(model_hint or "").strip()
         if normalized_model.lower().startswith("lmstudio/"):
             normalized_model = normalized_model[len("lmstudio/") :]
+        elif normalized_model.lower().startswith("lm-studio-local/"):
+            normalized_model = normalized_model[len("lm-studio-local/") :]
         if str(state.get("model", "") or "").strip() == normalized_model:
             previous_response_id = str(state.get("response_id", "") or "").strip()
         elif state:
@@ -2938,9 +2942,12 @@ class OpenClawClient:
 
                 # Wave 62: strip `lmstudio/` namespace prefix before sending
                 # to LM Studio API (which uses raw IDs).
+                # Wave 239: + ``lm-studio-local/`` (admin picker autodiscovery).
                 _compat_model = str(model_hint or "").strip()
                 if _compat_model.lower().startswith("lmstudio/"):
                     _compat_model = _compat_model[len("lmstudio/") :]
+                elif _compat_model.lower().startswith("lm-studio-local/"):
+                    _compat_model = _compat_model[len("lm-studio-local/") :]
                 payload = {
                     "messages": messages_for_lm,
                     "stream": False,
