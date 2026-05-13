@@ -120,11 +120,24 @@ KRAB_MEMORY_PRUNE_APPLY=1 venv/bin/python scripts/krab_memory_prune_orphans.py -
 venv/bin/python scripts/krab_sentry_quota_check.py
 ```
 
-## Session 48 stats
-- Commits: 35+ (across 3 macOS reboots)
-- Admin pages: 6 → **14**
-- Tests added: ~300+
+## Session 48 stats (updated post-Wave 192)
+- Commits: **43+** (across 3 macOS reboots)
+- Admin pages: 6 → **17** (added: cron/sentry/logs/db/network/voice/memory/health/help/env/commands)
+- Tests added: **~400+**
+- Endpoints: 309 → **349** (+40, 13% growth)
+- Metrics: 52 → 53, Alerts: 42 → 43
 - Sentry issues resolved: 10+
 - Disk freed: 9.5 GB
 - Major bug fixes: 2 — Wave 186 ASGITransport deadlock + Wave 180 KrabEar IPC probe
 - Worktree-main reconciliations: 3 (Waves 163, 164/165, 169)
+
+## Wave timeline addendum (190+)
+| Wave | Commit | Effect |
+|---|---|---|
+| 187 | `06f47ba` | `/admin/help` index page — 15-я page |
+| 188 | (background) | Wave 178 retry — live prune ~30min, ~173 MB savings expected |
+| 189 | `286d672` | `/admin/env` — 39 vars, secret masking, 16-я page |
+| 190 | `68ece90` | `/admin/commands` — 162 commands в 14 категориях, 17-я page |
+| 191 | `a37ed6a` | backup retention 4-я категория — openclaw config backups (437 .bak files без retention) |
+| 192 | `2e0fb43` | typing indicator group verify ✓ + NLU compound/anaphora patterns (`_KRAB_NAME_RE` DRY) |
+| autotables | `258fad6` | docs/CLAUDE_AUTO_*.md refreshed — 349 endpoints, 181 handlers |
