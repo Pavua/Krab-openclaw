@@ -2417,15 +2417,20 @@ class OpenClawClient:
         # перенаправляем запрос на соответствующий backend (mlx-local-kv4/* → :8088,
         # openclaw/* → gateway, прочее → текущий cloud). Если ничего не выбрано —
         # remains как было (gateway + payload["model"]="openclaw").
+        #
+        # Wave 235: используем async-вариант — sync json.load(open(...)) внутри
+        # async hot-path блокировал event loop при cache expiry и под concurrent
+        # load выстраивал async таски в очередь на threading.Lock → :8080 freeze
+        # (root cause наблюдаемых launchctl kickstart восстановлений).
         from src.core.active_model_routing import (  # noqa: PLC0415 - lazy
-            get_active_model_id,
-            resolve_active_target,
+            get_active_model_id_async,
+            resolve_active_target_async,
         )
 
         _request_base_url = self.base_url
-        _active_model = get_active_model_id()
+        _active_model = await get_active_model_id_async()
         if _active_model:
-            _request_base_url, _override_model = resolve_active_target(
+            _request_base_url, _override_model = await resolve_active_target_async(
                 default_base_url=self.base_url,
                 default_model=str(payload.get("model") or "openclaw"),
             )
