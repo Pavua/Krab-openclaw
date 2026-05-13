@@ -409,6 +409,12 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>Health</h2>
                 <p>Unified single-pane-of-glass:<br>traffic light + 7 subsystem cards.</p>
             </a>
+
+            <a href="/admin/help" class="card" style="animation-delay: 1.3s;">
+                <div class="emoji">📚</div>
+                <h2>Help</h2>
+                <p>Индекс всех admin-страниц:<br>назначение, endpoints, recent changes.</p>
+            </a>
         </div>
 
         <footer>

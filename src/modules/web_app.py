@@ -8965,6 +8965,9 @@ class WebApp:
         from .web_routers.health_dashboard_router import (  # noqa: PLC0415
             build_health_dashboard_router,
         )
+        from .web_routers.help_admin_router import (  # noqa: PLC0415
+            build_help_admin_router,
+        )
         from .web_routers.inbox_admin_router import (  # noqa: PLC0415
             build_inbox_admin_router,
         )
@@ -9004,6 +9007,7 @@ class WebApp:
             build_voice_admin_router,  # Wave 183: /admin/voice
             build_memory_admin_router,  # Wave 184: /admin/memory
             build_health_dashboard_router,  # Wave 186: /admin/health unified
+            build_help_admin_router,  # Wave 187: /admin/help index page
         ):
             try:
                 self.app.include_router(builder(self._make_router_context()))
