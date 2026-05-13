@@ -8950,6 +8950,9 @@ class WebApp:
         # Wave 144/146/152/155/156/157/164/165/169/176: admin UI pages (model
         # picker / routing / swarm / costs / ecosystem / inbox / cron / sentry
         # / logs / db).
+        from .web_routers.commands_admin_router import (  # noqa: PLC0415
+            build_commands_admin_router,
+        )
         from .web_routers.costs_admin_router import (  # noqa: PLC0415
             build_costs_admin_router,
         )
@@ -9012,6 +9015,7 @@ class WebApp:
             build_health_dashboard_router,  # Wave 186: /admin/health unified
             build_help_admin_router,  # Wave 187: /admin/help index page
             build_env_admin_router,  # Wave 189: /admin/env read-only env dashboard
+            build_commands_admin_router,  # Wave 190: /admin/commands registry+usage
         ):
             try:
                 self.app.include_router(builder(self._make_router_context()))

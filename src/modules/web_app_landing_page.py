@@ -421,6 +421,12 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>Env</h2>
                 <p>Read-only env dashboard:<br>KRAB_* vars с автомаскировкой секретов.</p>
             </a>
+
+            <a href="/admin/commands" class="card" style="animation-delay: 1.5s;">
+                <div class="emoji">⚡</div>
+                <h2>Commands</h2>
+                <p>162 Telegram-команды: search, фильтр<br>по категории, usage stats и aliases.</p>
+            </a>
         </div>
 
         <footer>
