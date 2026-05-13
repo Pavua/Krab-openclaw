@@ -265,19 +265,39 @@ def _system_card(raw: dict[str, dict[str, Any]]) -> dict[str, Any]:
 
 
 def _ai_card(raw: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """Извлекает AI/Models card: active channel, fallback_ready, paid guard."""
+    """Извлекает AI/Models card: active channel, fallback_ready, paid guard.
+
+    Wave 186-fix-2: реальная схема /api/health — AI info живёт в ``chain``
+    (active_ai_channel/fallback_ready), а не в ``checks.ai``. Также
+    openclaw/local_lm bool флаги дают сигнал о cloud/local чанналах.
+    """
     health = raw.get("health") or {}
     checks = health.get("checks") or {}
+    chain = health.get("chain") or {}
+    # legacy paths (если когда-то появятся)
     ai_block = checks.get("ai") or checks.get("models") or {}
-    return {
-        "active_channel": ai_block.get("active_channel")
+    # active_channel — приоритет chain.active_ai_channel
+    active = (
+        chain.get("active_ai_channel")
+        or ai_block.get("active_channel")
         or ai_block.get("channel")
         or health.get("active_channel")
-        or "unknown",
-        "fallback_ready": bool(ai_block.get("fallback_ready", True)),
+        or "unknown"
+    )
+    # fallback_ready — приоритет chain.fallback_ready
+    fallback = chain.get("fallback_ready")
+    if fallback is None:
+        fallback = ai_block.get("fallback_ready", True)
+    # available если есть chain или legacy ai_block или известны openclaw/local_lm checks
+    has_data = bool(chain) or bool(ai_block) or ("openclaw" in checks) or ("local_lm" in checks)
+    return {
+        "active_channel": active,
+        "fallback_ready": bool(fallback),
         "paid_gemini_blocked_24h": int(ai_block.get("paid_gemini_blocked_24h") or 0),
         "primary_model": ai_block.get("primary_model") or health.get("primary_model") or "",
-        "available": bool(ai_block) or "models" in (checks or {}),
+        "openclaw_healthy": bool(checks.get("openclaw")),
+        "local_lm_healthy": bool(checks.get("local_lm")),
+        "available": has_data,
     }
 
 
