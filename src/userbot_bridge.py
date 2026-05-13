@@ -2252,6 +2252,25 @@ class KraabUserbot(
             asyncio.create_task(chat_ban_cache.periodic_cleanup(interval_seconds=300))
             logger.info("chat_ban_periodic_cleanup_started", interval_sec=300)
 
+        # Wave 214: memory leak detector (Wave 205) — снапшоты RSS каждые ~15 мин,
+        # анализ тренда + Sentry warning при превышении KRAB_MEMORY_LEAK_THRESHOLD_MB_PER_HOUR.
+        if os.getenv("KRAB_MEMORY_LEAK_DETECTOR_ENABLED", "1").strip() != "0":
+            try:
+                from .core.memory_leak_detector import (  # noqa: PLC0415
+                    background_loop as _memleak_loop,
+                )
+
+                self._memory_leak_detector_task = asyncio.create_task(
+                    _memleak_loop(), name="memory_leak_detector"
+                )
+                logger.info("memory_leak_detector_bootstrap_done")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "memory_leak_detector_bootstrap_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
         # Wave 93/97: cost budget monitor loop — default-ON (observability-only,
         # шлёт alert только при ok→warning|critical транзиции).
         if os.getenv("KRAB_COST_BUDGET_MONITOR_ENABLED", "1").strip() != "0":
