@@ -565,6 +565,49 @@ def collect_metrics() -> str:
     except Exception:  # noqa: BLE001
         pass
 
+    # === Wave 205: Memory leak detector ===
+    try:
+        from src.core.memory_leak_detector import get_prometheus_state
+
+        mem_state = get_prometheus_state()
+        lines.append(
+            _format_metric(
+                "krab_process_rss_bytes",
+                mem_state["krab_process_rss_bytes"],
+                help_text="Wave 205: own process RSS bytes (psutil)",
+            )
+        )
+        lines.append(
+            _format_metric(
+                "krab_process_vms_bytes",
+                mem_state["krab_process_vms_bytes"],
+                help_text="Wave 205: own process VMS bytes (psutil)",
+            )
+        )
+        lines.append(
+            _format_metric(
+                "krab_process_swap_bytes",
+                mem_state["krab_process_swap_bytes"],
+                help_text="Wave 205: own process swap bytes (0 if AccessDenied)",
+            )
+        )
+        lines.append(
+            _format_metric(
+                "krab_memory_leak_growth_mb_per_hour",
+                mem_state["krab_memory_leak_growth_mb_per_hour"],
+                help_text="Wave 205: RSS growth rate over window",
+            )
+        )
+        lines.append(
+            _format_metric(
+                "krab_memory_leak_suspected",
+                mem_state["krab_memory_leak_suspected"],
+                help_text="Wave 205: 1 if RSS growth exceeds threshold",
+            )
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     # === Timestamps ===
     lines.append(
         _format_metric(
