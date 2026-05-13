@@ -22,6 +22,7 @@ import structlog
 
 from ..config import config
 from ..core.access_control import get_effective_owner_label
+from ..core.gemini_auth_audit import log_gemini_auth_setup
 from ..integrations.paid_gemini_guard import register_paid_gemini_guard
 from ..model_manager import model_manager
 from ..openclaw_client import openclaw_client
@@ -242,6 +243,11 @@ async def run_app() -> None:
     # httpx.AsyncClient/Client инстансы получили event_hook автоматически.
     # Env: KRAB_BLOCK_PAID_GEMINI_AI_STUDIO=1 (default block) | warn | 0.
     register_paid_gemini_guard()
+
+    # Wave 247: audit Gemini auth setup — owner получает прозрачный startup log
+    # о том, какой режим активен (vertex_adc / ai_studio_paid / ai_studio_free /
+    # misconfigured) + Sentry warning если paid key consumed или dangerous config.
+    log_gemini_auth_setup()
 
     print(f"""
     🦀 KRAB USERBOT STARTED 🦀
