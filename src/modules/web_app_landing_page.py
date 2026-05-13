@@ -403,6 +403,12 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>Memory</h2>
                 <p>RAG: archive.db rows, vec health,<br>retrieval metrics и search interface.</p>
             </a>
+
+            <a href="/admin/health" class="card" style="animation-delay: 1.2s;">
+                <div class="emoji">🩺</div>
+                <h2>Health</h2>
+                <p>Unified single-pane-of-glass:<br>traffic light + 7 subsystem cards.</p>
+            </a>
         </div>
 
         <footer>
