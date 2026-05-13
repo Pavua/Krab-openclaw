@@ -175,7 +175,8 @@ def _build_stats(active: list[dict[str, Any]], scheduled: dict[str, Any]) -> dic
         "active_per_chat": len(active),
         "global_muted": global_muted,
         "global_remaining_min": round(
-            silence_manager.global_mute_remaining_sec() / 60, 2,
+            silence_manager.global_mute_remaining_sec() / 60,
+            2,
         ),
         "scheduled_enabled": scheduled["enabled"],
         "scheduled_active_now": scheduled["active_now"],
