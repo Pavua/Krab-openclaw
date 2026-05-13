@@ -406,3 +406,81 @@ def test_env_value_parsing(monkeypatch, value: str, expected: bool):
     monkeypatch.setenv("KRAB_TYPING_INDICATOR_ENABLED", value)
     monkeypatch.delenv("KRAB_TYPING_INDICATOR_BLOCKED_CHATS", raising=False)
     assert is_enabled_for_chat(None) is expected
+
+
+# ---------------------------------------------------------------------------
+# 13. Wave 192: group chat (negative chat_id) тоже работает
+# ---------------------------------------------------------------------------
+#
+# Telegram MTProto: group chat_id < 0 (basic group), -100xxx (supergroup).
+# DM chat_id > 0 (user_id). Telegram send_chat_action поддерживает оба типа,
+# и наша обвязка не имеет DM-only guards — проверяем явно.
+
+
+@pytest.mark.asyncio
+async def test_group_chat_negative_id_emits_chat_action(fake_client):
+    """Wave 192: group chat (chat_id < 0) — indicator активен."""
+    from src.userbot.typing_indicator import TypingIndicator
+
+    ti = TypingIndicator(fake_client, chat_id=-1001234567890, action=_FakeAction.TYPING)
+    async with ti:
+        await asyncio.sleep(0.01)
+    # send_chat_action был вызван с negative chat_id.
+    assert fake_client.send_chat_action.await_count >= 1
+    call_chat_ids = [call.args[0] for call in fake_client.send_chat_action.await_args_list]
+    assert -1001234567890 in call_chat_ids
+
+
+@pytest.mark.asyncio
+async def test_basic_group_negative_id_emits_chat_action(fake_client):
+    """Wave 192: basic group (chat_id отрицательный, не -100xxx) — тоже работает."""
+    from src.userbot.typing_indicator import TypingIndicator
+
+    ti = TypingIndicator(fake_client, chat_id=-42, action=_FakeAction.TYPING)
+    async with ti:
+        await asyncio.sleep(0.01)
+    assert fake_client.send_chat_action.await_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_dm_and_group_both_work_in_same_session(fake_client):
+    """Wave 192: DM (positive id) и group (negative id) — независимые indicators."""
+    from src.userbot.typing_indicator import TypingIndicator
+
+    # DM
+    ti_dm = TypingIndicator(fake_client, chat_id=12345, action=_FakeAction.TYPING)
+    async with ti_dm:
+        await asyncio.sleep(0.01)
+    # Group
+    ti_grp = TypingIndicator(fake_client, chat_id=-1001234567890, action=_FakeAction.TYPING)
+    async with ti_grp:
+        await asyncio.sleep(0.01)
+
+    call_chat_ids = {call.args[0] for call in fake_client.send_chat_action.await_args_list}
+    # Обе chat_id присутствуют в вызовах.
+    assert 12345 in call_chat_ids
+    assert -1001234567890 in call_chat_ids
+
+
+def test_blocklist_works_for_negative_chat_id(monkeypatch):
+    """Wave 192: per-chat blocklist должен работать для group chats тоже."""
+    from src.userbot.typing_indicator import is_enabled_for_chat
+
+    monkeypatch.setenv("KRAB_TYPING_INDICATOR_BLOCKED_CHATS", "-1001234567890,777")
+    monkeypatch.setenv("KRAB_TYPING_INDICATOR_ENABLED", "1")
+    # Заблокированы — обе формы.
+    assert is_enabled_for_chat(-1001234567890) is False
+    assert is_enabled_for_chat(777) is False
+    # Не в blocklist.
+    assert is_enabled_for_chat(-999) is True
+    assert is_enabled_for_chat(12345) is True
+
+
+def test_blocklist_str_int_interchangeable_for_groups(monkeypatch):
+    """Wave 192: int -1001234567890 и str '-1001234567890' эквивалентны."""
+    from src.userbot.typing_indicator import is_enabled_for_chat
+
+    monkeypatch.setenv("KRAB_TYPING_INDICATOR_BLOCKED_CHATS", "-1001234567890")
+    monkeypatch.setenv("KRAB_TYPING_INDICATOR_ENABLED", "1")
+    assert is_enabled_for_chat(-1001234567890) is False
+    assert is_enabled_for_chat("-1001234567890") is False

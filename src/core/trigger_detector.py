@@ -116,6 +116,60 @@ _COMPOUND_MENTION_PATTERN = re.compile(
 
 _IRONIC_KRAB_SCORE = 0.7
 
+# Wave 192: compound mention + вопрос/просьба — самые частые формы обращения.
+# Покрывает: "Краб, а ты что думаешь?", "Крабушка, что скажешь?", "Краб, помоги",
+# "Крабушка, плиз", "Краб, можешь подсказать?". Score = 0.7 (как ironic) —
+# проходит regex_high порог Stage 3.
+#
+# Диминутив "Крабушка" — частая ласкательная форма от Pavua. "Краб" — base form.
+# Включаем оба + лат. "kraab" для full coverage.
+_KRAB_NAME_RE = r"(?:краб(?:ушк[аиуео]|ик|чик|еныш)?|kraab(?:ushka)?|нагато)"
+
+# Compound: "<Краб>, [а ] (?:что|как) (?:думаешь|скажешь|считаешь|тебе)..."
+# + императивные глаголы помощи: "помоги/помоги-ка/подскажи/посоветуй/глянь/глянь-ка"
+_COMPOUND_KRAB_QUESTION_PATTERNS: list[re.Pattern[str]] = [
+    # "Краб, а ты что думаешь?" / "Крабушка, что скажешь" / "Краб как считаешь"
+    re.compile(
+        rf"\b{_KRAB_NAME_RE}\b[,\s]+(?:а\s+)?(?:ты\s+)?"
+        r"(?:что|как|чё)\s+(?:дума\w+|скаж\w+|счита\w+|тебе|по[-\s]?твоему)",
+        re.IGNORECASE,
+    ),
+    # Imperative softener: "Краб, можешь подсказать?" / "Крабушка, можешь глянуть"
+    re.compile(
+        rf"\b{_KRAB_NAME_RE}\b[,\s]+(?:а\s+)?(?:ты\s+)?"
+        r"(?:не\s+)?мож(?:ешь|ете)\s+(?:под)?(?:сказ\w+|помо\w+|глян\w+|объясн\w+)",
+        re.IGNORECASE,
+    ),
+    # Прямая просьба: "Краб, помоги" / "Крабушка, подскажи" / "Краб, глянь"
+    re.compile(
+        rf"\b{_KRAB_NAME_RE}\b[,\s]+(?:плиз|пожалуйста|пж|плз)?[,\s]*"
+        r"(?:помоги|подскажи|посоветуй|глянь|объясни|расскажи|поясни)(?:[-\s]ка)?",
+        re.IGNORECASE,
+    ),
+    # Аффективная просьба: "Крабушка, плиз" / "Краб, ну пожалуйста"
+    re.compile(
+        rf"\b{_KRAB_NAME_RE}\b[,\s]+(?:ну\s+)?(?:плиз|пожалуйста|пж|плз)\b",
+        re.IGNORECASE,
+    ),
+]
+
+_COMPOUND_KRAB_QUESTION_SCORE = 0.7
+
+# Wave 192: anaphora bridge — местоимения "он/его/ему/ним" в follow-up окне
+# должны срабатывать даже без вопросительного знака.
+# Случай: Krab только что писал (5-min window) → user пишет "Он же только что
+# писал про это" / "Его ответ был странный". Без явного "?" — existing
+# detect_implicit_question не сработает, а follow-up уже срабатывает (5 мин),
+# но это safety-net для случаев между 5 и 10 мин.
+#
+# Шаблон: 3rd-person pronoun в начале фразы → достаточный сигнал, что
+# referent — Krab (если в окне). Score чуть ниже follow-up (0.6 vs 0.65).
+_ANAPHORA_BRIDGE_RE = re.compile(
+    r"^\s*(?:а\s+)?(?:но\s+)?(?:он|его|ему|ним)\b",
+    re.IGNORECASE,
+)
+_ANAPHORA_BRIDGE_SCORE = 0.6
+
 # Generic AI-алиасы: «бот», «ии», «нейронка» и т.п. рядом с вопросом
 _GENERIC_AI_PATTERN = re.compile(
     r"\b(ии|бот|ai|assistant|ассистент|нейронка|помощник|нейросеть|chatgpt|gpt)\b",
@@ -326,6 +380,35 @@ def detect_implicit_mention(
                 TriggerType.IMPLICIT_QUESTION,
                 _IMPLICIT_QUESTION_CTX_SCORE,
                 "implicit_question_ctx",
+            )
+
+    # 1.6. Wave 192: anaphora bridge внутри implicit-question окна.
+    # Если Krab отвечал в окне (10 мин) и user начинает с "он/его/ему/ним" —
+    # считаем follow-up даже без вопросительного знака. Защищает от ложного
+    # срабатывания в чатах без recent Krab activity (требуется window).
+    if (
+        chat_id
+        and not is_reply_to_explicit_msg
+        and last_krab_msg.within_window(chat_id, window=_IMPLICIT_QUESTION_WINDOW_SEC)
+        and _ANAPHORA_BRIDGE_RE.search(text_s)
+        and _ANAPHORA_BRIDGE_SCORE >= thresh
+    ):
+        return TriggerResult(
+            TriggerType.FOLLOWUP_TO_KRAB,
+            _ANAPHORA_BRIDGE_SCORE,
+            "anaphora_bridge",
+        )
+
+    # 1.7. Wave 192: compound mention с явным обращением к Крабу
+    # ("Краб, а ты что думаешь?", "Крабушка, помоги", "Краб, можешь глянуть?").
+    # Проверяем РАНЬШЕ ironic — паттерны более специфичны.
+    for pat in _COMPOUND_KRAB_QUESTION_PATTERNS:
+        m = pat.search(text_s)
+        if m:
+            return TriggerResult(
+                TriggerType.IMPLICIT_QUESTION,
+                _COMPOUND_KRAB_QUESTION_SCORE,
+                f"compound_question:{m.group(0)[:60]}",
             )
 
     # 2.0. Wave 40-T: ironic Krab mentions ("ну где же Краб?", "куда пропал Краб")
