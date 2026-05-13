@@ -123,6 +123,10 @@ class OpenClawAdapter:
         """Health через OpenClaw health_check().
 
         Кэширует на 60 секунд, чтобы не долбить gateway при каждом запросе.
+
+        Wave 245: при KRAB_OPENCLAW_BYPASS_ENABLED=1 health всё равно
+        репортуем настоящий статус gateway — это диагностика, а не
+        блокировка трафика. Bypass влияет только на routing send_message_stream.
         """
         now = time.monotonic()
         if self._healthy_cache is not None:

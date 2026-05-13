@@ -2991,12 +2991,14 @@ class OpenClawClient:
 
     async def health_check(self) -> bool:
         """Проверка доступности OpenClaw."""
+        ok = False
         try:
             # Wave 14-B: health probe also goes through semaphore so that during
             # an overload burst the probe is naturally queued (not racing inflight chats).
             async with _gateway_slot(chat_id="_health"):
                 response = await self._http_client.get(f"{self.base_url}/health")
-            return response.status_code == 200
+            ok = response.status_code == 200
+            return ok
         except OpenClawSemaphoreTimeoutError as exc:
             # Семафор перегружен — реальная проблема, оставляем error
             logger.error(
@@ -3015,6 +3017,20 @@ class OpenClawClient:
                 exc_class=type(exc).__name__,
             )
             return False
+        finally:
+            # Wave 245: трекаем success/fail rate для recommender'а. Если последний
+            # час показывает >50% fails — Sentry warning с рекомендацией включить
+            # KRAB_OPENCLAW_BYPASS_ENABLED.
+            try:
+                from .core.openclaw_bypass_recommender import (
+                    maybe_send_bypass_recommendation,
+                    record_openclaw_outcome,
+                )
+
+                record_openclaw_outcome(ok)
+                maybe_send_bypass_recommendation()
+            except Exception as _rec_exc:  # noqa: BLE001
+                logger.debug("openclaw_bypass_recommend_failed", error=str(_rec_exc))
 
     async def wait_for_healthy(self, timeout: int = 90) -> bool:
         """Ожидает доступности OpenClaw (polling). Timeout configurable via OPENCLAW_HEALTH_WAIT_TIMEOUT_SEC."""
@@ -3531,6 +3547,65 @@ class OpenClawClient:
                 route_detail="Определена целевая модель перед выполнением запроса",
                 force_cloud=effective_force_cloud,
             )
+
+            # Wave 245: emergency bypass — если KRAB_OPENCLAW_BYPASS_ENABLED=1,
+            # все LLM-запросы идут напрямую в local backend (MLX/LM Studio),
+            # минуя OpenClaw gateway полностью. Используется когда gateway
+            # сломан (malformed mcp_servers, runtime crash, и т.п.).
+            # Нет MCP tools, нет cloud fallback chain — оператор должен это знать.
+            try:
+                from .core.openclaw_bypass_gate import is_openclaw_bypass_enabled
+
+                _bypass_enabled = is_openclaw_bypass_enabled()
+            except Exception as _bypass_exc:  # noqa: BLE001
+                logger.debug("openclaw_bypass_check_failed", error=str(_bypass_exc))
+                _bypass_enabled = False
+
+            if _bypass_enabled:
+                # Bypass через _direct_lm_fallback: единственный путь, не использующий
+                # OpenClaw runtime. MLX local или LM Studio — ровно тот backend, что
+                # selected_model говорит (или local default).
+                bypass_text = await self._direct_lm_fallback(
+                    chat_id=chat_id,
+                    messages_to_send=messages_to_send,
+                    model_hint=selected_model or "local",
+                    has_photo=has_photo,
+                    max_output_tokens=max_output_tokens,
+                )
+                self._set_last_runtime_route(
+                    channel="openclaw_bypass",
+                    model=selected_model or "local",
+                    route_reason="openclaw_bypass_env",
+                    route_detail=(
+                        "KRAB_OPENCLAW_BYPASS_ENABLED=1 — direct local backend, "
+                        "OpenClaw gateway полностью обойдён"
+                    ),
+                    force_cloud=False,
+                )
+                if bypass_text:
+                    logger.info(
+                        "openclaw_bypass_path_used",
+                        chat_id=chat_id,
+                        model=selected_model or "local",
+                    )
+                    self._finalize_chat_response(chat_id, bypass_text)
+                    yield bypass_text
+                    return
+                logger.error(
+                    "openclaw_bypass_local_backend_failed",
+                    chat_id=chat_id,
+                    model=selected_model or "local",
+                    hint=(
+                        "MLX/LM Studio недоступен. Bypass-режим не позволяет "
+                        "уйти в cloud fallback. Проверьте :8088 / :1234."
+                    ),
+                )
+                yield (
+                    "⚠️ OpenClaw bypass активен, но локальный backend "
+                    "(MLX/LM Studio) недоступен. Проверьте порт :8088 / :1234 "
+                    "или выключите KRAB_OPENCLAW_BYPASS_ENABLED."
+                )
+                return
 
             # Жесткий local-first: если выбран локальный маршрут, сначала бьем напрямую в LM Studio.
             # Это исключает ситуацию, когда OpenClaw runtime игнорирует модель и уходит в cloud.
