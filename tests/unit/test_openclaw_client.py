@@ -58,6 +58,24 @@ def _disable_bypass_via_env(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_wave250_active_model_hook(monkeypatch: pytest.MonkeyPatch):
+    """Wave 251: Wave 250 hook читает `~/.openclaw/krab_runtime_state/active_model.json`
+    до `get_best_model`. На dev/CI там может быть owner-pick (`mlx-local-kv4/...`),
+    что перекрывает мок `get_best_model` и валит тесты, которые
+    проверяют routing behaviour для cloud/local fallback. По умолчанию
+    делаем hook прозрачным; тест может явно его пере-мокнуть, если
+    проверяет именно поведение Wave 250.
+    """
+    from unittest.mock import AsyncMock as _AM
+    monkeypatch.setattr(
+        "src.core.active_model_routing.get_active_model_id_async",
+        _AM(return_value=None),
+        raising=True,
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _clean_history_cache():
     """Session 39: persistent sqlite history_cache leaks между тестами.
 
@@ -854,6 +872,8 @@ async def test_local_autoload_failure_switches_to_cloud_candidate(client: OpenCl
 
     # Wave 61-A: routing_policy запускается до get_best_model и читает
     # LOCAL_PREFERRED_MODEL. Без явного "" подбирается MagicMock-атрибут.
+    # Wave 251: hook `get_active_model_id_async` уже нейтрализован
+    # autouse-фикстурой `_isolate_wave250_active_model_hook`.
     with patch("src.openclaw_client.config.LOCAL_PREFERRED_MODEL", ""):
         with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="local")):
             with patch.object(
@@ -883,6 +903,44 @@ async def test_local_autoload_failure_switches_to_cloud_candidate(client: OpenCl
     assert "".join(chunks) == "Cloud OK"
     assert completion.await_count == 1
     assert completion.await_args.kwargs["model_id"] == "google/gemini-2.5-flash"
+
+
+@pytest.mark.asyncio
+async def test_mlx_direct_backend_bypasses_lm_studio_preflight(
+    client: OpenClawClient,
+) -> None:
+    """Wave 251: `mlx-local-kv4/*` обслуживается внешним mlx_lm.server :8088
+    (launchd persistent). Owner pick через /admin/models должен дойти до
+    `_openclaw_completion_once` БЕЗ вызова `ensure_model_loaded` (LM Studio
+    API :1234 не знает про эти модели и вернёт 404 → silent switch на Codex).
+    """
+    from src.model_manager import model_manager
+
+    ensure_loaded = AsyncMock(return_value=False)
+    completion = AsyncMock(return_value="MLX OK")
+
+    # Owner force-picked mlx-local-kv4 через active_model.json
+    with patch(
+        "src.core.active_model_routing.get_active_model_id_async",
+        new=AsyncMock(return_value="mlx-local-kv4/gemma-4-26b"),
+    ), patch("src.openclaw_client.config.LOCAL_PREFERRED_MODEL", ""):
+        with patch.object(
+            model_manager,
+            "is_local_model",
+            side_effect=lambda mid: str(mid).startswith(("mlx-local-kv4/", "local")),
+        ):
+            with patch.object(model_manager, "ensure_model_loaded", new=ensure_loaded):
+                with patch.object(client, "_openclaw_completion_once", new=completion):
+                    chunks = []
+                    async for chunk in client.send_message_stream("Hi", "chat-mlx-direct"):
+                        chunks.append(chunk)
+
+    # MLX модель долетела до hot-path в неизменённом виде
+    assert "".join(chunks) == "MLX OK"
+    assert completion.await_count == 1
+    assert completion.await_args.kwargs["model_id"] == "mlx-local-kv4/gemma-4-26b"
+    # Preflight в LM Studio :1234 НЕ был вызван — это и есть Wave 251 invariant
+    assert ensure_loaded.await_count == 0
 
 
 @pytest.mark.asyncio

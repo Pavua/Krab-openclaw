@@ -3536,7 +3536,19 @@ class OpenClawClient:
                         fallback_chain=list(get_runtime_fallback_models()),
                     )
                     metrics.inc("photo_route_redirected_failed")
-            if not effective_force_cloud and model_manager.is_local_model(selected_model):
+            # Wave 251: `mlx-local-kv4/*` обслуживается внешним `mlx_lm.server`
+            # на :8088 (launchd persistent). НЕТ смысла дёргать LM Studio :1234
+            # preflight: модель уже запущена, грузить нечего. Без bypass
+            # `ensure_model_loaded` бьёт в LM Studio API, ловит 404
+            # `model_not_found`, помечает модель `local_model_temporarily_excluded`
+            # и переключает запрос на `cloud_candidate=codex-cli/gpt-5.5` —
+            # owner думает, что Krab отвечает MLX, а отвечает Codex.
+            _is_mlx_direct_backend = selected_model.startswith("mlx-local-kv4/")
+            if (
+                not effective_force_cloud
+                and not _is_mlx_direct_backend
+                and model_manager.is_local_model(selected_model)
+            ):
                 local_ready = await model_manager.ensure_model_loaded(
                     selected_model,
                     has_photo=has_photo,
