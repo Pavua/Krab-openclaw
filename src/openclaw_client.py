@@ -3337,6 +3337,46 @@ class OpenClawClient:
         request_started_at = time.time()
         messages_to_send: list[dict[str, Any]] = []
 
+        # Wave 250 (manual surgical apply): owner's set_primary через /admin/models
+        # реально перехватывает Telegram path. Читаем active_model.json и подставляем
+        # как preferred_model_id если ENV gate включён. Без этого UI «primary» — UI-only.
+        try:
+            _hook_enabled = os.getenv("KRAB_ACTIVE_MODEL_TELEGRAM_PATH_ENABLED", "1") in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+            _force_all = os.getenv("KRAB_ACTIVE_MODEL_FORCE_ALL_PATHS", "0") in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+            if _hook_enabled:
+                from .core.active_model_routing import get_active_model_id_async  # noqa: PLC0415
+
+                _active_pick = await get_active_model_id_async()
+                if _active_pick and (_force_all or not preferred_model_id):
+                    logger.info(
+                        "wave250_resolve_target",
+                        picked=_active_pick,
+                        had_preferred=bool(preferred_model_id),
+                        force_all=_force_all,
+                        force_cloud=effective_force_cloud,
+                    )
+                    preferred_model_id = _active_pick
+                    # MLX local / LM Studio local — обходим force_cloud remap к gateway.
+                    if any(
+                        _active_pick.startswith(p)
+                        for p in ("mlx-local-kv4/", "lm-studio-local/", "lmstudio/")
+                    ):
+                        if effective_force_cloud:
+                            logger.info("wave250_skip_force_cloud_remap", picked=_active_pick)
+                        effective_force_cloud = False
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning("wave250_resolve_failed", error=str(_exc))
+
         try:
             if preferred_model_id:
                 # Явный выбор модели из UI/owner-пути должен иметь приоритет над
