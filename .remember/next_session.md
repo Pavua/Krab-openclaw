@@ -80,6 +80,8 @@ mlx-local-kv4/gemma-4-26B-A4B-it-OptiQ-4bit
 | LM Studio 0.4.13 mxfp4/4bit под compressor pressure | 45-79 | не fair (memory ate perf) |
 | **LM Studio 0.4.13 nvfp4 t=0.3** (compressor pressure) | **64.5** | user наблюдал ~60, подтверждено |
 | **LM Studio 0.4.13 nvfp4 t=0** (greedy peak) | **76.6** | ≈ mxfp4 (79), noise-level diff 3% |
+| **LM Studio 0.4.13 vanilla 4bit t=0.3** (apples-to-apples) | **67.3** | **winner** среди 4bit, +4% vs nvfp4/mxfp4 |
+| **LM Studio 0.4.13 vanilla 4bit t=0** (greedy peak) | **79.7** | winner, на 15% быстрее `mlx_lm.server :8088` (58.7) под HTTP |
 
 **Главные выводы**:
 - **OptiQ ≈ vanilla 4bit на одинаковом стеке** (TurboQuant не быстрее в throughput, выигрывает только в точности на чувствительных слоях)
@@ -133,6 +135,7 @@ ls /Volumes/4TB\ SSD/bench_tmp/
 3. **Login account2/account3 codex** — user в Terminal, oneoff.
 4. **Routing alias UI fix** — `models_admin_router.py`, low risk patch для panel dropdown.
 5. ~~**(Опционально) nvfp4 mlx_vlm bench**~~ — **CLOSED 15.05 19:35**. nvfp4 ≈ mxfp4 на M4 Max (через LM Studio 0.4.13 noise-level diff 3%). FP4 на Apple Silicon идёт через generic path, не натив. Закрывает бенчмарк-цикл.
+6. **(Опционально, P5) Production routing → LM Studio HTTP** — vanilla 4bit через LM Studio :1234 даёт **79.7 tok/s** (greedy) / **67.3 tok/s** (t=0.3), что **на 15% быстрее** текущего `mlx_lm.server :8088` (58.7 tok/s HTTP с OptiQ). Apples-to-apples (одни RAM conditions, оба HTTP). Если переключить Krab routing на `lm-studio-local/gemma-4-26b-a4b-it` — +15% throughput бесплатно. Требует: (1) `KRAB_OPENCLAW_BYPASS_ENABLED=1` или похожий gate, (2) `LM_STUDIO_API_KEY` уже в `.env`, (3) test что Gateway не override'нет на cloud.
 
 ## 📂 Текущее состояние (2026-05-15 ~19:00)
 
