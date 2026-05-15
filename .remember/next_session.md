@@ -1,143 +1,145 @@
-# Session 49 — Starter Handoff (Session 48 in progress, 2026-05-13 ~02:30)
+# Session 50 — Starter Handoff (Session 49 closed, 2026-05-15 ~19:00)
 
-## TL;DR — Session 48 СУПЕРПРОДУКТИВНАЯ: **35+ commits**, **14 admin pages live**, **~300+ tests added**, 3 macOS reboot survived
+## TL;DR — Session 49 (длинная диагностика, 14-15.05): 1 commit, 3 patches live, 3 macbook reboots
 
-**main HEAD**: `cf742ed` (Wave 186-fix-2 _ai_card schema fix)
+**main HEAD**: `ad0534e` (Wave 256 + 257: typing-indicator early + bypass guard + codex heartbeat)
 
-## 🎯 Wave timeline (Session 48)
+Session началась как mlx-benchmark research (gemma-4 throughput на M4 Max), перешла в production troubleshooting после трёх kernel panic reboots, закрылась тремя production patches.
 
-| Wave | Commit | Effect |
+## 🎯 Что сделано (Wave 256–257)
+
+| Wave | Файл | Эффект |
 |---|---|---|
-| 163 | `3fe3ef1` | `/api/network/probes` восстановлен (исчез после S47 refactor) — split_brain + dispatcher_tick + pyrogram disconnects |
-| 164/165 | `ac1e38f` | `/admin/sentry` + `/admin/cron` pages |
-| 166 | `8f5647b`+`d788b70`+`ee46f75`+... | Father Reminder + Risk Guard + .env.bak gitignore + Wave 138/141 followups |
-| 167 | (Sentry resolve) | 6 issues resolved (Wave 142/143 fix verified, paid guard log spam reduced) |
-| 168 | `9055905` | docs autotables refresh — 309 endpoints, 181 handlers |
-| 169 | (bundled in 170) | `/admin/logs` page — structlog tail + level filter + grep + download |
-| 170 | `fa56639` | PaidGeminiGuard logger.error → warning (Wave 41-O pattern) |
-| 171 | (filesystem) | **8 GB freed** — old archive.db backups + workspace tarballs + dated dirs |
-| 172 | `c695034` | backup retention sweep — auto-prune krab_memory/backups/workspace |
-| 173 | `aedb14b` | typing indicator while LLM generates — async context manager |
-| 174 | `eeafd4e`+`2555116`+`5168b84` | Sentry hygiene: 4 noise events downgraded |
-| 176 | `f3ff396` | `/admin/db` — SQLite stats + integrity + WAL checkpoint |
-| 177 | `d9ebba5` | Prometheus metrics for typing indicator + alert |
-| 178 | (pending live retry) | Wave 90 retry batched prune — interrupted by reboots |
-| 179 | `d1911b7` | `/admin/network` — MTProto session + ping + DNS diagnostics |
-| 180 | `ea07549` | krab_ear IPC probe — backoff + not-installed + env gate. **KE now healthy** |
-| 181 | `7c7574a` | TTS pipeline wrapped в recording_voice indicator |
-| 182 | `db7eb23` | MLX Local KV4 provider в /admin/models picker |
-| 183 | `1cd9b9d` | `/admin/voice` — TTS/STT/Gateway/Ear + restart actions |
-| 184 | `4df00d6` | `/admin/memory` — RAG stats + search interface + retrieval metrics |
-| 186 | `38d21c0` | `/admin/health` unified dashboard (scatter-gather 8 endpoints) |
-| **186-fix** | `fe635bc` | **ASGITransport для in-process self-calls** — обход uvicorn single-worker deadlock |
-| 186-fix-2 | `cf742ed` | `_ai_card` schema fix (chain.active_ai_channel) — все 7 cards GREEN |
+| **256** | `src/userbot/llm_flow.py` (после `mark_accepted`) | Typing-indicator активируется сразу после auto-reaction, до segmented_prompt/memory/autoscale/joke. Counter с 1/8h → 2/2 reqs. User видит «Краб печатает...» за ~5 сек после receive (было 15-25 сек). |
+| **257-A** | `src/integrations/google_genai_direct.py:58-110` + `src/openclaw_client.py:4176,4266` | `LOCAL_BACKEND_PREFIXES = ("mlx-local-kv4/", "lm-studio-local/", ...)` guard в `is_gemma_model`. Bypass router больше не отправляет local-only aliases в Google GenerateContentRequest и HF lookup. Закрыло 11 events `PYTHON-FASTAPI-7M` (`ClientError: unexpected model name format`) + 2 events `PYTHON-FASTAPI-8S` (`404 Repository Not Found`). |
+| **257-B** | `src/userbot/llm_flow.py:1381-1404` | Heartbeat condition: `(received_any_tool_event or _is_codex_cli_route)`. Раньше codex-cli routes никогда не triggered heartbeat (subprocess bypass возвращает один stdout-блок, без tool events). Теперь на 60+ сек stalls placeholder обновляется как «🦀 Codex думает... (Ns)». Tests: 207 passed. |
 
-## 🌐 14 admin pages LIVE на http://127.0.0.1:8080
+**Pre-commit ruff**: passed (3 files already formatted, no fixes needed).
 
-| Page | Wave | Status |
+## 🐛 Открытые баги (для Session 50)
+
+### 🔥 P0 — Pyrogram chat subscription drop
+
+**Симптом**: после `graceful_restart_triggering_catchup` (network_watchdog) **конкретный chat исчезает** из активных Pyrogram updates. DM работает дальше, но **группа silent**.
+
+**Эмпирика 15.05**:
+- 05:38 — последний event для YMB chat (`-1001804661353`)
+- 09:09 / 10:01 / 12:21 / 16:01 / 18:13 — `graceful_restart_triggering_catchup` events
+- 09:09 — 18:13 — Krab обрабатывал DM `p0lrd` (chat `312322764`) **исправно**
+- 05:38 — 18:50 — **0 событий** для YMB, при этом 25+ mentions Krab'а от 4 разных пользователей (включая прямое «Краб, бери его на себя» от owner)
+- 18:54 (после fresh restart) — YMB снова видим, ответ за 19 сек
+
+**Гипотеза**: `src/userbot/message_catchup.py` (Wave 46-A) при session recreation **selectively** unsubscribes часть chats. Нужно:
+1. Прочитать `src/userbot/message_catchup.py` + `src/core/network_watchdog.py`
+2. Найти где Pyrogram session.recreate / iter_dialogs вызывается после catchup
+3. Проверить — re-attach handler идёт на **все** dialogs или только на active subset
+
+**Quick test**: Stop+Start Krab возвращает chat. Workaround на сейчас — следить через `silence_auto_owner_typing` events для main групп, если за 30 мин нет — рестартнуть.
+
+### P1 — Heartbeat patch применился, но не verified в prod на длинных stall
+
+Wave 257-B протестирован на 28-сек codex запросе → heartbeat threshold (60 сек) не triggered, как и должно. На реальных 3-min stalls должен показывать «Codex думает... (Ns)». **Нужен один natural slow request чтобы убедиться.**
+
+### P2 — Multi-account codex rotation мёртв
+
+В `~/.codex_accounts/`:
+- `primary/auth.json` ✅
+- `account2/`, `account3/` — папки есть, но `auth.json` отсутствует
+
+`list_accounts()` фильтрует по `auth.json` → возвращает `logged_in=False` для 2/3. `max_attempts = 2`, но второй `get_next_codex_home()` → `None` → `CodexQuotaExhaustedError` моментально при stall primary.
+
+**Fix**: интерактивно (user в Terminal) — `CODEX_HOME=~/.codex_accounts/account2 codex login` + повторить для account3. После этого rotation оживёт сама (код готов, в `src/integrations/cli_subprocess_bypass.py:341-565`).
+
+### P3 — Routing alias bug в owner panel
+
+`/admin/routing` UI при сохранении truncate'нет полные MLX aliases. Например выбираешь `gemma-4-26B-A4B-it-OptiQ-4bit (14.6 GB)` → сохраняется как `mlx-local-kv4/gemma-4-26b` → 404 на runtime. Это и спровоцировало 11 Sentry events PYTHON-FASTAPI-7M вчера.
+
+Правильный полный alias из `~/.openclaw/agents/main/agent/models.json`:
+```
+mlx-local-kv4/gemma-4-26B-A4B-it-OptiQ-4bit
+```
+
+**Workaround**: через API `POST /api/admin/model/switch` с body `{"model":"mlx-local-kv4/gemma-4-26B-A4B-it-OptiQ-4bit"}`.
+
+**Fix needed**: `src/modules/web_routers/models_admin_router.py` — где UI dropdown собирается, нужен `provider/full_id` join вместо truncation.
+
+## 📊 mlx-benchmark research findings (14-15.05)
+
+Замеры gemma-4-26B-A4B-it на M4 Max 36GB:
+
+| Стек / квант | warm tok/s | Заметки |
 |---|---|---|
-| `/admin/models` | 144+182 | ✅ + MLX KV4 |
-| `/admin/swarm` | 152 | ✅ |
-| `/admin/costs` | 155 | ✅ |
-| `/admin/ecosystem` | 156 | ✅ |
-| `/admin/inbox` | 157 | ✅ |
-| `/admin/routing` | 146+160 | ✅ |
-| `/admin/cron` | 165 | ✅ 56 launchd agents |
-| `/admin/sentry` | 164 | ✅ |
-| `/admin/logs` | 169 | ✅ structlog tail |
-| `/admin/db` | 176 | ✅ 12 DBs + integrity |
-| `/admin/network` | 179 | ✅ ping + DNS |
-| `/admin/voice` | 183 | ✅ TTS+STT+Gateway+Ear |
-| `/admin/memory` | 184 | ✅ RAG search + stats |
-| `/admin/health` | 186 | ✅ unified GREEN |
+| 🥇 **vanilla 4bit + MTP spec b=2 t=0** (mlx_vlm direct) | **101** | best result, MTP draft = `guardiangate1775/...-assistant-4bit` |
+| vanilla 4bit baseline t=0 (mlx_vlm) | 92.4 | без spec |
+| **LM Studio HTTP vanilla 4bit** (старая 0.4.12) | **87.4** | absolute fastest HTTP path |
+| vanilla 4bit baseline t=0.3 (mlx_vlm) | 82.6 | |
+| LM Studio HTTP OptiQ-4bit | 73.7 | |
+| OptiQ mlx_lm direct | 67.9 | |
+| vanilla mlx_lm direct | 68.0 | |
+| **OptiQ via mlx_lm.server :8088 HTTP** (Krab prod) | **58.7** | HTTP overhead ~14% |
+| LM Studio 0.4.13 mxfp4/4bit под compressor pressure | 45-79 | не fair (memory ate perf) |
 
-## 🔑 Архитектурные паттерны Session 48
+**Главные выводы**:
+- **OptiQ ≈ vanilla 4bit на одинаковом стеке** (TurboQuant не быстрее в throughput, выигрывает только в точности на чувствительных слоях)
+- **LM Studio самый быстрый HTTP стек** даже с overhead
+- **MTP speculative с правильным 4bit draft даёт ~10%** на vanilla target при t=0 (greedy). На abliterated target — provider mismatch, 0.57-0.81×.
+- **mxfp4 на M4 Max нет hw acceleration** — generic FP4 path, медленнее affine 4bit.
+- **`gemma-4-26B-A4B-it-assistant` (MTP draft) в LM Studio 0.4.13 UI** не распознаётся как «совместимая черновая модель» — native LM Studio spec для Gemma 4 не реализован
 
-### ASGITransport для server-internal calls (Wave 186-fix)
-Когда FastAPI handler делает HTTP self-calls на свой сервер через httpx — это deadlock'ит uvicorn single-worker. Fix:
-```python
-transport = httpx.ASGITransport(app=ctx.app)
-async with httpx.AsyncClient(transport=transport, base_url="http://owner-panel.local") as c:
-    r = await c.get("/api/health")  # in-process, no socket
-```
-RouterContext теперь содержит `app: FastAPI` для этого паттерна.
+**Артефакты бенчей**: `/Volumes/4TB SSD/bench_tmp/*.py` (mlx_vlm_bench.py, mxfp4_bench.py, lmstudio_bench.py) — persistent через reboot.
 
-### Wave 173 typing indicator (async context manager)
-```python
-async with recording_voice(bot.client, chat_id):
-    await tts_pipeline(text)  # Telegram shows "Krab is recording..."
-```
-Loop re-sends ChatAction.RECORD_AUDIO каждые 4s, cancels on exit.
+**Скачанные таргеты** в `/Volumes/4TB SSD/LMStudio_models/mlx-community/`:
+- `gemma-4-26b-a4b-it-4bit` (15.6 GB, vanilla affine)
+- `gemma-4-26b-a4b-it-mxfp4` (14.9 GB)
+- `gemma-4-26b-a4b-it-nvfp4` (15.6 GB) — **не тестировали, лежит готовый**
 
-### Worktree-main divergence pattern
-Subagents работают в worktree branch. Чтобы перенести их commits на main:
+**Скачанный draft**: `/Volumes/4TB SSD/LMStudio_models/guardiangate1775/gemma-4-26B-A4B-it-assistant-4bit` (282 MB, MLX 4bit MTP).
+
+## 🛑 Уроки сессии (записано в memory)
+
+| Memory file | Урок |
+|---|---|
+| `feedback_ram_pressure_36gb` | Никогда не запускать параллельно :8088 + mlx_vlm bench + LM Studio + HF download. Сумма >28GB committed → kernel panic. |
+| `feedback_lmstudio_single_model` | Никогда не держать 2 LM Studio модели loaded одновременно. После `POST /api/v1/models/unload` ВСЕГДА проверять `/api/v0/models` count=0. Body для unload: `{"instance_id":"..."}`, НЕ `{"model":"..."}`. |
+| `feedback_krab_ear_separate_project` | Krab Ear — параллельный проект. `new Stop Krab.command` теперь под env flag `KRAB_EAR_STOP_WITH_KRAB=0` (default), не трогает Krab Ear LaunchAgent'ы. |
+
+## ⚡ Quickstart следующей сессии
+
 ```bash
-git format-patch -1 <sha> --stdout -- <files> > /tmp/patch
-git apply --3way /tmp/patch
-```
-Это избегает 33-file cherry-pick conflicts из drift между branches.
+# 1. Health check
+curl -sS http://127.0.0.1:8080/api/health | python3 -m json.tool
+curl -sS http://127.0.0.1:8080/api/admin/routing-active | python3 -m json.tool
 
-## ⚠️ Pending для Session 49
+# 2. Если Krab лежит:
+"/Users/pablito/Antigravity_AGENTS/new start_krab.command"
 
-### High priority
-- **Wave 178 prune live retry** — 173 MB savings от 193K orphan messages. Запускать **в foreground**, monitor, без parallel sonnet agents во время prune.
-- **typing indicator group chats verify** — Wave 173 wired для DM, проверить группы
-- **autotables refresh** — endpoints > 309 после 14 admin pages
+# 3. Если YMB silent — проверить когда последний event:
+grep "1001804661353" ~/.openclaw/krab_runtime_state/krab_main.log | tail -3
+# Если > 30 мин назад — Stop+Start Krab
 
-### Medium priority
-- Wave 86 pressure-aware select — enable in production
-- Wave 63-D dispatcher recovery — flip enabled after 1-2 weeks
-- AGE-15 archive.db corruption monitor
+# 4. Sentry проверка:
+# через MCP: mcp__krab-yung-nagato__krab_sentry_status statsPeriod=6h
 
-### Low priority
-- `/admin/help` index page — описание всех 14 admin pages
-- Backup retention 4-я категория (`krab_memory/backups/`)
-- Wave 173 typing indicator для image generation (UPLOAD_PHOTO)
-
-## 💡 Lessons learned Session 48
-
-1. **Memory pressure от parallel Sonnet agents** — 4+ одновременно вызывают macOS OOM. Limit: **2 max foreground**, background prune separate.
-2. **Recovery from reboots clean** — launchd auto-restart + commit-after-each-wave persistence спасли 35 commits через 3 reboots.
-3. **ASGITransport** — production pattern для FastAPI dashboards с self-calls. Никогда `httpx.get('http://127.0.0.1:port/...')` из handler того же сервера.
-4. **Worktree-main divergence** требует `format-patch -- <files>` selective apply, не cherry-pick.
-
-## Quick commands
-
-```bash
-# Health dashboard
-open http://127.0.0.1:8080/admin/health
-
-# All probes
-curl -sS http://127.0.0.1:8080/api/network/probes | jq
-
-# Krab restart
-launchctl kickstart -k gui/$UID/ai.krab.core
-
-# Wave 178 prune retry (FOREGROUND only!)
-KRAB_MEMORY_PRUNE_APPLY=1 venv/bin/python scripts/krab_memory_prune_orphans.py --commit-each-chat 2>&1 | tee /tmp/prune.log
-
-# Sentry quota check
-venv/bin/python scripts/krab_sentry_quota_check.py
+# 5. Bench scripts:
+ls /Volumes/4TB\ SSD/bench_tmp/
 ```
 
-## Session 48 stats (updated post-Wave 192)
-- Commits: **43+** (across 3 macOS reboots)
-- Admin pages: 6 → **17** (added: cron/sentry/logs/db/network/voice/memory/health/help/env/commands)
-- Tests added: **~400+**
-- Endpoints: 309 → **349** (+40, 13% growth)
-- Metrics: 52 → 53, Alerts: 42 → 43
-- Sentry issues resolved: 10+
-- Disk freed: 9.5 GB
-- Major bug fixes: 2 — Wave 186 ASGITransport deadlock + Wave 180 KrabEar IPC probe
-- Worktree-main reconciliations: 3 (Waves 163, 164/165, 169)
+## 🎯 P0 для Session 50 (приоритеты)
 
-## Wave timeline addendum (190+)
-| Wave | Commit | Effect |
-|---|---|---|
-| 187 | `06f47ba` | `/admin/help` index page — 15-я page |
-| 188 | (background) | Wave 178 retry — live prune ~30min, ~173 MB savings expected |
-| 189 | `286d672` | `/admin/env` — 39 vars, secret masking, 16-я page |
-| 190 | `68ece90` | `/admin/commands` — 162 commands в 14 категориях, 17-я page |
-| 191 | `a37ed6a` | backup retention 4-я категория — openclaw config backups (437 .bak files без retention) |
-| 192 | `2e0fb43` | typing indicator group verify ✓ + NLU compound/anaphora patterns (`_KRAB_NAME_RE` DRY) |
-| autotables | `258fad6` | docs/CLAUDE_AUTO_*.md refreshed — 349 endpoints, 181 handlers |
+1. **Pyrogram chat-drop bug** — root cause investigation в `message_catchup.py` + `network_watchdog.py`. Можно через subagent (general-purpose, read-only, ≤250 слов отчёт).
+2. **Verify Wave 257-B heartbeat** — нужен natural slow codex запрос (60+ сек). Можно искусственно прогрузить codex длинным промптом и watch log на `heartbeat` events.
+3. **Login account2/account3 codex** — user в Terminal, oneoff.
+4. **Routing alias UI fix** — `models_admin_router.py`, low risk patch для panel dropdown.
+5. **(Опционально) nvfp4 mlx_vlm bench** — последний оставшийся таргет, посмотреть превзойдёт ли mxfp4 (вряд ли, но closure).
+
+## 📂 Текущее состояние (2026-05-15 ~19:00)
+
+- **Krab**: started ~18:54 после моего restorative restart, health=ok
+- **Routing**: picked=actually=`codex-cli/gpt-5.5`, status=ok
+- **YMB chat** (`-1001804661353`): обратно в подписке, ответил за 19 сек на test ping 18:54
+- **DM** (`p0lrd`, `312322764`): работал стабильно весь день
+- **Sentry 24h**: чисто (только Krab Ear hanging — параллельный проект)
+- **Memory**: 35GB used / 329MB free (compressor 7GB) — baseline для текущей рабочей конфигурации
+- **LM Studio**: 0.4.13 active, 0 моделей loaded
+- **`:8088` mlx_lm.server**: OptiQ-4bit loaded, не routed сейчас (Gateway → cloud через paid_gemini_guard)
+- **15940/16063 tests collected** (2 collection errors в test_memory_doctor_all_db.py — не блокер)
