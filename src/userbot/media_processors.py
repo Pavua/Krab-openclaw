@@ -27,6 +27,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import httpx
 import structlog
 
 from ..config import config
@@ -195,6 +196,82 @@ class MediaProcessorsMixin:
 
     # ─── Video pipeline ──────────────────────────────────────────────────────
 
+    async def _describe_frame_via_lmstudio(
+        self,
+        frame_b64: str,
+        idx: int,
+        *,
+        chat_id: str,
+        timeout_sec: float,
+    ) -> str:
+        """Session 52: vision describe через локальный LM Studio (Gemma 4).
+
+        Bench Session 52: local Gemma 4 26B 4bit через LM Studio = **1.7-2.2s**
+        per frame vs cloud Gemini ≥25s timeout (S51: 3/3 frames timed out).
+        Решает hot-path regression от cloud vision describe.
+
+        Env config:
+        - ``KRAB_LOCAL_VISION_URL`` (default ``http://127.0.0.1:1234``)
+        - ``KRAB_LOCAL_VISION_MODEL`` (default ``gemma-4-26b-a4b-it@4bit``)
+        - ``LM_STUDIO_API_KEY`` (auth Bearer; existing env)
+
+        Returns: stripped describe text, либо empty string при любой ошибке
+        (perceptor пропустит этот кадр — fail-open).
+        """
+        prompt = (
+            "Опиши кратко (1-2 предложения), что видно на кадре. "
+            "Без вводных, без markdown — только описание."
+        )
+
+        url = os.getenv("KRAB_LOCAL_VISION_URL", "http://127.0.0.1:1234").rstrip("/")
+        model = os.getenv("KRAB_LOCAL_VISION_MODEL", "gemma-4-26b-a4b-it@4bit")
+        api_key = os.getenv("LM_STUDIO_API_KEY", "")
+
+        body = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{frame_b64}"},
+                        },
+                    ],
+                }
+            ],
+            "max_tokens": 200,
+            "temperature": 0.0,
+            "stream": False,
+        }
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout_sec) as client:
+                resp = await client.post(
+                    f"{url}/v1/chat/completions",
+                    json=body,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            msg = (data.get("choices") or [{}])[0].get("message", {})
+            text = msg.get("content") or msg.get("reasoning") or ""
+            return text.strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "lmstudio_frame_describe_failed",
+                idx=idx,
+                error=str(exc)[:200],
+                error_type=type(exc).__name__,
+                url=url,
+                model=model,
+            )
+            return ""
+
     async def _describe_video_frame(
         self,
         frame_bytes: bytes,
@@ -204,8 +281,11 @@ class MediaProcessorsMixin:
     ) -> str:
         """Краткое описание одного кадра видео через vision-модель.
 
-        Использует тот же openclaw stream, что и фото-pipeline, но
-        собирает поток в одну строку (короткий prompt + жёсткий timeout).
+        Session 52: routing logic
+        - ``KRAB_LOCAL_VISION_ENABLED=1`` → local LM Studio (Gemma 4 26B)
+          ~1.7-2.2s/frame. Решает cloud Gemini timeout regression (S51).
+        - Иначе legacy cloud path через openclaw_client (force_cloud=True).
+
         Возвращает пустую строку при любой ошибке — perceptor пропустит кадр.
         """
         if not frame_bytes:
@@ -221,11 +301,34 @@ class MediaProcessorsMixin:
             )
             return ""
 
+        timeout_sec = float(getattr(config, "VIDEO_FRAME_DESCRIBE_TIMEOUT_SEC", 25.0))
+
+        # Session 52: local vision routing (default off → safe roll-out)
+        if os.getenv("KRAB_LOCAL_VISION_ENABLED", "0") == "1":
+            result = await self._describe_frame_via_lmstudio(
+                b64,
+                idx,
+                chat_id=chat_id,
+                timeout_sec=max(5.0, timeout_sec),
+            )
+            if result:
+                logger.info(
+                    "frame_describe_local_success",
+                    idx=idx,
+                    char_count=len(result),
+                )
+                return result
+            # Empty — log + fall through to cloud (resilience)
+            logger.info(
+                "frame_describe_local_empty_fallthrough",
+                idx=idx,
+            )
+
+        # Cloud path (existing, used when local disabled либо local empty)
         prompt = (
             "Опиши кратко (1-2 предложения), что видно на кадре. "
             "Без вводных, без markdown — только описание."
         )
-        timeout_sec = float(getattr(config, "VIDEO_FRAME_DESCRIBE_TIMEOUT_SEC", 25.0))
         chunks: list[str] = []
         try:
 
