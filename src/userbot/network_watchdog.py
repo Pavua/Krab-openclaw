@@ -492,8 +492,15 @@ class NetworkWatchdogMixin:
             )
             return
 
-        # Проверяем что метод catchup доступен (mixin-совместимость)
-        catchup_fn = getattr(self, "_run_startup_catchup_safe", None)
+        # Проверяем что метод catchup доступен (mixin-совместимость).
+        # Session 50 P0: prefer graceful-specific method (union whitelist +
+        # recent active dialogs) — он покрывает chats потерянные при long
+        # disconnect (PTS gap > server retention). Fallback на startup
+        # catchup для partial deploy / tests которые ещё не знают новый
+        # метод.
+        catchup_fn = getattr(self, "_run_graceful_restart_catchup_safe", None)
+        if catchup_fn is None:
+            catchup_fn = getattr(self, "_run_startup_catchup_safe", None)
         if catchup_fn is None:
             logger.warning("graceful_restart_catchup_method_missing")
             return

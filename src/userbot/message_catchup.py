@@ -244,6 +244,41 @@ def _resolve_catchup_concurrency(default: int = 3) -> int:
         return default
 
 
+def _resolve_recent_active_limit(default: int = 30) -> int:
+    """Session 50 P0: top-N recent dialogs для graceful-restart catchup.
+
+    Env ``KRAB_GRACEFUL_CATCHUP_RECENT_LIMIT`` (range 0-100, default 30).
+    0 = выключить расширение (только whitelist).
+
+    Используется только в graceful-restart контексте — startup catchup
+    остаётся узким (whitelist only), чтобы не блокировать boot.
+    """
+    raw = os.environ.get("KRAB_GRACEFUL_CATCHUP_RECENT_LIMIT", "").strip()
+    if not raw:
+        return default
+    try:
+        v = int(raw)
+        return max(0, min(v, 100))
+    except ValueError:
+        return default
+
+
+def _resolve_recent_active_hours(default: float = 6.0) -> float:
+    """Session 50 P0: окно "recent" в часах для graceful-restart catchup.
+
+    Env ``KRAB_GRACEFUL_CATCHUP_RECENT_HOURS`` (range 0.5-72, default 6.0).
+    Диалог попадает в graceful catchup если last_message.date > now - N часов.
+    """
+    raw = os.environ.get("KRAB_GRACEFUL_CATCHUP_RECENT_HOURS", "").strip()
+    if not raw:
+        return default
+    try:
+        v = float(raw)
+        return max(0.5, min(v, 72.0))
+    except ValueError:
+        return default
+
+
 def _resolve_owner_chat_id() -> int | None:
     """Resolve owner DM chat_id. Приоритет:
 
@@ -491,6 +526,89 @@ class MessageCatchupMixin:
             result.append(cid)
         return result
 
+    async def _resolve_recent_active_chats(
+        self,
+        *,
+        limit: int | None = None,
+        hours: float | None = None,
+    ) -> list[int]:
+        """Session 50 P0: top-N recent active dialogs для graceful-restart catchup.
+
+        Возвращает chat_id'ы у которых last_message.date > now - hours,
+        ограниченный top-N по recency. Defensive: любая ошибка iter_dialogs
+        → log warning + return [].
+
+        Используется как union с whitelist в ``_run_graceful_restart_catchup_safe``
+        — без этого Pyrogram при long disconnect теряет updates по chats,
+        которых нет в whitelist (PTS gap > server retention).
+
+        Background (15.05.2026): YMB group `-1001804661353` silence 13ч
+        после `graceful_restart_triggering_catchup` — chat не был в
+        whitelist, GetDifference не восстановил старые updates.
+        """
+        if limit is None:
+            limit = _resolve_recent_active_limit()
+        if hours is None:
+            hours = _resolve_recent_active_hours()
+
+        if limit <= 0:
+            return []
+
+        client = getattr(self, "client", None)
+        if client is None:
+            return []
+
+        cutoff_ts = time.time() - hours * 3600.0
+        active: list[int] = []
+        seen: set[int] = set()
+
+        try:
+            async for dialog in client.iter_dialogs(limit=limit):
+                chat_obj = getattr(dialog, "chat", None)
+                chat_id = getattr(chat_obj, "id", None) if chat_obj else None
+                if chat_id is None:
+                    continue
+                try:
+                    cid = int(chat_id)
+                except (TypeError, ValueError):
+                    continue
+                if cid in seen:
+                    continue
+
+                top_msg = getattr(dialog, "top_message", None)
+                msg_date = getattr(top_msg, "date", None) if top_msg else None
+                # date может быть datetime — нормализуем в epoch float.
+                ts: float | None = None
+                if msg_date is not None:
+                    try:
+                        ts = float(msg_date.timestamp())
+                    except (AttributeError, TypeError):
+                        try:
+                            ts = float(msg_date)
+                        except (TypeError, ValueError):
+                            ts = None
+
+                if ts is None or ts < cutoff_ts:
+                    continue
+
+                seen.add(cid)
+                active.append(cid)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "graceful_catchup_recent_dialogs_failed",
+                error=str(exc)[:200],
+                error_type=type(exc).__name__,
+            )
+            return []
+
+        logger.info(
+            "graceful_catchup_recent_dialogs_resolved",
+            count=len(active),
+            limit=limit,
+            hours=hours,
+        )
+        return active
+
     async def _catchup_chat_history(
         self, chat_id: int, *, max_lookback: int | None = None
     ) -> dict[str, int]:
@@ -653,12 +771,19 @@ class MessageCatchupMixin:
         stats = await self._catchup_chat_history(chat_id, max_lookback=max_lookback)
         return int(stats.get("caught_up", 0))
 
-    async def _catchup_all_owner_chats(self) -> dict[int, int]:
+    async def _catchup_all_owner_chats(
+        self, *, targets_override: list[int] | None = None
+    ) -> dict[int, int]:
         """Wave 48-A / Wave 56-F: catch-up для всех target chats. Возвращает {chat_id: caught_up}.
 
         Targets resolved через ``_resolve_catchup_target_chats``: env
         override ``KRAB_STARTUP_CATCHUP_CHATS`` либо defaults
         (owner DM + Krab Swarm group).
+
+        Session 50 P0: optional ``targets_override`` позволяет caller'у
+        передать готовый список (union whitelist + recent_active для
+        graceful-restart контекста). Backward-compatible: default None →
+        старое поведение через resolver.
 
         Wave 56-F: параллельный catchup через asyncio.gather + Semaphore.
         Все coroutines запускаются одновременно, ограничены семафором
@@ -671,7 +796,10 @@ class MessageCatchupMixin:
         Финальный structured log включает per-chat stats + totals.
         """
         result: dict[int, int] = {}
-        targets = self._resolve_catchup_target_chats()
+        if targets_override is not None:
+            targets = list(targets_override)
+        else:
+            targets = self._resolve_catchup_target_chats()
         if not targets:
             logger.info("startup_catchup_skipped", reason="no_targets")
             return result
@@ -767,3 +895,65 @@ class MessageCatchupMixin:
                 error_type=type(exc).__name__,
             )
             record_catchup_failure("unexpected")
+
+    async def _run_graceful_restart_catchup_safe(self) -> None:
+        """Session 50 P0: catchup wrapper для graceful Pyrogram reconnect.
+
+        Отличается от ``_run_startup_catchup_safe``: расширяет whitelist
+        union'ом с top-N recent active dialogs (env-tuned). Это нужно
+        потому что при long disconnect Pyrogram теряет updates по chats
+        не в whitelist (PTS gap > server retention), и GetDifference их
+        не восстанавливает.
+
+        Background (15.05.2026): YMB group `-1001804661353` silence 13ч
+        после `graceful_restart_triggering_catchup` — chat не был в
+        whitelist (KRAB_STARTUP_CATCHUP_CHATS пустой, defaults = owner DM
+        + swarm group). Workaround Stop+Start Krab возвращал подписку.
+
+        Defensive: любая ошибка → log warning + falls back на whitelist-only
+        (через `_run_startup_catchup_safe`). Никогда не raise.
+
+        Throttle/uptime guards применяются на уровне
+        ``_schedule_catchup_after_graceful_restart`` в network_watchdog.
+        """
+        try:
+            whitelist = list(self._resolve_catchup_target_chats() or [])
+            try:
+                recent_active = await self._resolve_recent_active_chats()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "graceful_catchup_recent_resolution_failed",
+                    error=str(exc)[:200],
+                    error_type=type(exc).__name__,
+                )
+                recent_active = []
+
+            # Union с сохранением порядка: сначала critical whitelist,
+            # потом recent active (новизной). Дедуп через seen-set.
+            seen: set[int] = set()
+            merged: list[int] = []
+            for cid in [*whitelist, *recent_active]:
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                merged.append(cid)
+
+            logger.info(
+                "graceful_catchup_targets_merged",
+                whitelist_count=len(whitelist),
+                recent_active_count=len(recent_active),
+                total_unique=len(merged),
+            )
+
+            await self._catchup_all_owner_chats(targets_override=merged)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "graceful_catchup_unexpected_failure",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            record_catchup_failure("graceful_unexpected")
