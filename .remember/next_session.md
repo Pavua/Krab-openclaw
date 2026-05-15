@@ -137,6 +137,21 @@ ls /Volumes/4TB\ SSD/bench_tmp/
 5. ~~**(Опционально) nvfp4 mlx_vlm bench**~~ — **CLOSED 15.05 19:35**. nvfp4 ≈ mxfp4 на M4 Max (через LM Studio 0.4.13 noise-level diff 3%). FP4 на Apple Silicon идёт через generic path, не натив. Закрывает бенчмарк-цикл.
 6. **(Опционально, P5) Production routing → LM Studio HTTP** — vanilla 4bit через LM Studio :1234 даёт **79.7 tok/s** (greedy) / **67.3 tok/s** (t=0.3), что **на 15% быстрее** текущего `mlx_lm.server :8088` (58.7 tok/s HTTP с OptiQ). Apples-to-apples (одни RAM conditions, оба HTTP). Если переключить Krab routing на `lm-studio-local/gemma-4-26b-a4b-it` — +15% throughput бесплатно. Требует: (1) `KRAB_OPENCLAW_BYPASS_ENABLED=1` или похожий gate, (2) `LM_STUDIO_API_KEY` уже в `.env`, (3) test что Gateway не override'нет на cloud.
 
+### P3.5 — LM Studio gemma model routing enablement (новое 15.05 21:30)
+
+Попытка зарегистрировать `gemma-4-26b-a4b-it@4bit` в `models.json` под `providers.lmstudio.models` **не сработала** — Krab API возвращает `model_unknown:lmstudio/gemma-4-26b-a4b-it@4bit` даже после restart с обновлённым catalog.
+
+**Корневая причина**: символ `@` в model.id (LM Studio convention для quant suffix) не валидируется catalog resolver Krab'a. Парсер вероятно режет `gemma-4-26b-a4b-it@4bit` на `gemma-4-26b-a4b-it` + `4bit` или просто rejects по spec char.
+
+**Fix варианты для S50**:
+1. **Sanitize layer в `src/core/model_router.py`** — map canonical-safe-id ↔ provider-actual-id. Например catalog id=`gemma-4-26b-a4b-it-lmstudio`, при HTTP-request к LM Studio шлём `model: gemma-4-26b-a4b-it@4bit`.
+2. **Rename в LM Studio через `lms load <model> --identifier <safe>`** — переименовать identifier когда загружаем. Тогда `@` не появится в id вообще. Это user-side workaround.
+3. **Расширить sanitize в registry validator** на `[a-z0-9_/-]+` + `@` whitelist.
+
+**Текущий state**: `models.json` уже содержит запись `gemma-4-26b-a4b-it@4bit` (добавлено 15.05 21:25). Эту запись нужно либо удалить, либо renames при fix.
+
+Backup до edit: `/Users/pablito/.openclaw/agents/main/agent/models.json.bak_before_lmstudio_add` (но не появился в ls — возможно cp не удался из-за RAM pressure timeout'а).
+
 ## 📂 Текущее состояние (2026-05-15 ~19:00)
 
 - **Krab**: started ~18:54 после моего restorative restart, health=ok
