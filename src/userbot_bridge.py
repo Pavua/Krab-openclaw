@@ -3582,6 +3582,25 @@ class KraabUserbot(
                 is_self=is_self,
                 chat_id=str(chat_id),
             )
+        # Session 51 video_note bug fix: если outer message без видео, но
+        # reply_to_message содержит video/video_note (Telegram кружок) /
+        # animation — обрабатываем reply media тем же flow. Owner reported
+        # 2026-05-16: «Краб, ну вот этот кружок в телеграме можешь поглядеть?»
+        # → Krab ответил «медиафайл не передан в мой runtime». Reply media
+        # extraction для photo/animation уже существует (line ~3531), но
+        # video/video_note был gap.
+        elif reply_msg is not None and (
+            getattr(reply_msg, "video", None)
+            or getattr(reply_msg, "video_note", None)
+            or getattr(reply_msg, "animation", None)
+        ):
+            query = await self._process_video_message(
+                message=reply_msg,
+                query=query,
+                temp_msg=temp_msg,
+                is_self=is_self,
+                chat_id=str(chat_id),
+            )
 
         system_prompt = self._build_system_prompt_for_sender(
             is_allowed_sender=is_allowed_sender,
