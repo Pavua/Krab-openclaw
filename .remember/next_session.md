@@ -1,177 +1,197 @@
-# Session 52 — Starter Handoff (Session 51 closed, 2026-05-16)
+# Session 53 — Starter Handoff (Session 52 closed, 2026-05-16)
 
-## TL;DR — Session 51 (~5 часов): 4 commits, 1 prod bug fix, mlx_lm bench complete, +31% throughput recommendation
+## TL;DR — Session 52 (~6 часов): 5 commits + comprehensive multi-stack bench + LOCAL VISION LIVE END-TO-END
 
-**main HEAD**: `ad0d20b` (video_note reply fix). После этого: P0 diag + P3 cleanup + video_note.
+**main HEAD**: `d4ff0e6` (feat(media): route frame describe to local LM Studio Gemma 4 (S52 P0))
 
-Session 51 продолжила Session 50 fixes (P3.5+P0+P3) и закрыла P5 research цикл
-с mlx_lm.server. **Главные находки**: (1) `gemma4_assistant` arch не
-поддерживается ни в mlx_lm 0.31.3 ни в LM Studio mlx-engine — все HTTP-paths для
-external draft DEAD END, (2) vanilla 4bit на mlx_lm.server = **77.1 tok/s**
-vs current OptiQ-4bit production = 58.7 → **+31% throughput бесплатной заменой**,
-(3) video_note reply bug найден + закрыт.
+Session 52 closed the **cloud Gemini vision describe regression** (S51 discovered:
+3/3 frame describes timeout @ 25s each). Implementation: local Gemma 4 26B
+vanilla via LM Studio :1234 для `_describe_video_frame`. **Verified end-to-end
+in production**: Krab корректно описал содержимое video_note (3 frames in ~6
+секунд) после reply от owner.
 
 ## 🎯 Что сделано (production)
 
 | Commit | Fix | Tests |
 |---|---|---|
-| `1e5fb00` | **P0 diag** — `_resolve_recent_active_chats` теперь логирует early returns + filter breakdown counters (enumerated/no_chat_id/no_date/too_old). Раньше silent return на client=None маскировал root cause `recent_active_count=0`. | 19 P0 tests still green |
-| `497f7bf` | **P3** — drop hardcoded `mlx-local-kv4` из `_CLOUD_PROVIDERS`, use `build_mlx_local_provider_group` (Wave 240) для dynamic discovery. `_get_all_providers()` helper joins cloud+local. Explicit `known_prefixes.add("mlx-local-kv4")` safety belt. | +3 tests (58/58 green) |
-| `ad0d20b` | **video_note reply** — owner reported 2026-05-16: «Краб, кружок поглядеть?» → Krab ответил «медиафайл не передан в runtime». Reply media extraction обрабатывал photo/animation, video/video_note был gap. 1 elif branch + delegation в `_process_video_message`. | (ad-hoc — Wave 16-G pattern) |
+| `1e5fb00` | P0 diag — `_resolve_recent_active_chats` diagnostic logging | (S51) |
+| `497f7bf` | P3 — drop hardcoded mlx-local-kv4 → dynamic discovery | (S51) |
+| `ad0d20b` | reply→video_note media extraction (S51) — fixes silent ignore | (S51) |
+| `2b820dc` | S51 handoff docs | (S51) |
+| **`d4ff0e6`** | **S52 P0** — `KRAB_LOCAL_VISION_ENABLED=1` → local LM Studio Gemma 4 vision describe. Closes cloud timeout regression. | **+9 tests** |
 
-## 🐍 P5 final verdict — все HTTP paths для external draft Gemma 4 BLOCKED
+## 🏁 Comprehensive bench results (Session 52 ~3 hours, 7+ models × 4 stacks)
 
-### Findings from 6 parallel research subagents (Session 51 start)
+### Winner матрица
 
-| Path | Status | Reason |
-|---|---|---|
-| **mlx_lm.server + --draft-model** (the killer finding) | ❌ BLOCKED | `ValueError: Model type gemma4_assistant not supported` — mlx_lm 0.31.3 не имеет gemma4_assistant arch для draft loading |
-| **LM Studio Python SDK + draftModel** | ❌ BLOCKED | mlx-engine не распознаёт `gemma4_assistant` arch (user confirmed visually: LM Studio shows 0 compatible drafts) |
-| **Rapid-MLX --enable-mtp** (Session 50) | ❌ BLOCKED | MTP regress 2× (37 vs 81 baseline); only embedded MTP head, no external draft API |
-| **mlx-openai-server (cubist38)** | ⚠️ untested | Same `--draft-model-path` flag — likely same arch block |
-| **vllm-mlx** | ❌ N/A | Embedded MTP only (Qwen3-Next), no external draft API |
-| **mlx_vlm direct** (Session 49: 101 tok/s) | ✅ работает | НО не HTTP server, нет tool calling integration с OpenClaw |
-| **Ollama PR #15980 Gemma 4 MTP** | ⚠️ alt | Merged, но `/api/chat` ≠ OpenAI-compat для Krab routing — нужен адаптер |
+| Combo | Text tok/s | Vision (s) | Quality | Verdict |
+|---|---|---|---|---|
+| 🏆 **LM Studio + Gemma 4 26B vanilla** | **68.5** | **1.7-2.2** | ✅ clean | **PRODUCTION** |
+| Rapid-MLX + Gemma 4 vanilla | 66.7 | 8-11 (verbose 2000 tok) | ✅ but ignores max_tokens | Alt |
+| mlx_lm.server + Qwen 3.5 35B-A3B MoE | 68.9 | n/a (text only) | ⚠️ thinking-process leak | Defer |
+| LM Studio + Qwen 3.5/3.6/GLM-4.6V/Claude-distilled | 8-48 | broken | ❌ thinking template quirks (LM Studio update May 16 may worsened) | Skip |
+| LM Studio + Gemma 4 OptiQ | n/a | n/a | ❌ GPU stream error | Broken backend |
+| MTPLX/DFlash | n/a | n/a | misnamed weights (no real MTP head) | Defer indefinitely |
 
-**Bench results (Session 51, mlx_lm.server vanilla 4bit, t=0 greedy, 800 max_tokens)**:
-- baseline (no draft): **77.1 tok/s median** ✅
-- + draft model attempt: **server crashed at first request** (`Model type gemma4_assistant not supported`)
+### Critical learning: stack matters as much as model
 
-**Comparison table (cross-session)**:
+- **Qwen 3.5 35B-A3B**: LM Studio 7.9 tok/s vs mlx_lm.server 68.9 tok/s = **8.7× difference** purely from serving stack.
+- LM Studio's mlx-engine has thinking-mode template quirks с Qwen / GLM / Claude-distilled — returns empty `content` field, всё в `reasoning`.
+- Gemma 4 vanilla — **единственная модель которая работает clean в LM Studio multimodal** (no template quirks, fastest, smallest verbose output).
 
-| Stack | tok/s |
-|---|---|
-| mlx_vlm direct + MTP (S49, не HTTP) | **101** |
-| LM Studio HTTP vanilla 4bit (S49) | 79.7 |
-| Rapid-MLX baseline (S50) | 81.7 |
-| **mlx_lm.server vanilla 4bit (S51)** | **77.1** |
-| mlx_lm.server :8088 HTTP OptiQ (production now) | 58.7 |
+### Models tested but rejected
 
-### 💡 P5 silver lining — free +31% throughput
+- **Qwen3.5-9B-VLM** (5.7 GB): 24.8 tok/s text, 28s cold vision describe — slower than 26B Gemma despite smaller
+- **Qwen 3.6 27B**: LM Studio returns empty content (template parser broken на Qwen 3.6 после May 16 update)
+- **Gemma 4 Claude-distilled**: `<|channel>thought` token leak (Issue #899) в content output
+- **GLM-4.6V-Flash (9B)**: 48.3 tok/s text but vision variable (3.75-17.6s)
+- **MTPLX-Optimized-Speed (Youssofal)**: `mtplx inspect` says "Model has no MTP head" — misnamed, не actually MTP-equipped
+- **DFlash variants (z-lab, mlx-community)**: draft models exist (821 MB DFlashDraftModel arch) но Rapid-MLX `--enable-dflash` automation broken для Gemma 4
 
-**Recommendation**: обновить `~/Library/LaunchAgents/com.user.mlx-lm-server.plist`
-заменив target:
-```diff
-- <string>/Volumes/4TB SSD/LMStudio_models/mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit</string>
-+ <string>/Volumes/4TB SSD/LMStudio_models/mlx-community/gemma-4-26b-a4b-it-4bit</string>
+## 🏗️ Architecture после S52
+
+```
+Krab text routing → codex-cli/gpt-5.5 (cloud, primary)
+                    ↘ openclaw/cloud Gemini (fallback)
+                    
+Krab vision describes (NEW) → LM Studio :1234 + Gemma 4 26B vanilla
+                              ↘ cloud Gemini (fallback if local empty)
+
+LM Studio config: 
+  - Gemma 4 26B-A4B-it@4bit loaded as `krab-vision-primary` (14.57 GiB)
+  - TTL=infinite (always loaded для tier-1 latency)
+
+RotorQuant :8088 mlx_lm.server (OptiQ-4bit) — untouched, their research
 ```
 
-Без всякого spec decoding — **+31% throughput на :8088** (58.7 → 77.1 tok/s).
-RotorQuant использует OptiQ для quality-related research, но для **production
-Krab throughput vanilla 4bit лучше**. Можно либо:
-- (A) Изменить production plist на vanilla 4bit (нужно user buy-in, RotorQuant impact)
-- (B) Создать second instance :8089 с vanilla 4bit, route Krab туда через
-  `MLX_LOCAL_KV4_URL=http://127.0.0.1:8089`
-- (C) Defer — текущая Krab routing использует cloud (codex-cli) в hot path,
-  local fallback редкий
+## 📊 Production E2E verification (логи 2026-05-16 01:29)
 
-Не applied autoматически — это user/RotorQuant decision.
-
-### Альтернативы для true spec decoding (defer):
-
-1. **Найти `gemma4` arch draft** (не `gemma4_assistant`) — нет такого в HF
-   на сегодня (subagent search exhaustive). Только `guardiangate1775` суите.
-2. **Wait for mlx-lm upstream PR** — поддержка `gemma4_assistant` arch как
-   draft в mlx_lm. Можно открыть issue/PR в ml-explore/mlx-lm.
-3. **Wrap mlx_vlm direct в FastAPI** — кастомный HTTP-сервер вокруг 101 tok/s
-   path. Heavy lift, untested tool calling.
-4. **Ollama Gemma 4 MTP** + adapter `/api/chat` → OpenAI-compat. Medium lift.
-
-## 🐛 Открытые баги для Session 52
-
-### 🟡 P0 — Verify P0 diag (S51 commit 1e5fb00) после следующего graceful_restart
-
-После next `graceful_restart_triggering_catchup` event ищи в логе:
-```bash
-grep "graceful_catchup_recent_skipped" ~/.openclaw/krab_runtime_state/krab_main.log
-grep "graceful_catchup_recent_dialogs_resolved" ~/.openclaw/krab_runtime_state/krab_main.log
+```
+01:29:36 processing_ai_request msg_id=768744 (reply to 768657 video_note)
+01:29:39 perceptor_video_frames_extracted frames=3
+01:29:42 frame_describe_local_success idx=0 char_count=194   ← 3s for vision
+01:29:43 frame_describe_local_success idx=1 char_count=132   ← 1s additional
+01:29:44 frame_describe_local_success idx=2 char_count=174   ← 1s additional
+... LLM context augmented with frame descriptions ...
+01:33:33 cli_subprocess_complete_done   ← Krab final response sent
 ```
 
-**Expected diagnostic signals** (нужен **Krab restart** для применения patch):
-- `graceful_catchup_recent_skipped reason=no_client` → подтверждает гипотезу
-  что `self.client` None в момент graceful-restart hook (race condition с
-  reconnect). Fix: задержка hook'а либо retry если client None.
-- `graceful_catchup_recent_skipped reason=limit_zero` → user disabled через
-  `KRAB_GRACEFUL_CATCHUP_RECENT_LIMIT=0`.
-- `graceful_catchup_recent_dialogs_resolved` с `enumerated=0` → iter_dialogs
-  возвращает empty (Pyrogram cache state issue).
-- `... enumerated=N filtered_too_old=N` (одинаковые) → hours window (6h)
-  слишком узкий, нужно увеличить.
+Krab response в чат:
+> "В конце кадр уходит в темноту: виден силуэт человека слева и какие-то
+> очертания окон/дверей внизу. Технически: кружок обработался как
+> `video_note`, `message_id=768657`, 3 кадра успешно разобраны."
 
-### 🟡 P1 — Verify video_note reply fix (S51 commit ad0d20b) после restart
+## 🐛 Открытые items для Session 53
 
-Owner может повторить scenario: в любом chat → reply text на video note (кружок).
-Krab должен ответить по содержимому видео (не «не передан в runtime»).
-Log marker: `module=media_processors` + `video_perceptor_*` events.
+### 🟡 P1 — Routing race condition после tests
 
-### 🟢 P2 — codex login для account2/account3 (carried over)
-Unchanged. User Terminal action.
+S52 P3 unit test `test_switch_mlx_local_kv4_prefix_session51_p3` использует
+`mlx-local-kv4/custom-experimental-model-xyz` через POST /api/admin/model/switch.
+В production WIP это committed в `active_model.json` если test runs against
+running Krab (которое не должно случаться — это unit test). НО я наблюдал
+запись `actually_used: mlx-local-kv4/custom-experimental-model-xyz` после
+restart Krab — может из artifact `~/.openclaw/agents/main/agent/active_model.json`.
 
-### 🟢 P3 — Production routing optimization (NEW)
+**Fix**: либо test использует separate temp config, либо `/api/admin/model/switch`
+sanitize'ить против "experimental" patterns (low risk).
 
-`com.user.mlx-lm-server.plist` использует OptiQ-4bit (58.7 tok/s). vanilla
-4bit даёт 77.1 tok/s (+31%). Recommendation: либо одна замена в plist, либо
-parallel instance :8089 для Krab. **Не applied — нужен user decision**.
+Workaround applied: manually reverted к codex-cli/gpt-5.5 через POST switch.
+**Verify в S53**: после reboot routing остаётся codex-cli, нет drift к
+experimental-model-xyz.
+
+### 🟡 P1 — Verify health.openclaw probe stability
+
+После S52 restart: `openclaw: false` в health endpoint первые ~10 сек, потом
+stabilized к `true` (но logs don't show stabilization event clearly). Не
+блокер, но monitor.
+
+### 🟢 P2 — Translator local migration (Phase 2 carryover)
+
+`src/core/translator_engine.py:117` всё ещё `force_cloud=True` для auto-translate.
+Highest frequency cloud-burner. Pattern для миграции уже proved working
+(S52 vision describe). Apply same routing logic для translator через
+KRAB_LOCAL_TRANSLATOR_ENABLED.
+
+### 🟢 P2 — Photo describe / OCR migration
+
+`src/handlers/commands/content_commands.py:288` (`cmd_img`) и `:388` (`cmd_ocr`)
+имеют hardcoded `force_cloud=True`. Reuse pattern S52 для local route.
+
+### 🟢 P3 — Local draft verifier (Phase 3 carryover)
+
+New module `src/core/local_draft_verifier.py` для 20% sample cross-AI verify
+(subagent S52 design). ~120 LOC + hook в llm_flow + JSONL log + Prometheus
+drift metric.
+
+### 🟢 P4 — Clean up routing test artifact
+
+`tests/unit/test_models_admin_router_wave144.py` use `mlx-local-kv4/custom-experimental-model-xyz`
+might persist if test fixtures leak. Verify fixture isolation OR change
+test model id to clearly-fake `_TEST_ONLY_` prefix.
+
+### 🟢 P5 — Disk cleanup (~894 GB models, найти "мусорные")
+
+User has 89+ models на 4TB SSD (~994 GB!). Candidates для cleanup:
+- **Qwen 3.6 27B variants** (broken в LM Studio): qwen/qwen3.6-27b, qwen3.6-27b-ud-mlx, Youssofal/Qwen3.6-35B-A3B-Abliterated-Heretic
+- **Qwen 3.5 9B VLM** (slower than Gemma 4 26B): qwen3.5-9b-mlx-vlm
+- **MTPLX-Optimized-Speed** (misnamed, no real MTP)
+- **Gemma 4 Claude-distilled** (`<|channel>thought` leak)
+- **Gemma 4 OptiQ** (GPU stream error в LM Studio, RotorQuant использует — НЕ удалять)
+
+Это потенциально 100+ GB освободить. **Не делаю автоматически — review с тобой first**.
 
 ## ⚡ Quickstart следующей сессии
 
 ```bash
-# 1. Health check
+# 1. Health
 curl -sS http://127.0.0.1:8080/api/health | python3 -m json.tool
 curl -sS http://127.0.0.1:8080/api/admin/routing-active | python3 -m json.tool
 
-# 2. Если Krab лежит:
-"/Users/pablito/Antigravity_AGENTS/new start_krab.command"
-
-# 3. Verify S51 fixes after Krab restart (нужен restart!):
+# 2. Verify local vision still works:
 LOG=~/.openclaw/krab_runtime_state/krab_main.log
-# P0 diag
-grep -E "graceful_catchup_recent_(skipped|dialogs_resolved)" $LOG | tail -5
-# P3 — admin panel render
-curl -sS http://127.0.0.1:8080/admin/models | grep -c "mlx-local-kv4"
-# video_note bug → попроси owner reply на кружок в любом chat
+grep "frame_describe_local_success" $LOG | tail -3   # последние успехи
+grep "lmstudio_frame_describe_failed" $LOG | tail -3 # если есть HTTP errors
 
-# 4. Bench scripts (для optional follow-up):
-ls /Volumes/4TB\ SSD/bench_tmp/   # rapid_mlx_bench.py, mlx_lm_server_bench.py, lmstudio_bench.py
+# 3. LM Studio status (Gemma должна быть loaded):
+~/.lmstudio/bin/lms ps   # ищи krab-vision-primary (gemma-4-26b-a4b-it@4bit)
+# Если unloaded — auto-load on first request (LM Studio JIT)
 
-# 5. mlx_lm.server status:
-launchctl list | grep mlx-lm
-curl -sS http://127.0.0.1:8088/v1/models | python3 -m json.tool
+# 4. If Krab routing drifted к experimental:
+curl -X POST http://127.0.0.1:8080/api/admin/model/switch -H 'Content-Type: application/json' \
+  -d '{"model":"codex-cli/gpt-5.5"}'
 
-# 6. Rapid-MLX dormant в isolated venv (для future):
-~/venvs/rapid-mlx/bin/rapid-mlx models  # list aliases
+# 5. Bench data:
+ls /Volumes/4TB\ SSD/bench_tmp/result_*.json   # все S52 bench results
 ```
 
-## 📊 Текущее состояние (2026-05-16 ~22:30+)
+## 📊 Текущее состояние (2026-05-16 ~01:34)
 
-- **Krab**: health ok, routing `codex-cli/gpt-5.5` (cloud), launchd-managed
-- **:8088 mlx_lm.server**: PID 10314, OptiQ-4bit loading после launchctl restore
-- **OpenClaw Gateway**: `:18789` running
-- **LM Studio :1234**: 0 models loaded (was Gemma — unloaded в S50)
-- **Voice Gateway**, **Krab Ear**: green
-- **RAM**: ~6.9 GB free (mlx_lm.server warming up OptiQ-4bit ~15 GB)
-- **Sentry**: clean (Session 50 fixes hold)
-- **Tests collected**: 15960+ (S51 added 3 P3 tests, retained 19 P0)
+- **Krab**: live, routing **codex-cli/gpt-5.5** (после revert)
+- **LM Studio :1234**: Gemma 4 26B vanilla loaded as `krab-vision-primary` (14.57 GiB)
+- **RotorQuant :8088 mlx_lm.server**: launchd-managed, OptiQ-4bit configured
+- **OpenClaw Gateway :18789**: running
+- **KrabEar, Voice Gateway**: green
+- **Local vision**: VERIFIED working (frame_describe_local_success × 3 в last test)
+- **RAM**: tight (~3-7 GB free) — 15 GB Gemma loaded + 15 GB RotorQuant OptiQ + Krab + Krab Ear + macOS
 
 ## 🛑 Уроки сессии
 
-| Memory file | Урок |
+| Lesson | Why matters |
 |---|---|
-| `feedback_arch_mismatch_draft_block` (NEW?) | Спекулятивное декодирование с external draft model требует **same arch** target + draft. `gemma4` vs `gemma4_assistant` — separate archs, не interoperable в mlx_lm/mlx-engine (только mlx_vlm 0.5.0+ умеет MTP-через-assistant). Subagent's research about LM Studio `draftModel` parameter был optimistic — реальный mlx-engine также blocked. |
-| `feedback_launchctl_supervised_processes` (NEW?) | Простой `kill PID` не помогает для launchd-managed процессов (auto-respawn). Нужен `launchctl unload <plist>` + verify через `pgrep`. После bench restore через `launchctl load`. |
-| `feedback_gemma_thinking_mode_response_shape` (NEW?) | Gemma 4 thinking mode в mlx_lm.server возвращает `message.reasoning` field, не `message.content`. Bench scripts должны fallback: `text = msg.get("content") or msg.get("reasoning") or ""`. Также max_tokens нужен достаточный (800+) чтобы model успела закрыть thinking и начать content. |
-| `feedback_reply_media_extraction_pattern` (existing) | Reply media extraction для photo/animation существует, но video/video_note был gap. Pattern: `if not has_direct_X and reply_msg has X → process_X(message=reply_msg, ...)`. Same as Wave 16-G (audio). |
+| Stack ≠ model: Qwen 3.5 35B даёт 7.9 tok/s в LM Studio vs 68.9 в mlx_lm.server | Test через **multiple** backends перед dismiss'ing model |
+| LM Studio update breaks thinking-mode templates | После updates LM Studio re-bench critical models |
+| MTPLX/DFlash misnamed weights | Always `mtplx inspect` model перед assuming spec decode support |
+| Unit test POST switch persists в production active_model.json | Test fixtures need isolation OR clearly-fake model ids |
+| Cloud Gemini vision describe regressed in May 2026 | Local vision = production-grade alternative ready |
 
-## 🎯 P0 для Session 52 (приоритеты)
+## 🎯 P0 для Session 53 (priorities)
 
-1. **Restart Krab** чтобы применить video_note fix (ad0d20b) + P0 diag (1e5fb00) + P3 (497f7bf).
-   - `new Stop Krab.command` + wait + `new start_krab.command`
-2. **Verify video_note fix** — попросить owner повторить scenario (reply на кружок)
-3. **Wait for P0 diag signals** — natural graceful_restart event, прочитать новые
-   log events чтобы понять root cause `recent_active_count=0`
-4. **Production routing decision** — оставить OptiQ-4bit (RotorQuant research) либо
-   migrate на vanilla 4bit (+31% throughput). User decides.
-5. **(Optional) Open mlx-lm upstream issue** — request `gemma4_assistant` arch
-   support для draft loading. Github issue в `ml-explore/mlx-lm` repo.
+1. **Monitor production**: проверить через 24h что local vision стабильно работает (no spike в `lmstudio_frame_describe_failed`)
+2. **Phase 2: Translator migration** к local — highest-freq cost saver, тот же pattern что S52 vision
+3. **Phase 3: Local draft verifier** — design ready, 120 LOC implementation
+4. **Cleanup tests + disk** — fix routing race condition, delete confirmed-bad models (100+ GB savings)
+5. **(Optional) Newer Qwen 3.5/3.6 models** через **mlx_lm.server** stack — может work clean (не через LM Studio)
 
 Удачной сессии 🦀
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
