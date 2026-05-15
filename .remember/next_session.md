@@ -78,6 +78,8 @@ mlx-local-kv4/gemma-4-26B-A4B-it-OptiQ-4bit
 | vanilla mlx_lm direct | 68.0 | |
 | **OptiQ via mlx_lm.server :8088 HTTP** (Krab prod) | **58.7** | HTTP overhead ~14% |
 | LM Studio 0.4.13 mxfp4/4bit под compressor pressure | 45-79 | не fair (memory ate perf) |
+| **LM Studio 0.4.13 nvfp4 t=0.3** (compressor pressure) | **64.5** | user наблюдал ~60, подтверждено |
+| **LM Studio 0.4.13 nvfp4 t=0** (greedy peak) | **76.6** | ≈ mxfp4 (79), noise-level diff 3% |
 
 **Главные выводы**:
 - **OptiQ ≈ vanilla 4bit на одинаковом стеке** (TurboQuant не быстрее в throughput, выигрывает только в точности на чувствительных слоях)
@@ -91,7 +93,7 @@ mlx-local-kv4/gemma-4-26B-A4B-it-OptiQ-4bit
 **Скачанные таргеты** в `/Volumes/4TB SSD/LMStudio_models/mlx-community/`:
 - `gemma-4-26b-a4b-it-4bit` (15.6 GB, vanilla affine)
 - `gemma-4-26b-a4b-it-mxfp4` (14.9 GB)
-- `gemma-4-26b-a4b-it-nvfp4` (15.6 GB) — **не тестировали, лежит готовый**
+- `gemma-4-26b-a4b-it-nvfp4` (15.6 GB) — **протестирован 15.05 19:35 в LM Studio 0.4.13: 64.5 (t=0.3) / 76.6 (t=0)**
 
 **Скачанный draft**: `/Volumes/4TB SSD/LMStudio_models/guardiangate1775/gemma-4-26B-A4B-it-assistant-4bit` (282 MB, MLX 4bit MTP).
 
@@ -130,7 +132,7 @@ ls /Volumes/4TB\ SSD/bench_tmp/
 2. **Verify Wave 257-B heartbeat** — нужен natural slow codex запрос (60+ сек). Можно искусственно прогрузить codex длинным промптом и watch log на `heartbeat` events.
 3. **Login account2/account3 codex** — user в Terminal, oneoff.
 4. **Routing alias UI fix** — `models_admin_router.py`, low risk patch для panel dropdown.
-5. **(Опционально) nvfp4 mlx_vlm bench** — последний оставшийся таргет, посмотреть превзойдёт ли mxfp4 (вряд ли, но closure).
+5. ~~**(Опционально) nvfp4 mlx_vlm bench**~~ — **CLOSED 15.05 19:35**. nvfp4 ≈ mxfp4 на M4 Max (через LM Studio 0.4.13 noise-level diff 3%). FP4 на Apple Silicon идёт через generic path, не натив. Закрывает бенчмарк-цикл.
 
 ## 📂 Текущее состояние (2026-05-15 ~19:00)
 
