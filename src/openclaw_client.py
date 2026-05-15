@@ -4173,7 +4173,13 @@ class OpenClawClient:
                 # gemma-* модели идут через AI Studio API key (free tier, 14400 req/day).
                 if not _gemma_bypass_attempted and not _has_photo_bypass:
                     try:
-                        if _gemma_bypass_enabled() and _is_gemma_model(attempt_model):
+                        if (
+                            _gemma_bypass_enabled()
+                            and _is_gemma_model(attempt_model)
+                            and not attempt_model.startswith(
+                                ("mlx-local-kv4/", "lm-studio-local/", "lmstudio/", "local/")
+                            )
+                        ):
                             _gemma_bypass_attempted = True
                             logger.info(
                                 "gemma_bypass_engaged",
@@ -4263,6 +4269,9 @@ class OpenClawClient:
                             _google_bypass_enabled()
                             and _cfg.KRAB_GOOGLE_DIRECT_BYPASS_ENABLED
                             and _is_google_model(attempt_model)
+                            and not attempt_model.startswith(
+                                ("mlx-local-kv4/", "lm-studio-local/", "lmstudio/", "local/")
+                            )
                         ):
                             _google_bypass_attempted = True
                             logger.info(

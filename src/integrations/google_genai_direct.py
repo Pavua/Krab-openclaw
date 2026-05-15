@@ -57,6 +57,13 @@ def is_google_direct_enabled() -> bool:
 
 GOOGLE_PREFIX = "google/"
 GEMMA_PREFIX = "gemma-"  # gemma-3-27b-it, gemma-3-12b-it, gemma-3-4b-it
+# Wave 257 (15.05.2026): local-backend models never route through Google API
+LOCAL_BACKEND_PREFIXES = (
+    "mlx-local-kv4/",
+    "lm-studio-local/",
+    "lmstudio/",
+    "local/",
+)
 
 
 def is_google_model(model: str) -> bool:
@@ -66,8 +73,12 @@ def is_google_model(model: str) -> bool:
     gemma-3-27b-it → True  (Wave 25-E: Gemma через AI Studio free tier)
     google-gemini-cli/... → False (CLI провайдер, не direct)
     openai/gpt-5 → False
+    mlx-local-kv4/gemma-* → False (Wave 257: local backend)
     """
     if not model:
+        return False
+    # Wave 257 (15.05.2026): local-backend models never route through Google API
+    if model.startswith(LOCAL_BACKEND_PREFIXES):
         return False
     # google-antigravity и google-gemini-cli — не direct API
     if model.startswith("google-"):
@@ -84,8 +95,12 @@ def is_gemma_model(model: str) -> bool:
     gemma-3-27b-it → True
     google/gemma-3-27b-it → False (не ожидается, но безопасно)
     gemini-3-pro → False
+    mlx-local-kv4/gemma-* → False (Wave 257: local backend)
     """
     if not model:
+        return False
+    # Wave 257 (15.05.2026): local-backend models never route through Google API
+    if model.startswith(LOCAL_BACKEND_PREFIXES):
         return False
     bare = _strip_provider_prefix(model)
     return bare.startswith(GEMMA_PREFIX)

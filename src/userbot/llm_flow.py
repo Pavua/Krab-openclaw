@@ -574,6 +574,25 @@ class LLMFlowMixin:
 
         # Auto-reaction: запрос принят
         await _safe_react(mark_accepted, self, message)
+
+        # Wave 256 (15.05.2026): typing indicator перенесён ВВЕРХ, сразу после
+        # mark_accepted. Раньше typing активировался после segmented_prompt /
+        # memory_layer / reasoning_autoscale / joke_calibration — это давало
+        # 3-15 сек delay прежде чем пользователь видел "Краб печатает...".
+        # На медленном codex-cli (~20 сек до first chunk) + KRAB_LLM_IDLE_TIMEOUT_SEC=180
+        # пользователь сидел в полной тишине минимум первые 15 сек.
+        try:
+            from .typing_indicator import TypingIndicator as _TypingIndicator  # noqa: PLC0415
+
+            _typing_indicator = _TypingIndicator(
+                getattr(self, "client", None) or getattr(self, "app", None),
+                getattr(getattr(message, "chat", None), "id", chat_id),
+            )
+            await _typing_indicator.__aenter__()
+        except Exception as _ti_exc:  # noqa: BLE001
+            logger.debug("typing_indicator_enter_failed", error=str(_ti_exc))
+            _typing_indicator = None
+
         # Progress-уведомления только в личных чатах или для self-сообщений.
         # В группах обрабатываем молча — финальный ответ всё равно отправляем.
         _show_progress = show_progress_notices
@@ -735,24 +754,9 @@ class LLMFlowMixin:
             except Exception as _jc_exc:  # noqa: BLE001
                 logger.debug("joke_calibration_prompt_inject_failed", error=str(_jc_exc))
 
-        # Wave 173 (Session 48): human-like typing indicator вокруг LLM stream.
-        # Async context manager шлёт "Краб печатает..." каждые 4 сек пока LLM
-        # генерирует. Env gate `KRAB_TYPING_INDICATOR_ENABLED` (default 1) +
-        # per-chat blocklist `KRAB_TYPING_INDICATOR_BLOCKED_CHATS`. При disabled —
-        # no-op (existing `action_task` mechanism продолжает работать как fallback).
-        # Wired через `_enter_typing_indicator` чтобы не индентировать тысячу
-        # строк существующего LLM flow в `async with` блок.
-        try:
-            from .typing_indicator import TypingIndicator as _TypingIndicator  # noqa: PLC0415
-
-            _typing_indicator = _TypingIndicator(
-                getattr(self, "client", None) or getattr(self, "app", None),
-                getattr(getattr(message, "chat", None), "id", chat_id),
-            )
-            await _typing_indicator.__aenter__()
-        except Exception as _ti_exc:  # noqa: BLE001
-            logger.debug("typing_indicator_enter_failed", error=str(_ti_exc))
-            _typing_indicator = None
+        # Wave 173/256: typing indicator — INITIALIZED EARLIER (right after
+        # mark_accepted). Этот блок намеренно удалён в Wave 256, чтобы избежать
+        # double __aenter__ и убрать 3-15 сек delay до "Краб печатает...".
 
         # Wave 17-B (Phase C): engine dispatch за ENV gate.
         # KRAB_AGENT_ENGINE_DISPATCH_ENABLED=0 (default) → всегда OpenClaw (zero risk).
@@ -1374,10 +1378,14 @@ class LLMFlowMixin:
                     # Wave 16-I: Heartbeat — обновляем temp_msg каждые N секунд с прогрессом.
                     # Показываем сколько tool calls было и сколько прошло времени.
                     # Гейт: только _show_progress and not is_self и есть tool activity.
+                    # Wave 257 (15.05.2026): codex-cli routes — heartbeat без tool_event gate
+                    # (cli_subprocess_bypass отдаёт один stdout-блок без стрима tool events,
+                    # поэтому received_any_tool_event никогда не становится True; без этого
+                    # пользователь видел static "Краб печатает..." без таймера 3+ минуты).
                     _heartbeat_due = (
                         _show_progress
                         and not is_self
-                        and received_any_tool_event
+                        and (received_any_tool_event or _is_codex_cli_route)
                         and not received_any_chunk
                         and _heartbeat_interval_sec > 0
                         and elapsed_wait_sec >= (_next_heartbeat_at - started_wait_at)
@@ -1388,7 +1396,10 @@ class LLMFlowMixin:
                         _tools_str = (
                             f", инструментов: {tool_call_count}" if tool_call_count > 0 else ""
                         )
-                        _heartbeat_notice = f"🦀 Думаю... ({_elapsed_int}s{_tools_str})"
+                        if _is_codex_cli_route and tool_call_count == 0:
+                            _heartbeat_notice = f"🦀 Codex думает... ({_elapsed_int}s)"
+                        else:
+                            _heartbeat_notice = f"🦀 Думаю... ({_elapsed_int}s{_tools_str})"
                         try:
                             await self._safe_edit(temp_msg, _heartbeat_notice)
                         except Exception:  # noqa: BLE001
