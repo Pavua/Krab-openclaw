@@ -378,6 +378,73 @@ def test_switch_lmstudio_prefix_accepted_session50_p35(
     assert resp.json()["model"] == "lmstudio/gemma-4-26b-a4b-it@4bit"
 
 
+def test_switch_mlx_local_kv4_prefix_session51_p3(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session 51 P3: после удаления hardcoded mlx-local-kv4 entry из
+    _CLOUD_PROVIDERS, prefix всё ещё whitelisted (явный `known_prefixes.add(
+    "mlx-local-kv4")` в switch+probe handlers). Это защищает случай когда
+    runtime discovery вернул пустой список (offline :8088 backend) либо
+    custom model id который не в static fallback.
+    """
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    client, refs = _client()
+    with _apply_patches(refs):
+        # Model id который НЕ в static fallback discovery (custom RotorQuant
+        # registered модель) — должен пройти prefix whitelist.
+        resp = client.post(
+            "/api/admin/model/switch",
+            json={"model": "mlx-local-kv4/custom-experimental-model-xyz"},
+        )
+    assert resp.status_code == 200, resp.json()
+
+
+def test_get_all_providers_includes_mlx_local_kv4_dynamic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session 51 P3: `_get_all_providers()` должен возвращать
+    static cloud providers + dynamic mlx-local-kv4 group из discovery
+    module. Если discovery возвращает empty (`models=[]`) — entry всё
+    равно присутствует с правильным shape (id/label/type/models).
+    """
+    from src.modules.web_routers import models_admin_router
+
+    providers = models_admin_router._get_all_providers()
+    # Cloud providers (4) + mlx-local-kv4 (1)
+    ids = [p["id"] for p in providers]
+    assert "mlx-local-kv4" in ids, (
+        f"mlx-local-kv4 missing from providers: {ids}"
+    )
+    # Shape check: должны быть как минимум id + label + type + models
+    mlx_group = next(p for p in providers if p["id"] == "mlx-local-kv4")
+    assert "models" in mlx_group
+    assert isinstance(mlx_group["models"], list)
+
+
+def test_get_all_providers_resilient_to_discovery_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session 51 P3: если build_mlx_local_provider_group() raise (крайний
+    случай) — _get_all_providers возвращает только cloud, не падает.
+    Admin panel важнее показать UI чем целиком 500'нуть.
+    """
+    from src.modules.web_routers import models_admin_router
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("discovery exploded")
+
+    monkeypatch.setattr(
+        models_admin_router, "build_mlx_local_provider_group", _boom
+    )
+    providers = models_admin_router._get_all_providers()
+    # Только cloud, mlx-local-kv4 отсутствует
+    ids = [p["id"] for p in providers]
+    assert "mlx-local-kv4" not in ids
+    # Cloud providers всё равно тут
+    assert "google-vertex" in ids
+    assert "codex-cli" in ids
+
+
 def test_switch_invalid_provider_mode_returns_400(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

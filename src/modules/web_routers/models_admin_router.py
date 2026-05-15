@@ -80,6 +80,8 @@ import httpx
 from fastapi import APIRouter, Body, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
+from src.core.mlx_local_discovery import build_mlx_local_provider_group
+
 from ._context import RouterContext
 
 # Wave 232 (replay of deferred Wave 224): real probe endpoint POST
@@ -173,18 +175,29 @@ _CLOUD_PROVIDERS: list[dict[str, Any]] = [
             ("google-gemini-cli/gemini-2.5-flash", "Gemini 2.5 Flash (CLI)"),
         ],
     },
-    {
-        "id": "mlx-local-kv4",
-        "label": "MLX KV4 (Local :8088)",
-        "type": "local",
-        "models": [
-            ("mlx-local-kv4/gemma-4-26b", "Gemma-4-26B-A4B Heretic (Baseline)"),
-            ("mlx-local-kv4/qwen3-4b-kv4", "Qwen3-4B Huihui (KV4, 105 tok/s)"),
-            ("mlx-local-kv4/qwen3-14b-kv4", "Qwen3-14B Huihui v2 (KV4, 41.5 tok/s)"),
-            ("mlx-local-kv4/llama-3.3-8b-kv4", "Llama-3.3-8B Abl 128K (KV4, 39.5 tok/s)"),
-        ],
-    },
 ]
+
+
+def _get_all_providers() -> list[dict[str, Any]]:
+    """Session 51 P3: cloud-providers (static) + mlx-local-kv4 (runtime
+    discovery через ``build_mlx_local_provider_group``, Wave 240).
+
+    Hardcoded mlx-local-kv4 entry удалён — модели приходят из live :8088
+    probe (либо static fallback в discovery module при offline backend).
+    Это устраняет dual-source-of-truth между статическим списком и
+    реальностью runtime backend.
+
+    Discovery wrapped в try/except: при крайнем фейле возвращаем только
+    cloud providers, чтобы admin panel не падал целиком.
+    """
+    providers: list[dict[str, Any]] = list(_CLOUD_PROVIDERS)
+    try:
+        providers.append(build_mlx_local_provider_group())
+    except Exception:  # noqa: BLE001
+        # Discovery должен сам обработать все ошибки (static fallback),
+        # но защищаемся ещё одним слоем — admin panel важнее.
+        pass
+    return providers
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -362,9 +375,9 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
             configured_primary=configured_primary,
         )
 
-        # --- Cloud providers ----------------------------------------------
+        # --- Cloud + mlx-local-kv4 (Session 51 P3: runtime discovery) -----
         providers: list[dict[str, Any]] = []
-        for prov in _CLOUD_PROVIDERS:
+        for prov in _get_all_providers():
             pid = str(prov["id"])
             quarantined = quarantine_map.get(pid.lower(), False)
             models: list[dict[str, Any]] = []
@@ -465,7 +478,9 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
 
         # Простейшая валидация против известного реестра + LM Studio probe.
         if model:
-            known_cloud = {mid for prov in _CLOUD_PROVIDERS for mid, _ in prov["models"]}
+            # Session 51 P3: include mlx-local-kv4 dynamic discovery в whitelist —
+            # иначе runtime-discovered ids валились как model_unknown.
+            known_cloud = {mid for prov in _get_all_providers() for mid, _ in prov["models"]}
             local_models = await _list_lm_studio_models(ctx)
             local_ids = {str(item.get("id") or "") for item in local_models if item.get("id")}
             if model not in known_cloud and model not in local_ids:
@@ -482,6 +497,12 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
                     # `lmstudio/` (без дефиса) для LM Studio entries — это
                     # отдельный prefix от `lm-studio-local/` (autodiscovery).
                     known_prefixes.add("lmstudio")
+                    # Session 51 P3: после удаления hardcoded mlx-local-kv4
+                    # из _CLOUD_PROVIDERS prefix явно whitelisted (как
+                    # lm-studio-local) — runtime discovery может вернуть
+                    # пустой список при offline backend, но prefix
+                    # остаётся валидным контрактом UI.
+                    known_prefixes.add("mlx-local-kv4")
                     if prefix not in known_prefixes:
                         raise HTTPException(
                             status_code=400,
@@ -625,6 +646,9 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
             # Session 50 P3.5: симметрично с switch handler — `lmstudio/`
             # (без дефиса) это OpenClaw models.json convention.
             known_prefixes.add("lmstudio")
+            # Session 51 P3: симметрично — mlx-local-kv4 prefix
+            # явно whitelisted (после удаления hardcoded entry).
+            known_prefixes.add("mlx-local-kv4")
             if prefix in known_prefixes:
                 provider_id = prefix
         if not provider_id:
