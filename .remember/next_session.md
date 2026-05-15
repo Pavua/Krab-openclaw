@@ -152,6 +152,33 @@ ls /Volumes/4TB\ SSD/bench_tmp/
 
 Backup до edit: `/Users/pablito/.openclaw/agents/main/agent/models.json.bak_before_lmstudio_add` (но не появился в ls — возможно cp не удался из-за RAM pressure timeout'а).
 
+### 🚀 P5 redesign — MLX HTTP serving alternatives research (15.05 22:00, subagent)
+
+Research subagent выявил **минимум 3 готовых HTTP-сервера** для MLX с speculative decoding — **custom FastAPI не нужен**:
+
+**Tier 1 — HTTP + spec decoding**:
+- 🥇 **Rapid-MLX** (`raullenchai/Rapid-MLX`, 2.4k stars, **v0.6.50 от 15.05.2026**) — OpenAI-compat `:8000`, Gemma 4 26B/31B в supported, **DFlash spec уже shipped** (1.3-2× decode), MTP помечен experimental. Drop-in замена для `:8088`. **Action**: `pip install rapid-mlx && rapid-mlx serve mlx-community/gemma-4-26b-a4b-it-4bit --port 8087 --speculative dflash` (или `--mtp`).
+- **vllm-mlx** (`waybarrios/vllm-mlx`, 1.2k stars) — vLLM-port для MLX, OpenAI+Anthropic API, `--mtp` flag (verified Qwen3-Next, Gemma 4 vision listed), 400+ tok/s claims, MCP tool calling, batching.
+- **Ollama PR #15980** — Gemma 4 MTP speculative pending merge. Watch для официальной поддержки.
+
+**Tier 2 — HTTP без MTP**:
+- MLX-Omni-Server (`madroidmaq`) — OpenAI+Anthropic на `:10240`
+- mlx-openai-server (`cubist38`) — FastAPI wrapper, no spec
+- oMLX (`jundot`) — menu-bar managed с SSD caching
+
+**Tier 3 — не подходит**:
+- MTPLX — Qwen-only
+- vLLM upstream — Linux/CUDA
+- TabbyML — нет MLX backend
+
+**Test plan для S50**:
+1. Install **Rapid-MLX** в worktree-venv (не глобально, чтобы не ломать system Python)
+2. Load `gemma-4-26b-a4b-it-4bit` через rapid-mlx serve `:8087` (или другой свободный port)
+3. Прогнать `/Volumes/4TB SSD/bench_tmp/lmstudio_bench.py` указав new endpoint
+4. Если DFlash spec работает: **сравнить с 101 tok/s** (наш утренний рекорд mlx_vlm + MTP). Если ≥80% → переключить Krab routing на Rapid-MLX HTTP. **Это закрывает P5 без custom FastAPI**.
+
+**Sources**: GitHub Rapid-MLX, vllm-mlx, MTPLX, mlx-omni-server, [Google blog Multi-Token Prediction for Gemma 4](https://blog.google/innovation-and-ai/technology/developers-tools/multi-token-prediction-gemma-4/), [mlx-vlm issue #981](https://github.com/Blaizzy/mlx-vlm/issues/981), [Ollama PR #15980](https://github.com/ollama/ollama/pull/15980).
+
 ## 📂 Текущее состояние (2026-05-15 ~19:00)
 
 - **Krab**: started ~18:54 после моего restorative restart, health=ok
