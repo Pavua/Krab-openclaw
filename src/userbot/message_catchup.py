@@ -552,25 +552,45 @@ class MessageCatchupMixin:
             hours = _resolve_recent_active_hours()
 
         if limit <= 0:
+            # Session 51 diag: prev silent return masked degenerate cases.
+            logger.debug(
+                "graceful_catchup_recent_skipped",
+                reason="limit_zero",
+                limit=limit,
+            )
             return []
 
         client = getattr(self, "client", None)
         if client is None:
+            # Session 51 diag: prev silent return — root cause of `recent_active_count=0`
+            # always in production (Session 50 verify). Pyrogram client может быть
+            # None в момент graceful-restart hook'a (race condition с reconnect).
+            logger.warning(
+                "graceful_catchup_recent_skipped",
+                reason="no_client",
+            )
             return []
 
         cutoff_ts = time.time() - hours * 3600.0
         active: list[int] = []
         seen: set[int] = set()
+        enumerated = 0  # Session 51 diag: считаем raw dialog count
+        filtered_no_chat_id = 0
+        filtered_no_date = 0
+        filtered_too_old = 0
 
         try:
             async for dialog in client.iter_dialogs(limit=limit):
+                enumerated += 1
                 chat_obj = getattr(dialog, "chat", None)
                 chat_id = getattr(chat_obj, "id", None) if chat_obj else None
                 if chat_id is None:
+                    filtered_no_chat_id += 1
                     continue
                 try:
                     cid = int(chat_id)
                 except (TypeError, ValueError):
+                    filtered_no_chat_id += 1
                     continue
                 if cid in seen:
                     continue
@@ -588,7 +608,11 @@ class MessageCatchupMixin:
                         except (TypeError, ValueError):
                             ts = None
 
-                if ts is None or ts < cutoff_ts:
+                if ts is None:
+                    filtered_no_date += 1
+                    continue
+                if ts < cutoff_ts:
+                    filtered_too_old += 1
                     continue
 
                 seen.add(cid)
@@ -598,14 +622,22 @@ class MessageCatchupMixin:
                 "graceful_catchup_recent_dialogs_failed",
                 error=str(exc)[:200],
                 error_type=type(exc).__name__,
+                enumerated=enumerated,
             )
             return []
 
+        # Session 51 diag: structured breakdown почему dialogs filtered out.
+        # Помогает понять — `recent_active_count=0` это empty iter_dialogs vs
+        # all-too-old vs no-dates.
         logger.info(
             "graceful_catchup_recent_dialogs_resolved",
             count=len(active),
             limit=limit,
             hours=hours,
+            enumerated=enumerated,
+            filtered_no_chat_id=filtered_no_chat_id,
+            filtered_no_date=filtered_no_date,
+            filtered_too_old=filtered_too_old,
         )
         return active
 
