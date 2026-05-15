@@ -478,6 +478,10 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
                     # whitelisted (он не в _CLOUD_PROVIDERS, чтобы не
                     # дублировать статический список).
                     known_prefixes.add("lm-studio-local")
+                    # Session 50 P3.5: OpenClaw models.json convention использует
+                    # `lmstudio/` (без дефиса) для LM Studio entries — это
+                    # отдельный prefix от `lm-studio-local/` (autodiscovery).
+                    known_prefixes.add("lmstudio")
                     if prefix not in known_prefixes:
                         raise HTTPException(
                             status_code=400,
@@ -618,6 +622,9 @@ def build_models_admin_router(ctx: RouterContext) -> APIRouter:
             prefix = model_id.split("/", 1)[0]
             known_prefixes = {p["id"] for p in _CLOUD_PROVIDERS}
             known_prefixes.add("lm-studio-local")
+            # Session 50 P3.5: симметрично с switch handler — `lmstudio/`
+            # (без дефиса) это OpenClaw models.json convention.
+            known_prefixes.add("lmstudio")
             if prefix in known_prefixes:
                 provider_id = prefix
         if not provider_id:

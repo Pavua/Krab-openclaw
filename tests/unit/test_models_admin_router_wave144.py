@@ -359,6 +359,25 @@ def test_switch_unknown_provider_in_model_returns_400(
     assert "model_unknown" in resp.json()["detail"]
 
 
+def test_switch_lmstudio_prefix_accepted_session50_p35(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session 50 P3.5: `lmstudio/` prefix (без дефиса, OpenClaw models.json
+    convention) должен быть в known_prefixes whitelist — раньше отбрасывался
+    как `model_unknown`, хотя `lm-studio-local/` (с дефисом) проходил.
+    Включает `@`-suffix (LM Studio quant convention) для полноты regression.
+    """
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+    client, refs = _client()
+    with _apply_patches(refs):
+        resp = client.post(
+            "/api/admin/model/switch",
+            json={"model": "lmstudio/gemma-4-26b-a4b-it@4bit"},
+        )
+    assert resp.status_code == 200, resp.json()
+    assert resp.json()["model"] == "lmstudio/gemma-4-26b-a4b-it@4bit"
+
+
 def test_switch_invalid_provider_mode_returns_400(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
