@@ -1,8 +1,55 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-05-13 (Wave 217)
+> Составлен: 2026-03-23 | Обновлён: 2026-05-16 (Session 50)
 > Статус: Активная разработка
 > Владелец: По
+
+---
+
+## Session 50 (2026-05-16) — Catchup Union + Whitelist Audit Backlog
+
+### DONE (committed)
+
+- **P3.5** (`692bc37`): `lmstudio/` prefix добавлен в `known_prefixes` whitelist
+  `models_admin_router.py` (POST switch + POST probe). `@`-suffix в model id
+  оказался red herring; реальная причина — gap в whitelist set'е.
+- **P0** (`4486ea4`): `_run_graceful_restart_catchup_safe` — union whitelist
+  + top-N recent active dialogs через `client.iter_dialogs`. Закрывает
+  Pyrogram chat-drop bug (YMB silence 13ч 15.05.2026). Env:
+  `KRAB_GRACEFUL_CATCHUP_RECENT_LIMIT/HOURS`. +19 tests.
+
+### Backlog (Wave-candidate)
+
+#### P3 — Hardcoded vs dynamic registry rationalize (smell)
+
+`models_admin_router._CLOUD_PROVIDERS[4].models` (mlx-local-kv4 section)
+содержит hardcoded entries (`mlx-local-kv4/gemma-4-26b`), параллельно
+`_build_lm_studio_local_dynamic_section` отдаёт full ids из autodiscovery.
+**Dual source of truth**: пользователь видит оба варианта в UI dropdown,
+не знает который выбрать. Workaround через alias-слой
+(`mlx_local_aliases.py`) корректно резолвит short → full path, runtime
+не ломается — но UI confusion остаётся.
+
+**Direction**: либо
+- (A) синхронизировать hardcoded entries с реальными ids в `models.json`
+  + dedup в `/api/admin/models/picker`, либо
+- (B) удалить hardcoded MLX-секцию полностью, оставить только dynamic
+  discovery (требует расширения `_build_lm_studio_local_dynamic_section`
+  на mlx-local-kv4 backend).
+
+Runtime errors уже закрыты Wave 257-A (LOCAL_BACKEND_PREFIXES guard в
+`is_gemma_model`), так что P3 — UX/architectural cleanup, не P0.
+
+#### Pattern: whitelist gap audit
+
+Session 50 выявила **3 whitelist gaps** в одной сессии:
+- P0: `_resolve_catchup_target_chats` whitelist → YMB chat silence
+- P3: `_CLOUD_PROVIDERS` hardcoded vs runtime aliases
+- P3.5: `known_prefixes` set без `lmstudio` (без дефиса)
+
+**Wave-candidate**: единый аудит/codegen для prefix sets — assertion
+`all_prefixes_in_use ⊆ known_prefixes` в test suite, либо derive
+`known_prefixes` from cloud_inventory automatically.
 
 ---
 
