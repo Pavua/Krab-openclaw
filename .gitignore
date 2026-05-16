@@ -53,3 +53,4 @@ node_modules/
 docs/superpowers/
 uv.lock
 .env.backup_*
+/venv
