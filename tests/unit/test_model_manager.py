@@ -325,6 +325,41 @@ def test_strip_local_prefix_normalizes_lmstudio_namespace(manager: ModelManager)
     assert manager._strip_local_prefix("   lmstudio/x   ") == "x"
 
 
+def test_strip_local_prefix_covers_all_local_namespaces(manager: ModelManager) -> None:
+    """
+    Session 53 P3.5: `_strip_local_prefix` должен покрывать ВСЕ namespace-префиксы
+    локальных провайдеров, не только legacy `lmstudio/`.
+
+    Регрессия 2026-05-16: после Wave 239 (`lm-studio-local/`) и Wave 223
+    (`mlx-local-kv4/`) функция продолжала пропускать новые префиксы → 404
+    `Model lm-studio-local/gemma-... not found` → `single_local_mode_pruned`
+    выгружал реально загруженную gemma → `local_primary_load_failed_no_fallback`.
+    """
+    # Wave 239: lm-studio-local/ active picker prefix
+    assert manager._strip_local_prefix("lm-studio-local/gemma-4-26b-a4b-it@4bit") == (
+        "gemma-4-26b-a4b-it@4bit"
+    )
+    assert manager._strip_local_prefix("LM-Studio-Local/krab-vision-primary") == (
+        "krab-vision-primary"
+    )
+
+    # Wave 223: mlx-local-kv4/ long-context provider prefix
+    assert manager._strip_local_prefix("mlx-local-kv4/gemma-4-26B-A4B-it-OptiQ-4bit") == (
+        "gemma-4-26B-A4B-it-OptiQ-4bit"
+    )
+    assert manager._strip_local_prefix("MLX-Local-KV4/foo") == "foo"
+
+    # `local/` general fallback
+    assert manager._strip_local_prefix("local/some-model") == "some-model"
+
+    # Legacy `lmstudio/` всё ещё работает (regression guard)
+    assert manager._strip_local_prefix("lmstudio/qwen3.5-9b") == "qwen3.5-9b"
+
+    # Cloud IDs остаются неизменными
+    assert manager._strip_local_prefix("google/gemini-3-pro-preview") == "google/gemini-3-pro-preview"
+    assert manager._strip_local_prefix("codex-cli/gpt-5.5") == "codex-cli/gpt-5.5"
+
+
 def test_is_local_model_treats_openai_codex_as_cloud(manager: ModelManager) -> None:
     """OpenAI/Codex и CLI backend IDs не должны маскироваться под локальные LM Studio модели."""
     assert manager.is_local_model("openai-codex/gpt-5.4") is False
