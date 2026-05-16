@@ -128,22 +128,41 @@ class ModelManager:
         # Аналитика затрат (Cost Engine, бюджет, отчёты) — Фаза 4.1, Шаг 4
         self._cost_analytics = cost_analytics
 
+    # Session 53 P3.5: namespace-префиксы для local моделей.
+    # Все они — чисто Python routing-слой (см. `_detect_model_type`).
+    # LM Studio API всегда использует raw ID (`gemma-4-26b-a4b-it@4bit`),
+    # поэтому ПЕРЕД любым обращением к LM Studio нужно стрипать namespace.
+    _LOCAL_NAMESPACE_PREFIXES = (
+        "lmstudio/",
+        "lm-studio-local/",  # Wave 239: LM Studio autodiscovery picker
+        "mlx-local-kv4/",  # Wave 223: long-context local provider
+        "local/",
+    )
+
     @staticmethod
     def _strip_local_prefix(model_id: str) -> str:
         """
-        Снимает `lmstudio/` namespace-префикс перед обращением к LM Studio API
+        Снимает любой `*local*/` namespace-префикс перед обращением к LM Studio API
         или `_models_cache` (которые оба используют raw IDs).
 
-        Wave 62 bugfix: префикс используется в Python routing-слое чтобы
-        `_detect_model_type()` уверенно классифицировал модель как LOCAL_MLX
-        даже без cache hit (см. `gemma-` namespace collision → CLOUD_GEMINI).
-        Но LM Studio'у нужен raw ID — иначе `Model lmstudio/... not found` (404)
-        и `single_local_mode` начинает выгружать корректную загруженную модель,
-        думая что она "extra".
+        Wave 62 bugfix (расширен Session 53): префикс используется в Python
+        routing-слое чтобы `_detect_model_type()` уверенно классифицировал модель
+        как LOCAL_MLX даже без cache hit (см. `gemma-` namespace collision →
+        CLOUD_GEMINI). Но LM Studio'у нужен raw ID — иначе
+        `Model lm-studio-local/... not found` (404) и `single_local_mode`
+        начинает выгружать корректную загруженную модель, думая что она "extra".
+
+        Эта функция покрывает ВСЕ 3 namespace-префикса централизованно:
+        - `lmstudio/` (legacy, Wave 62)
+        - `lm-studio-local/` (Wave 239 active picker)
+        - `mlx-local-kv4/` (Wave 223 long-context provider)
+        + `local/` general fallback.
         """
         normalized = str(model_id or "").strip()
-        if normalized.lower().startswith("lmstudio/"):
-            return normalized[len("lmstudio/") :]
+        low = normalized.lower()
+        for prefix in ModelManager._LOCAL_NAMESPACE_PREFIXES:
+            if low.startswith(prefix):
+                return normalized[len(prefix) :]
         return normalized
 
     @staticmethod
