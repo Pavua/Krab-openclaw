@@ -145,7 +145,7 @@ async def test_recent_active_filters_old_dialogs(tmp_path: Path) -> None:
     """Dialogs старше hours window отбрасываются."""
     host = _Host(tmp_path / "state.json")
     client = MagicMock()
-    client.iter_dialogs = _make_iter_dialogs(
+    client.get_dialogs = _make_iter_dialogs(
         [
             _mk_dialog(-1001111111, age_seconds=60),  # 1 min ago — keep
             _mk_dialog(-1002222222, age_seconds=2 * 3600),  # 2 h — keep (under 6h)
@@ -164,7 +164,7 @@ async def test_recent_active_empty_when_limit_zero(tmp_path: Path) -> None:
     """limit=0 → short-circuit, iter_dialogs не вызывается."""
     host = _Host(tmp_path / "state.json")
     client = MagicMock()
-    client.iter_dialogs = MagicMock(side_effect=AssertionError("should not be called"))
+    client.get_dialogs = MagicMock(side_effect=AssertionError("should not be called"))
     host.client = client
 
     result = await host._resolve_recent_active_chats(limit=0, hours=6.0)
@@ -189,7 +189,7 @@ async def test_recent_active_iter_dialogs_failure_isolated(tmp_path: Path) -> No
         raise RuntimeError("flood wait simulated")
         yield  # noqa
 
-    client.iter_dialogs = _bad_gen
+    client.get_dialogs = _bad_gen
     host.client = client
 
     result = await host._resolve_recent_active_chats(limit=10, hours=6.0)
@@ -201,7 +201,7 @@ async def test_recent_active_dedup(tmp_path: Path) -> None:
     """Дубликат chat_id из iter_dialogs не должен попасть дважды."""
     host = _Host(tmp_path / "state.json")
     client = MagicMock()
-    client.iter_dialogs = _make_iter_dialogs(
+    client.get_dialogs = _make_iter_dialogs(
         [
             _mk_dialog(-1005555555, age_seconds=60),
             _mk_dialog(-1005555555, age_seconds=120),  # дубликат
@@ -280,7 +280,7 @@ async def test_graceful_catchup_unions_whitelist_and_recent(
 
     host = _Host(tmp_path / "state.json")
     client = MagicMock()
-    client.iter_dialogs = _make_iter_dialogs(
+    client.get_dialogs = _make_iter_dialogs(
         [
             _mk_dialog(222, age_seconds=60),  # дубликат с whitelist
             _mk_dialog(333, age_seconds=60),
@@ -364,7 +364,7 @@ async def test_ymb_scenario_regression(tmp_path: Path, monkeypatch: pytest.Monke
 
     host = _Host(tmp_path / "state.json")
     client = MagicMock()
-    client.iter_dialogs = _make_iter_dialogs(
+    client.get_dialogs = _make_iter_dialogs(
         [
             _mk_dialog(-1001804661353, age_seconds=2 * 3600),  # YMB, 2h ago
             _mk_dialog(312322764, age_seconds=300),  # owner DM (дубликат)

@@ -580,7 +580,11 @@ class MessageCatchupMixin:
         filtered_too_old = 0
 
         try:
-            async for dialog in client.iter_dialogs(limit=limit):
+            # Pyrofork 2.3.69: метод называется `get_dialogs` (returns async
+            # generator). `iter_dialogs` отсутствует в этой версии Client
+            # class — это был S50 P0 bug (AttributeError каждый
+            # graceful_restart, fallback в whitelist-only теряет updates).
+            async for dialog in client.get_dialogs(limit=limit):
                 enumerated += 1
                 chat_obj = getattr(dialog, "chat", None)
                 chat_id = getattr(chat_obj, "id", None) if chat_obj else None
