@@ -272,6 +272,10 @@ class Perceptor:
 
 # Тип callable для опциональной vision-обёртки кадра
 FrameDescriber = Callable[[bytes, int], Awaitable[str]]
+# Session 52 P2.5: audio transcriber callback для video pipeline.
+# Принимает путь к video file (ffmpeg извлекает audio внутри callback),
+# возвращает transcript text либо пустую строку при failure.
+AudioTranscriber = Callable[[str], Awaitable[str]]
 
 # Поддерживаемые стратегии семплирования кадров
 _VALID_SAMPLE_STRATEGIES = ("uniform", "key-frames")
@@ -491,14 +495,22 @@ async def process_video_message(
     max_frames: int = 3,
     sample_strategy: str = "uniform",
     frame_describer: FrameDescriber | None = None,
+    audio_transcriber: AudioTranscriber | None = None,
 ) -> str:
     """Возвращает агрегированный текст для feed в LLM.
 
     Извлекает кадры → каждый прогоняется через `frame_describer`
     (по умолчанию плейсхолдер). Caption (если есть) приклеивается сверху.
 
-    Возвращает пустую строку, если кадров нет и caption пустой —
-    чтобы вызывающий код мог решить fallback'ить или дропать.
+    Session 52 P2.5: дополнительно принимает ``audio_transcriber``, который
+    extract'ит audio track из video через ffmpeg + транскрибирует через
+    Whisper (Voice Gateway либо mlx_whisper). Если transcript есть — он
+    инжектится в LLM context **с пометкой [Транскрипт аудио]** — чтобы
+    LLM знал что это реально услышанные слова, не выдумка из visual context.
+
+    Возвращает пустую строку, если кадров нет, caption пустой и audio
+    transcript пустой — чтобы вызывающий код мог решить fallback'ить или
+    дропать.
     """
     describer = frame_describer or _default_frame_describer
     caption_clean = (caption or "").strip()
@@ -528,18 +540,33 @@ async def process_video_message(
         if text:
             descriptions.append(text)
 
+    # Session 52 P2.5: audio track transcription
+    audio_text: str = ""
+    if audio_transcriber is not None:
+        try:
+            audio_text = (await audio_transcriber(file_path) or "").strip()
+        except Exception as exc:
+            logger.warning(
+                "perceptor_video_audio_transcribe_failed",
+                error=str(exc)[:200],
+                error_type=type(exc).__name__,
+            )
+            audio_text = ""
+
     parts: list[str] = []
     if caption_clean:
         parts.append(f"Подпись к видео: {caption_clean}")
     if descriptions:
         parts.append("Содержимое видео по кадрам:")
         parts.extend(f"  {i + 1}. {d}" for i, d in enumerate(descriptions))
-    elif not caption_clean:
-        # Видео без caption и кадры не извлеклись — пустой результат
+    elif not caption_clean and not audio_text:
+        # Видео без caption, кадры не извлеклись, audio пуст — пустой результат
         return ""
     elif not descriptions:
-        # Caption есть, но кадры пустые — даём знать LLM
         parts.append("(визуальное содержимое видео не удалось извлечь)")
+
+    if audio_text:
+        parts.append(f"Транскрипт аудио из видео (произнесённые слова): {audio_text}")
 
     return "\n".join(parts).strip()
 

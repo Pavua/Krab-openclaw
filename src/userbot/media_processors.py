@@ -196,6 +196,84 @@ class MediaProcessorsMixin:
 
     # ─── Video pipeline ──────────────────────────────────────────────────────
 
+    async def _extract_and_transcribe_audio(
+        self,
+        video_path: str,
+        *,
+        chat_id: str,
+    ) -> str:
+        """Session 52 P2.5: audio track из video → Whisper transcript.
+
+        Pipeline:
+        1. ffmpeg извлекает audio в .ogg (Opus 32kbps) — helper в
+           ``_video_audio_extract.extract_audio_via_ffmpeg`` (safe shell-less
+           pattern, same что voice_engine.py).
+        2. ``perceptor.transcribe(.ogg)`` — Voice Gateway → mlx_whisper fallback
+           (existing pipeline для voice messages).
+        3. Temp .ogg удаляется в finally.
+
+        Fail-open: empty string на любую ошибку — LLM просто не получит audio
+        context, не будет ложного claim что слышал.
+
+        Env tunables:
+        - ``KRAB_VIDEO_AUDIO_FFMPEG_TIMEOUT_SEC`` (default 30s)
+        - ``KRAB_VIDEO_AUDIO_TRANSCRIBE_TIMEOUT_SEC`` (default 60s)
+        """
+        from src.modules.perceptor import perceptor  # noqa: PLC0415
+        from src.userbot._video_audio_extract import (  # noqa: PLC0415
+            extract_audio_via_ffmpeg,
+        )
+
+        ffmpeg_timeout = float(os.getenv("KRAB_VIDEO_AUDIO_FFMPEG_TIMEOUT_SEC", "30.0"))
+        stt_timeout = float(os.getenv("KRAB_VIDEO_AUDIO_TRANSCRIBE_TIMEOUT_SEC", "60.0"))
+
+        audio_path = Path(video_path).with_suffix(".ogg")
+        try:
+            ok = await extract_audio_via_ffmpeg(
+                video_path,
+                str(audio_path),
+                timeout_sec=ffmpeg_timeout,
+                chat_id=chat_id,
+            )
+            if not ok:
+                return ""
+
+            try:
+                transcript = await asyncio.wait_for(
+                    perceptor.transcribe(str(audio_path)),
+                    timeout=max(10.0, stt_timeout),
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "video_audio_transcribe_timeout",
+                    chat_id=chat_id,
+                    timeout_sec=stt_timeout,
+                )
+                return ""
+
+            transcript = (transcript or "").strip()
+            if transcript.startswith("[transcription_failed"):
+                logger.warning(
+                    "video_audio_transcribe_returned_failure_markup",
+                    chat_id=chat_id,
+                    markup=transcript[:150],
+                )
+                return ""
+
+            logger.info(
+                "video_audio_transcribe_success",
+                chat_id=chat_id,
+                char_count=len(transcript),
+                audio_size=audio_path.stat().st_size,
+            )
+            return transcript
+        finally:
+            try:
+                if audio_path.exists():
+                    audio_path.unlink()
+            except Exception:  # noqa: BLE001
+                pass
+
     async def _describe_frame_via_lmstudio(
         self,
         frame_b64: str,
@@ -437,6 +515,15 @@ class MediaProcessorsMixin:
         async def _describer(frame: bytes, idx: int) -> str:
             return await self._describe_video_frame(frame, idx, chat_id=chat_id)
 
+        # Session 52 P2.5: audio transcription из video через ffmpeg + Whisper.
+        # Env gate KRAB_VIDEO_AUDIO_TRANSCRIBE_ENABLED=1 (default off для safety).
+        audio_enabled = os.getenv("KRAB_VIDEO_AUDIO_TRANSCRIBE_ENABLED", "0") == "1"
+
+        async def _audio_transcribe(vpath: str) -> str:
+            if not audio_enabled:
+                return ""
+            return await self._extract_and_transcribe_audio(vpath, chat_id=chat_id)
+
         try:
             extra_context = await process_video_message(
                 str(video_path),
@@ -444,6 +531,7 @@ class MediaProcessorsMixin:
                 max_frames=max_frames,
                 sample_strategy="uniform",
                 frame_describer=_describer,
+                audio_transcriber=_audio_transcribe if audio_enabled else None,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
