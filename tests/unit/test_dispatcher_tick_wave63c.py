@@ -35,10 +35,19 @@ from src.userbot.network_watchdog import (
 
 
 def _make_owner(**attrs: object) -> types.SimpleNamespace:
-    """Минимальный duck-type для _check_dispatcher_starved / probe."""
+    """Минимальный duck-type для _check_dispatcher_starved / probe.
+
+    Session 53 P3.6: дефолт `_last_raw_update_ts` синхронизируется с
+    `_last_dispatcher_tick_ts` — старые тесты получают consistent behavior
+    (когда оба ts старые → starved). Новые тесты для P3.6 могут переопределить
+    `_last_raw_update_ts` отдельно для проверки disambiguation.
+    """
+    tick_ts = attrs.get("_last_dispatcher_tick_ts", time.time())
     base = {
         "_dispatcher_tick_count": 0,
-        "_last_dispatcher_tick_ts": time.time(),
+        "_last_dispatcher_tick_ts": tick_ts,
+        "_raw_update_tick_count": 0,
+        "_last_raw_update_ts": tick_ts,  # дефолт: синхронно с message tick
         "_last_server_pts": 0,
         "_last_seen_update_id": 0,
         "client": None,
@@ -173,3 +182,66 @@ async def test_probe_alive_and_dispatcher_fresh_no_starved() -> None:
         and _check_dispatcher_starved(owner)
     )
     assert starved is False
+
+
+# ---------------------------------------------------------------------------
+# Session 53 P3.6: on_raw_update disambiguation
+# ---------------------------------------------------------------------------
+
+
+def test_dispatcher_starved_false_when_raw_alive_but_message_stale() -> None:
+    """P3.6: raw_update tick свежий, message tick устарел → НЕ starved.
+
+    Кейс: в чате просто нет messages, но user_status/typing/channel updates
+    идут (raw_update триггерится). Это нормальный «тихий чат», не silent-death.
+    """
+    now = time.time()
+    owner = _make_owner(
+        _last_dispatcher_tick_ts=now - (_DISPATCHER_TICK_STALENESS_SEC + 60.0),
+        _last_raw_update_ts=now - 30.0,  # свежий raw tick
+    )
+    assert _check_dispatcher_starved(owner) is False
+
+
+def test_dispatcher_starved_true_when_both_stale() -> None:
+    """P3.6: оба ts устарели → silent-death detected.
+
+    Это и есть production-инцидент 2026-05-17 17:29→19:24: handler chain
+    мёртв ПОЛНОСТЬЮ (никаких updates от Pyrogram dispatcher).
+    """
+    now = time.time()
+    stale_offset = _DISPATCHER_TICK_STALENESS_SEC + 60.0
+    owner = _make_owner(
+        _last_dispatcher_tick_ts=now - stale_offset,
+        _last_raw_update_ts=now - stale_offset,
+    )
+    assert _check_dispatcher_starved(owner) is True
+
+
+def test_dispatcher_starved_message_chain_broken_pattern() -> None:
+    """P3.6: raw alive + message stale = message filter chain broken (НЕ starved).
+
+    Этот pattern требует другой recovery — не reconnect Pyrogram, а debug
+    filter chain. Чтобы не ускорять recovery в ложных случаях, current
+    detection возвращает False; future Wave может добавить отдельный
+    `dispatcher_filter_chain_broken` signal.
+    """
+    now = time.time()
+    owner = _make_owner(
+        _last_dispatcher_tick_ts=now - (_DISPATCHER_TICK_STALENESS_SEC + 60.0),
+        _last_raw_update_ts=now - 1.0,  # raw совсем свежий
+    )
+    assert _check_dispatcher_starved(owner) is False
+
+
+def test_dispatcher_starved_fallback_when_raw_attr_missing() -> None:
+    """P3.6: backward compat — если `_last_raw_update_ts` отсутствует, fall back
+    на message-only signal (старая ревизия kraab bridge).
+    """
+    now = time.time()
+    owner = types.SimpleNamespace(
+        _last_dispatcher_tick_ts=now - (_DISPATCHER_TICK_STALENESS_SEC + 60.0),
+        # _last_raw_update_ts отсутствует
+        client=None,
+    )
+    assert _check_dispatcher_starved(owner) is True
