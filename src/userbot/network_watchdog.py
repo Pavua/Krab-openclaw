@@ -193,13 +193,36 @@ def _check_dispatcher_starved(
 
     Cross-reference signal: вызывать после того как pts probe сказал "alive".
     Stale tick + alive pts = новый split-brain pattern.
+
+    Session 53 P3.6 strengthened: дополнительно проверяем `_last_raw_update_ts`
+    (on_raw_update handler tick от любого update от Pyrogram dispatcher). Если
+    raw_update тоже замёрз → dispatcher truly dead (handler chain полностью
+    сломан). Если raw_update растёт но message tick замёрз → message filter chain
+    сломан (более узкая поломка). Возвращаем True ТОЛЬКО если ОБА замёрли,
+    чтобы избежать false-positive когда чат просто молчит (нет messages, но
+    есть user_status/typing/channel updates).
     """
     last_ts = getattr(owner, "_last_dispatcher_tick_ts", None)
     if last_ts is None:
         return False
     threshold = _DISPATCHER_TICK_STALENESS_SEC if staleness_sec is None else staleness_sec
     current = time.time() if now is None else now
-    return (current - float(last_ts)) >= threshold
+
+    message_starved = (current - float(last_ts)) >= threshold
+    if not message_starved:
+        return False
+
+    # Session 53 P3.6: cross-check raw_update tick если доступен.
+    # Если raw updates идут (типа user_status/typing) но message handler chain
+    # замёрз — это поломка message filter chain, не silent-death. Не считаем
+    # starved пока raw тоже не замёрз.
+    raw_ts = getattr(owner, "_last_raw_update_ts", None)
+    if raw_ts is not None:
+        raw_starved = (current - float(raw_ts)) >= threshold
+        return raw_starved
+
+    # Атрибут отсутствует (старая ревизия) — fall back на message-only signal.
+    return True
 
 
 def _launchd_exit_78() -> None:
@@ -1064,10 +1087,19 @@ class NetworkWatchdogMixin:
                     # давно → handler chain мёртв (network OK, dispatcher dead).
                     # Логируем отдельно для ops-видимости; реакция остаётся за
                     # split_brain_suspected ниже (consistent escalation).
+                    #
+                    # Session 53 P3.6: ослаблено условие server_pts_delta > 0.
+                    # Прошлая логика теряла silent-death кейсы где server pts тоже
+                    # заморожен (никто не пишет → нет global pts движения), но в
+                    # это время в конкретных chat'ах сообщения уходят и Pyrogram
+                    # их не диспатчит. Production observed 2026-05-17 17:29→19:24:
+                    # 2 часа handler silence без detection (probe.alive=True,
+                    # probe.server_pts_delta=0). Теперь detection работает на
+                    # `probe.alive AND starved`, server_pts_delta лог-only для
+                    # ops понимания.
                     if (
                         probe is not None
                         and probe.alive
-                        and probe.server_pts_delta > 0
                         and _check_dispatcher_starved(self)
                     ):
                         last_tick_ts = getattr(self, "_last_dispatcher_tick_ts", 0.0)

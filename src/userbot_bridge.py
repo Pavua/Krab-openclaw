@@ -426,6 +426,14 @@ class KraabUserbot(
         # split-brain pattern (network OK, dispatcher dead).
         self._dispatcher_tick_count: int = 0
         self._last_dispatcher_tick_ts: float = time.time()
+        # Session 53 P3.6: разделение сигналов «raw dispatcher жив» vs «message
+        # handler chain жив». on_raw_update триггерится на ВСЕ updates (channel
+        # admin, user status, typing, message), on_message — только на messages.
+        # Если оба растут → всё ок. Если raw растёт но message замёрз → message
+        # filter chain сломан. Если оба замёрли → dispatcher dead (silent death).
+        # Wave 63-D detection теперь использует ОБА сигнала для disambiguation.
+        self._raw_update_tick_count: int = 0
+        self._last_raw_update_ts: float = time.time()
         self._network_offline_monitor_task: Optional[asyncio.Task] = None
         # Runtime-состояние старта userbot для health/handoff и контролируемой деградации.
         self._startup_state = "initializing"
@@ -443,6 +451,20 @@ class KraabUserbot(
         prefixes = config.TRIGGER_PREFIXES + ["/", "!", "."]
 
         self._known_commands = set(USERBOT_KNOWN_COMMANDS)
+
+        # Session 53 P3.6: raw_update handler для silent-death detection.
+        # Любой update от Pyrogram dispatcher (message, user status, channel
+        # admin, typing) инкрементит counter. Используется в network_watchdog
+        # для disambiguation: stale raw_update + alive invoke probe =
+        # dispatcher dead (handler chain сломан).
+        @self.client.on_raw_update(group=-2)
+        async def _raw_update_tick(_client, _update, _users, _chats):
+            try:
+                self._raw_update_tick_count += 1
+                self._last_raw_update_ts = time.time()
+            except Exception:  # noqa: BLE001
+                pass
+            # Не возвращаем ничего — pyrofork продолжит обработку других хэндлеров.
 
         def _make_command_filter(command_name: str):
             """Создаёт per-command ACL-фильтр без дублирования правил в декораторах."""
