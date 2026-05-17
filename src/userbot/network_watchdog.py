@@ -717,10 +717,74 @@ class NetworkWatchdogMixin:
             return
 
         if ok:
-            logger.info("dispatcher_starved_recovery_ok")
-            # Сбрасываем silence-timer чтобы heartbeat не считал tick немедленно
-            # stale (свежий reconnect → reset event budget).
+            # Session 53 P3.6 hotfix2 (2026-05-17 23:40): `_try_reconnect_pyrofork`
+            # возвращает True по Ping invoke success — это false-positive если
+            # MTProto dispatcher worker мёртв (TCP+auth жив, но handler chain
+            # не оживает). Production observed: 4 detection cycle с
+            # `recovery_ok` подряд без реального восстановления, age_sec рос
+            # 6005s → 6728s за 12 минут.
+            #
+            # Verify post-recovery: сохраняем baseline dispatcher_tick_count
+            # ДО reconnect, ждём grace 30s, проверяем что counter вырос.
+            # Если не вырос → recovery был fake → escalate.
+            baseline_tick = int(getattr(self, "_dispatcher_tick_count", 0) or 0)
+            # Reset silence timer (свежий reconnect → reset event budget).
             self._last_telegram_event_ts = time.time()
+            logger.info("dispatcher_starved_recovery_reconnect_ok_awaiting_verify")
+
+            # Track consecutive fake-success для escalation.
+            fake_success_count = int(
+                getattr(self, "_dispatcher_recovery_fake_success_count", 0) or 0
+            )
+
+            # Wait grace для возможного incoming message чтобы инкрементить tick.
+            # 30s — два heartbeat-цикла или хотя бы один real message.
+            try:
+                await asyncio.sleep(30.0)
+            except asyncio.CancelledError:
+                raise
+
+            after_tick = int(getattr(self, "_dispatcher_tick_count", 0) or 0)
+            if after_tick > baseline_tick:
+                # Real success: dispatcher tick реально продвинулся.
+                logger.info(
+                    "dispatcher_starved_recovery_ok",
+                    baseline_tick=baseline_tick,
+                    after_tick=after_tick,
+                )
+                self._dispatcher_recovery_fake_success_count = 0
+            else:
+                # Fake success: reconnect OK но dispatcher всё ещё мёртв.
+                fake_success_count += 1
+                self._dispatcher_recovery_fake_success_count = fake_success_count
+                logger.warning(
+                    "dispatcher_starved_recovery_fake_success",
+                    baseline_tick=baseline_tick,
+                    after_tick=after_tick,
+                    fake_count=fake_success_count,
+                )
+                # Escalate after N=2 fake successes (Wave 44-C pattern).
+                # First fake — может быть просто тихий чат. Second подряд —
+                # высокая вероятность что dispatcher truly dead.
+                _fake_escalation_threshold = int(
+                    os.environ.get("KRAB_DISPATCHER_FAKE_ESCALATION_THRESHOLD", "2")
+                )
+                if fake_success_count >= _fake_escalation_threshold:
+                    logger.error(
+                        "dispatcher_starved_escalation_via_launchd",
+                        action="process_exit_for_launchd_respawn",
+                        fake_success_count=fake_success_count,
+                    )
+                    try:
+                        await self._send_proactive_watch_alert(
+                            "🧠 **Krab: dispatcher dead** — "
+                            f"recovery_ok x{fake_success_count} но handler chain "
+                            "не оживает.\n"
+                            "→ Эскалация: launchd respawn (P3.6 hotfix2)."
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _launchd_exit_78()
         else:
             logger.warning("dispatcher_starved_recovery_failed")
 
