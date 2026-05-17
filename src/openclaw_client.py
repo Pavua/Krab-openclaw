@@ -2896,6 +2896,141 @@ class OpenClawClient:
             return False
         return not self._allow_alt_local_vision_recovery()
 
+    async def _local_primary_bypass(
+        self,
+        *,
+        chat_id: str,
+        preferred_model_id: str,
+        has_photo: bool,
+        max_output_tokens: int | None,
+    ) -> str | None:
+        """S53 P4: Gateway bypass для local primary моделей.
+
+        Если ``preferred_model_id`` имеет namespace prefix ``lm-studio-local/``
+        или ``mlx-local-kv4/`` и ENV ``KRAB_LOCAL_PRIMARY_BYPASS_ENABLED=1``,
+        вызываем local backend напрямую через httpx, минуя OpenClaw Gateway
+        (:18789). Экономит 200-500ms latency vs Gateway proxy.
+
+        Reuse pattern from S52 ``_translate_via_lmstudio`` (translator path,
+        production-verified). НЕ затрагивает cloud путь — для preferred_model
+        вроде ``google/gemini-3-pro-preview`` early-return не сработает.
+
+        Returns: текст ответа или ``None`` (если bypass отключён / модель не
+        подходит / backend упал). Caller продолжает обычный Gateway path при
+        None.
+        """
+        if os.getenv("KRAB_LOCAL_PRIMARY_BYPASS_ENABLED", "0") not in ("1", "true", "yes", "on"):
+            return None
+
+        if has_photo:
+            # Vision запросы оставляем основному path: vision modal handling
+            # сложнее одного chat/completions call.
+            return None
+
+        prefix_lm = "lm-studio-local/"
+        prefix_mlx = "mlx-local-kv4/"
+        if not (
+            preferred_model_id.startswith(prefix_lm) or preferred_model_id.startswith(prefix_mlx)
+        ):
+            return None
+
+        # Resolve target URL: MLX → :8088, LM Studio → :1234 (config default).
+        if preferred_model_id.startswith(prefix_mlx):
+            url = os.getenv("MLX_LOCAL_KV4_URL", "http://127.0.0.1:8088").rstrip("/")
+            compat_model = preferred_model_id[len(prefix_mlx) :]
+        else:
+            url = str(
+                os.getenv("KRAB_LOCAL_PRIMARY_BYPASS_URL")
+                or config.LM_STUDIO_URL
+                or "http://127.0.0.1:1234"
+            ).rstrip("/")
+            compat_model = preferred_model_id[len(prefix_lm) :]
+
+        if not url or not compat_model:
+            return None
+
+        messages_for_lm = self._apply_local_route_history_budget(
+            chat_id,
+            self._apply_sliding_window(chat_id, self._sessions[chat_id]),
+            has_photo=False,
+            trim_reason="local_primary_bypass",
+        )
+        # Strip image parts на text-route (защита от случайных multimodal payloads).
+        messages_for_lm = self._strip_image_parts_for_text_route(messages_for_lm)
+
+        payload: dict[str, Any] = {
+            "messages": messages_for_lm,
+            "stream": False,
+            "model": compat_model,
+        }
+        if isinstance(max_output_tokens, int) and max_output_tokens > 0:
+            payload["max_tokens"] = max_output_tokens
+
+        # MLX local: disable thinking + resolve short alias → full path.
+        if _is_mlx_local_target(base_url=url, model_id=compat_model):
+            _resolve_mlx_local_model_in_payload(payload, base_url=url)
+            _apply_mlx_disable_thinking(payload)
+
+        api_key = getattr(config, "LM_STUDIO_API_KEY", "") or os.getenv("LM_STUDIO_API_KEY", "")
+        headers = build_lm_studio_auth_headers(api_key=api_key) or {}
+        headers.setdefault("Content-Type", "application/json")
+
+        timeout_sec = float(os.getenv("KRAB_LOCAL_PRIMARY_BYPASS_TIMEOUT_SEC", "120") or 120)
+
+        bypass_started_at = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(
+                timeout=timeout_sec,
+                verify=False,
+                trust_env=False,
+            ) as client:
+                resp = await client.post(
+                    f"{url}/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                )
+                if resp.status_code != 200:
+                    logger.warning(
+                        "local_primary_bypass_http_error",
+                        chat_id=chat_id,
+                        model=preferred_model_id,
+                        status=resp.status_code,
+                        url=url,
+                    )
+                    return None
+                data = resp.json()
+            msg = (data.get("choices") or [{}])[0].get("message") or {}
+            content = extract_message_text(msg, model_id=compat_model, logger_=logger)
+            if not content:
+                return None
+            semantic = self._detect_semantic_error(content)
+            if semantic:
+                logger.warning(
+                    "local_primary_bypass_semantic_error",
+                    chat_id=chat_id,
+                    model=preferred_model_id,
+                    semantic_kind=semantic.get("kind"),
+                )
+                return None
+            elapsed_ms = int((time.perf_counter() - bypass_started_at) * 1000)
+            logger.info(
+                "local_primary_bypass_ok",
+                chat_id=chat_id,
+                model=preferred_model_id,
+                elapsed_ms=elapsed_ms,
+                url=url,
+            )
+            return content
+        except (httpx.HTTPError, OSError, ValueError, KeyError, IndexError) as exc:
+            logger.warning(
+                "local_primary_bypass_failed",
+                chat_id=chat_id,
+                model=preferred_model_id,
+                error=str(exc)[:200],
+                error_type=type(exc).__name__,
+            )
+            return None
+
     async def _direct_lm_fallback(
         self,
         *,
@@ -3378,6 +3513,42 @@ class OpenClawClient:
             logger.warning("wave250_resolve_failed", error=str(_exc))
 
         try:
+            # S53 P4: Gateway bypass для local primary моделей (lm-studio-local/*
+            # и mlx-local-kv4/*). Опт-ин через KRAB_LOCAL_PRIMARY_BYPASS_ENABLED=1.
+            # Экономит 200-500ms latency vs OpenClaw Gateway :18789 proxy.
+            # Placed inside outer try: finally-cleanup (mark_request_finished,
+            # latency tracker, Sentry txn) выполнится после yield.
+            if not effective_force_cloud and preferred_model_id:
+                try:
+                    bypass_text = await self._local_primary_bypass(
+                        chat_id=chat_id,
+                        preferred_model_id=preferred_model_id,
+                        has_photo=has_photo,
+                        max_output_tokens=max_output_tokens,
+                    )
+                except Exception as _bp_exc:  # noqa: BLE001
+                    logger.warning(
+                        "local_primary_bypass_unexpected_error",
+                        chat_id=chat_id,
+                        model=preferred_model_id,
+                        error=str(_bp_exc)[:200],
+                    )
+                    bypass_text = None
+                if bypass_text:
+                    self._set_last_runtime_route(
+                        channel="local_primary_bypass",
+                        model=preferred_model_id,
+                        route_reason="local_primary_bypass_enabled",
+                        route_detail=(
+                            "S53 P4: KRAB_LOCAL_PRIMARY_BYPASS_ENABLED=1 — local "
+                            "backend вызван напрямую, OpenClaw Gateway обойдён"
+                        ),
+                        force_cloud=False,
+                    )
+                    self._finalize_chat_response(chat_id, bypass_text)
+                    yield bypass_text
+                    return
+
             if preferred_model_id:
                 # Явный выбор модели из UI/owner-пути должен иметь приоритет над
                 # автоматическим роутингом. Иначе owner-панель показывает, что
