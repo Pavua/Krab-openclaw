@@ -216,13 +216,34 @@ def _check_dispatcher_starved(
     # Если raw updates идут (типа user_status/typing) но message handler chain
     # замёрз — это поломка message filter chain, не silent-death. Не считаем
     # starved пока raw тоже не замёрз.
+    #
+    # P3.6 hotfix 2026-05-17 20:10: pyrofork on_raw_update handler оказался
+    # не reliable — в production triggers только для подмножества raw update
+    # типов (count рос редко, age перерастал threshold * 2 пока dispatcher
+    # активно работал). Если raw signal "stale forever" → fall back на
+    # **более консервативный** message-only detection (3x threshold = 30 мин),
+    # чтобы избежать false-positive при quiet chats overnight.
+    #
+    # Recovery hierarchy:
+    # - raw работает (raw_age < 2*threshold) + оба stale → silent-death (full force)
+    # - raw broken / never triggered → conservative message-only (3x threshold)
+    raw_count = getattr(owner, "_raw_update_tick_count", None)
     raw_ts = getattr(owner, "_last_raw_update_ts", None)
-    if raw_ts is not None:
-        raw_starved = (current - float(raw_ts)) >= threshold
-        return raw_starved
 
-    # Атрибут отсутствует (старая ревизия) — fall back на message-only signal.
-    return True
+    if raw_count is None or int(raw_count) == 0 or raw_ts is None:
+        # Handler not wired или ни разу не triggered — conservative fallback.
+        conservative_threshold = 3.0 * threshold
+        return (current - float(last_ts)) >= conservative_threshold
+
+    raw_age = current - float(raw_ts)
+    if raw_age >= 2.0 * threshold:
+        # Handler triggered раньше но сейчас застрял "вечно" — pyrofork
+        # bug, на raw signal не полагаемся. Conservative fallback.
+        conservative_threshold = 3.0 * threshold
+        return (current - float(last_ts)) >= conservative_threshold
+
+    # Здоровый случай: raw signal реально работает, проверяем оба синхронно.
+    return raw_age >= threshold
 
 
 def _launchd_exit_78() -> None:

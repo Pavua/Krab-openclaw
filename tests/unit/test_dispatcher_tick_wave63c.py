@@ -37,16 +37,16 @@ from src.userbot.network_watchdog import (
 def _make_owner(**attrs: object) -> types.SimpleNamespace:
     """Минимальный duck-type для _check_dispatcher_starved / probe.
 
-    Session 53 P3.6: дефолт `_last_raw_update_ts` синхронизируется с
-    `_last_dispatcher_tick_ts` — старые тесты получают consistent behavior
-    (когда оба ts старые → starved). Новые тесты для P3.6 могут переопределить
-    `_last_raw_update_ts` отдельно для проверки disambiguation.
+    Session 53 P3.6 (revised after 2026-05-17 hotfix):
+    - дефолт `_raw_update_tick_count = 1` (handler triggered хотя бы раз)
+    - дефолт `_last_raw_update_ts` синхронизируется с `_last_dispatcher_tick_ts`
+    - тесты для conservative fallback могут явно ставить count=0
     """
     tick_ts = attrs.get("_last_dispatcher_tick_ts", time.time())
     base = {
         "_dispatcher_tick_count": 0,
         "_last_dispatcher_tick_ts": tick_ts,
-        "_raw_update_tick_count": 0,
+        "_raw_update_tick_count": 1,  # handler healthy (triggered хотя бы раз)
         "_last_raw_update_ts": tick_ts,  # дефолт: синхронно с message tick
         "_last_server_pts": 0,
         "_last_seen_update_id": 0,
@@ -103,8 +103,12 @@ def test_dispatcher_starved_fail_open_when_attr_missing() -> None:
 
 
 def test_dispatcher_starved_respects_custom_threshold() -> None:
-    owner = _make_owner(_last_dispatcher_tick_ts=time.time() - 5.0)
-    # При threshold 2с — точно starved
+    """P3.6 hotfix: tick_ts свежее raw_age > 2*threshold → conservative path
+    срабатывает (3x threshold). Тест ставит достаточно старый tick для
+    пересечения conservative порога."""
+    now = time.time()
+    # При threshold=2s, conservative=6s → tick должен быть >6s старше
+    owner = _make_owner(_last_dispatcher_tick_ts=now - 10.0)
     assert _check_dispatcher_starved(owner, staleness_sec=2.0) is True
     assert _check_dispatcher_starved(owner, staleness_sec=60.0) is False
 
@@ -235,13 +239,60 @@ def test_dispatcher_starved_message_chain_broken_pattern() -> None:
 
 
 def test_dispatcher_starved_fallback_when_raw_attr_missing() -> None:
-    """P3.6: backward compat — если `_last_raw_update_ts` отсутствует, fall back
-    на message-only signal (старая ревизия kraab bridge).
+    """P3.6 hotfix: backward compat — если `_raw_update_tick_count` / ts отсутствуют,
+    fall back на CONSERVATIVE message-only (3x threshold) чтобы избежать
+    false-positive recovery в quiet chats overnight.
+
+    Тут message_starved 3x+ → conservative threshold пройден → starved True.
     """
     now = time.time()
     owner = types.SimpleNamespace(
-        _last_dispatcher_tick_ts=now - (_DISPATCHER_TICK_STALENESS_SEC + 60.0),
-        # _last_raw_update_ts отсутствует
+        _last_dispatcher_tick_ts=now - (3.0 * _DISPATCHER_TICK_STALENESS_SEC + 60.0),
+        # _raw_update_tick_count / _last_raw_update_ts отсутствуют
         client=None,
     )
     assert _check_dispatcher_starved(owner) is True
+
+
+def test_dispatcher_starved_NOT_in_quiet_chat_when_raw_broken() -> None:
+    """P3.6 hotfix: если raw handler broken (count=0 или age>2x threshold),
+    quiet message period <3x threshold НЕ должен trigger'ить recovery.
+
+    Это и есть production регрессия которую мы фиксим: pyrofork on_raw_update
+    handler сломан → raw_count=0/застрял → false-positive starved=True в
+    healthy quiet чатах через каждые 10 мин тишины.
+    """
+    now = time.time()
+    # Quiet chat: messages были 15 мин назад (> 1x threshold, < 3x threshold)
+    owner = _make_owner(
+        _last_dispatcher_tick_ts=now - 900.0,  # 15 мин
+        _raw_update_tick_count=0,  # broken handler
+        _last_raw_update_ts=now - 900.0,
+    )
+    assert _check_dispatcher_starved(owner) is False  # не starved — quiet chat
+
+
+def test_dispatcher_starved_TRUE_after_3x_threshold_when_raw_broken() -> None:
+    """P3.6 hotfix: даже при broken raw handler, если message молчит 30+ мин
+    (3x threshold) — recovery всё-таки нужно. Длительные тишины редки в
+    активных чатах; в quiet чатах overnight 30 мин = legitimate dead state."""
+    now = time.time()
+    owner = _make_owner(
+        _last_dispatcher_tick_ts=now - (3.0 * _DISPATCHER_TICK_STALENESS_SEC + 30.0),
+        _raw_update_tick_count=0,
+        _last_raw_update_ts=now - 1800.0,
+    )
+    assert _check_dispatcher_starved(owner) is True
+
+
+def test_dispatcher_starved_raw_handler_stuck_uses_conservative_threshold() -> None:
+    """P3.6 hotfix: handler работал когда-то (count > 0) но raw_age > 2x
+    threshold → handler застрял (pyrofork bug). Используем conservative."""
+    now = time.time()
+    owner = _make_owner(
+        _last_dispatcher_tick_ts=now - 900.0,  # 15 мин (1.5x)
+        _raw_update_tick_count=168,  # был triggered ранее
+        _last_raw_update_ts=now - 1500.0,  # 25 мин (> 2x = 1200)
+    )
+    # raw_age > 2x threshold → conservative mode → message не достиг 3x → False
+    assert _check_dispatcher_starved(owner) is False
