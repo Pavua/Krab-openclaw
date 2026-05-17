@@ -296,3 +296,74 @@ def test_dispatcher_starved_raw_handler_stuck_uses_conservative_threshold() -> N
     )
     # raw_age > 2x threshold → conservative mode → message не достиг 3x → False
     assert _check_dispatcher_starved(owner) is False
+
+
+# ---------------------------------------------------------------------------
+# Session 53 P3.6 hotfix3: Client.last_update_time primary signal
+# ---------------------------------------------------------------------------
+
+
+from datetime import datetime, timedelta
+
+from src.userbot.network_watchdog import _client_last_update_age_sec
+
+
+def _make_client_with_last_update(age_sec: float) -> types.SimpleNamespace:
+    """Mock pyrofork client with `last_update_time` attribute."""
+    return types.SimpleNamespace(
+        last_update_time=datetime.now() - timedelta(seconds=age_sec)
+    )
+
+
+def test_client_last_update_age_returns_none_when_no_client() -> None:
+    """No `client` attr или client=None → None (caller falls back)."""
+    owner = types.SimpleNamespace(client=None)
+    assert _client_last_update_age_sec(owner, time.time()) is None
+
+
+def test_client_last_update_age_returns_none_when_attr_missing() -> None:
+    """Старый pyrofork без `last_update_time` → None."""
+    owner = types.SimpleNamespace(client=types.SimpleNamespace())
+    assert _client_last_update_age_sec(owner, time.time()) is None
+
+
+def test_client_last_update_age_returns_seconds() -> None:
+    """Здоровый pyrofork client — возвращает age в секундах."""
+    owner = types.SimpleNamespace(client=_make_client_with_last_update(120.0))
+    age = _client_last_update_age_sec(owner, time.time())
+    assert age is not None
+    assert 119.0 < age < 121.0
+
+
+def test_dispatcher_starved_true_when_network_alive_but_dispatcher_dead() -> None:
+    """P3.6 hotfix3 PRIMARY case: client.last_update_time свежий
+    (network receives updates), но dispatcher_tick замёрз → handler chain
+    мёртв = SILENT-DEATH. Это и есть production pattern 17:29→19:24."""
+    now = time.time()
+    owner = _make_owner(
+        _last_dispatcher_tick_ts=now - (_DISPATCHER_TICK_STALENESS_SEC + 60.0),
+        # raw_count > 0 чтобы не fall back на legacy
+        _raw_update_tick_count=10,
+        _last_raw_update_ts=now - 30.0,
+    )
+    # Pyrofork получает updates 30 sec назад (network alive)
+    owner.client = _make_client_with_last_update(30.0)
+    assert _check_dispatcher_starved(owner) is True
+
+
+def test_dispatcher_starved_false_when_both_network_and_dispatcher_stale() -> None:
+    """P3.6 hotfix3: оба stale → НЕ silent-death (это network silence).
+    Regular reconnect path обрабатывает это, не dispatcher recovery."""
+    now = time.time()
+    stale = _DISPATCHER_TICK_STALENESS_SEC + 60.0
+    owner = _make_owner(_last_dispatcher_tick_ts=now - stale)
+    owner.client = _make_client_with_last_update(stale)
+    assert _check_dispatcher_starved(owner) is False
+
+
+def test_dispatcher_starved_false_when_dispatcher_fresh() -> None:
+    """P3.6 hotfix3: dispatcher_tick свежий → не starved (early return)."""
+    now = time.time()
+    owner = _make_owner(_last_dispatcher_tick_ts=now - 60.0)
+    owner.client = _make_client_with_last_update(60.0)
+    assert _check_dispatcher_starved(owner) is False

@@ -179,6 +179,36 @@ _DISPATCHER_RECOVERY_MIN_INTERVAL_SEC: float = float(
 )
 
 
+def _client_last_update_age_sec(owner: object, now: float) -> float | None:
+    """Session 53 P3.6 hotfix3 (gold finding via subagent 2026-05-17):
+    Возвращает age в секундах с последнего raw network update от Pyrogram.
+
+    Pyrofork `Client.last_update_time` (set в `handle_updates:628` ДО всякой
+    фильтрации) — true network-level liveness signal. Срабатывает на ВСЕ
+    incoming updates от socket: `Updates`, `UpdatesCombined`, `UpdateShort*`.
+    Не зависит от distribution update типов (как `on_raw_update` handler).
+
+    Используется в `_check_dispatcher_starved` для disambiguation:
+    - client.last_update_time свежий + dispatcher_tick замёрз → handler chain
+      broken (silent-death pattern)
+    - оба замёрзли → network layer dead (regular reconnect path)
+
+    Returns None если у client'a нет атрибута (старая pyrofork версия) или
+    owner.client отсутствует — caller fall back на legacy detection.
+    """
+    client = getattr(owner, "client", None)
+    if client is None:
+        return None
+    lut = getattr(client, "last_update_time", None)
+    if lut is None:
+        return None
+    try:
+        # pyrofork stores datetime — convert via .timestamp()
+        return now - float(lut.timestamp())
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def _check_dispatcher_starved(
     owner: object,
     *,
@@ -212,37 +242,38 @@ def _check_dispatcher_starved(
     if not message_starved:
         return False
 
-    # Session 53 P3.6: cross-check raw_update tick если доступен.
-    # Если raw updates идут (типа user_status/typing) но message handler chain
-    # замёрз — это поломка message filter chain, не silent-death. Не считаем
-    # starved пока raw тоже не замёрз.
+    # Session 53 P3.6 hotfix3: используем `Client.last_update_time` (pyrofork
+    # internal) как primary network-level liveness signal. Subagent findings
+    # 2026-05-17 показал: on_raw_update handler не reliable (распределение
+    # update типов делает counter rare-growing); `client.last_update_time`
+    # set в `handle_updates:628` для ВСЕХ raw updates от socket ДО фильтрации.
     #
-    # P3.6 hotfix 2026-05-17 20:10: pyrofork on_raw_update handler оказался
-    # не reliable — в production triggers только для подмножества raw update
-    # типов (count рос редко, age перерастал threshold * 2 пока dispatcher
-    # активно работал). Если raw signal "stale forever" → fall back на
-    # **более консервативный** message-only detection (3x threshold = 30 мин),
-    # чтобы избежать false-positive при quiet chats overnight.
-    #
-    # Recovery hierarchy:
-    # - raw работает (raw_age < 2*threshold) + оба stale → silent-death (full force)
-    # - raw broken / never triggered → conservative message-only (3x threshold)
+    # Disambiguation:
+    # - client.last_update_time свежий (< threshold) + dispatcher_tick stale
+    #   → handler chain dead (silent-death pattern) → starved=True
+    # - оба stale → network layer dead → handled by network_silence path
+    # - client.last_update_time stale + dispatcher_tick fresh → impossible
+    #   (dispatcher tick требует update от network → last_update_time тоже свежий)
+    client_update_age = _client_last_update_age_sec(owner, current)
+    if client_update_age is not None:
+        # Primary path: trust pyrofork's network-level timestamp.
+        # Если network alive (< threshold) И dispatcher_tick stale → silent-death.
+        if client_update_age < threshold:
+            return True  # network alive but dispatcher dead → silent-death
+        # Оба stale → not silent-death, regular network_silence will handle.
+        return False
+
+    # Fallback chain: pyrofork attribute absent → use legacy on_raw_update +
+    # conservative thresholds. P3.6 original logic.
     raw_count = getattr(owner, "_raw_update_tick_count", None)
     raw_ts = getattr(owner, "_last_raw_update_ts", None)
-
     if raw_count is None or int(raw_count) == 0 or raw_ts is None:
-        # Handler not wired или ни разу не triggered — conservative fallback.
         conservative_threshold = 3.0 * threshold
         return (current - float(last_ts)) >= conservative_threshold
-
     raw_age = current - float(raw_ts)
     if raw_age >= 2.0 * threshold:
-        # Handler triggered раньше но сейчас застрял "вечно" — pyrofork
-        # bug, на raw signal не полагаемся. Conservative fallback.
         conservative_threshold = 3.0 * threshold
         return (current - float(last_ts)) >= conservative_threshold
-
-    # Здоровый случай: raw signal реально работает, проверяем оба синхронно.
     return raw_age >= threshold
 
 
