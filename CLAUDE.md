@@ -40,7 +40,7 @@ bash scripts/install_pre_commit.sh
 
 ## Auto-generated reference
 
-- **Endpoints** (~380 routes): [docs/CLAUDE_AUTO_ENDPOINTS.md](docs/CLAUDE_AUTO_ENDPOINTS.md)
+- **Endpoints** (~408 routes): [docs/CLAUDE_AUTO_ENDPOINTS.md](docs/CLAUDE_AUTO_ENDPOINTS.md)
 - **Handlers** (~181 функций): [docs/CLAUDE_AUTO_HANDLERS.md](docs/CLAUDE_AUTO_HANDLERS.md)
 - **Commands** (~162 registered, 172+ с алиасами): [docs/CLAUDE_COMMANDS_REFERENCE.md](docs/CLAUDE_COMMANDS_REFERENCE.md)
 - **Prometheus** (42 alerts, 52 metrics): [docs/CLAUDE_AUTO_PROMETHEUS.md](docs/CLAUDE_AUTO_PROMETHEUS.md)

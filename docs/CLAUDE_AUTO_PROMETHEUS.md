@@ -1,6 +1,6 @@
 # Auto-generated Prometheus (43 алертов, 53 метрик)
 
-Обновлено: auto-refresh (14.05.2026). Конфиг: `scripts/prometheus/`
+Обновлено: auto-refresh (17.05.2026). Конфиг: `scripts/prometheus/`
 
 ## Alerts (43)
 

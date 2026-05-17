@@ -1,7 +1,7 @@
-# Auto-generated endpoints (380 routes)
+# Auto-generated endpoints (408 routes)
 
 **29 routers** в `src/modules/web_routers/` через factory `build_X_router(ctx)` pattern.
-Обновлено: auto-refresh (14.05.2026). Live проверить: `GET /api/endpoints`
+Обновлено: auto-refresh (17.05.2026). Live проверить: `GET /api/endpoints`
 
 | Endpoint | Метод |
 |----------|-------|
@@ -18,14 +18,20 @@
 | `/admin/help` | GET |
 | `/admin/inbox` | GET |
 | `/admin/logs` | GET |
+| `/admin/mcp` | GET |
 | `/admin/memory` | GET |
 | `/admin/models` | GET |
+| `/admin/models` | GET |
+| `/admin/models` | GET |
 | `/admin/network` | GET |
+| `/admin/reactions` | GET |
 | `/admin/routing` | GET |
 | `/admin/scheduler` | GET |
 | `/admin/sentry` | GET |
 | `/admin/silence` | GET |
 | `/admin/skills` | GET |
+| `/admin/snapshots` | GET |
+| `/admin/spawn` | GET |
 | `/admin/swarm` | GET |
 | `/admin/translator` | GET |
 | `/admin/typing` | GET |
@@ -65,9 +71,18 @@
 | `/api/admin/memory/search` | POST |
 | `/api/admin/memory/stats` | GET |
 | `/api/admin/model/switch` | POST |
+| `/api/admin/model/switch` | POST |
+| `/api/admin/model/test_ping` | POST |
+| `/api/admin/model/test_ping` | POST |
 | `/api/admin/network/dns_check` | POST |
 | `/api/admin/network/ping` | POST |
 | `/api/admin/network/status` | GET |
+| `/api/admin/reactions/add` | POST |
+| `/api/admin/reactions/list` | GET |
+| `/api/admin/reactions/remove/{rule_id}` | POST |
+| `/api/admin/reactions/toggle/{rule_id}` | POST |
+| `/api/admin/routing-active` | GET |
+| `/api/admin/routing-active` | GET |
 | `/api/admin/scheduler/cancel/{record_id}` | POST |
 | `/api/admin/scheduler/list` | GET |
 | `/api/admin/sentry/dashboard` | GET |
@@ -77,6 +92,13 @@
 | `/api/admin/silence/remove` | POST |
 | `/api/admin/skills/list` | GET |
 | `/api/admin/skills/{name}/curator_reports` | GET |
+| `/api/admin/snapshots/list` | GET |
+| `/api/admin/snapshots/trigger` | POST |
+| `/api/admin/snapshots/{name}/download` | GET |
+| `/api/admin/snapshots/{name}/preview` | GET |
+| `/api/admin/snapshots/{name}/restore` | POST |
+| `/api/admin/spawn/history` | GET |
+| `/api/admin/spawn/run` | POST |
 | `/api/admin/swarm/dashboard` | GET |
 | `/api/admin/translator/state` | GET |
 | `/api/admin/typing/stats` | GET |
@@ -165,6 +187,11 @@
 | `/api/krab_ear/status` | GET |
 | `/api/links` | GET |
 | `/api/mcp/health` | GET |
+| `/api/mcp/server/info` | GET |
+| `/api/mcp/sse` | GET |
+| `/api/mcp/tools/call` | POST |
+| `/api/mcp/tools/list` | POST |
+| `/api/mcp/tools/list` | GET |
 | `/api/memory/coverage-audit` | GET |
 | `/api/memory/doctor` | GET |
 | `/api/memory/doctor/fix` | POST |
@@ -189,6 +216,7 @@
 | `/api/model/recommend` | GET |
 | `/api/model/status` | GET |
 | `/api/model/switch` | POST |
+| `/api/models/registry` | GET |
 | `/api/models/registry` | GET |
 | `/api/moderation/audit` | GET |
 | `/api/mood/{chat_id}` | GET |
