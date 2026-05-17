@@ -127,6 +127,17 @@ def collect_network_probes_snapshot(userbot: Any, *, now: float | None = None) -
 
     last_update_id = _safe_int(getattr(userbot, "_last_seen_update_id", 0))
 
+    # Session 53 P3.6: raw_update tick exposes Pyrogram dispatcher liveness
+    # независимо от message handler chain. Используется для disambiguation:
+    # raw alive + message stale → filter chain broken; both stale → silent-death.
+    raw_tick_count = _safe_int(getattr(userbot, "_raw_update_tick_count", 0))
+    raw_tick_ts_raw = getattr(userbot, "_last_raw_update_ts", None)
+    raw_tick_ago: float | None
+    if raw_tick_ts_raw is None:
+        raw_tick_ago = None
+    else:
+        raw_tick_ago = max(0.0, ts_now - _safe_float(raw_tick_ts_raw))
+
     swarm_probes: dict[str, dict[str, Any]] = {}
     try:
         raw_swarm = getattr(userbot, "_last_swarm_pts", None) or {}
@@ -149,6 +160,8 @@ def collect_network_probes_snapshot(userbot: Any, *, now: float | None = None) -
         "available": True,
         "main_dispatcher_tick_count": tick_count,
         "main_dispatcher_tick_ago_sec": tick_ago,
+        "main_raw_update_tick_count": raw_tick_count,
+        "main_raw_update_tick_ago_sec": raw_tick_ago,
         "main_last_event_ago_sec": event_ago,
         "main_last_seen_update_id": last_update_id,
         "swarm_probes": swarm_probes,
