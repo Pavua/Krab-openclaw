@@ -394,7 +394,16 @@ class MediaProcessorsMixin:
         idle_log_interval_sec = float(os.getenv("KRAB_VISION_IDLE_LOG_INTERVAL_SEC", "60"))
 
         def _log_idle_skip(reason: str) -> None:
-            """Rate-limited idle log: once per `idle_log_interval_sec` per reason."""
+            """Rate-limited idle log: once per `idle_log_interval_sec` per reason.
+
+            S62 W6: counter инкрементируется на каждый skip, log rate-limited.
+            """
+            try:
+                from src.core.metrics.idle_skip import inc_vision_idle_skip
+
+                inc_vision_idle_skip(reason)
+            except Exception:  # noqa: BLE001
+                pass
             last = last_idle_log_ts.get(reason, 0.0)
             if now_ts - last < idle_log_interval_sec:
                 return

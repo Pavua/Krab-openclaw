@@ -526,3 +526,166 @@ def test_inc_telegram_flood_wait_handles_empty_caller():
     baseline = _TELEGRAM_FLOOD_WAIT_COUNTER.get("unknown", 0)
     inc_telegram_flood_wait("")
     assert _TELEGRAM_FLOOD_WAIT_COUNTER["unknown"] == baseline + 1
+
+
+# ---------------------------------------------------------------------------
+# S62 W6: idle skip counters (bypass / vision / translator / verifier)
+# ---------------------------------------------------------------------------
+
+
+def test_idle_skip_bypass_counter_increments():
+    """inc_bypass_idle_skip обновляет in-memory counter per reason."""
+    from src.core.metrics.idle_skip import (
+        _BYPASS_IDLE_SKIP_COUNTER,
+        inc_bypass_idle_skip,
+    )
+
+    _BYPASS_IDLE_SKIP_COUNTER.clear()
+    inc_bypass_idle_skip("has_photo")
+    inc_bypass_idle_skip("has_photo")
+    inc_bypass_idle_skip("cloud_or_cli_model")
+
+    assert _BYPASS_IDLE_SKIP_COUNTER["has_photo"] == 2
+    assert _BYPASS_IDLE_SKIP_COUNTER["cloud_or_cli_model"] == 1
+
+
+def test_idle_skip_vision_counter_increments():
+    """inc_vision_idle_skip обновляет in-memory counter per reason."""
+    from src.core.metrics.idle_skip import (
+        _VISION_IDLE_SKIP_COUNTER,
+        inc_vision_idle_skip,
+    )
+
+    _VISION_IDLE_SKIP_COUNTER.clear()
+    inc_vision_idle_skip("cloud_route_preferred")
+    inc_vision_idle_skip("cloud_route_preferred")
+
+    assert _VISION_IDLE_SKIP_COUNTER["cloud_route_preferred"] == 2
+
+
+def test_idle_skip_translator_counter_increments():
+    """inc_translator_idle_skip обновляет in-memory counter per reason."""
+    from src.core.metrics.idle_skip import (
+        _TRANSLATOR_IDLE_SKIP_COUNTER,
+        inc_translator_idle_skip,
+    )
+
+    _TRANSLATOR_IDLE_SKIP_COUNTER.clear()
+    inc_translator_idle_skip("cloud_fallback")
+    inc_translator_idle_skip("local_unavailable")
+    inc_translator_idle_skip("cloud_fallback")
+
+    assert _TRANSLATOR_IDLE_SKIP_COUNTER["cloud_fallback"] == 2
+    assert _TRANSLATOR_IDLE_SKIP_COUNTER["local_unavailable"] == 1
+
+
+def test_idle_skip_verifier_counter_increments():
+    """inc_verifier_sample обновляет counter per status."""
+    from src.core.metrics.idle_skip import (
+        _VERIFIER_SAMPLES_COUNTER,
+        inc_verifier_sample,
+    )
+
+    _VERIFIER_SAMPLES_COUNTER.clear()
+    inc_verifier_sample("sampled")
+    inc_verifier_sample("skipped_not_sampled")
+    inc_verifier_sample("skipped_env_disabled")
+    inc_verifier_sample("skipped_empty_input")
+    inc_verifier_sample("sampled")
+
+    assert _VERIFIER_SAMPLES_COUNTER["sampled"] == 2
+    assert _VERIFIER_SAMPLES_COUNTER["skipped_not_sampled"] == 1
+    assert _VERIFIER_SAMPLES_COUNTER["skipped_env_disabled"] == 1
+    assert _VERIFIER_SAMPLES_COUNTER["skipped_empty_input"] == 1
+
+
+def test_idle_skip_counters_handle_empty_reason():
+    """Empty/None reason → нормализуется до 'unknown' без crash."""
+    from src.core.metrics.idle_skip import (
+        _BYPASS_IDLE_SKIP_COUNTER,
+        inc_bypass_idle_skip,
+    )
+
+    _BYPASS_IDLE_SKIP_COUNTER.clear()
+    inc_bypass_idle_skip("")
+    assert _BYPASS_IDLE_SKIP_COUNTER.get("unknown", 0) == 1
+
+
+def test_idle_skip_counters_appear_in_metrics_output():
+    """После inc_* счётчики должны попасть в collect_metrics() Prometheus текст."""
+    from src.core.metrics.idle_skip import (
+        _BYPASS_IDLE_SKIP_COUNTER,
+        _TRANSLATOR_IDLE_SKIP_COUNTER,
+        _VERIFIER_SAMPLES_COUNTER,
+        _VISION_IDLE_SKIP_COUNTER,
+        inc_bypass_idle_skip,
+        inc_translator_idle_skip,
+        inc_verifier_sample,
+        inc_vision_idle_skip,
+    )
+    from src.core.prometheus_metrics import collect_metrics
+
+    _BYPASS_IDLE_SKIP_COUNTER.clear()
+    _VISION_IDLE_SKIP_COUNTER.clear()
+    _TRANSLATOR_IDLE_SKIP_COUNTER.clear()
+    _VERIFIER_SAMPLES_COUNTER.clear()
+
+    inc_bypass_idle_skip("cloud_or_cli_model")
+    inc_vision_idle_skip("cloud_route_preferred")
+    inc_translator_idle_skip("local_unavailable")
+    inc_verifier_sample("sampled")
+
+    text = collect_metrics()
+    assert "krab_bypass_idle_skip_total" in text
+    assert 'reason="cloud_or_cli_model"' in text
+    assert "krab_vision_idle_skip_total" in text
+    assert 'reason="cloud_route_preferred"' in text
+    assert "krab_translator_idle_skip_total" in text
+    assert 'reason="local_unavailable"' in text
+    assert "krab_verifier_samples_total" in text
+    assert 'status="sampled"' in text
+
+
+def test_idle_skip_counters_absent_when_empty():
+    """Если ни один inc_* не вызывался — метрики не должны появиться."""
+    from src.core.metrics.idle_skip import (
+        _BYPASS_IDLE_SKIP_COUNTER,
+        _TRANSLATOR_IDLE_SKIP_COUNTER,
+        _VERIFIER_SAMPLES_COUNTER,
+        _VISION_IDLE_SKIP_COUNTER,
+    )
+    from src.core.prometheus_metrics import collect_metrics
+
+    _BYPASS_IDLE_SKIP_COUNTER.clear()
+    _VISION_IDLE_SKIP_COUNTER.clear()
+    _TRANSLATOR_IDLE_SKIP_COUNTER.clear()
+    _VERIFIER_SAMPLES_COUNTER.clear()
+
+    text = collect_metrics()
+    assert "krab_bypass_idle_skip_total" not in text
+    assert "krab_vision_idle_skip_total" not in text
+    assert "krab_translator_idle_skip_total" not in text
+    assert "krab_verifier_samples_total" not in text
+
+
+def test_idle_skip_facade_reexports():
+    """Все символы должны быть доступны через src.core.prometheus_metrics facade."""
+    from src.core.prometheus_metrics import (
+        _BYPASS_IDLE_SKIP_COUNTER,
+        _TRANSLATOR_IDLE_SKIP_COUNTER,
+        _VERIFIER_SAMPLES_COUNTER,
+        _VISION_IDLE_SKIP_COUNTER,
+        inc_bypass_idle_skip,
+        inc_translator_idle_skip,
+        inc_verifier_sample,
+        inc_vision_idle_skip,
+    )
+
+    assert callable(inc_bypass_idle_skip)
+    assert callable(inc_vision_idle_skip)
+    assert callable(inc_translator_idle_skip)
+    assert callable(inc_verifier_sample)
+    assert isinstance(_BYPASS_IDLE_SKIP_COUNTER, dict)
+    assert isinstance(_VISION_IDLE_SKIP_COUNTER, dict)
+    assert isinstance(_TRANSLATOR_IDLE_SKIP_COUNTER, dict)
+    assert isinstance(_VERIFIER_SAMPLES_COUNTER, dict)

@@ -152,7 +152,18 @@ async def verify_local_draft(
 
     Never raises. Caller can `asyncio.create_task(...)` без await.
     """
+
+    # S62 W6: lazy import — best-effort counter, не должен ломать verifier.
+    def _bump(status: str) -> None:
+        try:
+            from src.core.metrics.idle_skip import inc_verifier_sample
+
+            inc_verifier_sample(status)
+        except Exception:  # noqa: BLE001
+            pass
+
     if not is_verifier_enabled():
+        _bump("skipped_env_disabled")
         logger.debug(
             "local_draft_verify_skipped",
             reason="env_disabled",
@@ -162,6 +173,7 @@ async def verify_local_draft(
         return
 
     if not local_response or not user_prompt:
+        _bump("skipped_empty_input")
         logger.debug(
             "local_draft_verify_skipped",
             reason="empty_input",
@@ -174,6 +186,7 @@ async def verify_local_draft(
 
     sample_rate = _get_sample_rate()
     if not _should_sample(sample_rate):
+        _bump("skipped_not_sampled")
         logger.debug(
             "local_draft_verify_skipped",
             reason="not_sampled",
@@ -183,6 +196,7 @@ async def verify_local_draft(
         )
         return
 
+    _bump("sampled")
     verify_model = _get_verify_model()
     timeout_sec = _get_timeout_sec()
 

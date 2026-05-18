@@ -36,7 +36,16 @@ def _log_translator_idle_skip(reason: str, *, src_lang: str, tgt_lang: str) -> N
     per reason. Помогает owner'у видеть что Phase 2 local translator armed
     (``KRAB_LOCAL_TRANSLATOR_ENABLED=1``) но spinning idle (local failed →
     cloud fallback, etc).
+
+    S62 W6: counter инкрементируется на каждый skip (не rate-limited),
+    log — rate-limited.
     """
+    try:
+        from src.core.metrics.idle_skip import inc_translator_idle_skip
+
+        inc_translator_idle_skip(reason)
+    except Exception:  # noqa: BLE001
+        pass
     now_ts = time.time()
     interval_sec = float(os.getenv("KRAB_TRANSLATOR_IDLE_LOG_INTERVAL_SEC", "60"))
     last = _translator_idle_last_log_ts.get(reason, 0.0)

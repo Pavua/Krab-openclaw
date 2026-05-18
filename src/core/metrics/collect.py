@@ -529,6 +529,49 @@ def collect_metrics() -> str:
     except Exception:  # noqa: BLE001
         pass
 
+    # === S62 W6: idle skip counters (bypass / vision / translator / verifier) ===
+    try:
+        from .idle_skip import (
+            _BYPASS_IDLE_SKIP_COUNTER,
+            _TRANSLATOR_IDLE_SKIP_COUNTER,
+            _VERIFIER_SAMPLES_COUNTER,
+            _VISION_IDLE_SKIP_COUNTER,
+        )
+
+        def _render_reason_counter(
+            name: str, help_text: str, data: dict[str, int], label: str = "reason"
+        ) -> None:
+            if not data:
+                return
+            lines.append(f"# HELP {name} {help_text}")
+            lines.append(f"# TYPE {name} counter")
+            for value, cnt in data.items():
+                lines.append(f'{name}{{{label}="{_sanitize_label(value)}"}} {cnt}')
+
+        _render_reason_counter(
+            "krab_bypass_idle_skip_total",
+            "S55 D: local primary bypass idle skips by reason",
+            _BYPASS_IDLE_SKIP_COUNTER,
+        )
+        _render_reason_counter(
+            "krab_vision_idle_skip_total",
+            "S56 C: Phase 1 vision idle skips by reason",
+            _VISION_IDLE_SKIP_COUNTER,
+        )
+        _render_reason_counter(
+            "krab_translator_idle_skip_total",
+            "S61 W2: Phase 2 local translator idle skips by reason",
+            _TRANSLATOR_IDLE_SKIP_COUNTER,
+        )
+        _render_reason_counter(
+            "krab_verifier_samples_total",
+            "S57 P3.1: local draft verifier sample events by status",
+            _VERIFIER_SAMPLES_COUNTER,
+            label="status",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     # === Wave 223: long-context routing decisions (MLX local) ===
     try:
         from .long_context_routing import _MLX_LOCAL_ROUTING_COUNTER
