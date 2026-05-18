@@ -428,6 +428,29 @@ class SessionMixin:
             workdir=str(self._session_workdir),
         )
         self._setup_handlers()
+        # S67 W2: defensive verify — `dispatcher.groups` должен быть populated после
+        # `_setup_handlers()`. Если empty → log error (race condition или silent failure).
+        # Pattern guards against pyrogram add_handler `loop.create_task(fn())`
+        # fire-and-forget potentially completing AFTER subsequent `client.start()`.
+        try:
+            groups = getattr(self.client.dispatcher, "groups", None)
+            if groups is None:
+                logger.warning("setup_handlers_no_dispatcher_groups_attr")
+            else:
+                total_handlers = sum(len(g) for g in groups.values()) if groups else 0
+                if total_handlers == 0:
+                    logger.error(
+                        "setup_handlers_returned_empty_groups",
+                        message="dispatcher.groups empty after _setup_handlers — likely race",
+                    )
+                else:
+                    logger.info(
+                        "setup_handlers_groups_populated",
+                        total_handlers=total_handlers,
+                        group_count=len(groups),
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("setup_handlers_groups_check_failed", error=str(exc))
 
     async def _start_client_serialized(self) -> None:
         """
