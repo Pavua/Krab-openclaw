@@ -523,16 +523,41 @@ _LAZY_RESETS: list[tuple[str, str]] = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# S63 Wave 5: module-level dict counters / idle-log timestamp maps.
+#
+# Эти dicts накапливают entries между тестами и могут влиять на:
+# - throttling decisions (idle_last_log_ts: следующий idle skip не залогируется)
+# - prometheus counters (тесты проверяют exact count, накопление ломает assert)
+#
+# Сброс через .clear() сохраняет инстанс dict (не подменяет ссылку),
+# поэтому модули, держащие ссылку, продолжают работать корректно.
+# ---------------------------------------------------------------------------
+_CLEAR_DICTS: list[tuple[str, str]] = [
+    # S62 W6: idle skip prometheus-style counters
+    ("src.core.metrics.idle_skip", "_BYPASS_IDLE_SKIP_COUNTER"),
+    ("src.core.metrics.idle_skip", "_VISION_IDLE_SKIP_COUNTER"),
+    ("src.core.metrics.idle_skip", "_TRANSLATOR_IDLE_SKIP_COUNTER"),
+    ("src.core.metrics.idle_skip", "_VERIFIER_SAMPLES_COUNTER"),
+    # S61 W2: translator idle log throttling
+    ("src.core.translator_engine", "_translator_idle_last_log_ts"),
+    # S62 W4: codex CLI subprocess bypass idle log throttling
+    ("src.integrations.cli_subprocess_bypass", "_codex_idle_last_log_ts"),
+]
+
+
 @pytest.fixture(autouse=True)
 def _reset_lazy_singletons_for_test() -> Iterator[None]:
     """
-    S61 Wave 3: defense-in-depth — после каждого теста сбрасываем
-    module-level lazy-init синглтоны в None.
+    S61 Wave 3 / S63 Wave 5: defense-in-depth — после каждого теста сбрасываем
+    module-level lazy-init синглтоны в None И очищаем dict-counters.
 
     Pre-test: ничего не делаем (текущее состояние может быть валидным).
-    Post-test: для каждого (mod_path, attr) импортируем модуль и
-    устанавливаем атрибут в None. Любая ошибка проглатывается — изоляция
-    не должна ломать тесты.
+    Post-test:
+      - для каждого (mod_path, attr) из _LAZY_RESETS импортируем модуль и
+        устанавливаем атрибут в None.
+      - для каждого (mod_path, attr) из _CLEAR_DICTS вызываем .clear() на dict.
+    Любая ошибка проглатывается — изоляция не должна ломать тесты.
     """
     import importlib
 
@@ -544,4 +569,17 @@ def _reset_lazy_singletons_for_test() -> Iterator[None]:
         except Exception:  # noqa: BLE001
             # Модуль может отсутствовать или не иметь атрибута —
             # это нормально, defense-in-depth не должен ломать тесты.
+            pass
+
+    # S63 W5: clear in-memory dict counters / timestamp maps.
+    # Используем .clear() а не setattr(None) чтобы сохранить object identity —
+    # модули, которые держат прямую ссылку (`from idle_skip import _BUCKET`),
+    # продолжат видеть тот же dict.
+    for mod_path, attr_name in _CLEAR_DICTS:
+        try:
+            mod = importlib.import_module(mod_path)
+            d = getattr(mod, attr_name, None)
+            if isinstance(d, dict):
+                d.clear()
+        except Exception:  # noqa: BLE001
             pass
