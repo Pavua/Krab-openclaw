@@ -11,6 +11,7 @@ import asyncio
 import json
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
@@ -223,17 +224,111 @@ async def test_oauth_valid():
 
 @pytest.mark.asyncio
 async def test_oauth_expired_graceful():
-    """Токен истёк → warn (graceful, т.к. auto-refresh работает при использовании)."""
+    """Токен истёк И daemon resync завис → warn (graceful, critical-уровня нет)."""
     expired_ts_ms = (time.time() - 2 * 3600) * 1000  # 2h назад
     creds_data = json.dumps({"expiry_date": int(expired_ts_ms)})
 
     with patch.object(Path, "exists", return_value=True):
         with patch.object(Path, "read_text", return_value=creds_data):
-            finding = await audit_oauth_tokens()
+            # Daemon последний раз обновлял давно → warn должен сработать
+            with patch(
+                "src.core.nightly_self_audit._last_oauth_force_refresh_age_sec",
+                return_value=99 * 60,
+            ):
+                finding = await audit_oauth_tokens()
 
     # Должен быть warn, не critical
     assert finding.status == "warn"
-    assert "истёк" in finding.summary or "auto-refresh" in finding.summary
+    assert "истёк" in finding.summary
+
+
+# ---------------------------------------------------------------------------
+# Wave 50-B sawtooth aware OAuth checks (S61 W1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_oauth_sawtooth_dip_with_alive_daemon_is_ok():
+    """expiry < 60min, но daemon refresh < 30min назад → НЕ warn (sawtooth норма)."""
+    # Token expires через 18 мин (типичный sawtooth dip перед force-refresh)
+    expiring_ts_ms = (time.time() + 18 * 60) * 1000
+    creds_data = json.dumps({"expiry_date": int(expiring_ts_ms)})
+
+    with patch.object(Path, "exists", return_value=True):
+        with patch.object(Path, "read_text", return_value=creds_data):
+            # Daemon refresh 5 мин назад — alive
+            with patch(
+                "src.core.nightly_self_audit._last_oauth_force_refresh_age_sec",
+                return_value=5 * 60,
+            ):
+                finding = await audit_oauth_tokens()
+
+    assert finding.status == "ok"
+    assert "истекает" not in finding.summary
+
+
+@pytest.mark.asyncio
+async def test_oauth_expiring_warn_when_daemon_stuck():
+    """expiry < 60min И daemon refresh > 30min назад → warn (daemon завис)."""
+    expiring_ts_ms = (time.time() + 18 * 60) * 1000
+    creds_data = json.dumps({"expiry_date": int(expiring_ts_ms)})
+
+    with patch.object(Path, "exists", return_value=True):
+        with patch.object(Path, "read_text", return_value=creds_data):
+            # Daemon последний force-refresh 90мин назад — stuck
+            with patch(
+                "src.core.nightly_self_audit._last_oauth_force_refresh_age_sec",
+                return_value=90 * 60,
+            ):
+                finding = await audit_oauth_tokens()
+
+    assert finding.status == "warn"
+    assert "daemon" in finding.summary.lower()
+
+
+@pytest.mark.asyncio
+async def test_oauth_expired_with_alive_daemon_is_ok():
+    """expired (-30 min), но daemon refresh свежий → sawtooth норма, не warn."""
+    expired_ts_ms = (time.time() - 30 * 60) * 1000
+    creds_data = json.dumps({"expiry_date": int(expired_ts_ms)})
+
+    with patch.object(Path, "exists", return_value=True):
+        with patch.object(Path, "read_text", return_value=creds_data):
+            with patch(
+                "src.core.nightly_self_audit._last_oauth_force_refresh_age_sec",
+                return_value=10 * 60,
+            ):
+                finding = await audit_oauth_tokens()
+
+    assert finding.status == "ok"
+
+
+def test_last_oauth_force_refresh_age_parses_log(tmp_path, monkeypatch):
+    """Helper парсит timestamp последнего force-refresh success из лога."""
+    from src.core import nightly_self_audit as nsa
+
+    log = tmp_path / "oauth_resync.log"
+    # Свежий timestamp 2 мин назад
+    ts = datetime.fromtimestamp(time.time() - 120, tz=timezone.utc).isoformat()
+    log.write_text(
+        f"[{ts}] already synced — no-op (expiry_in_min=-45.0)\n"
+        f"[{ts}] token expired (expiry_in_min=-60.0) — attempting force-refresh\n"
+        f"[{ts}] force-refresh success: new expiry_in_min=60.0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(nsa, "_OAUTH_RESYNC_LOG_CANDIDATES", (log,))
+
+    age = nsa._last_oauth_force_refresh_age_sec()
+    assert age is not None
+    assert 0 <= age <= 300  # parsed свежим (< 5 мин)
+
+
+def test_last_oauth_force_refresh_age_missing_log(monkeypatch):
+    """Helper возвращает None если ни одного лог-файла нет."""
+    from src.core import nightly_self_audit as nsa
+
+    monkeypatch.setattr(nsa, "_OAUTH_RESYNC_LOG_CANDIDATES", (Path("/nonexistent/krab/log"),))
+    assert nsa._last_oauth_force_refresh_age_sec() is None
 
 
 # ---------------------------------------------------------------------------

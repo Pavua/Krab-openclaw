@@ -456,8 +456,61 @@ async def audit_inbox_bloat() -> AuditFinding:
 # ---------------------------------------------------------------------------
 
 
+# Wave 50-B daemon (ai.krab.oauth-resync) force-refreshes gemini token каждые
+# ~15 мин sawtooth: expiry колеблется от +60min до -60min прежде чем daemon
+# обновит. Учитываем это при оценке "критичности".
+_OAUTH_RESYNC_LOG_CANDIDATES = (
+    Path.home() / ".openclaw/krab_runtime_state/oauth_resync.log",
+    Path("/tmp/krab-oauth-resync.log"),
+)
+# Если последний force_refresh_success моложе этого порога — daemon живой,
+# текущий просадок expiry — нормальная часть sawtooth, не повод для warn.
+_OAUTH_RESYNC_FRESH_MAX_AGE_SEC = 30 * 60
+
+
+def _last_oauth_force_refresh_age_sec() -> float | None:
+    """Возвращает возраст (сек) последнего успешного force-refresh из daemon-лога.
+
+    None — если лог отсутствует или строка force-refresh не найдена.
+    """
+    for log_path in _OAUTH_RESYNC_LOG_CANDIDATES:
+        try:
+            if not log_path.exists():
+                continue
+            # Читаем хвост (последние ~64 KB) — лог append-only, ротация ad-hoc.
+            with log_path.open("rb") as fh:
+                try:
+                    fh.seek(-65536, 2)
+                except OSError:
+                    fh.seek(0)
+                tail = fh.read().decode("utf-8", errors="replace")
+            last_ts: str | None = None
+            for line in tail.splitlines():
+                if "force-refresh success" in line or "force_refresh_success" in line:
+                    # Формат: "[2026-05-18T02:52:10+0200] force-refresh success: ..."
+                    if line.startswith("[") and "]" in line:
+                        last_ts = line[1 : line.index("]")]
+            if not last_ts:
+                continue
+            try:
+                dt = datetime.fromisoformat(last_ts)
+            except ValueError:
+                continue
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return max(0.0, time.time() - dt.timestamp())
+        except Exception:
+            continue
+    return None
+
+
 async def audit_oauth_tokens() -> AuditFinding:
-    """Проверяет истечение OAuth токенов (gemini-cli и другие)."""
+    """Проверяет истечение OAuth токенов (gemini-cli и другие).
+
+    Wave 50-B sawtooth aware: для gemini-cli warn выдаём только если
+    expiry < 60min И daemon-резинк не делал force-refresh последние 30мин
+    (т.е. daemon реально завис, а не нормальный цикл).
+    """
     issues: list[str] = []
     checked = 0
 
@@ -470,15 +523,26 @@ async def audit_oauth_tokens() -> AuditFinding:
             exp_ms = d.get("expiry_date", 0)
             if exp_ms:
                 hours_until = (exp_ms / 1000 - time.time()) / 3600
+                refresh_age = _last_oauth_force_refresh_age_sec()
+                daemon_alive = (
+                    refresh_age is not None and refresh_age <= _OAUTH_RESYNC_FRESH_MAX_AGE_SEC
+                )
                 if hours_until < 0:
-                    # Expired но auto-refresh должен сработать при использовании
+                    if not daemon_alive:
+                        # Expired И daemon не работает — реальная проблема.
+                        issues.append(
+                            f"gemini token истёк {abs(hours_until):.1f}h назад "
+                            f"(daemon last refresh "
+                            f"{('?' if refresh_age is None else f'{refresh_age / 60:.0f}мин')}"
+                            f" назад)"
+                        )
+                    # Иначе — sawtooth норма, daemon обновит в течение цикла.
+                elif hours_until < 1 and not daemon_alive:
                     issues.append(
-                        f"gemini token истёк {abs(hours_until):.1f}h назад "
-                        f"(auto-refresh при следующем использовании)"
-                    )
-                elif hours_until < 1:
-                    issues.append(
-                        f"gemini token истекает через {hours_until * 60:.0f}мин — критично!"
+                        f"gemini token истекает через {hours_until * 60:.0f}мин "
+                        f"— daemon resync завис (last refresh "
+                        f"{('?' if refresh_age is None else f'{refresh_age / 60:.0f}мин')}"
+                        f" назад)"
                     )
         except Exception as exc:
             issues.append(f"gemini creds read error: {str(exc)[:40]}")
