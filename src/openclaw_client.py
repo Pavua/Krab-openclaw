@@ -2922,9 +2922,31 @@ class OpenClawClient:
         if os.getenv("KRAB_LOCAL_PRIMARY_BYPASS_ENABLED", "0") not in ("1", "true", "yes", "on"):
             return None
 
+        # S55 D: idle observability — env enabled, log once-per-minute summary
+        # для каждой причины skip. Помогает owner'у видеть что bypass armed но
+        # spinning idle (cloud models, photos, etc).
+        now_ts = time.time()
+        last_idle_log_ts = getattr(self, "_bypass_idle_last_log_ts", {})
+        idle_log_interval_sec = float(os.getenv("KRAB_BYPASS_IDLE_LOG_INTERVAL_SEC", "60"))
+
+        def _log_idle_skip(reason: str) -> None:
+            """Rate-limited idle log: once per `idle_log_interval_sec` per reason."""
+            last = last_idle_log_ts.get(reason, 0.0)
+            if now_ts - last < idle_log_interval_sec:
+                return
+            last_idle_log_ts[reason] = now_ts
+            self._bypass_idle_last_log_ts = last_idle_log_ts  # type: ignore[attr-defined]
+            logger.info(
+                "local_primary_bypass_idle_skip",
+                reason=reason,
+                model=preferred_model_id,
+                interval_sec=idle_log_interval_sec,
+            )
+
         if has_photo:
             # Vision запросы оставляем основному path: vision modal handling
             # сложнее одного chat/completions call.
+            _log_idle_skip("has_photo")
             return None
 
         prefix_lm = "lm-studio-local/"
@@ -2932,6 +2954,7 @@ class OpenClawClient:
         if not (
             preferred_model_id.startswith(prefix_lm) or preferred_model_id.startswith(prefix_mlx)
         ):
+            _log_idle_skip("cloud_or_cli_model")
             return None
 
         # Resolve target URL: MLX → :8088, LM Studio → :1234 (config default).

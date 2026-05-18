@@ -207,3 +207,78 @@ async def test_bypass_http_500_returns_none(
 
     assert result is None
     fake.post.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Session 55 Task D: Idle observability logging
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bypass_logs_idle_skip_for_cloud_model(client, monkeypatch):
+    """S55 D: bypass enabled + cloud model → records skip reason in internal
+    state `_bypass_idle_last_log_ts['cloud_or_cli_model']`."""
+    monkeypatch.setenv("KRAB_LOCAL_PRIMARY_BYPASS_ENABLED", "1")
+    monkeypatch.setenv("KRAB_BYPASS_IDLE_LOG_INTERVAL_SEC", "0.1")
+
+    result = await client._local_primary_bypass(
+        chat_id="chat-bypass",
+        preferred_model_id="google/gemini-3-pro-preview",
+        has_photo=False,
+        max_output_tokens=None,
+    )
+    assert result is None
+    # idle_skip log emitted → state attr populated with reason
+    state = getattr(client, "_bypass_idle_last_log_ts", {})
+    assert "cloud_or_cli_model" in state, (
+        f"expected idle_skip log for cloud model, state={state}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bypass_logs_idle_skip_for_photo(client, monkeypatch):
+    """S55 D: bypass enabled + has_photo → state records reason=has_photo."""
+    monkeypatch.setenv("KRAB_LOCAL_PRIMARY_BYPASS_ENABLED", "1")
+    monkeypatch.setenv("KRAB_BYPASS_IDLE_LOG_INTERVAL_SEC", "0.1")
+
+    result = await client._local_primary_bypass(
+        chat_id="chat-bypass",
+        preferred_model_id="lm-studio-local/gemma-4-26b-a4b-it@4bit",
+        has_photo=True,
+        max_output_tokens=None,
+    )
+    assert result is None
+    state = getattr(client, "_bypass_idle_last_log_ts", {})
+    assert "has_photo" in state, (
+        f"expected idle_skip log for has_photo, state={state}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bypass_idle_skip_rate_limited(client, monkeypatch):
+    """S55 D: повторный skip за interval НЕ должен обновить timestamp
+    (rate-limit для отсутствия log noise)."""
+    monkeypatch.setenv("KRAB_LOCAL_PRIMARY_BYPASS_ENABLED", "1")
+    # Длинный interval — повторный call в пределах interval НЕ должен log.
+    monkeypatch.setenv("KRAB_BYPASS_IDLE_LOG_INTERVAL_SEC", "3600")
+
+    # First call → logs (state populated)
+    await client._local_primary_bypass(
+        chat_id="chat-bypass",
+        preferred_model_id="codex-cli/gpt-5.5",
+        has_photo=False,
+        max_output_tokens=None,
+    )
+    state1 = dict(getattr(client, "_bypass_idle_last_log_ts", {}))
+    assert "cloud_or_cli_model" in state1
+    ts1 = state1["cloud_or_cli_model"]
+
+    # Second call within interval → state TS NOT updated (rate-limited)
+    await client._local_primary_bypass(
+        chat_id="chat-bypass",
+        preferred_model_id="codex-cli/gpt-5.5",
+        has_photo=False,
+        max_output_tokens=None,
+    )
+    state2 = dict(getattr(client, "_bypass_idle_last_log_ts", {}))
+    assert state2["cloud_or_cli_model"] == ts1, "expected rate-limit: ts unchanged"
