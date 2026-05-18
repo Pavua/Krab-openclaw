@@ -187,6 +187,64 @@ _DISPATCHER_FAKE_ESCALATION_THRESHOLD: int = int(
     os.environ.get("KRAB_DISPATCHER_FAKE_ESCALATION_THRESHOLD", "2")
 )
 
+# S66 W1: handler_worker supervisor — safety net beyond S65 W1 P0 fix.
+# Pyrofork dispatcher spawns N background `handler_worker_tasks`. Если task
+# падает с unhandled exception (raise ДО входа в try-block, или CancelledError
+# с break semantics gone), task становится done() с exception() set — но
+# pyrofork сам по себе не re-spawn'ит worker. Result: incoming messages
+# постепенно перестают обрабатываться, никаких видимых ошибок в логах.
+#
+# Supervisor каждые HEARTBEAT_INTERVAL_SEC проверяет worker tasks:
+#  - any done() with exception() → лог `handler_worker_died` warning
+#  - ≥ HANDLER_WORKER_MAJORITY_THRESHOLD (default 0.5 = 50%) dead → trigger
+#    `_recreate_client()` через `_try_reconnect_pyrofork`.
+#
+# Default ON. Operator может опт-аутнуться установкой =0.
+_HANDLER_WORKER_SUPERVISOR_ENABLED: bool = os.environ.get(
+    "KRAB_HANDLER_WORKER_SUPERVISOR_ENABLED", "1"
+).strip().lower() in {"1", "true", "yes"}
+_HANDLER_WORKER_MAJORITY_THRESHOLD: float = float(
+    os.environ.get("KRAB_HANDLER_WORKER_MAJORITY_THRESHOLD", "0.5")
+)
+
+
+def _inspect_handler_worker_tasks(client: object) -> tuple[int, list[BaseException]]:
+    """S66 W1: inspect pyrofork dispatcher's `handler_worker_tasks`.
+
+    Returns (total_workers, list_of_exceptions). Каждая запись в списке —
+    exception от завершённого worker task'a. Пустой список = все workers
+    живы (или dispatcher отсутствует — fail-open).
+
+    Безопасный обход: getattr через цепочку, никогда не raise. Если
+    dispatcher/tasks/attribute отсутствуют — возвращает (0, []).
+    """
+    dispatcher = getattr(client, "dispatcher", None)
+    if dispatcher is None:
+        return (0, [])
+    tasks = getattr(dispatcher, "handler_worker_tasks", None)
+    if not tasks:
+        return (0, [])
+    dead_exceptions: list[BaseException] = []
+    total = 0
+    for task in tasks:
+        total += 1
+        try:
+            if not task.done():
+                continue
+            # task.exception() raises InvalidStateError если не done — мы
+            # уже проверили выше, но дополнительно ловим всё.
+            try:
+                exc = task.exception()
+            except (asyncio.CancelledError, asyncio.InvalidStateError):
+                continue
+            if exc is not None:
+                dead_exceptions.append(exc)
+        except Exception:  # noqa: BLE001
+            # Defensive: любые странности с future-объектом не должны крашить
+            # supervisor.
+            continue
+    return (total, dead_exceptions)
+
 
 def _client_last_update_age_sec(owner: object, now: float) -> float | None:
     """Session 53 P3.6 hotfix3 (gold finding via subagent 2026-05-17):
@@ -887,6 +945,76 @@ class NetworkWatchdogMixin:
         else:
             logger.warning("dispatcher_starved_recovery_failed")
 
+    async def _supervise_handler_workers(self) -> None:
+        """S66 W1: проверка живости pyrofork `handler_worker_tasks`.
+
+        Pyrofork dispatcher запускает N background worker'ов которые забирают
+        updates из queue и вызывают handler chain. Если worker раз и навсегда
+        падает с unhandled exception (например, `await` raises ДО входа в
+        try-block внутри `_handler_worker` loop), task становится done с
+        exception(), но dispatcher НЕ re-spawn'ит его. Постепенно все worker'ы
+        могут умереть → silent-death без видимых ошибок.
+
+        Этот supervisor:
+          1. Логирует `handler_worker_died` warning для каждого мёртвого
+             worker'а (видимость в ops/Sentry).
+          2. Если ≥ majority threshold workers мертвы → trigger
+             `_try_reconnect_pyrofork` (включает `_recreate_client` path,
+             S65 W1 P0 fix), который создаёт fresh Client + handlers.
+
+        ENV gate `KRAB_HANDLER_WORKER_SUPERVISOR_ENABLED` (default 1).
+        Throttle делегирован вызывающему loop (heartbeat ~240s).
+        """
+        if not _HANDLER_WORKER_SUPERVISOR_ENABLED:
+            return
+
+        client = getattr(self, "client", None)
+        if client is None:
+            return
+
+        total, dead_exceptions = _inspect_handler_worker_tasks(client)
+        if total == 0:
+            # Dispatcher ещё не стартовал / отсутствует — fail-open.
+            return
+        if not dead_exceptions:
+            return
+
+        # Логируем каждого мертвеца отдельно — operator видит exception types.
+        for exc in dead_exceptions:
+            logger.warning(
+                "handler_worker_died",
+                error_type=type(exc).__name__,
+                error=str(exc)[:200],
+                total_workers=total,
+                dead_count=len(dead_exceptions),
+            )
+
+        ratio = len(dead_exceptions) / float(total)
+        if ratio >= _HANDLER_WORKER_MAJORITY_THRESHOLD:
+            logger.error(
+                "handler_worker_majority_dead",
+                total_workers=total,
+                dead_count=len(dead_exceptions),
+                ratio=round(ratio, 2),
+                threshold=_HANDLER_WORKER_MAJORITY_THRESHOLD,
+                action="trigger_recreate_client",
+            )
+            try:
+                reconnect_ok = await self._try_reconnect_pyrofork(client)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "handler_worker_supervisor_recovery_exception",
+                    error=str(exc)[:200],
+                    error_type=type(exc).__name__,
+                )
+                return
+            if reconnect_ok:
+                logger.info("handler_worker_supervisor_recovery_ok")
+                # Reset silence timer — свежий client должен получать updates.
+                self._last_telegram_event_ts = time.time()
+            else:
+                logger.warning("handler_worker_supervisor_recovery_failed")
+
     @staticmethod
     async def _probe_telegram_dc(timeout: float = 5.0) -> bool:
         """
@@ -1326,6 +1454,19 @@ class NetworkWatchdogMixin:
                                 "split_brain_via_get_state_reconnect_failed",
                                 server_pts=probe.server_pts,
                             )
+
+                # S66 W1: handler_worker supervisor — safety net beyond S65 W1.
+                # Запускается на каждом heartbeat success (вне зависимости от
+                # pts probe), защищает от тихой смерти worker tasks до того
+                # как dispatcher_tick замёрзнет.
+                try:
+                    await self._supervise_handler_workers()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "handler_worker_supervisor_exception",
+                        error=str(exc)[:200],
+                        error_type=type(exc).__name__,
+                    )
                 continue
 
             except asyncio.TimeoutError:
