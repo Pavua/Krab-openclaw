@@ -305,3 +305,113 @@ async def test_translate_text_local_strips_quotes(
         result = await translate_text("Hello quotes", "en", "ru", openclaw_client=mock_client)
 
     assert result.translated == "Привет с кавычками"
+
+
+# ── S61 W2: idle observability (mirror S55 D / S56 C) ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_translate_local_failed_logs_idle_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local returns empty → translate_local_idle_skip log emitted with
+    reason=local_failed_fallback (rate-limited via module dict).
+    """
+    monkeypatch.setenv("KRAB_LOCAL_TRANSLATOR_ENABLED", "1")
+    monkeypatch.setenv("KRAB_TRANSLATOR_IDLE_LOG_INTERVAL_SEC", "60")
+    from src.core import translation_cache as cache_mod
+
+    cache_mod.translation_cache._entries.clear()  # type: ignore[attr-defined]
+    # Reset rate-limit dict to ensure deterministic first-log behavior.
+    translator_engine._translator_idle_last_log_ts.clear()
+
+    local_mock = AsyncMock(return_value=("", "lmstudio_error"))
+    mock_client = _make_mock_client(["cloud fallback text"])
+
+    logged: list[tuple[str, dict]] = []
+
+    def _fake_info(event: str, **kwargs: Any) -> None:
+        logged.append((event, kwargs))
+
+    with (
+        patch.object(translator_engine, "_translate_via_lmstudio", local_mock),
+        patch.object(translator_engine.logger, "info", side_effect=_fake_info),
+    ):
+        result = await translate_text("Phase2 fallback", "en", "ru", openclaw_client=mock_client)
+
+    assert result.translated == "cloud fallback text"
+    idle_events = [(e, k) for e, k in logged if e == "translate_local_idle_skip"]
+    assert len(idle_events) == 1, f"expected 1 idle_skip event, got {idle_events}"
+    _, kwargs = idle_events[0]
+    assert kwargs["reason"] == "local_failed_fallback"
+    assert kwargs["src_lang"] == "en"
+    assert kwargs["tgt_lang"] == "ru"
+    assert kwargs["interval_sec"] == 60.0
+
+
+@pytest.mark.asyncio
+async def test_translate_local_idle_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two consecutive local failures within interval → only one
+    translate_local_idle_skip log (rate-limited).
+    """
+    monkeypatch.setenv("KRAB_LOCAL_TRANSLATOR_ENABLED", "1")
+    # Wide window: ensure 2nd call falls inside rate-limit gate.
+    monkeypatch.setenv("KRAB_TRANSLATOR_IDLE_LOG_INTERVAL_SEC", "3600")
+    from src.core import translation_cache as cache_mod
+
+    cache_mod.translation_cache._entries.clear()  # type: ignore[attr-defined]
+    translator_engine._translator_idle_last_log_ts.clear()
+
+    local_mock = AsyncMock(return_value=("", "lmstudio_error"))
+
+    logged: list[tuple[str, dict]] = []
+
+    def _fake_info(event: str, **kwargs: Any) -> None:
+        logged.append((event, kwargs))
+
+    # Two consecutive calls with different texts (cache miss both times).
+    with (
+        patch.object(translator_engine, "_translate_via_lmstudio", local_mock),
+        patch.object(translator_engine.logger, "info", side_effect=_fake_info),
+    ):
+        mock1 = _make_mock_client(["cloud-1"])
+        await translate_text("first text", "en", "ru", openclaw_client=mock1)
+        mock2 = _make_mock_client(["cloud-2"])
+        await translate_text("second text", "en", "ru", openclaw_client=mock2)
+
+    idle_events = [(e, k) for e, k in logged if e == "translate_local_idle_skip"]
+    assert len(idle_events) == 1, (
+        f"expected exactly 1 idle_skip (rate-limited), got {len(idle_events)}: {idle_events}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_translate_local_success_no_idle_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local path succeeds → NO translate_local_idle_skip log."""
+    monkeypatch.setenv("KRAB_LOCAL_TRANSLATOR_ENABLED", "1")
+    from src.core import translation_cache as cache_mod
+
+    cache_mod.translation_cache._entries.clear()  # type: ignore[attr-defined]
+    translator_engine._translator_idle_last_log_ts.clear()
+
+    local_mock = AsyncMock(return_value=("Локальный успех", "lmstudio/gemma"))
+    mock_client = _make_mock_client(["unused"])
+
+    logged: list[tuple[str, dict]] = []
+
+    def _fake_info(event: str, **kwargs: Any) -> None:
+        logged.append((event, kwargs))
+
+    with (
+        patch.object(translator_engine, "_translate_via_lmstudio", local_mock),
+        patch.object(translator_engine.logger, "info", side_effect=_fake_info),
+    ):
+        result = await translate_text("Success path", "en", "ru", openclaw_client=mock_client)
+
+    assert result.translated == "Локальный успех"
+    idle_events = [e for e, _ in logged if e == "translate_local_idle_skip"]
+    assert idle_events == [], f"unexpected idle_skip on local success: {idle_events}"

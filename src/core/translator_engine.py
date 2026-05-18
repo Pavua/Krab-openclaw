@@ -24,6 +24,34 @@ if TYPE_CHECKING:
 logger = structlog.get_logger("Krab.core.translator_engine")
 
 
+# S61 W2: idle observability — mirror S55 D bypass / S56 C vision pattern.
+# Module-level rate-limit state (translate_text is a module function, not a
+# method on a class — поэтому dict живёт в модуле, не на self). Keyed by
+# reason string, value = last-log timestamp (float seconds).
+_translator_idle_last_log_ts: dict[str, float] = {}
+
+
+def _log_translator_idle_skip(reason: str, *, src_lang: str, tgt_lang: str) -> None:
+    """Rate-limited idle log: once per ``KRAB_TRANSLATOR_IDLE_LOG_INTERVAL_SEC``
+    per reason. Помогает owner'у видеть что Phase 2 local translator armed
+    (``KRAB_LOCAL_TRANSLATOR_ENABLED=1``) но spinning idle (local failed →
+    cloud fallback, etc).
+    """
+    now_ts = time.time()
+    interval_sec = float(os.getenv("KRAB_TRANSLATOR_IDLE_LOG_INTERVAL_SEC", "60"))
+    last = _translator_idle_last_log_ts.get(reason, 0.0)
+    if now_ts - last < interval_sec:
+        return
+    _translator_idle_last_log_ts[reason] = now_ts
+    logger.info(
+        "translate_local_idle_skip",
+        reason=reason,
+        src_lang=src_lang,
+        tgt_lang=tgt_lang,
+        interval_sec=interval_sec,
+    )
+
+
 # Языки для промпта
 _LANG_NAMES: dict[str, str] = {
     "es": "испанского",
@@ -218,6 +246,14 @@ async def translate_text(
             )
         logger.info(
             "translate_local_empty_fallthrough",
+            src_lang=src_lang,
+            tgt_lang=tgt_lang,
+        )
+        # S61 W2: idle observability — local attempted but returned empty →
+        # cloud fallback. Rate-limited log так что не spam'им owner'а при
+        # каждом сообщении в auto-translate потоке.
+        _log_translator_idle_skip(
+            "local_failed_fallback",
             src_lang=src_lang,
             tgt_lang=tgt_lang,
         )
