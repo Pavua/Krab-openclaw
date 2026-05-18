@@ -3079,13 +3079,27 @@ class OpenClawClient:
                             else:
                                 last_user_prompt = str(_c)
                             break
+                    # S65 W2: correlation ID живёт в structlog contextvars
+                    # (pattern с line 2484), а не на self. `OpenClawClient`
+                    # никогда не выставлял `self.request_id` → старый getattr
+                    # всегда возвращал "". Берём `request_id` из contextvars,
+                    # привязанных message handler'ом.
+                    _verify_rid = ""
+                    try:
+                        from structlog.contextvars import (
+                            get_contextvars as _get_ctxvars_verify,
+                        )
+
+                        _verify_rid = str(_get_ctxvars_verify().get("request_id") or "")
+                    except Exception:  # noqa: BLE001
+                        _verify_rid = ""
                     asyncio.create_task(
                         verify_local_draft(
                             user_prompt=last_user_prompt,
                             local_response=content,
                             local_model=preferred_model_id,
                             chat_id=str(chat_id),
-                            request_id=str(getattr(self, "request_id", "") or ""),
+                            request_id=_verify_rid,
                         )
                     )
             except Exception as _ver_exc:  # noqa: BLE001 — never break bypass path

@@ -230,9 +230,7 @@ async def test_bypass_logs_idle_skip_for_cloud_model(client, monkeypatch):
     assert result is None
     # idle_skip log emitted → state attr populated with reason
     state = getattr(client, "_bypass_idle_last_log_ts", {})
-    assert "cloud_or_cli_model" in state, (
-        f"expected idle_skip log for cloud model, state={state}"
-    )
+    assert "cloud_or_cli_model" in state, f"expected idle_skip log for cloud model, state={state}"
 
 
 @pytest.mark.asyncio
@@ -249,9 +247,7 @@ async def test_bypass_logs_idle_skip_for_photo(client, monkeypatch):
     )
     assert result is None
     state = getattr(client, "_bypass_idle_last_log_ts", {})
-    assert "has_photo" in state, (
-        f"expected idle_skip log for has_photo, state={state}"
-    )
+    assert "has_photo" in state, f"expected idle_skip log for has_photo, state={state}"
 
 
 @pytest.mark.asyncio
@@ -282,3 +278,103 @@ async def test_bypass_idle_skip_rate_limited(client, monkeypatch):
     )
     state2 = dict(getattr(client, "_bypass_idle_last_log_ts", {}))
     assert state2["cloud_or_cli_model"] == ts1, "expected rate-limit: ts unchanged"
+
+
+# ---------------------------------------------------------------------------
+# S65 W2: verifier correlation_id propagates from structlog contextvars
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_verifier_request_id_propagated_from_contextvars(
+    client: OpenClawClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S65 W2: verifier dispatch берёт request_id из structlog contextvars,
+    а не self.request_id (которого нет). Bind contextvar → captured."""
+    from structlog.contextvars import bind_contextvars, clear_contextvars
+
+    monkeypatch.setenv("KRAB_LOCAL_PRIMARY_BYPASS_ENABLED", "1")
+    monkeypatch.setenv("KRAB_LOCAL_DRAFT_VERIFY_ENABLED", "1")
+
+    captured: dict[str, str] = {}
+
+    async def _spy_verify(**kwargs):
+        captured.update({k: v for k, v in kwargs.items() if k == "request_id"})
+
+    fake, _ = _fake_httpx_client(status=200, content="local content")
+    clear_contextvars()
+    bind_contextvars(request_id="rid-from-ctx-123")
+    try:
+        with (
+            patch("src.openclaw_client.httpx.AsyncClient", return_value=fake),
+            patch(
+                "src.core.local_draft_verifier.is_verifier_enabled",
+                return_value=True,
+            ),
+            patch(
+                "src.core.local_draft_verifier.verify_local_draft",
+                new=_spy_verify,
+            ),
+        ):
+            result = await client._local_primary_bypass(  # noqa: SLF001
+                chat_id="chat-bypass",
+                preferred_model_id="lm-studio-local/gemma-3-12b",
+                has_photo=False,
+                max_output_tokens=None,
+            )
+        # give fire-and-forget task a tick to run
+        import asyncio as _aio
+
+        await _aio.sleep(0)
+    finally:
+        clear_contextvars()
+
+    assert result == "local content"
+    assert captured.get("request_id") == "rid-from-ctx-123", (
+        f"verifier should receive request_id from contextvars, got {captured!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_verifier_request_id_empty_when_no_contextvars(
+    client: OpenClawClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S65 W2: при отсутствии request_id в contextvars verifier получает ""
+    (graceful fallback)."""
+    from structlog.contextvars import clear_contextvars
+
+    monkeypatch.setenv("KRAB_LOCAL_PRIMARY_BYPASS_ENABLED", "1")
+    monkeypatch.setenv("KRAB_LOCAL_DRAFT_VERIFY_ENABLED", "1")
+
+    captured: dict[str, str] = {}
+
+    async def _spy_verify(**kwargs):
+        captured.update({k: v for k, v in kwargs.items() if k == "request_id"})
+
+    fake, _ = _fake_httpx_client(status=200, content="local content")
+    clear_contextvars()  # ensure no leakage from prior test
+    with (
+        patch("src.openclaw_client.httpx.AsyncClient", return_value=fake),
+        patch(
+            "src.core.local_draft_verifier.is_verifier_enabled",
+            return_value=True,
+        ),
+        patch(
+            "src.core.local_draft_verifier.verify_local_draft",
+            new=_spy_verify,
+        ),
+    ):
+        result = await client._local_primary_bypass(  # noqa: SLF001
+            chat_id="chat-bypass",
+            preferred_model_id="lm-studio-local/gemma-3-12b",
+            has_photo=False,
+            max_output_tokens=None,
+        )
+        import asyncio as _aio
+
+        await _aio.sleep(0)
+
+    assert result == "local content"
+    assert captured.get("request_id") == "", (
+        f"verifier should receive empty request_id when contextvars unset, got {captured!r}"
+    )
