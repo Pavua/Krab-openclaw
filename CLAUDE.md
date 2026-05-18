@@ -341,6 +341,38 @@ KRAB_VERTEX_REGION=global              # Vertex location
 
 ## Session highlights (последние)
 
+### Session 53-56 highlights (2026-05-15 → 2026-05-18 — 10+ commits, silent-death defence + Phase 2 + Gateway bypass)
+
+Branch `main`. Серия consolidation сессий: defence-in-depth против silent-death, Phase 2
+translator verified end-to-end, Gateway bypass для local primary моделей live, Phase 3
+brainstorm. Главный paradigm shift — **4-я итерация «outcomes-not-heartbeats»**:
+`Client.last_update_time` как primary signal (S53 P3.6 hotfix3).
+
+- **S53 P3.5** (`fix(model_manager)`) — strip `lm-studio-local/` + `mlx-local-kv4/`
+  prefixes перед health check (prefixed model id ломал API matching).
+- **S53 P3.6** (`30d7755` → 3 hotfixes) — 3-layer hotfix architecture для silent-death:
+  - `_attempt_dispatcher_recovery` верифицирует success через tick increment;
+  - escalation chain `dispatcher_recovery → reconnect verify → 2 fake updates → _launchd_exit_78`;
+  - hotfix3 переключает primary signal с `raw_update_tick` на `Client.last_update_time`
+    (pyrofork internal `client.py:628`, `dispatcher.py:393-406`).
+- **S53 P4** (`cb962f3`) — Gateway bypass live: `lm-studio-local/*` + `mlx-local-kv4/*`
+  models идут напрямую через `_direct_lm_fallback`, минуя весь OpenClaw chain.
+  Env gate `KRAB_LOCAL_PRIMARY_BYPASS_ENABLED=1`.
+- **S54 C** (`3900655`) — removed unused `on_raw_update` handler (Pyrofork quirk:
+  handler регистрировался но никогда не вызывался для не-message updates).
+- **S54 D** (`d56f3bd`) — wave72 endpoint tests rewritten для нового flat format.
+- **S55 B** (`7421822`) — CLAUDE.md Phase 2 translator + yung_nagato session docs.
+- **S55 C** (`180be75`) — translator_engine test isolation + cache singleton fixture.
+- **S55 D** (`3f827aa`) — idle observability `local_primary_bypass_idle_skip`,
+  rate-limited 60s per reason.
+- **S56 C** (`84952bb`) — Phase 1 local vision idle observability (mirror S55 D pattern).
+
+**Production verified**: Phase 2 translator (EN→RU, ES→RU samples, <1s latency для ~10-word
+переводов), Gateway bypass (test_ping `resolved_url=http://127.0.0.1:1234`, real chat
+traffic), silent-death recovery chain (escalation срабатывает на stuck dispatcher_tick).
+
+См. `docs/PHASE_2_TRANSLATOR.md`, `docs/SILENT_DEATH_DEFENCE.md`, `docs/GATEWAY_BYPASS.md`.
+
 ### Session 48 highlights (2026-05-13 → 2026-05-14 — Waves 163 → 225+, ~70+ commits, admin pages massive)
 
 Branch `main`. Сессия admin-панели: 6 → **25+ admin pages**, +20 endpoints (360 → 380),
