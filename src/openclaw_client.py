@@ -3043,6 +3043,47 @@ class OpenClawClient:
                 elapsed_ms=elapsed_ms,
                 url=url,
             )
+            # S57 / Phase 3.1: fire-and-forget Vertex Gemini Flash verifier.
+            # P(0.2) sampling, logs divergence score. Pure observability —
+            # never affects user response or routing decisions. ENV-gated:
+            # KRAB_LOCAL_DRAFT_VERIFY_ENABLED=1 to activate.
+            try:
+                from .core.local_draft_verifier import (
+                    is_verifier_enabled,
+                    verify_local_draft,
+                )
+
+                if is_verifier_enabled():
+                    # Extract last user message text from messages_for_lm.
+                    last_user_prompt = ""
+                    for _m in reversed(messages_for_lm):
+                        if str(_m.get("role") or "").lower() == "user":
+                            _c = _m.get("content") or ""
+                            if isinstance(_c, list):
+                                _parts = [
+                                    p.get("text", "")
+                                    for p in _c
+                                    if isinstance(p, dict) and "text" in p
+                                ]
+                                last_user_prompt = " ".join(_parts)
+                            else:
+                                last_user_prompt = str(_c)
+                            break
+                    asyncio.create_task(
+                        verify_local_draft(
+                            user_prompt=last_user_prompt,
+                            local_response=content,
+                            local_model=preferred_model_id,
+                            chat_id=str(chat_id),
+                            request_id=str(getattr(self, "request_id", "") or ""),
+                        )
+                    )
+            except Exception as _ver_exc:  # noqa: BLE001 — never break bypass path
+                logger.debug(
+                    "local_draft_verify_dispatch_failed",
+                    chat_id=chat_id,
+                    error=str(_ver_exc)[:200],
+                )
             return content
         except (httpx.HTTPError, OSError, ValueError, KeyError, IndexError) as exc:
             logger.warning(
