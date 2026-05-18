@@ -687,17 +687,42 @@ class NetworkWatchdogMixin:
         """
         import secrets
 
-        # Стратегия 1: graceful stop + start
+        # S65 W1 P0 FIX (silent-death root cause):
+        # Старая стратегия `client.stop() + client.start()` имела upstream pyrogram bug:
+        # `pyrogram/dispatcher.py:296` `dispatcher.stop()` вызывает `self.groups.clear()`,
+        # стирая ВСЕ зарегистрированные @on_message handlers. Subsequent `client.start()`
+        # создаёт fresh handler_worker tasks, но `dispatcher.groups` остаётся пустым.
+        # Результат: все incoming messages silently dropped → recurring silent-death.
+        # Документировано в S64 W1+W2 audit reports (~04:00 today).
+        #
+        # Fix: `_recreate_client()` строит fresh Client instance AND вызывает
+        # `_setup_handlers()` (session.py:392+430), который re-registers все
+        # @on_message decorators. Затем `_start_client_serialized()` стартует
+        # с populated groups.
         try:
             is_conn = getattr(client, "is_connected", False)
             if is_conn:
-                await client.stop(block=True)
+                # Best-effort stop. Если падает — продолжаем, recreate сделает fresh.
+                try:
+                    await client.stop(block=True)
+                except (ConnectionError, RuntimeError, OSError) as _stop_exc:
+                    logger.warning("pyrofork_reconnect_stop_failed", error=str(_stop_exc))
+            recreate = getattr(self, "_recreate_client", None)
+            start_serialized = getattr(self, "_start_client_serialized", None)
+            if callable(recreate) and callable(start_serialized):
+                # Canonical path: fresh Client + _setup_handlers() + start.
+                recreate()
+                await start_serialized()
+                logger.info("pyrofork_reconnect_via_recreate_client_ok")
+                return True
+            # Legacy fallback: если mixin chain не предоставил recreate (старый Krab).
             await client.start()
+            logger.warning("pyrofork_reconnect_legacy_start_no_recreate")
             return True
         except (ConnectionError, RuntimeError, OSError) as _e:
             logger.warning("pyrofork_reconnect_strategy1_failed", error=str(_e))
 
-        # Стратегия 2: Ping invoke (без teardown)
+        # Стратегия 2: Ping invoke (без teardown) — safe, doesn't touch groups
         try:
             from pyrogram.raw.functions import Ping  # noqa: PLC0415
 

@@ -410,3 +410,89 @@ async def test_escalation_threshold_env_override(
     assert len(alerts) == 1
     assert "dispatcher dead" in alerts[0]
     assert "pre-respawn" not in alerts[0]
+
+
+# ---------------------------------------------------------------------------
+# S65 W1: silent-death root cause fix — _try_reconnect_pyrofork uses
+# _recreate_client() instead of stop()+start() (preserves dispatcher.groups)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reconnect_calls_recreate_client_and_start_serialized() -> None:
+    """S65 W1: после S64 W1 root cause fix, _try_reconnect_pyrofork должен
+    вызвать `_recreate_client()` + `_start_client_serialized()`, НЕ просто
+    `client.stop() + client.start()`. Это сохраняет @on_message handlers
+    в dispatcher.groups (которые иначе wipe'аются `dispatcher.stop()` →
+    `groups.clear()` upstream в pyrogram).
+    """
+    from src.userbot.network_watchdog import NetworkWatchdogMixin
+
+    # Create minimal owner с мокированными методами recreate_client + start
+    fake_client = types.SimpleNamespace(
+        is_connected=True,
+        stop=AsyncMock(return_value=None),
+        start=AsyncMock(return_value=None),
+    )
+    owner = types.SimpleNamespace(client=fake_client)
+    owner._recreate_client = MagicMock_NoOp = type("M", (), {"called": False})()
+    owner._start_client_serialized = AsyncMock(return_value=None)
+
+    def _recreate_marker():
+        owner._recreate_client.called = True
+
+    owner._recreate_client = _recreate_marker
+
+    result = await NetworkWatchdogMixin._try_reconnect_pyrofork(owner, fake_client)
+
+    assert result is True
+    assert owner._recreate_client.called is True, (
+        "S65 W1: _recreate_client() MUST be called (preserves handlers)"
+    )
+    owner._start_client_serialized.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_legacy_fallback_when_no_recreate_method() -> None:
+    """S65 W1: если у owner нет `_recreate_client` (старый Krab), fall back
+    на legacy `client.start()` path. Logs warning о legacy path."""
+    from src.userbot.network_watchdog import NetworkWatchdogMixin
+
+    fake_client = types.SimpleNamespace(
+        is_connected=False,
+        stop=AsyncMock(return_value=None),
+        start=AsyncMock(return_value=None),
+    )
+    # Owner explicitly без _recreate_client
+    owner = types.SimpleNamespace(client=fake_client)
+
+    result = await NetworkWatchdogMixin._try_reconnect_pyrofork(owner, fake_client)
+
+    assert result is True
+    fake_client.start.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_stop_failure_still_proceeds_to_recreate() -> None:
+    """S65 W1: если `client.stop()` падает (ConnectionError), recreate всё
+    равно должен build fresh client. Stop is best-effort."""
+    from src.userbot.network_watchdog import NetworkWatchdogMixin
+
+    fake_client = types.SimpleNamespace(
+        is_connected=True,
+        stop=AsyncMock(side_effect=ConnectionError("stop failed")),
+        start=AsyncMock(return_value=None),
+    )
+    owner = types.SimpleNamespace(client=fake_client)
+    recreate_called = [False]
+
+    def _recreate_marker():
+        recreate_called[0] = True
+
+    owner._recreate_client = _recreate_marker
+    owner._start_client_serialized = AsyncMock(return_value=None)
+
+    result = await NetworkWatchdogMixin._try_reconnect_pyrofork(owner, fake_client)
+
+    assert result is True
+    assert recreate_called[0] is True, "recreate must proceed even if stop() fails"
