@@ -40,10 +40,12 @@ bash scripts/install_pre_commit.sh
 
 ## Auto-generated reference
 
-- **Endpoints** (~408 routes): [docs/CLAUDE_AUTO_ENDPOINTS.md](docs/CLAUDE_AUTO_ENDPOINTS.md)
+Обновлено: S69 W8 (18.05.2026, после S55-S68 marathon — 45 commits).
+
+- **Endpoints** (~409 routes): [docs/CLAUDE_AUTO_ENDPOINTS.md](docs/CLAUDE_AUTO_ENDPOINTS.md)
 - **Handlers** (~181 функций): [docs/CLAUDE_AUTO_HANDLERS.md](docs/CLAUDE_AUTO_HANDLERS.md)
 - **Commands** (~162 registered, 172+ с алиасами): [docs/CLAUDE_COMMANDS_REFERENCE.md](docs/CLAUDE_COMMANDS_REFERENCE.md)
-- **Prometheus** (42 alerts, 52 metrics): [docs/CLAUDE_AUTO_PROMETHEUS.md](docs/CLAUDE_AUTO_PROMETHEUS.md)
+- **Prometheus** (45 alerts, 145 live metric series): [docs/CLAUDE_AUTO_PROMETHEUS.md](docs/CLAUDE_AUTO_PROMETHEUS.md)
 - **Owner Panel API** (детальный): [docs/CLAUDE_OWNER_PANEL_API.md](docs/CLAUDE_OWNER_PANEL_API.md)
 
 Актуальные счётчики:
@@ -359,8 +361,8 @@ LaunchAgent `ai.krab.backup-retention` запускает sweep daily 03:00.
 ## Phase 7 статус
 
 - **Phase 7: 100%**, Memory Phase 2: **LIVE** (`KRAB_RAG_PHASE2_ENABLED=1`)
-- **15141/15264 тестов collected** (Session 48, 13–14.05.2026)
-- **380 API endpoints** (live: `/api/endpoints`), 181 handlers, 162 registered commands (172+ с алиасами), 43 alerts / 53 metrics
+- **16224/16347 тестов collected** (Session 55-68, 18.05.2026; unit subset: 15877)
+- **409 API endpoints** (live: `/api/endpoints`), 181 handlers, 162 registered commands (172+ с алиасами), 45 alerts / 145 live metric series
 - **25+ admin pages** (было 6) — /admin/skills, /silence, /aliases, /typing, /whitelist, /translator, /scheduler, /captcha, /snapshots, /reactions и др.
 - **~70+ commits в Session 48** (13.05 → 14.05.2026, Waves 163 → 225+)
 
@@ -699,6 +701,7 @@ Empirical rule: sonnet — 200-300 word с TDD; haiku — < 100 word.
 | **Session 43+44 (10.05)** | **13795/13916 collected** (+~377: Waves 44-Z, 45-*, 46-*, 47, 48-*, 49-*) |
 | **Session 45 (11→12.05)** | **~13920+ collected** (+~120 tests: Waves 62-66 + AGE-8/15/12/9/16 + 50-B). **25 commits** (incl. Wave 66 billing leak fix), **7 Linear issues closed**, **>1000 Sentry events/week** stop firing. 3 paradigm shifts: «outcomes-not-heartbeats» pattern (Wave 63-A/50-B/65-D/62-G). Wave 66: €40/week paid AI Studio leak → Vertex bonus credits. |
 | **Session 47+48 (13.05)** | **15141/15264 collected** (+1346 from S44 baseline; admin pages add, autotables refresh — Wave 168) |
+| **Session 55-68 (18.05)** | **15877 unit / 16224/16347 total** (+~960 from S48: 45 commits, Phase 3 verifier deployed, silent-death 2 P0 fixes — S69 W8 baseline) |
 
 ### Session 40 highlights (07.05.2026 — runtime e2e + KE deadlock fix + ecosystem health)
 
