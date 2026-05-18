@@ -687,3 +687,119 @@ def clear_storage_corrupt_flag(storage: object) -> None:
 def is_corrupt_marker_error(exc: BaseException) -> bool:
     """Проверяет, что DatabaseError содержит наш маркер от read-wrapper."""
     return isinstance(exc, sqlite3.DatabaseError) and _CORRUPT_MARKER in str(exc)
+
+
+# ---------------------------------------------------------------------------
+# S69 Wave 1: monkey-patch pyrogram Dispatcher.add_handler — sync registration
+# ---------------------------------------------------------------------------
+#
+# Root cause cold-boot race: оригинальный pyrogram Dispatcher.add_handler
+# создаёт inner `async def fn()` и шедулит её через `self.loop.create_task(fn())`
+# — fire-and-forget. При cold-boot вызовы `client.add_handler(...)` происходят
+# до старта dispatcher worker'ов, и задачи могут ещё не отработать к моменту,
+# когда updates начинают приходить → handlers молчат пока loop пройдёт круг.
+#
+# S68 W1 добавил барьер в `_start_client_serialized()` который ждёт пока
+# `dispatcher.groups` не заполнится — это **mitigation**.
+#
+# S69 W1 (этот патч) — **root cause fix**: при setup phase (workers ещё не
+# запущены) мутируем `self.groups` синхронно прямо в текущем call frame,
+# вместо того чтобы шедулить fire-and-forget task. Когда dispatcher уже
+# запущен (workers крутятся), делегируем в оригинал — там lock-acquire важен
+# для thread-safety с running message_parser'ом.
+#
+# Активация через env `KRAB_PYROGRAM_PATCH_ADD_HANDLER=1` (default OFF).
+# S68 W1 барьер остаётся primary defense пока этот патч валидируется в
+# production. Opt-in flag позволит включать/выключать без релиза.
+
+_ADD_HANDLER_PATCH_APPLIED = False
+_ORIGINAL_ADD_HANDLER = None
+
+
+def _patched_add_handler(self, handler, group: int) -> None:
+    """S69 W1: sync add_handler when dispatcher не started (cold-boot setup phase).
+
+    Detection: если ``handler_worker_tasks`` пуст ИЛИ все таски done — мы в
+    setup phase → мутируем groups directly. Иначе fallback на оригинальный
+    async-path (для dynamic registration уже запущенного dispatcher'а — там
+    locks_list acquire важен для thread-safety с message_parser).
+
+    Также корректно обрабатывает ErrorHandler — он живёт в отдельном списке
+    ``error_handlers``, не в ``groups``.
+    """
+    workers = getattr(self, "handler_worker_tasks", [])
+    is_running = bool(workers) and any(not t.done() for t in workers)
+    if is_running:
+        # Dispatcher уже работает — нужен lock-acquire, делегируем в оригинал.
+        return _ORIGINAL_ADD_HANDLER(self, handler, group)
+
+    # Sync path: workers ещё не стартанули — мутируем напрямую.
+    # Lazy import чтобы не тянуть pyrogram на module-level (patch ставится из
+    # bootstrap который импортируется ДО первого Client).
+    from collections import OrderedDict
+
+    from pyrogram.handlers.error_handler import ErrorHandler
+    from pyrogram.handlers.handler import Handler  # noqa: F401  # type guard
+
+    if isinstance(handler, ErrorHandler):
+        if handler not in self.error_handlers:
+            self.error_handlers.append(handler)
+        return None
+
+    if group not in self.groups:
+        self.groups[group] = []
+        # Сохраняем тип контейнера (OrderedDict) после re-sort.
+        self.groups = OrderedDict(sorted(self.groups.items()))
+    self.groups[group].append(handler)
+    return None
+
+
+def install_pyrogram_patches() -> bool:
+    """Install S69 W1 add_handler monkey-patch.
+
+    Активируется через env ``KRAB_PYROGRAM_PATCH_ADD_HANDLER=1`` (default OFF).
+    Returns True если patch применён.
+    Идемпотентен: повторный вызов no-op.
+    """
+    global _ADD_HANDLER_PATCH_APPLIED, _ORIGINAL_ADD_HANDLER
+
+    if _ADD_HANDLER_PATCH_APPLIED:
+        return True
+
+    if os.environ.get("KRAB_PYROGRAM_PATCH_ADD_HANDLER", "0").strip() not in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return False
+
+    try:
+        from pyrogram.dispatcher import Dispatcher
+    except Exception as exc:  # noqa: BLE001
+        log.warning("pyrogram_add_handler_patch_import_failed", extra={"error": str(exc)})
+        return False
+
+    _ORIGINAL_ADD_HANDLER = Dispatcher.add_handler
+    Dispatcher.add_handler = _patched_add_handler
+    _ADD_HANDLER_PATCH_APPLIED = True
+    log.info("pyrogram_add_handler_patch_applied")
+    return True
+
+
+def is_add_handler_patch_applied() -> bool:
+    """Тестовый хук: проверить, применён ли S69 W1 add_handler patch."""
+    return _ADD_HANDLER_PATCH_APPLIED
+
+
+def _reset_add_handler_patch_for_tests() -> None:
+    """Только для тестов: восстанавливает оригинал add_handler, сбрасывает флаг."""
+    global _ADD_HANDLER_PATCH_APPLIED, _ORIGINAL_ADD_HANDLER
+    if _ADD_HANDLER_PATCH_APPLIED and _ORIGINAL_ADD_HANDLER is not None:
+        try:
+            from pyrogram.dispatcher import Dispatcher
+
+            Dispatcher.add_handler = _ORIGINAL_ADD_HANDLER
+        except Exception:  # noqa: BLE001
+            pass
+    _ADD_HANDLER_PATCH_APPLIED = False
+    _ORIGINAL_ADD_HANDLER = None

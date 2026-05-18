@@ -296,6 +296,7 @@ KRAB_LONG_CONTEXT_PROVIDER=cloud         # "mlx-local-kv4" → route long-contex
 MLX_LOCAL_KV4_URL=http://127.0.0.1:8088  # local MLX endpoint override (Wave 223)
 KRAB_LONG_CONTEXT_THRESHOLD_TOKENS=8000  # prompt_tokens > N → local (Wave 223)
 KRAB_MLX_LOCAL_TASK_TYPES=summarization,rag_retrieval  # task_type whitelist для local (Wave 223)
+KRAB_PYROGRAM_PATCH_ADD_HANDLER=0    # S69 W1: sync add_handler patch (opt-in pending S68 W1 validation)
 KRAB_HEARTBEAT_GET_STATE_PROBE_ENABLED=1 # GetState pts probe split-brain (Wave 63-A)
 KRAB_HEARTBEAT_GET_STATE_TIMEOUT_SEC=8.0  # GetState invoke timeout (Wave 63-A)
 LOCAL_AUTOLOAD_FALLBACK_LIMIT=0      # 0=strict preferred (Wave 62 — было zombie env)
