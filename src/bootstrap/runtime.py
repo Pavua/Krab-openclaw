@@ -238,6 +238,16 @@ async def run_app() -> None:
     global startup_time_sec
     _startup_begin_ts = time.monotonic()
 
+    # S64 W4: ops-видимость причины рестарта. Логируем `krab_startup_cause`
+    # на основе exit history, last_seen_pid и cold_starts.log. Fail-open —
+    # любая ошибка не должна блокировать boot.
+    try:
+        from ..core.restart_cause import record_startup_cause
+
+        record_startup_cause()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("startup_cause_record_failed", error=str(exc))
+
     # Wave 67: hard runtime guard для paid AI Studio Gemini requests.
     # Ставится ДО любых других HTTP-инициализаций, чтобы все последующие
     # httpx.AsyncClient/Client инстансы получили event_hook автоматически.
@@ -331,6 +341,13 @@ async def run_app() -> None:
             quarantined=[r["path"] for r in critical_quarantined],
             exit_code=DB_CORRUPTION_EXIT_CODE,
         )
+        # S64 W4: фиксируем причину для следующего startup_cause.
+        try:
+            from ..core.restart_cause import record_exit_intent
+
+            record_exit_intent("db_corruption", exit_code=DB_CORRUPTION_EXIT_CODE)
+        except Exception:  # noqa: BLE001
+            pass
         sys.exit(DB_CORRUPTION_EXIT_CODE)
 
     # Запускаем проверку non-critical DB (archive.db) в фоне — не блокируем
@@ -363,6 +380,13 @@ async def run_app() -> None:
         """Запрашивает штатную остановку приложения без форс-килла."""
         if not stop_event.is_set():
             logger.info("stop_requested", reason=reason)
+            # S64 W4: фиксируем graceful intent для следующего startup_cause.
+            try:
+                from ..core.restart_cause import record_exit_intent
+
+                record_exit_intent(f"graceful_{reason}", exit_code=0)
+            except Exception:  # noqa: BLE001
+                pass
             stop_event.set()
 
     loop = asyncio.get_running_loop()
