@@ -307,6 +307,15 @@ KRAB_GOOGLE_DIRECT_VERTEX_PREFERRED=1  # google_direct Vertex mode (Wave 66-B)
 GEMINI_PAID_KEY_ENABLED=0              # safety belt (Wave 66-B)
 KRAB_VERTEX_PROJECT=caramel-anvil-492816-t5  # bonus credits project
 KRAB_VERTEX_REGION=global              # Vertex location
+KRAB_LOCAL_DRAFT_VERIFY_ENABLED=1        # local draft verifier in main flow (S62)
+KRAB_LOCAL_DRAFT_VERIFY_SAMPLE_RATE=0.2  # 20% sample rate для verifier (S62)
+KRAB_LOCAL_PRIMARY_BYPASS_ENABLED=1      # Gateway bypass для local primary (S55 D)
+KRAB_BYPASS_IDLE_LOG_INTERVAL_SEC=60     # rate-limit bypass idle skip logs (S55 D)
+KRAB_VISION_IDLE_LOG_INTERVAL_SEC=60     # rate-limit vision idle skip logs (S56 C)
+KRAB_TRANSLATOR_IDLE_LOG_INTERVAL_SEC=60 # rate-limit translator idle logs (S60)
+KRAB_CODEX_IDLE_LOG_INTERVAL_SEC=60      # rate-limit codex CLI idle logs (S62)
+KRAB_DISPATCHER_FAKE_ESCALATION_THRESHOLD=2  # fake_success → escalate after N (S53 hotfix2)
+KRAB_DISPATCHER_RECOVERY_MIN_INTERVAL_SEC=600  # min interval между dispatcher recovery (S53)
 ```
 
 ## Idiosyncrasies
@@ -340,6 +349,48 @@ KRAB_VERTEX_REGION=global              # Vertex location
 - **~70+ commits в Session 48** (13.05 → 14.05.2026, Waves 163 → 225+)
 
 ## Session highlights (последние)
+
+### Session 60-63 highlights (2026-05-17 → 2026-05-18 — 11+ commits, parallel sonnets pattern matured)
+
+Branch `main`. Серия autonomous waves через **3-wave × 6-sonnets parallel pattern** —
+24 sonnets, 26 commits, ~2.5 часа за один день (S62). Главный архитектурный прорыв —
+**Phase 3 verifier foundation** для confidence-gated routing + операционный tooling
+expansion (workspace_gc plist, OAuth sawtooth audit, 137-metric Prometheus catalog).
+
+- **S57 P3.1 verifier** — local draft verifier deployed и активирован в production main
+  flow (`KRAB_LOCAL_DRAFT_VERIFY_ENABLED=1`, sample rate 0.2). Foundation для
+  confidence-gated cloud fallback.
+- **S58 dashboard endpoint** `/api/admin/local-draft-verifier-stats` — admin observability
+  для verify metrics (verdict distribution, latency, fallback rate).
+- **S60 triple audit**:
+  - Memory leak audit — Krab innocent (rss flat over 12h);
+  - OAuth audit — все 4 Google accounts healthy (sawtooth refresh working);
+  - Test isolation audit — clean (no cross-test state leaks).
+- **S61 W3 conftest defense-in-depth** — 16 lazy-init singletons reset между тестами
+  (translator_engine, model_manager, swarm_bus, etc.) фикс flakiness в parallel CI runs.
+- **S61 W5 `scripts/workspace_gc.py` + plist** — daily 04:00 GC старых worktrees,
+  **26 stale worktrees reclaimed** на первом запуске.
+- **S62 W1–W6** — Sentry markers expansion + Prometheus parity (12 новых счётчиков) +
+  admin panel /admin/observability + codex CLI idle observability (5-th backend в idle
+  stack: bypass / vision / translator / verifier / codex).
+- **S63 W2 `docs/PROMETHEUS_METRICS.md`** — 137 metrics catalog (auto-generated +
+  curated descriptions).
+- **Silent-death captured TWICE в production live** (03:46, 04:09 UTC) — S53 P3.6
+  hotfix2 fake_success detection отработал: dispatcher_recovery 1st attempt → no tick
+  increment → fake_success += 1 → escalate → reconnect → ok. **Verified end-to-end.**
+
+**Architectural insights**:
+1. **3-wave × 6-sonnets autonomous pattern** — 24 sonnets, 26 commits, 0 merge conflicts
+   через worktree isolation (см. Session 35 origin pattern + S62 scaling).
+2. **5-backend idle observability stack** — bypass / vision / translator / verifier /
+   codex CLI, все rate-limited 60s per reason.
+3. **Phase 3 verifier foundation** для confidence-gated routing — sample 20% локально,
+   verdict ∈ {accept, reject, escalate} → метрики собирают baseline для future
+   threshold tuning.
+4. **Operational tooling expansion** — workspace_gc plist (daily), OAuth sawtooth
+   audit script, 137-metric catalog как single source of truth.
+
+См. `docs/PROMETHEUS_METRICS.md`, `docs/PHASE_3_VERIFIER.md`, `scripts/workspace_gc.py`.
 
 ### Session 53-56 highlights (2026-05-15 → 2026-05-18 — 10+ commits, silent-death defence + Phase 2 + Gateway bypass)
 
