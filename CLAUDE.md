@@ -316,6 +316,13 @@ KRAB_TRANSLATOR_IDLE_LOG_INTERVAL_SEC=60 # rate-limit translator idle logs (S60)
 KRAB_CODEX_IDLE_LOG_INTERVAL_SEC=60      # rate-limit codex CLI idle logs (S62)
 KRAB_DISPATCHER_FAKE_ESCALATION_THRESHOLD=2  # fake_success → escalate after N (S53 hotfix2)
 KRAB_DISPATCHER_RECOVERY_MIN_INTERVAL_SEC=600  # min interval между dispatcher recovery (S53)
+KRAB_HANDLER_WORKER_SUPERVISOR_ENABLED=1     # handler_worker supervisor safety net (S66 W1)
+KRAB_HANDLER_WORKER_MAJORITY_THRESHOLD=0.5   # majority threshold для handler tick health (S66 W1)
+KRAB_LOCAL_SHARE_CHAT=0.0                    # per-task local share env, chat task (S66 W4)
+KRAB_LOCAL_SHARE_TRANSLATE=0.0               # per-task local share env, translate task (S66 W4)
+KRAB_LOCAL_SHARE_SUMMARY=0.0                 # per-task local share env, summary task (S66 W4)
+KRAB_LOCAL_SHARE_VERIFY=0.0                  # per-task local share env, verify task (S66 W4)
+KRAB_LOCAL_SHARE_RERANK=0.0                  # per-task local share env, rerank task (S66 W4)
 ```
 
 ## Idiosyncrasies
@@ -357,6 +364,63 @@ LaunchAgent `ai.krab.backup-retention` запускает sweep daily 03:00.
 - **~70+ commits в Session 48** (13.05 → 14.05.2026, Waves 163 → 225+)
 
 ## Session highlights (последние)
+
+### Session 64-66 highlights (2026-05-18 — 23 commits, silent-death root cause discovery + supervisor)
+
+Branch `main`. Триплет сессий: **root cause discovery → P0 fix → defence-in-depth +
+autonomous pattern docs**. Главный архитектурный прорыв — **5-я итерация
+«outcomes-not-heartbeats»** + найден настоящий root cause silent-death,
+который S53 hotfix-серия только маскировала.
+
+- **S64 W1+W2 audit** — найден root cause silent-death: при reconnect через
+  `client.stop()+start()` Pyrogram **очищает `dispatcher.groups`** (handlers
+  registry), и хотя client возобновляет updates, handler dispatcher молчит.
+  Все S53 hotfix1/2/3 ловили симптом (no tick increment), но не причину.
+- **S64 W4** — `record_startup_cause()` логирует причину каждого restart
+  (clean / crash / supervisor / manual) в `~/.openclaw/krab_runtime_state/
+  startup_causes.jsonl`. Foundation для post-mortem analysis.
+- **S64 W10** — `scripts/smoke_silent_death.py` (252 LOC) + 10 unit-тестов,
+  e2e сценарий: forced disconnect → reconnect → verify dispatcher.groups
+  preserved → verify handler responds.
+- **S65 W1 P0 FIX** — `_try_reconnect_pyrofork` теперь использует
+  `_recreate_client()` (полный rebuild с re-registration handlers) вместо
+  `stop()+start()`. Root cause устранён, S53 hotfix-стек остаётся как
+  defence-in-depth.
+- **S65 coverage waves** — workspace_gc 49% → **95%**, health_router 86% →
+  **97%**, translator 90% → **99%**. Закрытие test debt после P0 fix.
+- **S66 W1 handler_worker supervisor** — независимый watcher проверяет
+  `handler_tick_age` через introspection; при majority of handlers stuck
+  (`KRAB_HANDLER_WORKER_MAJORITY_THRESHOLD=0.5`) escalates → reconnect.
+  Дополнительный safety net поверх S65 W1 fix.
+- **S66 W2 `docs/AUTONOMOUS_SESSION_PATTERN.md`** — encoded learnings из
+  **48-sonnet-day baseline** (S62 24 → S64-66 48): worktree isolation,
+  TDD-required prompts, sonnet-only (haiku context window недостаточен),
+  3-wave × N-sonnets pattern scaling.
+- **S66 W3** — `krab_uptime_seconds` + `krab_handler_tick_age_seconds`
+  Prometheus gauges (для supervisor alerting).
+- **S66 W4** — per-task `KRAB_LOCAL_SHARE_*` env vars (5 task types: chat,
+  translate, summary, verify, rerank, default 0.0). Foundation для Phase 4
+  local-cloud traffic splitting.
+- **S66 W5** — `scripts/krab_backup_preview.py` CLI — превью что backup
+  retention sweep собирается удалить (dry-run перед актуальным запуском).
+
+**Architectural insights**:
+1. **«Outcomes-not-heartbeats» — 5-я итерация**: Wave 63-A pts probe → Wave
+   63-C dispatcher_tick → S53 P3.6 hotfix3 `client.last_update_time` → **S65
+   W1 `_recreate_client` recovery (real fix)** → S66 W1 handler_worker
+   introspection. Каждый шаг — глубже в stack, ближе к outcome.
+2. **48 sonnets/day baseline установлен** (`docs/AUTONOMOUS_SESSION_PATTERN.md`)
+   — 2× scaling от S62 pattern (24 sonnets) через те же worktree isolation +
+   TDD prompts. Без merge conflicts, без CI red.
+3. **Root cause vs symptom**: S53 hotfix-стек (3 итерации) был honest
+   defence-in-depth, но не root cause. S64 W1+W2 audit нашёл реальную
+   причину; S65 W1 fix её устранил; S66 W1 supervisor добавил safety net.
+4. **Open: cold-boot dispatcher race** — отдельная от reconnect, S67 W1
+   investigating (предположение: handlers регистрируются до полного boot
+   pyrogram, race window).
+
+См. `docs/AUTONOMOUS_SESSION_PATTERN.md`, `scripts/smoke_silent_death.py`,
+`scripts/krab_backup_preview.py`, `docs/PROMETHEUS_METRICS.md`.
 
 ### Session 60-63 highlights (2026-05-17 → 2026-05-18 — 11+ commits, parallel sonnets pattern matured)
 
