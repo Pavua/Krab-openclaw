@@ -331,6 +331,14 @@ KRAB_DISPATCHER_RECOVERY_MIN_INTERVAL_SEC=600  # min interval между dispatc
 - Все сообщения уходят **FROM Yung Nagato**; ACL checks owner через `from_user.id == 312322764`
 - Не «фиксить» этот session swap — он намеренный
 
+### Backup retention: 7 дней (S65 W3, было 14)
+
+`KRAB_BACKUP_RETENTION_MAX_AGE_DAYS=7` в `.env` (override от default 14 в
+`scripts/krab_backup_retention_sweep.py`). Снижение принято после S64 W8 audit:
+7.8 GB total backups, 14 дней слишком loose. 7 дней + `keep_recent=3` reclaim'ит
+~1.4 GB/sweep при сохранении safety net последних 3 снапшотов per target.
+LaunchAgent `ai.krab.backup-retention` запускает sweep daily 03:00.
+
 ## Правила
 
 - **Не дублируй нативный функционал OpenClaw** если он уже есть
