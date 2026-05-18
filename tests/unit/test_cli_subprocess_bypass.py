@@ -329,3 +329,92 @@ async def test_complete_via_cli_preempts_when_codex_disabled() -> None:
 
     # Verify: subprocess НЕ был запущен (preempt сработал ДО)
     mock_subprocess.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# S62 W4: idle observability — codex_cli_idle_skip log marker (mirror pattern)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_codex_idle_skip_weekly_quota_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """is_codex_disabled() True → _log_codex_idle_skip('weekly_quota_exhausted')
+    fires before CodexQuotaExhaustedError raised. Rate-limit storage gets entry.
+    """
+    from src.integrations import cli_subprocess_bypass as mod
+    from src.integrations.codex_quota_state import CodexQuotaExhaustedError
+
+    # Reset module-level rate-limit storage to ensure log fires
+    mod._codex_idle_last_log_ts.clear()
+    monkeypatch.setenv("KRAB_CODEX_IDLE_LOG_INTERVAL_SEC", "60")
+
+    with (
+        patch(
+            "src.integrations.cli_subprocess_bypass.shutil.which",
+            MagicMock(return_value="/usr/local/bin/codex"),
+        ),
+        patch(
+            "src.integrations.codex_quota_state.is_codex_disabled",
+            return_value=True,
+        ),
+    ):
+        with pytest.raises(CodexQuotaExhaustedError):
+            await mod.complete_via_cli(
+                model="codex-cli/gpt-5.5",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+    # idle skip entry recorded under reason="weekly_quota_exhausted"
+    assert "weekly_quota_exhausted" in mod._codex_idle_last_log_ts
+
+
+@pytest.mark.asyncio
+async def test_codex_idle_skip_subprocess_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex binary not in PATH → _log_codex_idle_skip('subprocess_unavailable')
+    fires before RuntimeError raised.
+    """
+    from src.integrations import cli_subprocess_bypass as mod
+
+    mod._codex_idle_last_log_ts.clear()
+    monkeypatch.setenv("KRAB_CODEX_IDLE_LOG_INTERVAL_SEC", "60")
+
+    with patch(
+        "src.integrations.cli_subprocess_bypass.shutil.which",
+        MagicMock(return_value=None),
+    ):
+        with pytest.raises(RuntimeError, match="не найден в PATH"):
+            await mod.complete_via_cli(
+                model="codex-cli/gpt-5.5",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+    assert "subprocess_unavailable" in mod._codex_idle_last_log_ts
+
+
+def test_codex_idle_skip_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_log_codex_idle_skip rate-limited: second call в пределах interval
+    не обновляет timestamp.
+    """
+    from src.integrations import cli_subprocess_bypass as mod
+
+    mod._codex_idle_last_log_ts.clear()
+    monkeypatch.setenv("KRAB_CODEX_IDLE_LOG_INTERVAL_SEC", "60")
+
+    # First call records timestamp
+    mod._log_codex_idle_skip("weekly_quota_exhausted", model="codex-cli/gpt-5.5")
+    ts1 = mod._codex_idle_last_log_ts["weekly_quota_exhausted"]
+    assert ts1 > 0
+
+    # Second call immediately — timestamp unchanged (rate-limited)
+    mod._log_codex_idle_skip("weekly_quota_exhausted", model="codex-cli/gpt-5.5")
+    ts2 = mod._codex_idle_last_log_ts["weekly_quota_exhausted"]
+    assert ts2 == ts1
+
+    # Different reason → independent timestamp (not rate-limited by other reason)
+    mod._log_codex_idle_skip("subprocess_unavailable", model="codex-cli/gpt-5.5")
+    assert "subprocess_unavailable" in mod._codex_idle_last_log_ts
+    assert mod._codex_idle_last_log_ts["subprocess_unavailable"] >= ts1

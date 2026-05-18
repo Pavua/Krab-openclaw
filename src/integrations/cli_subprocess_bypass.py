@@ -34,6 +34,40 @@ from ._observability_log import record_agent_run
 logger = get_logger(__name__)
 
 
+# S62 W4: idle observability — mirror S55 D bypass / S56 C vision / S61 W2
+# translator pattern. Module-level rate-limit state (complete_via_cli — module
+# function, не метод класса), keyed by reason string, value = last-log
+# timestamp (float seconds). Помогает owner'у видеть когда codex armed но
+# spinning idle (weekly quota exhausted, disabled via env, binary missing).
+_codex_idle_last_log_ts: dict[str, float] = {}
+
+
+def _log_codex_idle_skip(reason: str, *, model: str = "") -> None:
+    """Rate-limited idle log: once per ``KRAB_CODEX_IDLE_LOG_INTERVAL_SEC``
+    per reason (default 60s).
+
+    Reasons:
+        - ``weekly_quota_exhausted`` — Wave 62-G preempt (is_codex_disabled)
+        - ``disabled_via_env``      — KRAB_CODEX_DISABLED_MODELS / bypass off
+        - ``subprocess_unavailable`` — codex binary missing in PATH
+    """
+    now_ts = time.time()
+    try:
+        interval_sec = float(os.getenv("KRAB_CODEX_IDLE_LOG_INTERVAL_SEC", "60"))
+    except (TypeError, ValueError):
+        interval_sec = 60.0
+    last = _codex_idle_last_log_ts.get(reason, 0.0)
+    if now_ts - last < interval_sec:
+        return
+    _codex_idle_last_log_ts[reason] = now_ts
+    logger.info(
+        "codex_cli_idle_skip",
+        reason=reason,
+        model=model,
+        interval_sec=interval_sec,
+    )
+
+
 def _get_idle_timeout_sec() -> float:
     """Wave 44-W: idle gap threshold перед kill subprocess'a."""
     raw = os.environ.get("KRAB_LLM_IDLE_TIMEOUT_SEC", "180")
@@ -382,6 +416,8 @@ async def _complete_codex_with_account_rotation(
             model=model_id,
             reason="is_codex_disabled() returned True — see codex_quota_state.json",
         )
+        # S62 W4: idle observability — log skip reason (rate-limited)
+        _log_codex_idle_skip("weekly_quota_exhausted", model=model_id)
         add_bypass_breadcrumb(
             bypass_kind="cli",
             event="preempted_weekly_disabled",
@@ -616,8 +652,17 @@ async def complete_via_cli(
     if not is_cli or binary_name is None:
         raise RuntimeError(f"Not a CLI model: {model}")
 
+    # S62 W4: idle observability — bypass off via env, но caller всё равно
+    # дошёл до complete_via_cli. Логируем skip reason (rate-limited) для
+    # codex, чтобы видеть spinning idle bypass armed-but-disabled.
+    if binary_name == "codex" and not is_cli_subprocess_enabled():
+        _log_codex_idle_skip("disabled_via_env", model=model)
+
     binary_path = _resolve_binary(binary_name)
     if not binary_path:
+        # S62 W4: codex binary отсутствует в PATH → idle skip (subprocess_unavailable)
+        if binary_name == "codex":
+            _log_codex_idle_skip("subprocess_unavailable", model=model)
         raise RuntimeError(
             f"CLI binary '{binary_name}' не найден в PATH. Установка: brew install {binary_name}"
         )
