@@ -12,11 +12,22 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.core.language_detect import detect_language, resolve_translation_pair
+from src.core.translation_cache import translation_cache
 from src.core.translator_engine import (
     TranslationResult,
     build_translation_prompt,
     translate_text,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_translation_cache():
+    """S55 C: translation_cache singleton чистится перед каждым тестом — иначе
+    предыдущие переводы возвращают cached result (model_id='translation_cache')
+    и call_count для send_message_stream/clear_session = 0."""
+    translation_cache._entries.clear()
+    yield
+    translation_cache._entries.clear()
 
 # ---------------------------------------------------------------------------
 # detect_language
