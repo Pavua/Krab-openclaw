@@ -520,6 +520,14 @@ async def complete_direct(
     except Exception:  # noqa: BLE001
         pass
 
+    # S69 W6: per-model latency p50/p95/p99 gauges (success path).
+    try:
+        from ..core.metrics.model_latency import record_latency_seconds
+
+        record_latency_seconds(model, _elapsed)
+    except Exception:  # noqa: BLE001
+        pass
+
     # Wave 78 FinOps: surface token cost для google direct bypass.
     # Provider — всегда 'google' (Vertex или AI Studio). model — оригинальный
     # 'google/gemini-...' для совпадения с pricing table.

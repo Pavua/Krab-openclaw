@@ -611,6 +611,13 @@ async def _complete_codex_with_account_rotation(
             error_type=_perf_error_type,
             error_message=_perf_error_message,
         )
+        # S69 W6: per-model latency p50/p95/p99 gauges.
+        try:
+            from ..core.metrics.model_latency import record_latency_seconds
+
+            record_latency_seconds(full_model, _duration)
+        except Exception:  # noqa: BLE001
+            pass
         # Wave 44-U observability: telemetry для Owner panel /observability dashboard
         try:
             record_agent_run(
@@ -841,6 +848,13 @@ async def complete_via_cli(
             error_type=_perf_error_type,
             error_message=_perf_error_message,
         )
+        # S69 W6: per-model latency p50/p95/p99 gauges (non-codex CLI).
+        try:
+            from ..core.metrics.model_latency import record_latency_seconds
+
+            record_latency_seconds(model, _duration)
+        except Exception:  # noqa: BLE001
+            pass
         # Wave 44-U observability: telemetry для Owner panel /observability dashboard
         try:
             _status = (

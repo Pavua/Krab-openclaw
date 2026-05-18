@@ -3053,6 +3053,13 @@ class OpenClawClient:
                 elapsed_ms=elapsed_ms,
                 url=url,
             )
+            # S69 W6: per-model latency p50/p95/p99 gauges.
+            try:
+                from .core.metrics.model_latency import record_latency
+
+                record_latency(preferred_model_id, elapsed_ms)
+            except Exception:  # noqa: BLE001
+                pass
             # S57 / Phase 3.1: fire-and-forget Vertex Gemini Flash verifier.
             # P(0.2) sampling, logs divergence score. Pure observability —
             # never affects user response or routing decisions. ENV-gated:

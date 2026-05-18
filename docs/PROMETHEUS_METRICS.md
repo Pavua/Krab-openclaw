@@ -1,8 +1,8 @@
 # Krab Prometheus Metrics
 
-Last updated: 2026-05-18 (S63 Wave 2)
+Last updated: 2026-05-18 (S69 Wave 6)
 
-Total: **137 metrics** across **18 categories** (auto-generated from
+Total: **140 metrics** across **19 categories** (auto-generated from
 `src/core/metrics/*` and `src/core/metrics/collect.py`).
 
 Source-of-truth: `src/core/metrics/` package (façade re-exported via
@@ -181,6 +181,24 @@ visible.
 - `krab_google_direct_bypass_latency_seconds{model}` — Histogram.
 - `krab_google_direct_bypass_thoughts_tokens{model}` — Thinking-token
   histogram.
+
+### Per-Model LLM Latency (S69 W6)
+
+Rolling p50/p95/p99 over the last **100** LLM call samples per model.
+Gauges are recomputed on every `record_latency()` call from an in-memory
+`deque(maxlen=100)`. Operator can compare cloud Gemini vs local primary
+bypass vs codex-cli latency side-by-side on a single dashboard.
+
+- `krab_model_latency_p50_seconds{model}` — 50th percentile (nearest-rank)
+  over last 100 samples. Source module
+  [`src/core/metrics/model_latency.py`](../src/core/metrics/model_latency.py).
+- `krab_model_latency_p95_seconds{model}` — 95th percentile.
+- `krab_model_latency_p99_seconds{model}` — 99th percentile.
+
+Wire-in: `openclaw_client.py` (local_primary_bypass_ok), `integrations/
+google_genai_direct.py` (success path), `integrations/cli_subprocess_bypass.py`
+(codex + non-codex CLI). All wire-ins are `try/except`-wrapped and
+lazy-imported — never affects request hot path.
 
 ### MLX Local + Long Context (Wave 223 / 225)
 
