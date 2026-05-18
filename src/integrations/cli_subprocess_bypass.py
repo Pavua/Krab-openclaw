@@ -50,7 +50,19 @@ def _log_codex_idle_skip(reason: str, *, model: str = "") -> None:
         - ``weekly_quota_exhausted`` — Wave 62-G preempt (is_codex_disabled)
         - ``disabled_via_env``      — KRAB_CODEX_DISABLED_MODELS / bypass off
         - ``subprocess_unavailable`` — codex binary missing in PATH
+
+    S63 W1: каждый skip также инкрементирует Prometheus counter
+    ``krab_codex_idle_skip_total{reason}`` (best-effort, never raises).
+    Counter не rate-limited — отдельный сигнал для observability.
     """
+    # S63 W1: Prometheus counter inc — independent of rate-limit ниже.
+    try:
+        from src.core.metrics.idle_skip import inc_codex_idle_skip
+
+        inc_codex_idle_skip(reason)
+    except Exception:  # noqa: BLE001 — metrics best-effort
+        pass
+
     now_ts = time.time()
     try:
         interval_sec = float(os.getenv("KRAB_CODEX_IDLE_LOG_INTERVAL_SEC", "60"))

@@ -529,10 +529,12 @@ def collect_metrics() -> str:
     except Exception:  # noqa: BLE001
         pass
 
-    # === S62 W6: idle skip counters (bypass / vision / translator / verifier) ===
+    # === S62 W6 + S63 W1: idle skip counters
+    # (bypass / vision / translator / verifier / codex_cli) ===
     try:
         from .idle_skip import (
             _BYPASS_IDLE_SKIP_COUNTER,
+            _CODEX_IDLE_SKIP_COUNTER,
             _TRANSLATOR_IDLE_SKIP_COUNTER,
             _VERIFIER_SAMPLES_COUNTER,
             _VISION_IDLE_SKIP_COUNTER,
@@ -568,6 +570,11 @@ def collect_metrics() -> str:
             "S57 P3.1: local draft verifier sample events by status",
             _VERIFIER_SAMPLES_COUNTER,
             label="status",
+        )
+        _render_reason_counter(
+            "krab_codex_idle_skip_total",
+            "S62 W4: codex CLI subprocess bypass idle skips by reason",
+            _CODEX_IDLE_SKIP_COUNTER,
         )
     except Exception:  # noqa: BLE001
         pass

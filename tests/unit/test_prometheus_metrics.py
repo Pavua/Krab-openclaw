@@ -672,10 +672,12 @@ def test_idle_skip_facade_reexports():
     """Все символы должны быть доступны через src.core.prometheus_metrics facade."""
     from src.core.prometheus_metrics import (
         _BYPASS_IDLE_SKIP_COUNTER,
+        _CODEX_IDLE_SKIP_COUNTER,
         _TRANSLATOR_IDLE_SKIP_COUNTER,
         _VERIFIER_SAMPLES_COUNTER,
         _VISION_IDLE_SKIP_COUNTER,
         inc_bypass_idle_skip,
+        inc_codex_idle_skip,
         inc_translator_idle_skip,
         inc_verifier_sample,
         inc_vision_idle_skip,
@@ -685,7 +687,63 @@ def test_idle_skip_facade_reexports():
     assert callable(inc_vision_idle_skip)
     assert callable(inc_translator_idle_skip)
     assert callable(inc_verifier_sample)
+    assert callable(inc_codex_idle_skip)
     assert isinstance(_BYPASS_IDLE_SKIP_COUNTER, dict)
     assert isinstance(_VISION_IDLE_SKIP_COUNTER, dict)
     assert isinstance(_TRANSLATOR_IDLE_SKIP_COUNTER, dict)
     assert isinstance(_VERIFIER_SAMPLES_COUNTER, dict)
+    assert isinstance(_CODEX_IDLE_SKIP_COUNTER, dict)
+
+
+# ---------------------------------------------------------------------------
+# S63 W1: codex_cli idle skip counter parity
+# ---------------------------------------------------------------------------
+
+
+def test_idle_skip_codex_counter_increments():
+    """inc_codex_idle_skip обновляет in-memory counter per reason."""
+    from src.core.metrics.idle_skip import (
+        _CODEX_IDLE_SKIP_COUNTER,
+        inc_codex_idle_skip,
+    )
+
+    _CODEX_IDLE_SKIP_COUNTER.clear()
+    inc_codex_idle_skip("weekly_quota_exhausted")
+    inc_codex_idle_skip("weekly_quota_exhausted")
+    inc_codex_idle_skip("disabled_via_env")
+    inc_codex_idle_skip("subprocess_unavailable")
+
+    assert _CODEX_IDLE_SKIP_COUNTER["weekly_quota_exhausted"] == 2
+    assert _CODEX_IDLE_SKIP_COUNTER["disabled_via_env"] == 1
+    assert _CODEX_IDLE_SKIP_COUNTER["subprocess_unavailable"] == 1
+
+
+def test_idle_skip_codex_appears_in_metrics_output():
+    """После inc_codex_idle_skip счётчик должен попасть в collect_metrics()."""
+    from src.core.metrics.idle_skip import (
+        _CODEX_IDLE_SKIP_COUNTER,
+        inc_codex_idle_skip,
+    )
+    from src.core.prometheus_metrics import collect_metrics
+
+    _CODEX_IDLE_SKIP_COUNTER.clear()
+    inc_codex_idle_skip("weekly_quota_exhausted")
+
+    text = collect_metrics()
+    assert "krab_codex_idle_skip_total" in text
+    assert 'reason="weekly_quota_exhausted"' in text
+
+
+def test_idle_skip_codex_wired_from_cli_helper():
+    """_log_codex_idle_skip из cli_subprocess_bypass инкрементит counter."""
+    from src.core.metrics.idle_skip import _CODEX_IDLE_SKIP_COUNTER
+    from src.integrations.cli_subprocess_bypass import (
+        _codex_idle_last_log_ts,
+        _log_codex_idle_skip,
+    )
+
+    _CODEX_IDLE_SKIP_COUNTER.clear()
+    _codex_idle_last_log_ts.clear()  # сбросить rate-limit
+    _log_codex_idle_skip("subprocess_unavailable", model="gpt-5-codex")
+
+    assert _CODEX_IDLE_SKIP_COUNTER.get("subprocess_unavailable", 0) == 1

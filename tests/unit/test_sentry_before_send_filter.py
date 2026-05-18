@@ -288,9 +288,7 @@ def test_pytest_filter_drops_xdist_worker_argv() -> None:
     """sys.argv == ['-c'] — xdist worker subprocess (`python -c '...'`)."""
     event = {
         "extra": {"sys.argv": ["-c"]},
-        "exception": {
-            "values": [{"type": "RuntimeError", "value": "anything"}]
-        },
+        "exception": {"values": [{"type": "RuntimeError", "value": "anything"}]},
     }
     assert _is_pytest_event(event) is True
     assert _before_send(event, {}) is None
@@ -348,9 +346,7 @@ def test_pytest_filter_passes_real_production_event() -> None:
             "method": "GET",
         },
         "extra": {"error_code": "real_production_bug"},
-        "exception": {
-            "values": [{"type": "ValueError", "value": "real bug"}]
-        },
+        "exception": {"values": [{"type": "ValueError", "value": "real bug"}]},
     }
     assert _is_pytest_event(event) is False
     # Передаётся дальше (не None)
@@ -361,9 +357,7 @@ def test_pytest_filter_unknown_argv_not_filtered() -> None:
     """sys.argv = ['python', 'manage.py', ...] — не pytest, не дропать."""
     event = {
         "extra": {"sys.argv": ["python", "manage.py", "runserver"]},
-        "exception": {
-            "values": [{"type": "RuntimeError", "value": "real bug"}]
-        },
+        "exception": {"values": [{"type": "RuntimeError", "value": "real bug"}]},
     }
     assert _is_pytest_event(event) is False
 
@@ -397,3 +391,79 @@ def test_before_send_drops_port_bind_in_message() -> None:
         "message": "uvicorn startup failed: [Errno 48] address already in use",
     }
     assert _before_send(event, {}) is None
+
+
+# ── S63 Wave 6: expand benign markers (transient http, asyncio cleanup) ─────
+
+
+def test_before_send_drops_server_disconnected_httpx() -> None:
+    """httpx 'Server disconnected without sending a response' — retry handles.
+
+    openclaw_client retry layer перехватывает (event
+    `openclaw_connect_error_retryable`). Не runtime-bug — request успешно
+    retry'ится на следующей попытке.
+    """
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "RemoteProtocolError",
+                    "value": "Server disconnected without sending a response.",
+                },
+            ]
+        }
+    }
+    assert _before_send(event, {}) is None
+
+
+def test_before_send_drops_broken_pipe_pyrogram_reconnect() -> None:
+    """BrokenPipeError при pyrogram reconnect — TCP socket close race.
+
+    Возникает между Session.restart() и нашим try/except. recovery автоматический
+    через "Retrying ... due to: Connection lost" в pyrogram.
+    """
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "BrokenPipeError",
+                    "value": "[Errno 32] Broken pipe",
+                },
+            ]
+        }
+    }
+    assert _before_send(event, {}) is None
+
+
+def test_before_send_drops_browser_bridge_cdp_probe_event() -> None:
+    """browser_bridge_raw_cdp_probe_failed — Chrome :9222 probe, штатное.
+
+    Если Chrome не запущен, probe возвращает ConnectionRefused. Используется
+    structured event name (не generic "Connect call failed") чтобы НЕ
+    маскировать другие connection refused errors.
+    """
+    event = {
+        "extra": {"error_code": "browser_bridge_raw_cdp_probe_failed"},
+        "message": "browser_bridge_raw_cdp_probe_failed",
+    }
+    assert _before_send(event, {}) is None
+
+
+def test_before_send_keeps_unrelated_connection_refused() -> None:
+    """Generic 'Connection refused' к prod-сервису должен проходить (не маскируем).
+
+    Защитный тест: убеждаемся что Wave 6 markers НЕ задевают real ConnectionRefused
+    к non-browser-bridge endpoint'ам.
+    """
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "ConnectionRefusedError",
+                    "value": ("[Errno 61] Connect call failed ('api.production.com', 443)"),
+                },
+            ]
+        }
+    }
+    # Должен пройти насквозь — production endpoint ConnectionRefused = real bug.
+    assert _before_send(event, {}) is event

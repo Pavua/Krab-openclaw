@@ -32,6 +32,7 @@ _EXPECTED_CATEGORIES = {
     "routing",
     "api_keys",
     "agent_gates",
+    "local_llm",  # S63 Wave 4 — verifier + local LLM toggles
 }
 
 
@@ -75,7 +76,7 @@ def test_env_metadata_tuple_shape() -> None:
 def test_category_order_matches_labels() -> None:
     """_CATEGORY_ORDER и _CATEGORY_LABELS синхронизированы."""
     assert set(ear._CATEGORY_ORDER) == set(ear._CATEGORY_LABELS.keys())
-    assert len(ear._CATEGORY_ORDER) == 8
+    assert len(ear._CATEGORY_ORDER) == 9
 
 
 # ── Secret detection ────────────────────────────────────────────────────────
@@ -142,7 +143,7 @@ def test_parse_dotenv_basic(tmp_path: Path) -> None:
     env_file.write_text(
         "# comment line\n"
         "KEY1=value1\n"
-        "KEY2=\"quoted value\"\n"
+        'KEY2="quoted value"\n'
         "KEY3='single quoted'\n"
         "\n"
         "# another comment\n"
@@ -288,3 +289,53 @@ def test_env_list_payload_has_var_record_fields() -> None:
         for rec in cat["vars"]:
             missing = required - set(rec.keys())
             assert not missing, f"var {rec.get('key')} missing: {missing}"
+
+
+# ── S63 Wave 4: Local LLM / Verifier surfacing ──────────────────────────────
+
+
+def test_local_llm_category_has_verifier_vars() -> None:
+    """S63 W4: категория local_llm регистрирует 5 verifier/local LLM toggles."""
+    keys_in_local_llm = {entry[0] for entry in ear._ENV_METADATA if entry[1] == "local_llm"}
+    expected = {
+        "KRAB_LOCAL_DRAFT_VERIFY_ENABLED",
+        "KRAB_LOCAL_DRAFT_VERIFY_SAMPLE_RATE",
+        "KRAB_LOCAL_PRIMARY_BYPASS_ENABLED",
+        "KRAB_LOCAL_VISION_ENABLED",
+        "KRAB_LOCAL_TRANSLATOR_ENABLED",
+    }
+    assert expected.issubset(keys_in_local_llm), (
+        f"Missing in local_llm: {expected - keys_in_local_llm}"
+    )
+
+
+def test_local_llm_category_marked_experimental_with_link() -> None:
+    """S63 W4: local_llm помечена experimental + содержит cross-link на stats."""
+    ear._invalidate_cache()
+    snap = ear._build_env_snapshot()
+    cat = snap["categories"]["local_llm"]
+    assert cat["experimental"] is True, "local_llm должна быть experimental opt-in"
+    assert cat.get("link_url") == "/api/admin/local-draft-verifier-stats"
+    assert "verifier" in (cat.get("link_label") or "").lower()
+    # Прочие категории — НЕ experimental.
+    non_exp = {k for k, v in snap["categories"].items() if not v["experimental"]}
+    assert "ai_models" in non_exp
+    assert "telegram" in non_exp
+
+
+def test_verify_enabled_reflects_env_value() -> None:
+    """S63 W4: KRAB_LOCAL_DRAFT_VERIFY_ENABLED=1 в env → set=True, value='1'."""
+    ear._invalidate_cache()
+    with patch.dict("os.environ", {"KRAB_LOCAL_DRAFT_VERIFY_ENABLED": "1"}, clear=False):
+        snap = ear._build_env_snapshot()
+    local_vars = snap["categories"]["local_llm"]["vars"]
+    rec = next(
+        (v for v in local_vars if v["key"] == "KRAB_LOCAL_DRAFT_VERIFY_ENABLED"),
+        None,
+    )
+    assert rec is not None, "KRAB_LOCAL_DRAFT_VERIFY_ENABLED missing from snapshot"
+    assert rec["set"] is True
+    assert rec["value"] == "1"
+    assert rec["secret"] is False
+    assert rec["masked"] is False
+    assert rec["default"] == "0"

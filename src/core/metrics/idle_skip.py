@@ -12,6 +12,9 @@
 - ``krab_verifier_samples_total{status}`` — S57 P3.1: local draft verifier
   события (``sampled`` / ``skipped_not_sampled`` / ``skipped_env_disabled``
   / ``skipped_empty_input``).
+- ``krab_codex_idle_skip_total{reason}`` — S62 W4: codex CLI subprocess
+  bypass idle skip (``weekly_quota_exhausted`` / ``disabled_via_env`` /
+  ``subprocess_unavailable``). Добавлено S63 W1.
 
 Pattern: ``pressure_aware.py`` (Wave 86) — prometheus_client optional,
 in-memory dict для render fallback в ``collect.py`` если client отсутствует
@@ -43,11 +46,17 @@ try:
         "S57 P3.1: local draft verifier sample events by status",
         ["status"],
     )
+    _codex_idle_skip_total = _CounterIS(
+        "krab_codex_idle_skip_total",
+        "S62 W4: codex CLI subprocess bypass idle skips by reason",
+        ["reason"],
+    )
 except Exception:  # noqa: BLE001 — prometheus_client optional
     _bypass_idle_skip_total = None  # type: ignore[assignment]
     _vision_idle_skip_total = None  # type: ignore[assignment]
     _translator_idle_skip_total = None  # type: ignore[assignment]
     _verifier_samples_total = None  # type: ignore[assignment]
+    _codex_idle_skip_total = None  # type: ignore[assignment]
 
 
 # Сырой in-memory счётчик (text render fallback + тестовая инспекция).
@@ -55,6 +64,7 @@ _BYPASS_IDLE_SKIP_COUNTER: dict[str, int] = {}
 _VISION_IDLE_SKIP_COUNTER: dict[str, int] = {}
 _TRANSLATOR_IDLE_SKIP_COUNTER: dict[str, int] = {}
 _VERIFIER_SAMPLES_COUNTER: dict[str, int] = {}
+_CODEX_IDLE_SKIP_COUNTER: dict[str, int] = {}
 
 
 def _inc(
@@ -88,6 +98,15 @@ def inc_translator_idle_skip(reason: str) -> None:
     _inc(_TRANSLATOR_IDLE_SKIP_COUNTER, _translator_idle_skip_total, reason)
 
 
+def inc_codex_idle_skip(reason: str) -> None:
+    """S62 W4: фиксирует пропуск codex CLI subprocess bypass. Best-effort.
+
+    ``reason`` — одно из: ``weekly_quota_exhausted`` / ``disabled_via_env`` /
+    ``subprocess_unavailable``.
+    """
+    _inc(_CODEX_IDLE_SKIP_COUNTER, _codex_idle_skip_total, reason)
+
+
 def inc_verifier_sample(status: str) -> None:
     """S57 P3.1: фиксирует sample event верификатора. Best-effort.
 
@@ -105,14 +124,17 @@ def inc_verifier_sample(status: str) -> None:
 
 __all__ = [
     "_BYPASS_IDLE_SKIP_COUNTER",
+    "_CODEX_IDLE_SKIP_COUNTER",
     "_TRANSLATOR_IDLE_SKIP_COUNTER",
     "_VERIFIER_SAMPLES_COUNTER",
     "_VISION_IDLE_SKIP_COUNTER",
     "_bypass_idle_skip_total",
+    "_codex_idle_skip_total",
     "_translator_idle_skip_total",
     "_verifier_samples_total",
     "_vision_idle_skip_total",
     "inc_bypass_idle_skip",
+    "inc_codex_idle_skip",
     "inc_translator_idle_skip",
     "inc_verifier_sample",
     "inc_vision_idle_skip",

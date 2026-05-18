@@ -379,6 +379,29 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     #   (6 events / 12 days). benign_marker_added: port_bind.
     "[Errno 48] address already in use",
     "address already in use",
+    # S63 Wave 6 (18.05.2026): expand benign markers for transient http /
+    # asyncio cleanup races. Все подтверждены в production логах:
+    #
+    # 1. "Server disconnected without sending a response." — httpx transient,
+    #    openclaw_client retry layer уже обрабатывает (event
+    #    `openclaw_connect_error_retryable`). Не runtime-bug, retry успешен.
+    #    Source: openclaw_connect_error_retryable в логах (~22 events / 17 days).
+    "Server disconnected without sending a response",
+    # 2. BrokenPipeError [Errno 32] Broken pipe — pyrogram TCP socket race
+    #    во время close/reconnect cycle. "Close exception: BrokenPipeError"
+    #    логируется самим pyrogram, recovery автоматический через
+    #    "[1] Retrying ... due to: Connection lost". Не runtime-bug.
+    "BrokenPipeError",
+    "[Errno 32] Broken pipe",
+    # 3. "browser_bridge_raw_cdp_probe_failed" — Chrome CDP probe periodically
+    #    проверяет :9222; если Chrome не запущен → ConnectionRefusedError, что
+    #    штатное состояние (probe-then-skip pattern). Используем именно
+    #    structured event name, чтобы НЕ маскировать другие ConnectionRefused.
+    "browser_bridge_raw_cdp_probe_failed",
+    # 4. "openclaw_connect_error_retryable" — структурированный event указывает
+    #    на transient httpx error, который retry layer уже обработал.
+    #    Видим только если эскалирует на error level — но семантически retry-able.
+    "openclaw_connect_error_retryable",
 )
 
 

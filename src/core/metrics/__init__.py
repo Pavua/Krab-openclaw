@@ -29,17 +29,20 @@ from .google_bypass import (
     record_google_bypass_call,
 )
 
-# === idle_skip (S62 W6) ===
+# === idle_skip (S62 W6 + S63 W1 codex) ===
 from .idle_skip import (
     _BYPASS_IDLE_SKIP_COUNTER,
+    _CODEX_IDLE_SKIP_COUNTER,
     _TRANSLATOR_IDLE_SKIP_COUNTER,
     _VERIFIER_SAMPLES_COUNTER,
     _VISION_IDLE_SKIP_COUNTER,
     _bypass_idle_skip_total,
+    _codex_idle_skip_total,
     _translator_idle_skip_total,
     _verifier_samples_total,
     _vision_idle_skip_total,
     inc_bypass_idle_skip,
+    inc_codex_idle_skip,
     inc_translator_idle_skip,
     inc_verifier_sample,
     inc_vision_idle_skip,
@@ -304,16 +307,19 @@ __all__ = [
     "_MLX_LOCAL_ROUTING_COUNTER",
     "_mlx_local_routing_total",
     "inc_mlx_local_routing",
-    # idle_skip (S62 W6)
+    # idle_skip (S62 W6 + S63 W1 codex)
     "_BYPASS_IDLE_SKIP_COUNTER",
+    "_CODEX_IDLE_SKIP_COUNTER",
     "_TRANSLATOR_IDLE_SKIP_COUNTER",
     "_VERIFIER_SAMPLES_COUNTER",
     "_VISION_IDLE_SKIP_COUNTER",
     "_bypass_idle_skip_total",
+    "_codex_idle_skip_total",
     "_translator_idle_skip_total",
     "_verifier_samples_total",
     "_vision_idle_skip_total",
     "inc_bypass_idle_skip",
+    "inc_codex_idle_skip",
     "inc_translator_idle_skip",
     "inc_verifier_sample",
     "inc_vision_idle_skip",

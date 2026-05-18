@@ -296,6 +296,38 @@ _ENV_METADATA: list[tuple[str, str, str, str]] = [
         "Активна ли health-проверка agent-engine resolver.",
         "1",
     ),
+    # ── 9. Local LLM / Verifier (experimental opt-in, S57/S63) ─────────────
+    # Cross-link: stats dashboard /api/admin/local-draft-verifier-stats
+    (
+        "KRAB_LOCAL_DRAFT_VERIFY_ENABLED",
+        "local_llm",
+        "S57: локальный verifier draft-ответов (experimental opt-in, default OFF).",
+        "0",
+    ),
+    (
+        "KRAB_LOCAL_DRAFT_VERIFY_SAMPLE_RATE",
+        "local_llm",
+        "Доля сэмплируемых draft-ов (0.0–1.0).",
+        "0.2",
+    ),
+    (
+        "KRAB_LOCAL_PRIMARY_BYPASS_ENABLED",
+        "local_llm",
+        "S53 P4: bypass primary cloud в local MLX (experimental opt-in).",
+        "0",
+    ),
+    (
+        "KRAB_LOCAL_VISION_ENABLED",
+        "local_llm",
+        "Локальное vision (LM Studio Gemma) вместо cloud для медиа.",
+        "0",
+    ),
+    (
+        "KRAB_LOCAL_TRANSLATOR_ENABLED",
+        "local_llm",
+        "Локальный переводчик (LM Studio) вместо cloud Gemini.",
+        "0",
+    ),
 ]
 
 
@@ -309,6 +341,7 @@ _CATEGORY_LABELS: dict[str, tuple[str, str]] = {
     "routing": ("🚦", "Routing"),
     "api_keys": ("🔑", "API keys"),
     "agent_gates": ("🚪", "Agent gates"),
+    "local_llm": ("🧪", "Local LLM / Verifier (experimental)"),
 }
 
 # Порядок отображения категорий.
@@ -321,7 +354,19 @@ _CATEGORY_ORDER: list[str] = [
     "routing",
     "api_keys",
     "agent_gates",
+    "local_llm",
 ]
+
+# Категории, помеченные как experimental opt-in (UI badge).
+_EXPERIMENTAL_CATEGORIES: frozenset[str] = frozenset({"local_llm"})
+
+# Cross-link: dashboard URL для категории (отображается как кнопка).
+_CATEGORY_LINKS: dict[str, tuple[str, str]] = {
+    "local_llm": (
+        "/api/admin/local-draft-verifier-stats",
+        "verifier stats →",
+    ),
+}
 
 
 def _is_secret_name(name: str) -> bool:
@@ -397,7 +442,17 @@ def _build_env_snapshot() -> dict[str, Any]:
     categories: dict[str, dict[str, Any]] = {}
     for cat_key in _CATEGORY_ORDER:
         emoji, label = _CATEGORY_LABELS[cat_key]
-        categories[cat_key] = {"emoji": emoji, "label": label, "vars": []}
+        cat_entry: dict[str, Any] = {
+            "emoji": emoji,
+            "label": label,
+            "vars": [],
+            "experimental": cat_key in _EXPERIMENTAL_CATEGORIES,
+        }
+        link = _CATEGORY_LINKS.get(cat_key)
+        if link is not None:
+            cat_entry["link_url"] = link[0]
+            cat_entry["link_label"] = link[1]
+        categories[cat_key] = cat_entry
 
     set_count = 0
     secret_count = 0
@@ -589,6 +644,17 @@ _ENV_ADMIN_PAGE_HTML = """<!DOCTYPE html>
         }
         .badge.secret { background: rgba(244,114,182,0.12); color: var(--secret); }
         .badge.unset { background: rgba(136,136,136,0.12); color: var(--text-muted); }
+        .badge.experimental {
+            background: rgba(250,204,21,0.14); color: var(--warn);
+            font-size: 0.7rem; margin-left: 10px;
+        }
+        a.cat-link {
+            margin-left: auto; color: var(--accent);
+            text-decoration: none; font-size: 0.78rem;
+            border: 1px solid var(--border); padding: 2px 8px;
+            border-radius: 3px;
+        }
+        a.cat-link:hover { border-color: var(--accent); }
         .copy-btn {
             background: transparent; border: 1px solid var(--border);
             color: var(--text-muted); cursor: pointer;
@@ -711,6 +777,19 @@ _ENV_ADMIN_PAGE_HTML = """<!DOCTYPE html>
             h2.appendChild(mkText('span',
                 '(' + cnt + ' var' + (cnt !== 1 ? 's' : '') + ')',
                 'cat-count'));
+            if (catData.experimental) {
+                h2.appendChild(mkText('span', 'EXPERIMENTAL OPT-IN',
+                    'badge experimental'));
+            }
+            if (catData.link_url) {
+                const a = document.createElement('a');
+                a.className = 'cat-link';
+                a.href = catData.link_url;
+                a.target = '_blank';
+                a.rel = 'noopener';
+                a.textContent = catData.link_label || catData.link_url;
+                h2.appendChild(a);
+            }
             wrap.appendChild(h2);
 
             const table = document.createElement('table');
