@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        S62 Wave 1: Krab workspace garbage collector (LaunchAgent)
+
+        Daily 04:00 — после ai.krab.db-backup-daily (02:00) и
+        ai.krab.backup-retention (03:00), чтобы не мешать резервным копиям.
+
+        Подметает:
+          - stale git worktrees в .claude/worktrees/ (старше N дней,
+            merged/без активной сессии)
+          - zombie claude sessions
+          - временные файлы / директории сборки
+
+        Скрипт: scripts/krab_workspace_gc.py --execute
+
+        Install:
+          launchctl bootstrap gui/501 \
+            /Users/pablito/Antigravity_AGENTS/Краб/scripts/launchagents/ai.krab.workspace-gc.plist
+    -->
+    <key>Label</key>
+    <string>ai.krab.workspace-gc</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python</string>
+        <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/krab_workspace_gc.py</string>
+        <string>--execute</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/krab-workspace-gc.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/krab-workspace-gc.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/pablito</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
