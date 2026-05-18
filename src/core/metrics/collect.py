@@ -607,6 +607,23 @@ def collect_metrics() -> str:
     except Exception:  # noqa: BLE001
         pass
 
+    # === S69 W4: dispatcher_groups_barrier outcomes (S68 W1) ===
+    try:
+        from .dispatcher_barrier import _DISPATCHER_BARRIER_COUNTER
+
+        if _DISPATCHER_BARRIER_COUNTER:
+            lines.append(
+                "# HELP krab_dispatcher_groups_barrier_total "
+                "S69 W4: outcome of S68 W1 dispatcher add_handler barrier"
+            )
+            lines.append("# TYPE krab_dispatcher_groups_barrier_total counter")
+            for outcome, cnt in _DISPATCHER_BARRIER_COUNTER.items():
+                lines.append(
+                    f'krab_dispatcher_groups_barrier_total{{outcome="{_sanitize_label(outcome)}"}} {cnt}'
+                )
+    except Exception:  # noqa: BLE001
+        pass
+
     # === Wave 223: long-context routing decisions (MLX local) ===
     try:
         from .long_context_routing import _MLX_LOCAL_ROUTING_COUNTER

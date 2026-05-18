@@ -500,6 +500,15 @@ class SessionMixin:
                                 min_required=min_handlers,
                                 elapsed_ms=int(elapsed * 1000),
                             )
+                            # S69 W4: prometheus counter (best-effort, lazy import)
+                            try:
+                                from src.core.metrics.dispatcher_barrier import (
+                                    inc_dispatcher_barrier,
+                                )
+
+                                inc_dispatcher_barrier("passed")
+                            except Exception:  # noqa: BLE001
+                                pass
                             break
                 except Exception:  # noqa: BLE001
                     pass
@@ -513,6 +522,15 @@ class SessionMixin:
                     elapsed_ms=int(elapsed * 1000),
                     message="add_handler fire-and-forget tasks not drained — pyrogram race",
                 )
+                # S69 W4: prometheus counter (best-effort, lazy import)
+                try:
+                    from src.core.metrics.dispatcher_barrier import (
+                        inc_dispatcher_barrier,
+                    )
+
+                    inc_dispatcher_barrier("timeout")
+                except Exception:  # noqa: BLE001
+                    pass
 
             await self.client.start()
 

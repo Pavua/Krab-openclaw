@@ -48,6 +48,12 @@ Pattern: "outcomes, not heartbeats" (Wave 63 series).
   `-1`=off. Tracks `KRAB_BLOCK_PAID_GEMINI_AI_STUDIO`.
 - `krab_pyrogram_disconnects_total{session}` — Wave 142. Count of
   `Connection.close` events per session label.
+- `krab_dispatcher_groups_barrier_total{outcome}` — S69 W4. Outcome of
+  S68 W1 `add_handler` barrier в `_start_client_serialized`:
+  `outcome="passed"` — handlers drained до `client.start()`;
+  `outcome="timeout"` — barrier hit `KRAB_HANDLER_BARRIER_TIMEOUT_SEC`,
+  прошли с degraded state (pyrogram fire-and-forget race). Alert on
+  sustained `rate(timeout) > 0`.
 - `krab_session_corruption_total{kind}` — DB-corruption events that
   triggered quarantine (`malformed_disk_image`, `wal_drop`, etc.).
 

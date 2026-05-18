@@ -810,3 +810,65 @@ def test_handler_tick_age_gauge_set_via_helper():
 
     # Cleanup чтобы не утекать ref в следующие тесты.
     register_userbot_for_metrics(None)
+
+
+# ---------------------------------------------------------------------------
+# S69 W4: dispatcher_groups_barrier_total counter (S68 W1 wiring)
+# ---------------------------------------------------------------------------
+
+
+def test_dispatcher_barrier_counter_increments():
+    """inc_dispatcher_barrier обновляет in-memory counter per outcome."""
+    from src.core.metrics.dispatcher_barrier import (
+        _DISPATCHER_BARRIER_COUNTER,
+        inc_dispatcher_barrier,
+    )
+
+    _DISPATCHER_BARRIER_COUNTER.clear()
+    inc_dispatcher_barrier("passed")
+    inc_dispatcher_barrier("passed")
+    inc_dispatcher_barrier("timeout")
+
+    assert _DISPATCHER_BARRIER_COUNTER["passed"] == 2
+    assert _DISPATCHER_BARRIER_COUNTER["timeout"] == 1
+
+
+def test_dispatcher_barrier_counter_appears_in_metrics_output():
+    """После inc_dispatcher_barrier счётчик попадает в Prometheus text."""
+    from src.core.metrics.dispatcher_barrier import (
+        _DISPATCHER_BARRIER_COUNTER,
+        inc_dispatcher_barrier,
+    )
+    from src.core.prometheus_metrics import collect_metrics
+
+    _DISPATCHER_BARRIER_COUNTER.clear()
+    inc_dispatcher_barrier("passed")
+    inc_dispatcher_barrier("timeout")
+
+    text = collect_metrics()
+    assert "krab_dispatcher_groups_barrier_total" in text
+    assert "# TYPE krab_dispatcher_groups_barrier_total counter" in text
+    assert 'outcome="passed"' in text
+    assert 'outcome="timeout"' in text
+
+
+def test_dispatcher_barrier_counter_absent_when_empty():
+    """Если ни один inc не вызывался — метрика не появляется."""
+    from src.core.metrics.dispatcher_barrier import _DISPATCHER_BARRIER_COUNTER
+    from src.core.prometheus_metrics import collect_metrics
+
+    _DISPATCHER_BARRIER_COUNTER.clear()
+    text = collect_metrics()
+    assert "krab_dispatcher_groups_barrier_total" not in text
+
+
+def test_dispatcher_barrier_handles_empty_outcome():
+    """Empty outcome → нормализуется до 'unknown', не падает."""
+    from src.core.metrics.dispatcher_barrier import (
+        _DISPATCHER_BARRIER_COUNTER,
+        inc_dispatcher_barrier,
+    )
+
+    _DISPATCHER_BARRIER_COUNTER.clear()
+    inc_dispatcher_barrier("")
+    assert _DISPATCHER_BARRIER_COUNTER.get("unknown", 0) == 1

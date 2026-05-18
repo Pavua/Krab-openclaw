@@ -21,6 +21,13 @@ from .collect import (
     collect_metrics,
 )
 
+# === dispatcher_barrier (S69 W4) ===
+from .dispatcher_barrier import (
+    _DISPATCHER_BARRIER_COUNTER,
+    _dispatcher_groups_barrier_total,
+    inc_dispatcher_barrier,
+)
+
 # === google_bypass (Wave 20-B) ===
 from .google_bypass import (
     krab_google_direct_bypass_latency_seconds,
@@ -71,6 +78,16 @@ from .mlx_local_aliases import (
     _MLX_LOCAL_ALIAS_COUNTER,
     _mlx_local_alias_resolved_total,
     inc_mlx_local_alias_resolved,
+)
+
+# === model_latency (S69 Wave 6) ===
+from .model_latency import (
+    get_percentiles,
+    krab_model_latency_p50_seconds,
+    krab_model_latency_p95_seconds,
+    krab_model_latency_p99_seconds,
+    record_latency,
+    record_latency_seconds,
 )
 
 # === nlu_intent (Wave 135) ===
@@ -258,6 +275,13 @@ __all__ = [
     "krab_google_direct_bypass_thoughts_tokens",
     "krab_google_direct_bypass_total",
     "record_google_bypass_call",
+    # model_latency (S69 W6)
+    "get_percentiles",
+    "krab_model_latency_p50_seconds",
+    "krab_model_latency_p95_seconds",
+    "krab_model_latency_p99_seconds",
+    "record_latency",
+    "record_latency_seconds",
     # memory
     "_memory_retrieval_duration_seconds",
     "_memory_retrieval_latency_seconds",
@@ -311,6 +335,10 @@ __all__ = [
     "_MLX_LOCAL_ROUTING_COUNTER",
     "_mlx_local_routing_total",
     "inc_mlx_local_routing",
+    # dispatcher_barrier (S69 W4)
+    "_DISPATCHER_BARRIER_COUNTER",
+    "_dispatcher_groups_barrier_total",
+    "inc_dispatcher_barrier",
     # idle_skip (S62 W6 + S63 W1 codex)
     "_BYPASS_IDLE_SKIP_COUNTER",
     "_CODEX_IDLE_SKIP_COUNTER",
