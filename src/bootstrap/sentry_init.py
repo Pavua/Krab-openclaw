@@ -372,6 +372,13 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     #   Sentry issues PYTHON-FASTAPI-8B/8C.
     "memory_indexer_db_error",
     "lm_studio_load_failed",
+    # S62 Wave 5: port-bind race во время Stop→Start sequence. Owner panel
+    #   на 127.0.0.1:8080 ловит [Errno 48] address already in use если предыдущий
+    #   процесс ещё держит сокет в TIME_WAIT. Recovery автоматическая (retry
+    #   loop в boot path), не runtime-bug. Sentry issue PYTHON-FASTAPI-7W
+    #   (6 events / 12 days). benign_marker_added: port_bind.
+    "[Errno 48] address already in use",
+    "address already in use",
 )
 
 

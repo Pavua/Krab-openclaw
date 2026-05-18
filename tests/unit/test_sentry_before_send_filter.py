@@ -366,3 +366,34 @@ def test_pytest_filter_unknown_argv_not_filtered() -> None:
         },
     }
     assert _is_pytest_event(event) is False
+
+
+# ── S62 Wave 5: port-bind benign filter (PYTHON-FASTAPI-7W) ─────────────────
+
+
+def test_before_send_drops_port_bind_in_exception_value() -> None:
+    """OSError 'address already in use' на :8080 — cosmetic, recovery automatic.
+
+    Sentry issue PYTHON-FASTAPI-7W: 6 events за 12 days во время Stop→Start race
+    когда предыдущий процесс держит сокет :8080 в TIME_WAIT. Boot retry loop
+    разрешает сам — не runtime-bug.
+    """
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "OSError",
+                    "value": "[Errno 48] address already in use",
+                },
+            ]
+        }
+    }
+    assert _before_send(event, {}) is None
+
+
+def test_before_send_drops_port_bind_in_message() -> None:
+    """logger.error("...address already in use...") — также дропается."""
+    event = {
+        "message": "uvicorn startup failed: [Errno 48] address already in use",
+    }
+    assert _before_send(event, {}) is None
