@@ -242,6 +242,17 @@ Runtime truth: `~/.openclaw/agents/main/agent/models.json`
 - LM Studio local — автоматический fallback при cloud-failure
 - Google direct SDK bypass: `KRAB_GOOGLE_DIRECT_BYPASS_ENABLED=1` (default ON, Wave 18-B)
 
+## Phase 2 translator (local LM Studio, S54)
+
+Локальный перевод через LM Studio Gemma 4 — нулевая стоимость RAM (модель уже загружена под Phase 1 vision, single 15.64 GiB).
+
+- Code: `src/core/translator_engine.py:74-149` (`_translate_via_lmstudio`)
+- ENV:
+  - `KRAB_LOCAL_TRANSLATOR_ENABLED=1` — master gate (default OFF)
+  - `KRAB_LOCAL_TRANSLATOR_MODEL` — модель (fallback на `KRAB_LOCAL_VISION_MODEL` = `gemma-4-26b-a4b-it@4bit`)
+  - `KRAB_LOCAL_VISION_URL=http://127.0.0.1:1234` — общий endpoint LM Studio
+- Verified в production S54: EN→RU + ES→RU sync tests passed
+
 ## Свёрм (Multi-Agent)
 
 Команды в Telegram: `!swarm <team> <topic>`, `!swarm teams`, `!swarm schedule`, `!swarm memory`
@@ -297,6 +308,19 @@ GEMINI_PAID_KEY_ENABLED=0              # safety belt (Wave 66-B)
 KRAB_VERTEX_PROJECT=caramel-anvil-492816-t5  # bonus credits project
 KRAB_VERTEX_REGION=global              # Vertex location
 ```
+
+## Idiosyncrasies
+
+### Session swap: `kraab.session` авторизован как Yung Nagato (не Pavel)
+
+`data/sessions/kraab.session` — `me = yung_nagato (id=6435872621)`, **НЕ** Pavel (`312322764`).
+Это **by design** — Yung Nagato и есть основная userbot-идентичность Краба
+(см. MEMORY.md `krab_swarm_listeners`, session 5: «Yung Nagato твой Krab-бот для
+публичных дискуссий по LLM»).
+
+- Pavel / `p0lrd` (id `312322764`) — owner, проверяется через `is_owner_user_id()`
+- Все сообщения уходят **FROM Yung Nagato**; ACL checks owner через `from_user.id == 312322764`
+- Не «фиксить» этот session swap — он намеренный
 
 ## Правила
 
