@@ -178,6 +178,15 @@ _DISPATCHER_RECOVERY_MIN_INTERVAL_SEC: float = float(
     os.environ.get("KRAB_DISPATCHER_RECOVERY_MIN_INTERVAL_SEC", "600")
 )
 
+# S64 W3: tunable escalation threshold for fake-success → launchd respawn.
+# Default 2: first fake может быть quiet chat, second подряд = dispatcher dead.
+# Operator может tune via env (1 = aggressive single-fake respawn, ≥3 = lenient).
+# При fake_count = threshold-1 шлём pre-respawn alert владельцу с context, чтобы
+# дать шанс на ручное вмешательство до автоматического respawn.
+_DISPATCHER_FAKE_ESCALATION_THRESHOLD: int = int(
+    os.environ.get("KRAB_DISPATCHER_FAKE_ESCALATION_THRESHOLD", "2")
+)
+
 
 def _client_last_update_age_sec(owner: object, now: float) -> float | None:
     """Session 53 P3.6 hotfix3 (gold finding via subagent 2026-05-17):
@@ -269,7 +278,7 @@ def _check_dispatcher_starved(
     return (current - float(last_ts)) >= conservative_threshold
 
 
-def _launchd_exit_78() -> None:
+def _launchd_exit_78(reason: str = "dispatcher_starved_escalation") -> None:
     """Trigger launchd-respawn через `os._exit(78)` (EX_CONFIG).
 
     Session 39: вынесено в helper чтобы добавить test-process guard. Если
@@ -277,7 +286,18 @@ def _launchd_exit_78() -> None:
     pytest перед каждым тестом) — НЕ убиваем интерпретатор, а raise'аем
     SystemExit. Это позволяет xdist worker корректно завершиться, а
     тесты — assert'ить что watchdog хотел escalation.
+
+    S64 W4: записываем `record_exit_intent` ДО фактического exit, чтобы
+    следующий startup мог установить cause `previous_exit_via_launchd_exit_78`.
     """
+    # S64 W4: record intent before dying. fail-open inside record_exit_intent.
+    try:
+        from ..core.restart_cause import record_exit_intent
+
+        record_exit_intent(reason, exit_code=78)
+    except Exception:  # noqa: BLE001 — мы и так умираем, не блокируем
+        pass
+
     if os.environ.get("PYTEST_CURRENT_TEST"):
         # pytest-xdist worker умирает при os._exit → "node down" + hang.
         # SystemExit ловится в caller (или в pytest framework) и тест
@@ -789,14 +809,45 @@ class NetworkWatchdogMixin:
                 # Escalate after N=2 fake successes (Wave 44-C pattern).
                 # First fake — может быть просто тихий чат. Second подряд —
                 # высокая вероятность что dispatcher truly dead.
-                _fake_escalation_threshold = int(
-                    os.environ.get("KRAB_DISPATCHER_FAKE_ESCALATION_THRESHOLD", "2")
-                )
+                # S64 W3: использует module-level constant (env-tunable).
+                _fake_escalation_threshold = _DISPATCHER_FAKE_ESCALATION_THRESHOLD
+
+                # S64 W3: pre-respawn alert — при fake_count = threshold-1
+                # шлём owner-у предупреждение с контекстом перед auto-respawn,
+                # чтобы дать шанс на ручное вмешательство.
+                if (
+                    _fake_escalation_threshold >= 2
+                    and fake_success_count == _fake_escalation_threshold - 1
+                ):
+                    try:
+                        last_tick_age = round(
+                            time.time()
+                            - float(
+                                getattr(self, "_last_dispatcher_tick_ts", time.time())
+                                or time.time()
+                            ),
+                            1,
+                        )
+                        pre_msg = (
+                            "⚠️ **Krab: pre-respawn warning** — "
+                            f"dispatcher fake_success={fake_success_count} "
+                            f"(threshold={_fake_escalation_threshold}).\n"
+                            f"• baseline_tick={baseline_tick}, "
+                            f"after_tick={after_tick}\n"
+                            f"• last_tick_age={last_tick_age}s\n"
+                            f"• tick_count={getattr(self, '_dispatcher_tick_count', 0)}\n"
+                            "→ Ещё один fake — launchd respawn (S64 W3)."
+                        )
+                        await self._send_proactive_watch_alert(pre_msg)
+                    except Exception:  # noqa: BLE001
+                        pass
+
                 if fake_success_count >= _fake_escalation_threshold:
                     logger.error(
                         "dispatcher_starved_escalation_via_launchd",
                         action="process_exit_for_launchd_respawn",
                         fake_success_count=fake_success_count,
+                        threshold=_fake_escalation_threshold,
                     )
                     try:
                         await self._send_proactive_watch_alert(
@@ -1205,11 +1256,7 @@ class NetworkWatchdogMixin:
                     # probe.server_pts_delta=0). Теперь detection работает на
                     # `probe.alive AND starved`, server_pts_delta лог-only для
                     # ops понимания.
-                    if (
-                        probe is not None
-                        and probe.alive
-                        and _check_dispatcher_starved(self)
-                    ):
+                    if probe is not None and probe.alive and _check_dispatcher_starved(self):
                         last_tick_ts = getattr(self, "_last_dispatcher_tick_ts", 0.0)
                         logger.warning(
                             "dispatcher_starved_detected",
