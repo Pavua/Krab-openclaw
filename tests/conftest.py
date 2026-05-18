@@ -490,3 +490,58 @@ def _cancel_leftover_asyncio_tasks() -> Iterator[None]:
             loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         except Exception:  # noqa: BLE001
             pass
+
+
+# ---------------------------------------------------------------------------
+# S61 Wave 3: defense-in-depth reset of lazy-init module-level singletons.
+#
+# Audit S58/59 выявил 14+ lazy-init синглтонов в src/core, которые могут
+# протекать между тестами (мутируемые module-level globals, инициализируются
+# при первом вызове). Превентивно сбрасываем их в None после каждого теста,
+# чтобы следующий тест получил чистый lazy state.
+#
+# Все операции wrap'нуты в try/except — никогда не ломаем тест из-за
+# отсутствующего модуля/атрибута.
+# ---------------------------------------------------------------------------
+_LAZY_RESETS: list[tuple[str, str]] = [
+    ("src.core.feedback_tracker", "_default_tracker"),
+    ("src.core.chat_response_policy", "_singleton"),
+    ("src.core.llm_intent_classifier", "_default_classifier"),
+    ("src.core.audio_summarizer", "_default_summarizer"),
+    ("src.core.agent_action_rate_limiter", "_singleton"),
+    ("src.core.memory_adapter", "_retriever_singleton"),
+    ("src.core.memory_indexer_worker", "_worker_singleton"),
+    ("src.core.memory_embeddings", "_MODEL"),
+    ("src.core.self_correction", "_singleton"),
+    ("src.core.swarm_research_pipeline", "_default_pipeline"),
+    ("src.core.user_reaction_memory", "_singleton"),
+    ("src.core.voice_message_dispatcher", "_default_dispatcher"),
+    ("src.core.lm_studio_idle_watcher", "_watcher"),
+    ("src.core.lm_studio_registry_probe", "_probe"),
+    ("src.core.krab_identity", "_krab_user_id"),
+    ("src.modules.owner_panel_error_tracker", "_DEFAULT_LOGGER"),
+]
+
+
+@pytest.fixture(autouse=True)
+def _reset_lazy_singletons_for_test() -> Iterator[None]:
+    """
+    S61 Wave 3: defense-in-depth — после каждого теста сбрасываем
+    module-level lazy-init синглтоны в None.
+
+    Pre-test: ничего не делаем (текущее состояние может быть валидным).
+    Post-test: для каждого (mod_path, attr) импортируем модуль и
+    устанавливаем атрибут в None. Любая ошибка проглатывается — изоляция
+    не должна ломать тесты.
+    """
+    import importlib
+
+    yield
+    for mod_path, attr_name in _LAZY_RESETS:
+        try:
+            mod = importlib.import_module(mod_path)
+            setattr(mod, attr_name, None)
+        except Exception:  # noqa: BLE001
+            # Модуль может отсутствовать или не иметь атрибута —
+            # это нормально, defense-in-depth не должен ломать тесты.
+            pass
