@@ -467,3 +467,58 @@ def test_before_send_keeps_unrelated_connection_refused() -> None:
     }
     # Должен пройти насквозь — production endpoint ConnectionRefused = real bug.
     assert _before_send(event, {}) is event
+
+
+# ── S69 Wave 9: audit-driven expand v3 ──────────────────────────────────────
+
+
+def test_before_send_drops_dispatcher_recovery_skipped_throttled() -> None:
+    """dispatcher_starved_recovery_skipped — throttle gate by-design.
+
+    network_watchdog откладывает recovery если elapsed < min_interval_sec.
+    reason=throttled — ожидаемое поведение, не runtime-bug.
+    """
+    event = {
+        "extra": {"error_code": "dispatcher_starved_recovery_skipped"},
+        "message": "dispatcher_starved_recovery_skipped",
+    }
+    assert _before_send(event, {}) is None
+
+
+def test_before_send_drops_dispatcher_recovery_fake_success_via_message() -> None:
+    """dispatcher_starved_recovery_fake_success — S53 P3.6 hotfix2 informational.
+
+    Reconnect вернул success но tick не advance'нулся — detection event,
+    escalation отдельным маркером (dispatcher_starved_escalation_via_launchd).
+    """
+    event = {
+        "message": "dispatcher_starved_recovery_fake_success after_tick=16 baseline_tick=16",
+    }
+    assert _before_send(event, {}) is None
+
+
+def test_before_send_drops_pyrofork_reconnect_stop_failed() -> None:
+    """pyrofork_reconnect_stop_failed — best-effort stop при reconnect.
+
+    S65 Wave 1: предыдущая сессия могла быть уже disconnected.
+    Логируется для трассировки, recovery продолжается нормально.
+    """
+    event = {
+        "extra": {"error_code": "pyrofork_reconnect_stop_failed"},
+        "message": "pyrofork_reconnect_stop_failed",
+    }
+    assert _before_send(event, {}) is None
+
+
+def test_before_send_keeps_dispatcher_escalation_via_launchd() -> None:
+    """Защитный тест: escalation_via_launchd (НЕ benign) должен проходить.
+
+    После 2-х fake_success срабатывает real escalation — этот event
+    intentional logger.error для LaunchAgent respawn, и он должен оставаться
+    видимым в Sentry для трассировки silent-death инцидентов.
+    """
+    event = {
+        "message": "dispatcher_starved_escalation_via_launchd action=process_exit_for_launchd_respawn",
+    }
+    # Должен пройти — это marker реальной эскалации (хотя by-design)
+    assert _before_send(event, {}) is event

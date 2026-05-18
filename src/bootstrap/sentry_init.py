@@ -402,6 +402,28 @@ _BENIGN_ERROR_MARKERS: tuple[str, ...] = (
     #    на transient httpx error, который retry layer уже обработал.
     #    Видим только если эскалирует на error level — но семантически retry-able.
     "openclaw_connect_error_retryable",
+    # S69 Wave 9 (18.05.2026): audit-driven expand v3 — silent-death recovery
+    # noise. Все три маркера — structured events из network_watchdog /
+    # pyrofork-reconnect path, добавленные в S53 P3.6 hotfix series. Каждый
+    # event указывает на ожидаемое поведение auto-recovery, не runtime-bug.
+    #
+    # 5. "dispatcher_starved_recovery_skipped" — throttle gate в
+    #    network_watchdog: попытки recovery throttled до min_interval_sec
+    #    (default 600s) чтобы не зациклить reconnect. reason=throttled —
+    #    by-design, верхний detector переотправит alert когда window истечёт.
+    "dispatcher_starved_recovery_skipped",
+    # 6. "dispatcher_starved_recovery_fake_success" — S53 P3.6 hotfix2
+    #    detection event: dispatcher_recovery вернул success но tick не
+    #    advance'нулся (split-brain после reconnect). Это informational
+    #    маркер для escalation pipeline — после 2-х fake_success срабатывает
+    #    "dispatcher_starved_escalation_via_launchd" (тот — НЕ benign,
+    #    остаётся видимым в Sentry).
+    "dispatcher_starved_recovery_fake_success",
+    # 7. "pyrofork_reconnect_stop_failed" — S65 Wave 1 best-effort stop:
+    #    при reconnect клиент пытается stop предыдущую сессию; если она уже
+    #    disconnected, raises exception. Логируем для трассировки, но это
+    #    ожидаемый race (тогда reconnect просто продолжается).
+    "pyrofork_reconnect_stop_failed",
 )
 
 
