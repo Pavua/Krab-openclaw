@@ -510,7 +510,7 @@ Empirical rule: sonnet — 200-300 word с TDD; haiku — < 100 word.
 ### Session 38 highlights (05.05.2026 — Waves 23-A/B/C, 24-A/B/C/D/E, 25-A/B/D/E/F, 26-A/B, 27-A, 28-A)
 - Vertex AI direct bypass (Gemini 8 моделей в global, Anthropic Claude pending quota)
 - CLI subprocess bypass для codex-cli/* + google-gemini-cli/* (Wave 22-A finally working после exec fix)
-- Multi-account codex rotation (~/.codex_accounts/)
+- Multi-account codex rotation (~/.codex_accounts/) — currently только `primary` symlink → `~/.codex` активен. Placeholders `account2/`, `account3/` удалены S62 W3 (были empty с 5.05). Добавление аккаунта: `mkdir ~/.codex_accounts/<name> && CODEX_HOME=~/.codex_accounts/<name> codex login` → `list_accounts()` подхватит автоматически (см. `src/integrations/codex_account_rotator.py`)
 - Graceful shutdown 15s grace + post-doctor primary reapply
 - OAuth auto-resync daemon + Krab Ear coexistence monitor LaunchAgents
 - `!quota` Telegram command + reconciled_state `/api/model/status`
