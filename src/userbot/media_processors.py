@@ -382,25 +382,59 @@ class MediaProcessorsMixin:
         timeout_sec = float(getattr(config, "VIDEO_FRAME_DESCRIBE_TIMEOUT_SEC", 25.0))
 
         # Session 52: local vision routing (default off → safe roll-out)
-        if os.getenv("KRAB_LOCAL_VISION_ENABLED", "0") == "1":
-            result = await self._describe_frame_via_lmstudio(
-                b64,
-                idx,
-                chat_id=chat_id,
-                timeout_sec=max(5.0, timeout_sec),
-            )
-            if result:
-                logger.info(
-                    "frame_describe_local_success",
-                    idx=idx,
-                    char_count=len(result),
-                )
-                return result
-            # Empty — log + fall through to cloud (resilience)
+        local_vision_enabled = os.getenv("KRAB_LOCAL_VISION_ENABLED", "0") == "1"
+
+        # S56 C: idle observability — mirror S55 D pattern. Когда env=1, но
+        # local path всё-таки не сработал (cloud routing won, либо local
+        # failed → cloud fallback) — rate-limited log раз в минуту на
+        # каждую причину. Помогает owner'у видеть что Phase 1 vision armed
+        # но spinning idle.
+        now_ts = time.time()
+        last_idle_log_ts = getattr(self, "_vision_idle_last_log_ts", {})
+        idle_log_interval_sec = float(os.getenv("KRAB_VISION_IDLE_LOG_INTERVAL_SEC", "60"))
+
+        def _log_idle_skip(reason: str) -> None:
+            """Rate-limited idle log: once per `idle_log_interval_sec` per reason."""
+            last = last_idle_log_ts.get(reason, 0.0)
+            if now_ts - last < idle_log_interval_sec:
+                return
+            last_idle_log_ts[reason] = now_ts
+            self._vision_idle_last_log_ts = last_idle_log_ts  # type: ignore[attr-defined]
             logger.info(
-                "frame_describe_local_empty_fallthrough",
+                "frame_describe_local_idle_skip",
+                reason=reason,
                 idx=idx,
+                interval_sec=idle_log_interval_sec,
             )
+
+        if local_vision_enabled:
+            # S56 C: host-level opt-out hook — если host класс установил
+            # _vision_force_cloud=True (e.g. preview/test context, large
+            # frame, или future routing decision), пропускаем local path
+            # с rate-limited логом.
+            if getattr(self, "_vision_force_cloud", False):
+                _log_idle_skip("cloud_route_preferred")
+            else:
+                result = await self._describe_frame_via_lmstudio(
+                    b64,
+                    idx,
+                    chat_id=chat_id,
+                    timeout_sec=max(5.0, timeout_sec),
+                )
+                if result:
+                    logger.info(
+                        "frame_describe_local_success",
+                        idx=idx,
+                        char_count=len(result),
+                    )
+                    return result
+                # Empty — log + fall through to cloud (resilience)
+                logger.info(
+                    "frame_describe_local_empty_fallthrough",
+                    idx=idx,
+                )
+                # S56 C: local attempted but returned empty → cloud fallback
+                _log_idle_skip("local_failed_fallback")
 
         # Cloud path (existing, used when local disabled либо local empty)
         prompt = (

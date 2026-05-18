@@ -315,3 +315,154 @@ async def test_describe_video_frame_b64_failure(
         result = await host._describe_video_frame(b"\xff\xd8fake", idx=0, chat_id="-100")
 
     assert result == ""
+
+
+# ── S56 C: idle observability (frame_describe_local_idle_skip) ──────────────
+
+
+@pytest.mark.asyncio
+async def test_s56c_idle_skip_logs_local_failed_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """env=1, local empty → frame_describe_local_idle_skip(reason=local_failed_fallback)."""
+    monkeypatch.setenv("KRAB_LOCAL_VISION_ENABLED", "1")
+    monkeypatch.setenv("KRAB_VISION_IDLE_LOG_INTERVAL_SEC", "60")
+    host = _Host()
+
+    host._describe_frame_via_lmstudio = AsyncMock(return_value="")  # type: ignore[method-assign]
+
+    async def _fake_stream(*args, **kwargs):
+        yield "cloud"
+
+    captured: list[dict[str, Any]] = []
+
+    def _capture(event: str, **kwargs: Any) -> None:
+        captured.append({"event": event, **kwargs})
+
+    fake_logger = MagicMock()
+    fake_logger.info = _capture
+    fake_logger.warning = MagicMock()
+
+    with (
+        patch("src.userbot.media_processors.openclaw_client.send_message_stream", _fake_stream),
+        patch("src.userbot.media_processors.logger", fake_logger),
+    ):
+        await host._describe_video_frame(b"\xff\xd8fake", idx=3, chat_id="-100")
+
+    idle_events = [c for c in captured if c["event"] == "frame_describe_local_idle_skip"]
+    assert len(idle_events) == 1
+    assert idle_events[0]["reason"] == "local_failed_fallback"
+    assert idle_events[0]["idx"] == 3
+    assert idle_events[0]["interval_sec"] == 60.0
+    # State persisted on host
+    assert "local_failed_fallback" in host._vision_idle_last_log_ts
+
+
+@pytest.mark.asyncio
+async def test_s56c_idle_skip_logs_cloud_route_preferred(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """env=1, _vision_force_cloud=True → reason=cloud_route_preferred, NO local call."""
+    monkeypatch.setenv("KRAB_LOCAL_VISION_ENABLED", "1")
+    monkeypatch.setenv("KRAB_VISION_IDLE_LOG_INTERVAL_SEC", "60")
+    host = _Host()
+    host._vision_force_cloud = True  # type: ignore[attr-defined]
+
+    local_mock = AsyncMock(return_value="should not run")
+    host._describe_frame_via_lmstudio = local_mock  # type: ignore[method-assign]
+
+    async def _fake_stream(*args, **kwargs):
+        yield "cloud"
+
+    captured: list[dict[str, Any]] = []
+
+    def _capture(event: str, **kwargs: Any) -> None:
+        captured.append({"event": event, **kwargs})
+
+    fake_logger = MagicMock()
+    fake_logger.info = _capture
+    fake_logger.warning = MagicMock()
+
+    with (
+        patch("src.userbot.media_processors.openclaw_client.send_message_stream", _fake_stream),
+        patch("src.userbot.media_processors.logger", fake_logger),
+    ):
+        await host._describe_video_frame(b"\xff\xd8fake", idx=1, chat_id="-100")
+
+    idle_events = [c for c in captured if c["event"] == "frame_describe_local_idle_skip"]
+    assert len(idle_events) == 1
+    assert idle_events[0]["reason"] == "cloud_route_preferred"
+    assert idle_events[0]["idx"] == 1
+    local_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_s56c_idle_skip_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same reason within interval → suppress second log. Different reason → fires."""
+    monkeypatch.setenv("KRAB_LOCAL_VISION_ENABLED", "1")
+    monkeypatch.setenv("KRAB_VISION_IDLE_LOG_INTERVAL_SEC", "3600")  # 1h — both calls within
+    host = _Host()
+    host._describe_frame_via_lmstudio = AsyncMock(return_value="")  # type: ignore[method-assign]
+
+    async def _fake_stream(*args, **kwargs):
+        yield "cloud"
+
+    captured: list[dict[str, Any]] = []
+
+    def _capture(event: str, **kwargs: Any) -> None:
+        captured.append({"event": event, **kwargs})
+
+    fake_logger = MagicMock()
+    fake_logger.info = _capture
+    fake_logger.warning = MagicMock()
+
+    with (
+        patch("src.userbot.media_processors.openclaw_client.send_message_stream", _fake_stream),
+        patch("src.userbot.media_processors.logger", fake_logger),
+    ):
+        # 1st call: local_failed_fallback fires
+        await host._describe_video_frame(b"\xff\xd8a", idx=0, chat_id="-100")
+        # 2nd call same reason: should be suppressed
+        await host._describe_video_frame(b"\xff\xd8b", idx=1, chat_id="-100")
+        # Now switch to cloud_route_preferred — different reason fires immediately
+        host._vision_force_cloud = True  # type: ignore[attr-defined]
+        await host._describe_video_frame(b"\xff\xd8c", idx=2, chat_id="-100")
+
+    idle_events = [c for c in captured if c["event"] == "frame_describe_local_idle_skip"]
+    # 1× local_failed_fallback (2nd suppressed) + 1× cloud_route_preferred
+    assert len(idle_events) == 2
+    reasons = [e["reason"] for e in idle_events]
+    assert reasons.count("local_failed_fallback") == 1
+    assert reasons.count("cloud_route_preferred") == 1
+
+
+@pytest.mark.asyncio
+async def test_s56c_idle_skip_not_logged_when_env_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """env_disabled is expected default — NO idle_skip event logged."""
+    monkeypatch.delenv("KRAB_LOCAL_VISION_ENABLED", raising=False)
+    host = _Host()
+
+    async def _fake_stream(*args, **kwargs):
+        yield "cloud"
+
+    captured: list[dict[str, Any]] = []
+
+    def _capture(event: str, **kwargs: Any) -> None:
+        captured.append({"event": event, **kwargs})
+
+    fake_logger = MagicMock()
+    fake_logger.info = _capture
+    fake_logger.warning = MagicMock()
+
+    with (
+        patch("src.userbot.media_processors.openclaw_client.send_message_stream", _fake_stream),
+        patch("src.userbot.media_processors.logger", fake_logger),
+    ):
+        await host._describe_video_frame(b"\xff\xd8fake", idx=0, chat_id="-100")
+
+    idle_events = [c for c in captured if c["event"] == "frame_describe_local_idle_skip"]
+    assert idle_events == []  # Env disabled is the expected silent path
