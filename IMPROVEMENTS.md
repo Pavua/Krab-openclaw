@@ -1,6 +1,6 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-05-18 (Session 61)
+> Составлен: 2026-03-23 | Обновлён: 2026-05-18 (Session 63)
 > Статус: Активная разработка
 > Владелец: По
 
@@ -83,6 +83,79 @@ score; ниже порога → forced cloud fallback или операторс
 Verifier собирает ground-truth pairs (request → выбранная модель →
 факт-checked outcome) для калибровки confidence модели в следующих
 сессиях. Сейчас shadow-mode (logs only, нет влияния на routing).
+
+---
+
+## Session 61-62 Insights (2026-05-18, +11 commits поверх S60)
+
+Сессии прошли в режиме автономного run'а — пользовательская инструкция
+«не останавливайся» запустила цепочку из 17+ Sonnet sub-agents за ~2 часа.
+Новые паттерны зафиксированы для последующих сессий.
+
+### "Idle observability" mirror pattern (5 paths)
+
+Унифицированная структура rate-limited skip-логов появилась в 5 независимых
+loop'ах (heartbeat / watchdog / catchup / reaper / scheduler tick). Каждый
+путь повторяет один шаблон:
+
+- `_*_idle_last_log_ts: dict[str, float]` — module-level state (per-reason)
+- `_log_*_idle_skip(reason, ...)` — rate-limited helper, dedup по reason
+- ENV `KRAB_*_IDLE_LOG_INTERVAL_SEC` (default 60s) — конфигурация interval'а
+- Log marker (structlog field) + optional Prometheus counter `.inc()` на skip
+
+Result: observability «почему loop ничего не сделал в этот тик» без log spam.
+Использовать как baseline для любого нового tight loop с idle-skip-ветками.
+
+### 3-wave × 6-sonnets autonomous run methodology
+
+Эволюция S53-60 «6 parallel sonnets» — теперь в формате 3 wave'а подряд:
+
+- Wave dispatch: 6 Sonnet в одном сообщении (single tool batch)
+- Disjoint file scopes — критично для zero merge conflict (verified 17+/17+)
+- Chain triggered инструкцией «не останавливайся» — parent сам инициирует
+  следующую волну после merge предыдущей, без подтверждения от пользователя
+- 17+ sonnets за 2-часовой день — sustainable rate при правильной диспетчеризации
+- **Worktree branch trap**: sonnet иногда коммитит в свою worktree-ветку
+  вместо main. Mitigation: cherry-pick на main после ревью; добавить
+  явный hint «commit on main» в prompt sub-agent'а.
+
+### Defense-in-depth hermetic singletons (S58/59 + S61 W3)
+
+Аудит расширен с 38 модулей до полного покрытия 16 lazy-init синглтонов:
+теперь все они авто-resetятся между тестами через `autouse=True` fixture
+в `conftest.py`. Идея «найден один полный outlier» (translation_cache, S55 C)
+закрыта defense-in-depth прослойкой — даже если новый код добавит global
+state без явного fixture, generic reset hook поймает основные паттерны.
+
+### Production hotfix2 fake-success caught live (2026-05-18 03:46)
+
+Первое подтверждение в проде, что TCP/MTProto reconnect ok ≠ real
+dispatcher recovery. Hotfix2 успел отработать в живой инцидент: dispatcher_tick
+не вырос после `reconnect_pyrofork=OK` → escalation на `_recreate_client`.
+Зафиксировали policy:
+
+- **Throttle**: один fake-success log не чаще 10 мин (избежать spam)
+- **Escalation**: 2 fake подряд → респавн через recreate_client (а не reconnect)
+
+Lesson confirmed live: «success» нижнего слоя без верификации outcome'а
+верхнего — это leading indicator next failure, а не победа.
+
+### Phase 3 verifier activated (shadow → active sampling)
+
+S60-shadow перешёл в active sampling: 20% локальных response'ов параллельно
+отправляются в cloud Vertex Gemini Flash. Divergence histogram доступна
+через `/api/admin/local-draft-verifier-stats`. Это foundation для
+confidence-gated routing (S63+): если divergence на запрос > threshold,
+forced cloud fallback. Cost — controlled (20% sampling, Flash tier),
+benefit — ground-truth pairs для калибровки.
+
+### Workspace GC tooling (operational automation)
+
+Новый daily LaunchAgent (04:00) для очистки stale worktree'ов — 26 reclaimed
+в one-time S62 run. Триггер: `git worktree list --porcelain` + age cutoff.
+Pattern для любой ресурс-накапливающейся подсистемы (worktrees / branches /
+session backups / log files): cron на 04:00 + structured log marker для
+аудита retention'а.
 
 ---
 
