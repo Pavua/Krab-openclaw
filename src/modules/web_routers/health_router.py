@@ -27,9 +27,13 @@ Wave CC (Session 25): /api/health/deep extracted. Existing tests
 from __future__ import annotations
 
 import json
+import os
+import re
+import statistics
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
@@ -38,6 +42,230 @@ from ...core.logger import get_logger
 from ._context import RouterContext
 
 logger = get_logger(__name__)
+
+# ── S58: local_draft_verifier stats endpoint ────────────────────────────────
+# Pattern matching the structlog ConsoleRenderer output written to
+# krab_main.log. Format (with ANSI codes stripped):
+#   "2026-05-18 03:17:39 [info     ] <event_name>     key=value key=value ..."
+# We grep for "local_draft_verify_divergence_score" events from the last 24h
+# and extract: timestamp, divergence_score, local_model, request_id.
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+_KV_RE = re.compile(r"(\w+)=('([^']*)'|\"([^\"]*)\"|(\S+))")
+_LOCAL_DRAFT_EVENT = "local_draft_verify_divergence_score"
+
+# In-memory cache to avoid heavy log re-parse per HTTP request (60s TTL).
+# Holder dict shared at module level; tests can clear via _LDV_CACHE.clear().
+_LDV_CACHE: dict[str, Any] = {"ts": 0.0, "payload": None}
+_LDV_CACHE_TTL_SEC = 60.0
+_LDV_LOOKBACK_SEC = 24 * 3600
+
+
+def _resolve_log_file_path() -> Path:
+    """Return the krab_main.log path, honoring KRAB_LOG_FILE override."""
+    raw = os.environ.get("KRAB_LOG_FILE")
+    if raw:
+        return Path(raw).expanduser()
+    base = os.environ.get("KRAB_RUNTIME_STATE_DIR")
+    base_dir = Path(base).expanduser() if base else Path.home() / ".openclaw" / "krab_runtime_state"
+    return base_dir / "krab_main.log"
+
+
+def _parse_log_line(line: str) -> dict[str, Any] | None:
+    """Extract structlog event_name + key=value pairs from one log line.
+
+    Returns dict with at least ``event`` key on success, ``None`` if line
+    isn't a structlog event (e.g. pyrogram raw output, header banners).
+    Robust to ANSI codes and malformed lines.
+    """
+    try:
+        clean = _ANSI_RE.sub("", line).strip()
+    except Exception:  # noqa: BLE001 — corrupt encoding etc.
+        return None
+    if not clean:
+        return None
+    ts_match = _TIMESTAMP_RE.match(clean)
+    if not ts_match:
+        return None
+    timestamp = ts_match.group(1)
+    # After timestamp: "[level     ] event_name     key=value ..."
+    rest = clean[len(timestamp) :].lstrip()
+    # Strip "[level    ]"
+    if rest.startswith("["):
+        end = rest.find("]")
+        if end < 0:
+            return None
+        rest = rest[end + 1 :].lstrip()
+    # Event name = first whitespace-delimited token. Structlog pads with
+    # spaces (e.g. "local_draft_verify_divergence_score    key=value").
+    parts = rest.split(None, 1)
+    if not parts:
+        return None
+    event = parts[0]
+    kvs: dict[str, Any] = {"event": event, "_timestamp": timestamp}
+    if len(parts) > 1:
+        for match in _KV_RE.finditer(parts[1]):
+            key = match.group(1)
+            # Prefer quoted captures, fall back to raw token
+            value = match.group(3) or match.group(4) or match.group(5) or ""
+            kvs[key] = value
+    return kvs
+
+
+def _coerce_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _bucket_score(score: int) -> str:
+    if score <= 2:
+        return "0-2"
+    if score <= 5:
+        return "3-5"
+    if score <= 8:
+        return "6-8"
+    return "9-10"
+
+
+def _collect_verifier_samples(
+    log_path: Path,
+    *,
+    now: float,
+    lookback_sec: int = _LDV_LOOKBACK_SEC,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Read log_path, return (samples, warnings).
+
+    samples: list of {"ts": iso_str, "epoch": float, "model": str,
+                      "score": int, "request_id": str}
+    Each sample comes from a ``local_draft_verify_divergence_score`` event
+    whose parsed timestamp is within ``lookback_sec`` of ``now``.
+    """
+    samples: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    if not log_path.exists():
+        warnings.append(f"log_file_missing:{log_path}")
+        return samples, warnings
+    try:
+        with log_path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if _LOCAL_DRAFT_EVENT not in line:
+                    continue
+                parsed = _parse_log_line(line)
+                if parsed is None or parsed.get("event") != _LOCAL_DRAFT_EVENT:
+                    continue
+                ts_str = parsed.get("_timestamp", "")
+                try:
+                    epoch = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").timestamp()
+                except ValueError:
+                    continue
+                if now - epoch > lookback_sec:
+                    continue
+                score = _coerce_int(parsed.get("divergence_score"))
+                if score is None or score < 0 or score > 10:
+                    continue
+                samples.append(
+                    {
+                        "ts": ts_str,
+                        "epoch": epoch,
+                        "model": str(parsed.get("local_model", "") or ""),
+                        "score": score,
+                        "request_id": str(parsed.get("request_id", "") or ""),
+                    }
+                )
+    except OSError as exc:
+        warnings.append(f"log_read_error:{exc}")
+    return samples, warnings
+
+
+def _compute_stats_payload(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the ``stats`` sub-dict from raw samples."""
+    histogram = {"0-2": 0, "3-5": 0, "6-8": 0, "9-10": 0}
+    scores: list[int] = []
+    for sample in samples:
+        score = sample["score"]
+        histogram[_bucket_score(score)] += 1
+        scores.append(score)
+    last_10 = sorted(samples, key=lambda s: s["epoch"], reverse=True)[:10]
+    last_10_payload = [
+        {
+            "ts": s["ts"],
+            "model": s["model"],
+            "score": s["score"],
+            "request_id": s["request_id"],
+        }
+        for s in last_10
+    ]
+    if scores:
+        mean_score = round(statistics.fmean(scores), 2)
+        median_score = round(statistics.median(scores), 2)
+    else:
+        mean_score = None
+        median_score = None
+    return {
+        "total_verified_24h": len(samples),
+        "divergence_histogram": histogram,
+        "last_10_samples": last_10_payload,
+        "mean_score": mean_score,
+        "median_score": median_score,
+    }
+
+
+def _verifier_env_truthy() -> bool:
+    return str(os.environ.get("KRAB_LOCAL_DRAFT_VERIFY_ENABLED", "0")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _verifier_sample_rate() -> float:
+    raw = os.environ.get("KRAB_LOCAL_DRAFT_VERIFY_SAMPLE_RATE", "0.2")
+    try:
+        rate = float(raw)
+    except (TypeError, ValueError):
+        return 0.2
+    return max(0.0, min(1.0, rate))
+
+
+def collect_local_draft_verifier_stats(
+    *,
+    now: float | None = None,
+    cache_ttl_sec: float | None = None,
+) -> dict[str, Any]:
+    """Build the response envelope for /api/admin/local-draft-verifier-stats.
+
+    Cache TTL applies to the ``stats`` block; env flags are always fresh.
+    Tests can pass ``cache_ttl_sec=0`` to force re-parse.
+    """
+    if now is None:
+        now = time.time()
+    ttl = _LDV_CACHE_TTL_SEC if cache_ttl_sec is None else cache_ttl_sec
+
+    cached_payload = _LDV_CACHE.get("payload")
+    cached_ts = float(_LDV_CACHE.get("ts") or 0.0)
+    if cached_payload is not None and ttl > 0 and (now - cached_ts) < ttl:
+        stats = cached_payload["stats"]
+        warnings = list(cached_payload["warnings"])
+    else:
+        log_path = _resolve_log_file_path()
+        samples, warnings = _collect_verifier_samples(log_path, now=now)
+        stats = _compute_stats_payload(samples)
+        _LDV_CACHE["ts"] = now
+        _LDV_CACHE["payload"] = {"stats": stats, "warnings": list(warnings)}
+
+    return {
+        "ok": True,
+        "enabled": _verifier_env_truthy(),
+        "sample_rate": _verifier_sample_rate(),
+        "stats": stats,
+        "warnings": warnings,
+    }
 
 
 def build_health_router(ctx: RouterContext) -> APIRouter:
@@ -357,5 +585,32 @@ def build_health_router(ctx: RouterContext) -> APIRouter:
                 "session_label": session_label,
             },
         }
+
+    # ── /api/admin/local-draft-verifier-stats (S58) ─────────────────────────
+    # Rolling 24h stats sourced from local_draft_verify_divergence_score events
+    # in krab_main.log. 60s cache TTL — heavy log parse не на каждый запрос.
+    # Robust к отсутствию S57 module: если событий в логе нет, возвращаем
+    # zeroed stats + null means.
+
+    @router.get("/api/admin/local-draft-verifier-stats")
+    async def get_local_draft_verifier_stats() -> dict:
+        """S58: rolling histogram + last-10 samples от S57 verifier событий."""
+        try:
+            return collect_local_draft_verifier_stats()
+        except Exception as exc:  # noqa: BLE001 — read-only endpoint, fail-open
+            logger.warning("local_draft_verifier_stats_failed", error=str(exc)[:200])
+            return {
+                "ok": False,
+                "enabled": _verifier_env_truthy(),
+                "sample_rate": _verifier_sample_rate(),
+                "stats": {
+                    "total_verified_24h": 0,
+                    "divergence_histogram": {"0-2": 0, "3-5": 0, "6-8": 0, "9-10": 0},
+                    "last_10_samples": [],
+                    "mean_score": None,
+                    "median_score": None,
+                },
+                "warnings": [f"endpoint_error:{type(exc).__name__}"],
+            }
 
     return router
