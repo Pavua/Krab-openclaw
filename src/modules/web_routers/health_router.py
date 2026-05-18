@@ -320,15 +320,10 @@ def build_health_router(ctx: RouterContext) -> APIRouter:
         )
         dispatcher_tick_count = int(getattr(userbot, "_dispatcher_tick_count", 0) or 0)
 
-        # Session 53 P3.6: raw_update tick — независимый сигнал что Pyrogram
-        # dispatcher loop живой (триггерится на ВСЕ updates от Telegram, не
-        # только messages). Используется для disambiguation silent-death vs
-        # quiet-chats. См. on_raw_update handler в userbot_bridge._setup_handlers.
-        last_raw_update_ts = float(getattr(userbot, "_last_raw_update_ts", 0.0) or 0.0)
-        raw_update_age_sec: int = (
-            int(now - last_raw_update_ts) if last_raw_update_ts > 0 else -1
-        )
-        raw_update_count = int(getattr(userbot, "_raw_update_tick_count", 0) or 0)
+        # Session 54 Task C: raw_update_tick секция удалена. on_raw_update
+        # handler был не reliable (UpdateShort(UpdateNewMessage) — dominant
+        # traffic — bypass'ил raw handlers). Liveness теперь через
+        # Client.last_update_time в network_watchdog (S53 hotfix3).
 
         # ── pyrogram section (Wave 142) ────────────────────────────────────
         disconnects_total = 0
@@ -356,10 +351,6 @@ def build_health_router(ctx: RouterContext) -> APIRouter:
                 "starved": dispatcher_starved,
                 "age_sec": dispatcher_tick_age_sec,
                 "count": dispatcher_tick_count,
-            },
-            "raw_update_tick": {
-                "age_sec": raw_update_age_sec,
-                "count": raw_update_count,
             },
             "pyrogram": {
                 "disconnects_total": disconnects_total,

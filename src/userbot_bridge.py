@@ -330,6 +330,79 @@ class KraabUserbot(
     _plaintext_reasoning_intro_pattern = re.compile(
         r"(?i)^(?:think|thinking|thinking process|reasoning|analysis)\s*:?\s*$"
     )
+
+    async def _hydrate_reply_to_message(self, message: Message, *, chat_id: str) -> None:
+        """
+        Подтягивает полное reply-сообщение, если Pyrogram прислал только id.
+
+        Зачем это нужно:
+        - Telegram UI может показывать, что пользователь ответил на видео/кружок;
+        - update при этом иногда приходит без полного ``reply_to_message``;
+        - без явного ``get_messages`` media pipeline видит только текст текущего
+          сообщения и честно отвечает «видео не вижу».
+
+        Метод fail-open: если Telegram не отдал сообщение, основной текстовый
+        сценарий продолжит работать как раньше.
+        """
+        if getattr(message, "reply_to_message", None) is not None:
+            return
+
+        reply_to_id = getattr(message, "reply_to_message_id", None)
+        if not reply_to_id:
+            return
+        if self.client is None or not hasattr(self.client, "get_messages"):
+            return
+
+        try:
+            fetched = await self.client.get_messages(
+                chat_id=getattr(getattr(message, "chat", None), "id", chat_id),
+                message_ids=int(reply_to_id),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "reply_hydrate_failed",
+                chat_id=chat_id,
+                reply_to_message_id=reply_to_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return
+
+        if isinstance(fetched, list):
+            fetched = fetched[0] if fetched else None
+        if fetched is None:
+            logger.info(
+                "reply_hydrate_empty",
+                chat_id=chat_id,
+                reply_to_message_id=reply_to_id,
+            )
+            return
+
+        try:
+            message.reply_to_message = fetched  # type: ignore[assignment]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "reply_hydrate_assign_failed",
+                chat_id=chat_id,
+                reply_to_message_id=reply_to_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return
+
+        logger.info(
+            "reply_hydrated_from_id",
+            chat_id=chat_id,
+            reply_to_message_id=reply_to_id,
+            has_photo=bool(getattr(fetched, "photo", None)),
+            has_video=bool(
+                getattr(fetched, "video", None)
+                or getattr(fetched, "video_note", None)
+                or getattr(fetched, "animation", None)
+            ),
+            has_audio=bool(getattr(fetched, "voice", None) or getattr(fetched, "audio", None)),
+            has_document=bool(getattr(fetched, "document", None)),
+        )
     _plaintext_reasoning_step_pattern = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s+")
     _plaintext_reasoning_meta_pattern = re.compile(
         r"(?i)^(?:step\s*\d+|thinking process|analysis|reasoning"
@@ -426,14 +499,12 @@ class KraabUserbot(
         # split-brain pattern (network OK, dispatcher dead).
         self._dispatcher_tick_count: int = 0
         self._last_dispatcher_tick_ts: float = time.time()
-        # Session 53 P3.6: разделение сигналов «raw dispatcher жив» vs «message
-        # handler chain жив». on_raw_update триггерится на ВСЕ updates (channel
-        # admin, user status, typing, message), on_message — только на messages.
-        # Если оба растут → всё ок. Если raw растёт но message замёрз → message
-        # filter chain сломан. Если оба замёрли → dispatcher dead (silent death).
-        # Wave 63-D detection теперь использует ОБА сигнала для disambiguation.
-        self._raw_update_tick_count: int = 0
-        self._last_raw_update_ts: float = time.time()
+        # Session 54 Task C: on_raw_update handler removed — pyrofork dispatcher
+        # routes UpdateShort(UpdateNewMessage) (dominant traffic) через parse_update
+        # → on_message, bypass раздачи raw handlers. Production observed: 16 msgs
+        # handled vs 0 raw ticks за 9 мин uptime. Заменено на Client.last_update_time
+        # (pyrofork internal client.py:628) как network-level liveness signal — см.
+        # S53 hotfix3 в network_watchdog._check_dispatcher_starved.
         self._network_offline_monitor_task: Optional[asyncio.Task] = None
         # Runtime-состояние старта userbot для health/handoff и контролируемой деградации.
         self._startup_state = "initializing"
@@ -451,20 +522,6 @@ class KraabUserbot(
         prefixes = config.TRIGGER_PREFIXES + ["/", "!", "."]
 
         self._known_commands = set(USERBOT_KNOWN_COMMANDS)
-
-        # Session 53 P3.6: raw_update handler для silent-death detection.
-        # Любой update от Pyrogram dispatcher (message, user status, channel
-        # admin, typing) инкрементит counter. Используется в network_watchdog
-        # для disambiguation: stale raw_update + alive invoke probe =
-        # dispatcher dead (handler chain сломан).
-        @self.client.on_raw_update(group=-2)
-        async def _raw_update_tick(_client, _update, _users, _chats):
-            try:
-                self._raw_update_tick_count += 1
-                self._last_raw_update_ts = time.time()
-            except Exception:  # noqa: BLE001
-                pass
-            # Не возвращаем ничего — pyrofork продолжит обработку других хэндлеров.
 
         def _make_command_filter(command_name: str):
             """Создаёт per-command ACL-фильтр без дублирования правил в декораторах."""
@@ -2657,6 +2714,7 @@ class KraabUserbot(
         from .core.command_aliases import alias_service as _alias_svc  # noqa: PLC0415
 
         text = message.text or message.caption or ""
+        await self._hydrate_reply_to_message(message, chat_id=chat_id)
         has_audio_message = self._message_has_audio(message)
         # Wave 16-G: аудио в reply_to_message, а не в самом сообщении
         has_reply_audio = self._message_has_reply_audio(message)
@@ -3233,6 +3291,13 @@ class KraabUserbot(
             "video_attr": bool(getattr(message, "video", None)),
             "media_value": str(getattr(message, "media", "") or ""),
             "caption": bool(getattr(message, "caption", None)),
+            "reply_to_message_id": getattr(message, "reply_to_message_id", None),
+            "reply_hydrated": bool(getattr(message, "reply_to_message", None)),
+            "reply_video_attr": bool(
+                getattr(getattr(message, "reply_to_message", None), "video", None)
+                or getattr(getattr(message, "reply_to_message", None), "video_note", None)
+                or getattr(getattr(message, "reply_to_message", None), "animation", None)
+            ),
             "msg_id": getattr(message, "id", None),
             "msg_type": type(message).__name__,
         }
@@ -3817,13 +3882,13 @@ class KraabUserbot(
         # (центральный funnel для всех 50+ @on_message decorators). Counter
         # фиксирует "outcomes": dispatcher жив ⇔ updates реально доходят до
         # хэндлеров. Stale tick при alive pts probe = новый split-brain pattern.
-        self._dispatcher_tick_count += 1
+        self._dispatcher_tick_count = getattr(self, "_dispatcher_tick_count", 0) + 1
         self._last_dispatcher_tick_ts = time.time()
         # Wave 39-D: трекаем message.id как proxy для update_id.
         # message.id монотонно растёт (per-chat), служит сигналом живости
         # updates_subscriber. Обновляем только если новый id больше.
         _uid = getattr(message, "id", 0) or 0
-        if _uid > self._last_seen_update_id:
+        if _uid > getattr(self, "_last_seen_update_id", 0):
             self._last_seen_update_id = _uid
         # Wave 46-A: persist per-chat last_seen для startup catchup.
         # Wrapped в try/except → не блокируем hot path message processing.

@@ -224,13 +224,12 @@ def _check_dispatcher_starved(
     Cross-reference signal: вызывать после того как pts probe сказал "alive".
     Stale tick + alive pts = новый split-brain pattern.
 
-    Session 53 P3.6 strengthened: дополнительно проверяем `_last_raw_update_ts`
-    (on_raw_update handler tick от любого update от Pyrogram dispatcher). Если
-    raw_update тоже замёрз → dispatcher truly dead (handler chain полностью
-    сломан). Если raw_update растёт но message tick замёрз → message filter chain
-    сломан (более узкая поломка). Возвращаем True ТОЛЬКО если ОБА замёрли,
-    чтобы избежать false-positive когда чат просто молчит (нет messages, но
-    есть user_status/typing/channel updates).
+    Session 54 Task C: упрощено — `on_raw_update` handler удалён (pyrofork не
+    триггерит его для UpdateShort(UpdateNewMessage), dominant traffic, в
+    production observed 0 ticks за 9 мин при 16 handled messages). Primary
+    signal теперь `Client.last_update_time` (pyrofork internal,
+    `handle_updates:628`, S53 hotfix3). Legacy fallback при отсутствии
+    атрибута — conservative 3x threshold message-only check.
     """
     last_ts = getattr(owner, "_last_dispatcher_tick_ts", None)
     if last_ts is None:
@@ -263,18 +262,11 @@ def _check_dispatcher_starved(
         # Оба stale → not silent-death, regular network_silence will handle.
         return False
 
-    # Fallback chain: pyrofork attribute absent → use legacy on_raw_update +
-    # conservative thresholds. P3.6 original logic.
-    raw_count = getattr(owner, "_raw_update_tick_count", None)
-    raw_ts = getattr(owner, "_last_raw_update_ts", None)
-    if raw_count is None or int(raw_count) == 0 or raw_ts is None:
-        conservative_threshold = 3.0 * threshold
-        return (current - float(last_ts)) >= conservative_threshold
-    raw_age = current - float(raw_ts)
-    if raw_age >= 2.0 * threshold:
-        conservative_threshold = 3.0 * threshold
-        return (current - float(last_ts)) >= conservative_threshold
-    return raw_age >= threshold
+    # Legacy fallback: pyrofork attribute absent (старая версия pyrofork) → use
+    # conservative 3x threshold message-only check. Session 54 Task C: убрали
+    # on_raw_update fallback (handler удалён, был не reliable).
+    conservative_threshold = 3.0 * threshold
+    return (current - float(last_ts)) >= conservative_threshold
 
 
 def _launchd_exit_78() -> None:
