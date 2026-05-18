@@ -10,8 +10,10 @@ watchdog, recovery, purge session-файлов, диагностика sqlite-с
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import sqlite3
+import time
 import types
 from pathlib import Path
 
@@ -455,9 +457,63 @@ class SessionMixin:
     async def _start_client_serialized(self) -> None:
         """
         Сериализованный client.start(), чтобы избежать гонки start/stop над одним sqlite session-файлом.
+
+        S68 W1 P0 FIX (cold-boot dispatcher race condition):
+
+        Pyrogram `Dispatcher.add_handler` использует `loop.create_task(fn())` —
+        fire-and-forget. Когда `_setup_handlers()` runs synchronously,
+        все ~105+ @on_message декораторы scheduling fn() tasks, но они не
+        execute'ятся пока event loop не получит контроль.
+
+        Если `client.start()` запускается раньше чем queued fn() tasks
+        drain, `Dispatcher.start()` spawns handler_worker tasks, которые
+        читают `updates_queue` → iterate empty `groups` → **silent drop**.
+
+        S67 W2 verify в production показал `total_handlers=1` (только
+        ConversationHandler) после `_setup_handlers()` — proof of race.
+
+        Fix: barrier BEFORE `client.start()` ждёт пока `dispatcher.groups`
+        наполнится minimum expected handlers (default 50, env-tunable).
+        Timeout 2s — если не наполнилось, log error + продолжаем
+        (recover_gaps may compensate, лучше degraded чем dead).
         """
         async with self._client_lifecycle_lock:
             assert self.client is not None
+
+            # S68 W1: barrier для add_handler fire-and-forget race
+            min_handlers = int(os.environ.get("KRAB_HANDLER_BARRIER_MIN_COUNT", "50"))
+            max_wait_sec = float(os.environ.get("KRAB_HANDLER_BARRIER_TIMEOUT_SEC", "2.0"))
+            poll_interval = 0.01
+
+            wait_started = time.monotonic()
+            observed = 0
+            while time.monotonic() - wait_started < max_wait_sec:
+                try:
+                    groups = getattr(self.client.dispatcher, "groups", None)
+                    if groups:
+                        observed = sum(len(g) for g in groups.values())
+                        if observed >= min_handlers:
+                            elapsed = time.monotonic() - wait_started
+                            logger.info(
+                                "dispatcher_groups_barrier_passed",
+                                total_handlers=observed,
+                                min_required=min_handlers,
+                                elapsed_ms=int(elapsed * 1000),
+                            )
+                            break
+                except Exception:  # noqa: BLE001
+                    pass
+                await asyncio.sleep(poll_interval)
+            else:
+                elapsed = time.monotonic() - wait_started
+                logger.error(
+                    "dispatcher_groups_barrier_timeout",
+                    observed=observed,
+                    min_required=min_handlers,
+                    elapsed_ms=int(elapsed * 1000),
+                    message="add_handler fire-and-forget tasks not drained — pyrogram race",
+                )
+
             await self.client.start()
 
     async def _safe_stop_client(self, *, reason: str) -> None:
