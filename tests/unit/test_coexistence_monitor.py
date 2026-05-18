@@ -225,3 +225,113 @@ def test_main_writes_jsonl(tmp_path):
     assert snapshot["krab_rss_gb"] == 1.0
     assert snapshot["ear_rss_gb"] == 1.0
     assert snapshot["combined_rss_gb"] == 2.0
+
+
+# --------------------------------------------------------------------------- #
+# Тест 7 (S61 W4): top_external_rss добавляется в текст Telegram alert'а
+# --------------------------------------------------------------------------- #
+
+def test_main_alert_includes_top_external_rss(tmp_path):
+    mod = _import_monitor()
+    log_file = tmp_path / "coexistence_monitor.log"
+    state_file = tmp_path / "alert_state.json"
+
+    # Включаем swap critical alert (>32 GB)
+    _vm = MagicMock()
+    _vm.used = 20_000_000_000
+    _vm.available = 10_000_000_000
+
+    _sw = MagicMock()
+    _sw.used = 35_000_000_000  # 35 GB > 32 GB SWAP_THRESHOLD → critical
+
+    def _krab_rss(pid):
+        p = MagicMock()
+        p.memory_info.return_value.rss = 1_000_000_000
+        return p
+
+    # External процессы — > 200 MB cutoff, не принадлежат Krab/Ear PID set'у
+    external_procs = [
+        _make_proc(501, ["/Applications/OrbStack.app/Contents/MacOS/OrbStack"]),
+        _make_proc(502, ["/Applications/Google Chrome.app"]),
+    ]
+    external_procs[0].info["memory_info"] = MagicMock(rss=8_000_000_000)
+    external_procs[0].info["name"] = "OrbStack"
+    external_procs[1].info["memory_info"] = MagicMock(rss=4_000_000_000)
+    external_procs[1].info["name"] = "Google Chrome"
+
+    krab_procs = [_make_proc(1, ["python", "src.main"])]
+    krab_procs[0].info["memory_info"] = MagicMock(rss=1_000_000_000)
+    krab_procs[0].info["name"] = "python"
+
+    with (
+        patch.object(mod, "LOG_FILE", log_file),
+        patch.object(mod, "ALERT_STATE_FILE", state_file),
+        patch.object(
+            mod,
+            "find_pids",
+            side_effect=lambda patterns, exclude=None: [1] if "userbot" in patterns[0] else [],
+        ),
+        patch("psutil.Process", side_effect=_krab_rss),
+        patch("psutil.process_iter", return_value=krab_procs + external_procs),
+        patch("psutil.virtual_memory", return_value=_vm),
+        patch("psutil.swap_memory", return_value=_sw),
+        patch.object(mod, "_send_notify") as mock_notify,
+    ):
+        mod.main()
+
+    mock_notify.assert_called_once()
+    alert_text = mock_notify.call_args[0][0]
+    assert "swap_used_critical" in alert_text
+    assert "top external RSS:" in alert_text
+    assert "OrbStack" in alert_text
+    assert "Google Chrome" in alert_text
+    # Top sorted by RSS desc — OrbStack (8 GB) перед Chrome (4 GB)
+    assert alert_text.index("OrbStack") < alert_text.index("Google Chrome")
+
+
+# --------------------------------------------------------------------------- #
+# Тест 8 (S61 W4): top_external_rss НЕ ломает alert если список пуст
+# --------------------------------------------------------------------------- #
+
+def test_main_alert_without_external_processes(tmp_path):
+    mod = _import_monitor()
+    log_file = tmp_path / "coexistence_monitor.log"
+    state_file = tmp_path / "alert_state.json"
+
+    _vm = MagicMock()
+    _vm.used = 20_000_000_000
+    _vm.available = 10_000_000_000
+
+    _sw = MagicMock()
+    _sw.used = 35_000_000_000
+
+    def _krab_rss(pid):
+        p = MagicMock()
+        p.memory_info.return_value.rss = 1_000_000_000
+        return p
+
+    krab_procs = [_make_proc(1, ["python", "src.main"])]
+    krab_procs[0].info["memory_info"] = MagicMock(rss=1_000_000_000)
+    krab_procs[0].info["name"] = "python"
+
+    with (
+        patch.object(mod, "LOG_FILE", log_file),
+        patch.object(mod, "ALERT_STATE_FILE", state_file),
+        patch.object(
+            mod,
+            "find_pids",
+            side_effect=lambda patterns, exclude=None: [1] if "userbot" in patterns[0] else [],
+        ),
+        patch("psutil.Process", side_effect=_krab_rss),
+        patch("psutil.process_iter", return_value=krab_procs),  # только Krab
+        patch("psutil.virtual_memory", return_value=_vm),
+        patch("psutil.swap_memory", return_value=_sw),
+        patch.object(mod, "_send_notify") as mock_notify,
+    ):
+        mod.main()
+
+    mock_notify.assert_called_once()
+    alert_text = mock_notify.call_args[0][0]
+    assert "swap_used_critical" in alert_text
+    # Без external — секция top external RSS не добавляется
+    assert "top external RSS:" not in alert_text

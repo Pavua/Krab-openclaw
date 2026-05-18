@@ -203,6 +203,14 @@ def main() -> int:
 
         if now_ts - last_ts >= ALERT_COOLDOWN_SEC:
             alert_text = "⚠️ Krab memory alert: " + ", ".join(alerts)
+            # S61 Wave 4: добавляем top-5 external RSS consumers (non-Krab/Ear)
+            # в текст alert'а — owner сразу видит реального виновника swap pressure
+            # без необходимости лезть в JSONL лог.
+            if top_external:
+                lines = ["", "top external RSS:"]
+                for entry in top_external:
+                    lines.append(f"  - {entry['name']}: {entry['rss_gb']} GB")
+                alert_text += "\n" + "\n".join(lines)
             _send_notify(alert_text)
             try:
                 ALERT_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)

@@ -1,8 +1,88 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-05-16 (Session 50)
+> Составлен: 2026-03-23 | Обновлён: 2026-05-18 (Session 61)
 > Статус: Активная разработка
 > Владелец: По
+
+---
+
+## Session 53-60 Architectural Insights (2026-05-17 → 2026-05-18)
+
+Сессии посвящены устранению silent-death — состояния, когда Pyrofork формально
+жив (process up, heartbeat OK), но `updates` reader блокирован и сообщения
+от Telegram молча теряются. Несколько итераций recovery собрались в зрелый
+эшелонированный паттерн.
+
+### 3-layer silent-death defence
+
+Каждый слой ловит свою долю случаев, и вместе они закрывают практически весь
+known failure mode:
+
+1. **Wave 63-A — server-side pts probe.** `updates.GetState` опрашивается
+   из heartbeat loop; если server `pts` рос, а наш `_last_seen_update_id`
+   стоит — split-brain детектится за ~4 мин (раньше 93 мин). Ловит случай
+   когда reader умер, а connection ещё формально alive.
+2. **Wave 63-C — dispatcher_tick + GetState recovery verify.** Перед
+   объявлением recovery успешным проверяем, что dispatcher реально начал
+   обрабатывать updates (tick increments). Иначе эскалация на `_recreate_client`.
+   Ловит случай fake-recovery, когда `reconnect_pyrofork` отвечает OK, но
+   reader всё ещё мёртв.
+3. **S53 P3.6 hotfix3 — `Client.last_update_time` как primary signal.**
+   Pyrofork сам обновляет атрибут на каждом приходе update; используем его
+   как самый дешёвый и точный индикатор «reader живой» вместо своих счётчиков.
+   Ловит самый узкий случай — когда наши custom-handlers не fire'ятся,
+   а Pyrofork внутри обрабатывает.
+
+### "Outcomes, not heartbeats" pattern (4 итерации)
+
+Паттерн зафиксирован уже в 4 независимых местах кодовой базы:
+
+- Wave 50-B (OAuth force-refresh при `expiry_in_min < -60`)
+- Wave 63-A (server pts vs local `_last_seen_update_id`)
+- Wave 65-D (preempt `claude-sonnet-4-5` без квоты до вызова)
+- Wave 62-G (preempt codex weekly quota из state file)
+
+Единый принцип: **проверять outcomes, а не aliveness процесса/флага.**
+Health monitor говорит OK — это ничего не значит, если outcome
+(update arrived / token refreshed / model usable) не подтверждается.
+
+### Pyrofork `on_raw_update` quirk (Session 54 C)
+
+Обнаружен и удалён: `@app.on_raw_update()` декоратор Pyrofork _не_ вызывается
+синхронно с приходом update в dispatcher — fires только когда хотя бы один
+handler matched payload. То есть raw_update как «proof of life» был ненадёжен.
+Заменён на `Client.last_update_time` (см. слой 3 выше) — атрибут обновляется
+безусловно. Урок: не путать observer hooks с low-level transport signals.
+
+### Hermetic test fixtures pattern
+
+Параллельный аудит 38 модулей-синглтонов (`*_singleton`, `*_instance`,
+global state holders) — все, кроме `translation_cache`, корректно
+изолируются через pytest fixtures (`autouse=True` reset). Outlier
+получил dedicated fixture в `conftest.py`. Пользоваться как baseline
+для будущих синглтонов: новый модуль с global state → required reset
+fixture в conftest рядом.
+
+### 6 parallel sonnets autonomous run (паттерн)
+
+Сессии 53-60 активно использовали запуск 6 параллельных Sonnet sub-agents
+в отдельных worktrees (через `superpowers:using-git-worktrees`).
+Empirical правила, подтверждённые на множестве задач:
+
+- Sonnet 200-300 word prompt с TDD scaffold → 6/6 success rate
+- Haiku context window недостаточен для расширенных задач (0/2 в S41,
+  не improved в S53-60) — не использовать для параллельных runs
+- 0 merge conflicts при изоляции в worktree + неперекрывающихся файлах
+- Координация через handoff: parent читает результаты, мерджит в main
+
+### Phase 3 verifier launched
+
+В рамках S60 запущен Phase 3 verifier — фундамент для **confidence-gated
+routing** в S62+. Идея: каждый routing decision сопровождается confidence
+score; ниже порога → forced cloud fallback или операторская эскалация.
+Verifier собирает ground-truth pairs (request → выбранная модель →
+факт-checked outcome) для калибровки confidence модели в следующих
+сессиях. Сейчас shadow-mode (logs only, нет влияния на routing).
 
 ---
 
