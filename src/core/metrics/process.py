@@ -55,6 +55,48 @@ def set_startup_duration(elapsed_sec: float) -> None:
         pass
 
 
+# === S66 Wave 3: uptime / handler tick age gauges =========================
+#
+# Дополняют Silent-Death Defense (Wave 63 series). Operator может строить
+# графики "uptime по версии Krab" (после S64 W4 restart cause logging) и
+# "dispatcher liveness over time".
+
+
+def current_uptime_seconds(*, now: float | None = None) -> float:
+    """Сколько секунд процесс Krab прожил с момента userbot_started.
+
+    Источник правды — `_PROCESS_START_TIME` (module-load timestamp).
+    Fail-safe: возвращает 0.0 при любых сбоях.
+    """
+    try:
+        ts_now = float(now) if now is not None else time.time()
+        return max(0.0, ts_now - float(_PROCESS_START_TIME))
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def current_handler_tick_age_seconds(*, now: float | None = None) -> float:
+    """Сколько секунд назад main dispatcher последний раз тикнул.
+
+    Читает `_last_dispatcher_tick_ts` через Wave 70 weakref. Возвращает
+    `-1.0` если userbot не зарегистрирован или ts ещё не выставлен —
+    aligned с semantics `krab_main_dispatcher_tick_ago_seconds`.
+    """
+    try:
+        from src.core.metrics.probes import _get_userbot_for_metrics  # noqa: PLC0415
+
+        ub = _get_userbot_for_metrics()
+        if ub is None:
+            return -1.0
+        tick_ts_raw = getattr(ub, "_last_dispatcher_tick_ts", None)
+        if tick_ts_raw is None:
+            return -1.0
+        ts_now = float(now) if now is not None else time.time()
+        return max(0.0, ts_now - float(tick_ts_raw))
+    except Exception:  # noqa: BLE001
+        return -1.0
+
+
 def record_agent_engine_run(engine: str, success: bool, latency_sec: float) -> None:
     """Инкремент runs_total и накопитель latency. Fail-safe."""
     try:

@@ -35,6 +35,13 @@ Pattern: "outcomes, not heartbeats" (Wave 63 series).
 - `krab_main_dispatcher_tick_ago_seconds` — Wave 63-C. Seconds since main
   dispatcher last ticked. `-1` = userbot not registered (probe weakref
   not wired). Alert >120s.
+- `krab_uptime_seconds` — S66 W3. Seconds since `userbot_started` event
+  (process uptime, sourced from module-load `_PROCESS_START_TIME`).
+  Graph by Krab version to correlate with S64 W4 restart-cause logging.
+- `krab_last_handler_tick_age_seconds` — S66 W3. Seconds since last
+  `@on_message` handler invocation (reads `_last_dispatcher_tick_ts`
+  via Wave 70 weakref). `-1` = userbot not registered. Complements
+  `krab_main_dispatcher_tick_ago_seconds` for dispatcher liveness graphs.
 - `krab_swarm_probe_ago_seconds{team}` — Wave 63-B. Seconds since swarm
   team pts last advanced. `-1` = team probe unset.
 - `krab_paid_gemini_guard_mode{mode}` — Wave 67. `1`=block, `0`=warn,

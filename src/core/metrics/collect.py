@@ -493,6 +493,34 @@ def collect_metrics() -> str:
     except Exception:
         pass
 
+    # === S66 Wave 3: uptime / handler tick age gauges ===
+    try:
+        uptime_sec = _pm.current_uptime_seconds()
+        lines.append(
+            _format_metric(
+                "krab_uptime_seconds",
+                round(float(uptime_sec), 3),
+                help_text=(
+                    "S66 W3: seconds since userbot_started (process uptime). "
+                    "Graph by Krab version to see deploy / restart cause."
+                ),
+            )
+        )
+        tick_age_sec = _pm.current_handler_tick_age_seconds()
+        lines.append(
+            _format_metric(
+                "krab_last_handler_tick_age_seconds",
+                round(float(tick_age_sec), 3),
+                help_text=(
+                    "S66 W3: seconds since last @on_message handler invocation. "
+                    "-1 = userbot not registered. Complements "
+                    "krab_main_dispatcher_tick_ago_seconds."
+                ),
+            )
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     # === Wave 75: LaunchAgent health ===
     lines.extend(_launchd.render_launchd_metrics(_format_metric, _sanitize_label))
 

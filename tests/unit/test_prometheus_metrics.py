@@ -747,3 +747,66 @@ def test_idle_skip_codex_wired_from_cli_helper():
     _log_codex_idle_skip("subprocess_unavailable", model="gpt-5-codex")
 
     assert _CODEX_IDLE_SKIP_COUNTER.get("subprocess_unavailable", 0) == 1
+
+
+# ---------------------------------------------------------------------------
+# S66 Wave 3: krab_uptime_seconds + krab_last_handler_tick_age_seconds gauges
+# ---------------------------------------------------------------------------
+
+
+def test_uptime_gauge_set_via_helper():
+    """current_uptime_seconds() возвращает положительное значение и попадает в /metrics."""
+    import time as _time
+
+    from src.core.prometheus_metrics import (
+        _PROCESS_START_TIME,
+        collect_metrics,
+        current_uptime_seconds,
+    )
+
+    # Helper: now override → детерминированный результат.
+    fake_now = _PROCESS_START_TIME + 42.5
+    assert current_uptime_seconds(now=fake_now) == 42.5
+
+    # Без override — значение >=0 и <= "сейчас минус module load".
+    live = current_uptime_seconds()
+    assert live >= 0.0
+    assert live <= _time.time() - _PROCESS_START_TIME + 1.0
+
+    text = collect_metrics()
+    assert "krab_uptime_seconds" in text
+    assert "# TYPE krab_uptime_seconds gauge" in text
+
+
+def test_handler_tick_age_gauge_set_via_helper():
+    """current_handler_tick_age_seconds() читает _last_dispatcher_tick_ts через weakref."""
+    import time as _time
+
+    from src.core.metrics.probes import register_userbot_for_metrics
+    from src.core.prometheus_metrics import (
+        collect_metrics,
+        current_handler_tick_age_seconds,
+    )
+
+    # Без зарегистрированного userbot → -1.0 (aligned с tick_ago_seconds semantics).
+    register_userbot_for_metrics(None)
+    assert current_handler_tick_age_seconds() == -1.0
+
+    # Stub userbot с _last_dispatcher_tick_ts — weakref нужен __weakref__.
+    class _StubBot:
+        pass
+
+    bot = _StubBot()
+    tick_ts = _time.time() - 5.0
+    bot._last_dispatcher_tick_ts = tick_ts  # type: ignore[attr-defined]
+    register_userbot_for_metrics(bot)
+
+    age = current_handler_tick_age_seconds(now=tick_ts + 5.0)
+    assert age == 5.0
+
+    text = collect_metrics()
+    assert "krab_last_handler_tick_age_seconds" in text
+    assert "# TYPE krab_last_handler_tick_age_seconds gauge" in text
+
+    # Cleanup чтобы не утекать ref в следующие тесты.
+    register_userbot_for_metrics(None)
