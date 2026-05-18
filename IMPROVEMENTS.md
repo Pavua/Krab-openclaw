@@ -159,6 +159,68 @@ session backups / log files): cron на 04:00 + structured log marker для
 
 ---
 
+## Session 64 Insights (2026-05-18, 34+ sonnet dispatches, ~3 ч автономного run'а)
+
+S64 продолжила S61-62 паттерн — на сей раз 4 wave'а × 6-10 sonnet'ов в каждой.
+Главный итог: silent-death root cause finally identified после двух недель
+hotfix'ов поверх симптома.
+
+### Silent-death root cause: Pyrogram dispatcher.groups wipe
+
+Корень проблемы в `pyrogram/dispatcher.py:296` — `Client.stop()` обнуляет
+`dispatcher.groups`, поэтому `_try_reconnect_pyrofork` strategy 1
+(`stop()` → `start()`) **возвращает успех на нижнем слое, но dispatcher
+больше не доставляет updates**. Все симптомы S53-S63 (frozen updates,
+fake-success на reconnect, escalation cascades) — производные одного root.
+
+### Fix design: replace strategy 1 → `_recreate_client()` (3-line change)
+
+Canonical путь `_recreate_client` (`session.py:392`) уже вызывает
+`_setup_handlers()` после респавна — handlers и dispatcher.groups
+восстанавливаются корректно. Strategy 1 в `_try_reconnect_pyrofork`
+должна делегировать в этот путь, а не пытаться stop()+start() напрямую.
+3 строки изменения закрывают двухнедельный класс багов.
+
+### Detection vs recovery: разные слои, оба нужны
+
+Hotfix2 (S53 P3.6) **fake-success detection работает** — verified live дважды
+за день (03:46 и в S64 W2). Но **recovery path был сам багом**: detection
+правильно сигнализировал «не сработало», а escalation шёл в тот же сломанный
+strategy 1. Lesson: detection и recovery — независимые слои, fix-роли разные.
+Полезный шаблон: при caught fake-success всегда задавать вопрос «куда
+escalate'имся и почему этот путь не имеет той же баги».
+
+### Parallel sonnet read-only audits = root cause discovery
+
+S64 W1 (Pyrogram codebase audit) + W2 (timing correlation между restart
+events и handler invocations) **запущенные параллельно** идентифицировали
+root cause, который single sonnet пропустил бы. W1 нашёл `dispatcher.groups
+= {}` строку, W2 показал что handlers перестают триггериться сразу после
+strategy 1. Pattern: для разведки root cause диспатчить **минимум 2
+read-only sonnet'а на disjoint angles** (code + telemetry).
+
+### 4-wave × 6-10 sonnet pattern mature
+
+34+ sonnet dispatches за ~3 часа. Зафиксированные lessons:
+- **SONNET_BRIEF_TEMPLATE.md** (W5) — single source of truth для prompt'ов
+  sub-agent'ов (encode'ит S55-S63 уроки: scope, commit conventions, branch).
+- **Staging collision**: `git add -A` ломает параллельные waves —
+  обязательный `git add <paths>` с explicit list. Особенно при overlapping
+  работе в одной директории.
+- **Worktree branch trap** (повтор S61): sonnet иногда коммитит в свою
+  branch вместо main → cherry-pick после ревью, hint в brief template.
+
+### Restart-cause logging (W4 ops visibility)
+
+Новый artifact `~/.openclaw/krab_runtime_state/krab_exit_history.jsonl` —
+структурированный лог причин выхода Krab process'а с timestamp / reason /
+trigger source. Post-mortem ops visibility: за минуту видно «кто убил
+Krab в 03:46» без grep'а по runtime logs. Pattern для любого
+long-running service: append-only JSONL с минимальной schema (ts/cause/by)
+> RAM-only state, который теряется на рестарте.
+
+---
+
 ## Session 50 (2026-05-16) — Catchup Union + Whitelist Audit Backlog
 
 ### DONE (committed)
