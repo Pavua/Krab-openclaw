@@ -33,6 +33,7 @@ _EXPECTED_CATEGORIES = {
     "api_keys",
     "agent_gates",
     "local_llm",  # S63 Wave 4 — verifier + local LLM toggles
+    "local_share",  # S66 W4 — per-task-type local share env infrastructure
 }
 
 
@@ -56,8 +57,8 @@ def test_env_metadata_has_at_least_30_vars() -> None:
     assert len(ear._ENV_METADATA) >= 30
 
 
-def test_env_metadata_all_8_categories_present() -> None:
-    """Все 8 категорий имеют хотя бы одну переменную."""
+def test_env_metadata_all_categories_present() -> None:
+    """Все категории имеют хотя бы одну переменную."""
     cats = {entry[1] for entry in ear._ENV_METADATA}
     assert cats == _EXPECTED_CATEGORIES
 
@@ -76,7 +77,7 @@ def test_env_metadata_tuple_shape() -> None:
 def test_category_order_matches_labels() -> None:
     """_CATEGORY_ORDER и _CATEGORY_LABELS синхронизированы."""
     assert set(ear._CATEGORY_ORDER) == set(ear._CATEGORY_LABELS.keys())
-    assert len(ear._CATEGORY_ORDER) == 9
+    assert len(ear._CATEGORY_ORDER) == 10
 
 
 # ── Secret detection ────────────────────────────────────────────────────────

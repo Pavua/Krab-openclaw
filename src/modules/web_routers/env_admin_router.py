@@ -328,6 +328,39 @@ _ENV_METADATA: list[tuple[str, str, str, str]] = [
         "Локальный переводчик (LM Studio) вместо cloud Gemini.",
         "0",
     ),
+    # ── 10. Local share per task-type (Phase 4 prep, S66 W4) ───────────────
+    # Cross-link: docs/PHASE_4_CONFIDENCE_GATED_ROUTING.md
+    # Сейчас observability only — routing решения добавятся в Phase 4.
+    (
+        "KRAB_LOCAL_SHARE_TRANSLATION",
+        "local_share",
+        "Доля local LLM для translation (0.0–1.0, default 0.0=cloud-only).",
+        "0.0",
+    ),
+    (
+        "KRAB_LOCAL_SHARE_QA",
+        "local_share",
+        "Доля local LLM для Q&A (0.0–1.0, default 0.0).",
+        "0.0",
+    ),
+    (
+        "KRAB_LOCAL_SHARE_SUMMARIZATION",
+        "local_share",
+        "Доля local LLM для summarization (0.0–1.0, default 0.0).",
+        "0.0",
+    ),
+    (
+        "KRAB_LOCAL_SHARE_CHAT",
+        "local_share",
+        "Доля local LLM для chat replies (0.0–1.0, default 0.0).",
+        "0.0",
+    ),
+    (
+        "KRAB_LOCAL_SHARE_CODE",
+        "local_share",
+        "Доля local LLM для code generation (0.0–1.0, default 0.0=cloud-only).",
+        "0.0",
+    ),
 ]
 
 
@@ -342,6 +375,7 @@ _CATEGORY_LABELS: dict[str, tuple[str, str]] = {
     "api_keys": ("🔑", "API keys"),
     "agent_gates": ("🚪", "Agent gates"),
     "local_llm": ("🧪", "Local LLM / Verifier (experimental)"),
+    "local_share": ("⚖️", "Local share per task-type (Phase 4 prep)"),
 }
 
 # Порядок отображения категорий.
@@ -355,10 +389,11 @@ _CATEGORY_ORDER: list[str] = [
     "api_keys",
     "agent_gates",
     "local_llm",
+    "local_share",
 ]
 
 # Категории, помеченные как experimental opt-in (UI badge).
-_EXPERIMENTAL_CATEGORIES: frozenset[str] = frozenset({"local_llm"})
+_EXPERIMENTAL_CATEGORIES: frozenset[str] = frozenset({"local_llm", "local_share"})
 
 # Cross-link: dashboard URL для категории (отображается как кнопка).
 _CATEGORY_LINKS: dict[str, tuple[str, str]] = {
