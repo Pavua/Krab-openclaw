@@ -415,3 +415,162 @@ async def test_translate_local_success_no_idle_skip(
     assert result.translated == "Локальный успех"
     idle_events = [e for e, _ in logged if e == "translate_local_idle_skip"]
     assert idle_events == [], f"unexpected idle_skip on local success: {idle_events}"
+
+
+# ── S65 W6: residual coverage gaps (translation cache hit, counter import
+# failure, cache.store exceptions, runtime route lookup exception) ───────────
+
+
+@pytest.mark.asyncio
+async def test_translate_text_cache_hit_short_circuits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """translation_cache.lookup hit → return TranslationResult с model_id=
+    'translation_cache' БЕЗ обращения к local/cloud (lines 216-217)."""
+    monkeypatch.setenv("KRAB_LOCAL_TRANSLATOR_ENABLED", "1")
+    from src.core import translation_cache as cache_mod
+
+    cache_mod.translation_cache._entries.clear()  # type: ignore[attr-defined]
+    cache_mod.translation_cache.store("cached source text", "ru", "Кэшированный перевод")
+
+    # Local mock raises if called → asserts cache short-circuits.
+    local_mock = AsyncMock(side_effect=AssertionError("local should not be called on cache hit"))
+    mock_client = _make_mock_client(["unused cloud"])
+
+    with patch.object(translator_engine, "_translate_via_lmstudio", local_mock):
+        result = await translate_text(
+            "cached source text", "en", "ru", openclaw_client=mock_client
+        )
+
+    assert result.translated == "Кэшированный перевод"
+    assert result.model_id == "translation_cache"
+    local_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_translate_local_counter_import_failure_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`inc_translator_idle_skip` import/call раскидывает Exception → swallow,
+    log path продолжается (lines 47-48). Гарантирует resilience metrics shim."""
+    monkeypatch.setenv("KRAB_LOCAL_TRANSLATOR_ENABLED", "1")
+    monkeypatch.setenv("KRAB_TRANSLATOR_IDLE_LOG_INTERVAL_SEC", "60")
+    from src.core import translation_cache as cache_mod
+
+    cache_mod.translation_cache._entries.clear()  # type: ignore[attr-defined]
+    translator_engine._translator_idle_last_log_ts.clear()
+
+    # Подменяем модуль метрик так чтобы импорт inc_translator_idle_skip
+    # внутри _log_translator_idle_skip рейзил → catch BLE001.
+    import sys
+
+    fake_module = type(sys)("src.core.metrics.idle_skip")
+
+    def _boom(_reason: str) -> None:
+        raise RuntimeError("metrics backend down")
+
+    fake_module.inc_translator_idle_skip = _boom  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "src.core.metrics.idle_skip", fake_module)
+
+    local_mock = AsyncMock(return_value=("", "lmstudio_error"))
+    mock_client = _make_mock_client(["cloud after counter boom"])
+
+    logged: list[tuple[str, dict]] = []
+
+    def _fake_info(event: str, **kwargs: Any) -> None:
+        logged.append((event, kwargs))
+
+    with (
+        patch.object(translator_engine, "_translate_via_lmstudio", local_mock),
+        patch.object(translator_engine.logger, "info", side_effect=_fake_info),
+    ):
+        result = await translate_text("counter boom", "en", "ru", openclaw_client=mock_client)
+
+    # Несмотря на counter Exception, idle_skip log всё равно эмитится, и
+    # cloud fallback отрабатывает успешно.
+    assert result.translated == "cloud after counter boom"
+    assert any(e == "translate_local_idle_skip" for e, _ in logged)
+
+
+@pytest.mark.asyncio
+async def test_translate_local_cache_store_exception_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """translation_cache.store raises на local-success path → swallow (246-247),
+    результат всё равно возвращается caller'у."""
+    monkeypatch.setenv("KRAB_LOCAL_TRANSLATOR_ENABLED", "1")
+    from src.core import translation_cache as cache_mod
+
+    cache_mod.translation_cache._entries.clear()  # type: ignore[attr-defined]
+
+    def _boom_store(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("cache backend down")
+
+    local_mock = AsyncMock(return_value=("Локальный успех", "lmstudio/gemma"))
+    mock_client = _make_mock_client(["unused"])
+
+    with (
+        patch.object(translator_engine, "_translate_via_lmstudio", local_mock),
+        patch.object(cache_mod.translation_cache, "store", side_effect=_boom_store),
+    ):
+        result = await translate_text("store boom local", "en", "ru", openclaw_client=mock_client)
+
+    assert result.translated == "Локальный успех"
+    assert result.model_id == "lmstudio/gemma"
+
+
+@pytest.mark.asyncio
+async def test_translate_cloud_route_lookup_exception_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """getattr(openclaw_client, '_last_runtime_route') raises → swallow
+    (lines 299-300), model_id остаётся 'unknown'."""
+    monkeypatch.delenv("KRAB_LOCAL_TRANSLATOR_ENABLED", raising=False)
+    from src.core import translation_cache as cache_mod
+
+    cache_mod.translation_cache._entries.clear()  # type: ignore[attr-defined]
+
+    class _RaisingRouteClient:
+        """OpenClawClient stub в котором _last_runtime_route — property raising."""
+
+        @property
+        def _last_runtime_route(self) -> dict:  # noqa: D401
+            raise RuntimeError("route descriptor exploded")
+
+        def clear_session(self, _chat_id: str) -> None:
+            return None
+
+        def send_message_stream(self, **_kwargs: Any):
+            async def _gen():
+                yield "Перевод OK"
+
+            return _gen()
+
+    client = _RaisingRouteClient()
+    result = await translate_text("route boom", "en", "ru", openclaw_client=client)  # type: ignore[arg-type]
+
+    assert result.translated == "Перевод OK"
+    # _last_runtime_route raised → fallback model_id="unknown" сохранён.
+    assert result.model_id == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_translate_cloud_cache_store_exception_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """translation_cache.store raises на cloud-success path → swallow
+    (lines 312-314)."""
+    monkeypatch.delenv("KRAB_LOCAL_TRANSLATOR_ENABLED", raising=False)
+    from src.core import translation_cache as cache_mod
+
+    cache_mod.translation_cache._entries.clear()  # type: ignore[attr-defined]
+
+    def _boom_store(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("cache backend down")
+
+    mock_client = _make_mock_client(["Облачный перевод"])
+
+    with patch.object(cache_mod.translation_cache, "store", side_effect=_boom_store):
+        result = await translate_text("cloud store boom", "en", "ru", openclaw_client=mock_client)
+
+    assert result.translated == "Облачный перевод"
