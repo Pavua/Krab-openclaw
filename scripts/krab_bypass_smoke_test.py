@@ -72,7 +72,13 @@ def get_current_primary(panel: str) -> str:
 
 
 def switch_model(panel: str, model_id: str, reason: str = "smoke_test") -> dict[str, Any]:
-    """POST /api/admin/model/switch."""
+    """POST /api/admin/model/switch.
+
+    Endpoint returns ``{ok, action, provider, model, active}`` where ``model``
+    echoes the requested target и ``active`` отражает ``model_manager.active_model_id``
+    (может отличаться нормализацией — Wave 230). Для verification используем
+    ``model`` (S69 W2 fix bug 1).
+    """
     provider = model_id.split("/", 1)[0] if "/" in model_id else ""
     payload = {
         "provider": provider,
@@ -86,19 +92,38 @@ def switch_model(panel: str, model_id: str, reason: str = "smoke_test") -> dict[
         timeout=HTTP_TIMEOUT,
         params=_auth_params(),
     )
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        # S69 W2: expose response body для диагностики (raise_for_status иначе
+        # топит detail с stage/body внутрь exception str(exc) — теряется).
+        raise httpx.HTTPStatusError(
+            f"switch_model HTTP {resp.status_code}: {resp.text[:400]}",
+            request=resp.request,
+            response=resp,
+        )
     return resp.json()
 
 
 def test_ping(panel: str, model_id: str) -> dict[str, Any]:
-    """POST /api/admin/model/test_ping — real probe, returns latency_ms."""
+    """POST /api/admin/model/test_ping — real probe, returns latency_ms.
+
+    S69 W2 fix bug 2: на HTTP 500 backend возвращает ``{"detail": {stage, body,
+    status, error}}`` — raise_for_status дефолтно прятал это в generic
+    HTTPStatusError. Мы выкидываем enriched error с телом ответа, чтобы
+    диагностика (LM Studio model load failure, gateway down, etc) была видна
+    в выводе скрипта.
+    """
     resp = httpx.post(
         f"{panel}/api/admin/model/test_ping",
         json={"model_id": model_id},
         timeout=HTTP_TIMEOUT,
         params=_auth_params(),
     )
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        raise httpx.HTTPStatusError(
+            f"test_ping HTTP {resp.status_code}: {resp.text[:400]}",
+            request=resp.request,
+            response=resp,
+        )
     return resp.json()
 
 
@@ -160,9 +185,21 @@ def run_smoke(
         return 2
 
     # 2) Switch to local
+    # S69 W2 fix bug 1: verify через ``response["model"]`` (echo от endpoint),
+    # не ``active`` — последний может отличаться нормализацией / mode-проекцией.
     try:
         sw = switch_model(panel, target, reason=f"smoke:{test_text}")
-        ok(f"switched → {sw.get('active') or target} (action={sw.get('action')})")
+        echoed_model = str(sw.get("model") or "")
+        active = str(sw.get("active") or "")
+        action = sw.get("action")
+        if echoed_model and echoed_model != target:
+            fail(
+                f"switch verification failed: requested={target} "
+                f"echoed={echoed_model} (active={active})"
+            )
+            failures += 1
+        else:
+            ok(f"switched → {echoed_model or target} (action={action}, active={active})")
     except Exception as exc:  # noqa: BLE001
         fail(f"switch failed: {exc}")
         failures += 1
